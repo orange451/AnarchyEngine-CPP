@@ -55,9 +55,9 @@ public:
     std::optional<std::string> set_transparency(double value);
 
     // Scale multiplies the size the Prefab draws at, about the GameObject's
-    // origin, and the shape of the PhysicsObject that moves it
-    // (PhysicsWorld::shape_scale). It is not part of the Transform. A saved
-    // registry property, 1 by default.
+    // origin, on top of any scale in the Transform's axes. The shape of the
+    // PhysicsObject that moves it grows with both (PhysicsWorld::shape_scale).
+    // It is not part of the Transform. A saved registry property, 1 by default.
     static constexpr double kDefaultScale = 1.0;
     double scale() const { return scale_; }
     // SimulationThread. A value that is not finite and above 0 is refused:

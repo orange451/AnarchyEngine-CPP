@@ -711,10 +711,10 @@ void GameView::readSelectedBodies() {
                 engine_core::known_pieces(*mesh, outline.meshPoints, outline.meshTriangles, outline.meshPieces);
             }
         }
-        // Its GameObject's Scale multiplies its Size, as its body's shape is made.
-        const float scale = engine_core::PhysicsWorld::shape_scale(*game_, *body);
+        // Its GameObject's scale multiplies its Size, as its body's shape is made.
+        const engine_core::Vec3 scale = engine_core::PhysicsWorld::shape_scale(*game_, *body);
         const engine_core::Vec3 bodySize = body->size();
-        const engine_core::Vec3 size{bodySize.x * scale, bodySize.y * scale, bodySize.z * scale};
+        const engine_core::Vec3 size{bodySize.x * scale.x, bodySize.y * scale.y, bodySize.z * scale.z};
         // Centered in its GameObject's Prefab, which changes as the Prefab's Models and Meshes do.
         const engine_core::Vec3 center = engine_core::PhysicsWorld::shape_center(*game_, *body);
         const auto same = [](engine_core::Vec3 a, engine_core::Vec3 b) { return a.x == b.x && a.y == b.y && a.z == b.z; };

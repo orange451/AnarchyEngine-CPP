@@ -145,13 +145,23 @@ void fit_points(const std::vector<Vec3>& mesh_points, Vec3 size, Vec3 center, st
     }
 }
 
-// shape_scale for a body that moves driven, or none at 0.
-float scale_for(const DataModel& game, InstanceId driven) {
+const Vec3 kUnscaled{1.f, 1.f, 1.f};
+
+// shape_scale for a body that moves driven, or none at 0: per axis, the
+// length of that axis of the GameObject's Transform times its Scale, as its
+// Prefab is drawn.
+Vec3 scale_for(const DataModel& game, InstanceId driven) {
     const GameObject* object = driven != 0 ? game.game_object(driven) : nullptr;
-    return object != nullptr ? static_cast<float>(object->scale()) : 1.f;
+    if (object == nullptr) {
+        return kUnscaled;
+    }
+    const Matrix4 transform = object->transform();
+    const float scale = static_cast<float>(object->scale());
+    return Vec3{column_length(transform, 0) * scale, column_length(transform, 1) * scale,
+                column_length(transform, 2) * scale};
 }
 
-Vec3 scaled(Vec3 size, float scale) { return Vec3{size.x * scale, size.y * scale, size.z * scale}; }
+Vec3 scaled(Vec3 size, Vec3 scale) { return Vec3{size.x * scale.x, size.y * scale.y, size.z * scale.z}; }
 
 // shape_center for a body that moves driven, or none at 0.
 Vec3 center_for(const DataModel& game, InstanceId driven) {
@@ -167,11 +177,7 @@ Vec3 center_for(const DataModel& game, InstanceId driven) {
     }
     // The body's space has the GameObject's rotation but not its Transform's
     // scale or its Scale, which the Prefab is drawn with.
-    const Vec3 offset = prefab->origin_offset();
-    const Matrix4 transform = object->transform();
-    const float scale = static_cast<float>(object->scale());
-    return Vec3{offset.x * column_length(transform, 0) * scale, offset.y * column_length(transform, 1) * scale,
-                offset.z * column_length(transform, 2) * scale};
+    return scaled(prefab->origin_offset(), scale_for(game, driven));
 }
 
 bool same_vec3(Vec3 a, Vec3 b) { return a.x == b.x && a.y == b.y && a.z == b.z; }
@@ -406,10 +412,10 @@ struct PhysicsWorld::Impl {
         InstanceId driven = 0;
         Matrix4 driven_pose{};
         // Where the shape was centered when it was made (shape_center), the
-        // driven GameObject's Scale it was made at (shape_scale), and the GUID
-        // of that GameObject's Prefab as last seen.
+        // scale it was made at (shape_scale), and the GUID of the driven
+        // GameObject's Prefab as last seen.
         Vec3 center{};
-        float scale = 1.f;
+        Vec3 scale = kUnscaled;
         std::string prefab;
         std::uint64_t seen = 0;
     };
@@ -592,9 +598,9 @@ struct PhysicsWorld::Impl {
         recenter(game, object, body, follow_driven(game, object, body));
     }
 
-    // A GameObject with another Prefab, or one moved or scaled by someone
-    // else (moved), may center the shape elsewhere: it is made again there.
-    // One with another Scale makes it again at that size.
+    // A GameObject with another Prefab, or one moved by someone else (moved),
+    // may center the shape elsewhere: it is made again there. One scaled
+    // another way, by its Transform or its Scale, makes it again at that size.
     void recenter(DataModel& game, PhysicsBase& object, Body& record, bool moved) {
         if (record.controller) {
             return;
@@ -603,7 +609,7 @@ struct PhysicsWorld::Impl {
         if (driven == nullptr) {
             return;
         }
-        const bool rescaled = static_cast<float>(driven->scale()) != record.scale;
+        const bool rescaled = !same_vec3(scale_for(game, record.driven), record.scale);
         if (!moved && !rescaled && driven->prefab_guid() == record.prefab) {
             return;
         }
@@ -1077,7 +1083,7 @@ struct PhysicsWorld::Impl {
         drop_shape(record);
         record.controller = true;
         record.center = Vec3{};
-        record.scale = 1.f;
+        record.scale = kUnscaled;
         record.prefab.clear();
         const float radius = static_cast<float>(controller.radius());
         const float gap = static_cast<float>(controller.hover_gap());
@@ -1484,9 +1490,9 @@ Vec3 PhysicsWorld::shape_center(const DataModel& game, const PhysicsBase& object
     return center_for(game, object.driven_game_object());
 }
 
-float PhysicsWorld::shape_scale(const DataModel& game, const PhysicsBase& object) {
+Vec3 PhysicsWorld::shape_scale(const DataModel& game, const PhysicsBase& object) {
     if (dynamic_cast<const PlayerController*>(&object) != nullptr) {
-        return 1.f;
+        return kUnscaled;
     }
     return scale_for(game, object.driven_game_object());
 }
@@ -1510,7 +1516,7 @@ void PhysicsWorld::collision_outline(const PlayerController& controller, std::ve
 
 void PhysicsWorld::collision_outline(const PhysicsObject& object, Vec3 center, const std::vector<Vec3>& mesh_points,
                                      const std::vector<std::uint32_t>& triangles, std::vector<Vec3>& lines,
-                                     float scale, const std::vector<anarchy::amesh::ConvexPiece>* pieces) {
+                                     Vec3 scale, const std::vector<anarchy::amesh::ConvexPiece>* pieces) {
     const Vec3 x{1.f, 0.f, 0.f};
     const Vec3 y{0.f, 1.f, 0.f};
     const Vec3 z{0.f, 0.f, 1.f};

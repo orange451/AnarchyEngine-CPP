@@ -707,12 +707,12 @@ TEST_CASE("P19 a body sits in the middle of its GameObject's Prefab", "[physics]
     SECTION("the offset grows with the GameObject's scale, as the drawn mesh does") {
         Matrix4 tall = at(0.f, 5.f, 0.f);
         tall.m[5] = 2.f;
-        PrefabBody pot = prefab_body(rig, tall, Vec3{2.f, 4.f, 2.f});
+        PrefabBody pot = prefab_body(rig, tall, Vec3{2.f, 2.f, 2.f});
         rig.play();
         REQUIRE_FALSE(pot.mesh->edit_geometry(box_above_origin));
         rig.seconds(3.0);
         INFO(y_of(pot.object->transform()));
-        // The middle is 2 above the origin, and the 4 tall shape reaches down to it.
+        // The middle is 2 above the origin, and the shape, 4 tall at that scale, reaches down to it.
         REQUIRE(near(y_of(pot.object->transform()), 0.f, 0.05f));
         REQUIRE(near(column_length(pot.object->transform(), 1), 2.f, 1e-4f));
     }
@@ -833,8 +833,10 @@ TEST_CASE("P22 a GameObject's Scale scales the body that moves it", "[physics]")
         GameObject& part = create_part(rig.game);
         REQUIRE_FALSE(part.set_scale(3.0));
         PhysicsObject& body = rig.body(engine_core::matrix4_identity(), Vec3{1.f, 2.f, 1.f}, false, part.id());
-        const float scale = engine_core::PhysicsWorld::shape_scale(rig.game, body);
-        REQUIRE(scale == 3.f);
+        const Vec3 scale = engine_core::PhysicsWorld::shape_scale(rig.game, body);
+        REQUIRE(scale.x == 3.f);
+        REQUIRE(scale.y == 3.f);
+        REQUIRE(scale.z == 3.f);
         std::vector<Vec3> lines;
         engine_core::PhysicsWorld::collision_outline(body, Vec3{}, {}, {}, lines, scale);
         REQUIRE(lines.size() == 24);
@@ -1067,7 +1069,7 @@ TEST_CASE("P33 an unanchored Custom's outline is its pieces when they are known"
     std::vector<Vec3> hull_lines;
     engine_core::PhysicsWorld::collision_outline(cup, Vec3{}, points, data.indices, hull_lines);
     std::vector<Vec3> piece_lines;
-    engine_core::PhysicsWorld::collision_outline(cup, Vec3{}, points, data.indices, piece_lines, 1.f, &pieces);
+    engine_core::PhysicsWorld::collision_outline(cup, Vec3{}, points, data.indices, piece_lines, Vec3{1.f, 1.f, 1.f}, &pieces);
     REQUIRE(piece_lines.size() > hull_lines.size());
     for (const Vec3& p : piece_lines) {
         REQUIRE(std::fabs(p.x) <= 2.05f);
@@ -1077,7 +1079,7 @@ TEST_CASE("P33 an unanchored Custom's outline is its pieces when they are known"
     // Anchored, it is its triangles whatever pieces it has.
     cup.set_anchored(true);
     std::vector<Vec3> anchored_lines;
-    engine_core::PhysicsWorld::collision_outline(cup, Vec3{}, points, data.indices, anchored_lines, 1.f, &pieces);
+    engine_core::PhysicsWorld::collision_outline(cup, Vec3{}, points, data.indices, anchored_lines, Vec3{1.f, 1.f, 1.f}, &pieces);
     std::vector<Vec3> triangle_lines;
     engine_core::PhysicsWorld::collision_outline(cup, Vec3{}, points, data.indices, triangle_lines);
     REQUIRE(anchored_lines.size() == triangle_lines.size());
@@ -1136,4 +1138,71 @@ TEST_CASE("P35 stopped, a body's Transform follows the GameObject it moves", "[p
     REQUIRE(near(z_of(controller.transform()), 6.f, 1e-5f));
     REQUIRE(near(controller.transform().m[5], 1.f, 1e-5f));
     REQUIRE(near(controller.transform().m[6], 0.f, 1e-5f));
+}
+
+TEST_CASE("P36 the scale in a GameObject's Transform scales the body that moves it, per axis", "[physics]") {
+    PhysicsRig rig;
+    rig.floor();
+
+    SECTION("a 1 wide box under a GameObject scaled 2 by its Transform rests 1 above the floor") {
+        GameObject& part = create_part(rig.game);
+        Matrix4 scaled = at(0.f, 5.f, 0.f);
+        scaled.m[0] = scaled.m[5] = scaled.m[10] = 2.f;
+        part.set_transform(scaled);
+        PhysicsObject& body = rig.body(engine_core::matrix4_identity(), Vec3{1.f, 1.f, 1.f}, false, part.id());
+        rig.play();
+        rig.seconds(3.0);
+        INFO(y_of(part.transform()));
+        REQUIRE(near(y_of(part.transform()), 1.f, 0.05f));
+        // Size stays as written, and the Transform keeps its scale.
+        REQUIRE(body.size().y == 1.f);
+        REQUIRE(near(column_length(part.transform(), 1), 2.f, 1e-4f));
+    }
+
+    SECTION("each axis scales on its own, and Scale multiplies on top") {
+        GameObject& part = create_part(rig.game);
+        Matrix4 tall = at(0.f, 5.f, 0.f);
+        tall.m[5] = 3.f;
+        part.set_transform(tall);
+        REQUIRE_FALSE(part.set_scale(2.0));
+        PhysicsObject& body = rig.body(engine_core::matrix4_identity(), Vec3{1.f, 1.f, 1.f}, false, part.id());
+        const Vec3 scale = engine_core::PhysicsWorld::shape_scale(rig.game, body);
+        REQUIRE(near(scale.x, 2.f, 1e-5f));
+        REQUIRE(near(scale.y, 6.f, 1e-5f));
+        REQUIRE(near(scale.z, 2.f, 1e-5f));
+        rig.play();
+        rig.seconds(3.0);
+        INFO(y_of(part.transform()));
+        REQUIRE(near(y_of(part.transform()), 3.f, 0.05f));
+    }
+
+    SECTION("a Transform scale written during play makes the shape again") {
+        GameObject& part = create_part(rig.game);
+        part.set_transform(at(0.f, 2.f, 0.f));
+        rig.body(engine_core::matrix4_identity(), Vec3{1.f, 1.f, 1.f}, false, part.id());
+        rig.play();
+        rig.seconds(2.0);
+        REQUIRE(near(y_of(part.transform()), 0.5f, 0.05f));
+        Matrix4 grown = part.transform();
+        grown.m[0] = grown.m[5] = grown.m[10] = 3.f;
+        part.set_transform(grown);
+        rig.seconds(3.0);
+        INFO(y_of(part.transform()));
+        REQUIRE(near(y_of(part.transform()), 1.5f, 0.05f));
+    }
+
+    SECTION("its collision outline is the shape at that scale") {
+        GameObject& part = create_part(rig.game);
+        Matrix4 wide = engine_core::matrix4_identity();
+        wide.m[0] = 3.f;
+        part.set_transform(wide);
+        PhysicsObject& body = rig.body(engine_core::matrix4_identity(), Vec3{1.f, 2.f, 1.f}, false, part.id());
+        std::vector<Vec3> lines;
+        engine_core::PhysicsWorld::collision_outline(body, Vec3{}, {}, {}, lines,
+                                                     engine_core::PhysicsWorld::shape_scale(rig.game, body));
+        REQUIRE(lines.size() == 24);
+        for (const Vec3& p : lines) {
+            REQUIRE(on_box_corner(p, Vec3{1.5f, 1.f, 0.5f}));
+        }
+    }
 }

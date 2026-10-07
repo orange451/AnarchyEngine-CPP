@@ -12,7 +12,11 @@ namespace engine_core {
 // Bounciness       number    restitution: 0, not below 0; the slider runs to 1.
 // AngularDamping   number    0, not below 0.
 // Shape            Enum.PhysicsShape  Box.
-// Size             Vector3   (1, 1, 1); each axis at least kMinSize. Box: its
+// Size             Vector3   (1, 1, 1); each axis at least kMinSize. The body
+//                            is made at Size times, per axis, the scale of the
+//                            GameObject it moves: its Transform's axes and its
+//                            Scale (PhysicsWorld::shape_scale). Size itself
+//                            stays as written. Box: its
 //                            extents. Sphere: diameter X. Capsule: diameter X,
 //                            height Y, along Y. Cylinder: diameter X,
 //                            height Y, along Y. Cone: base diameter X at

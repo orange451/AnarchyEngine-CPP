@@ -89,11 +89,13 @@ public:
     // never recentered.
     static Vec3 shape_center(const DataModel& game, const PhysicsBase& object);
 
-    // What object's Size is multiplied by: the Scale of the GameObject it
-    // moves, or 1 when it moves none. Its Mass stays as given. A body is
-    // made again when that Scale changes. Needs the DataModel lock; a read
-    // lock is enough. 1 for a PlayerController, which is never scaled.
-    static float shape_scale(const DataModel& game, const PhysicsBase& object);
+    // What object's Size is multiplied by, per axis: the scale of the
+    // GameObject it moves, which is the length of each axis of its Transform
+    // times its Scale, as its Prefab is drawn; or (1, 1, 1) when it moves
+    // none. Size itself is never changed, and Mass stays as given. A body is
+    // made again when this changes. Needs the DataModel lock; a read lock is
+    // enough. (1, 1, 1) for a PlayerController, which is never scaled.
+    static Vec3 shape_scale(const DataModel& game, const PhysicsBase& object);
 
     // The edges of what a body made now for object would collide as, for the
     // Scene View to draw: line segments into lines, two points each, in the
@@ -107,7 +109,8 @@ public:
     // made is the Box it falls back to. Warns of nothing.
     static void collision_outline(const PhysicsObject& object, Vec3 center, const std::vector<Vec3>& points,
                                   const std::vector<std::uint32_t>& triangles, std::vector<Vec3>& lines,
-                                  float scale = 1.f, const std::vector<anarchy::amesh::ConvexPiece>* pieces = nullptr);
+                                  Vec3 scale = Vec3{1.f, 1.f, 1.f},
+                                  const std::vector<anarchy::amesh::ConvexPiece>* pieces = nullptr);
     // Where a body made at transform is: its position and rotation, with any
     // scale taken out.
     static Matrix4 body_pose(const Matrix4& transform);

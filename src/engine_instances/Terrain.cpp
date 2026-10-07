@@ -1,5 +1,6 @@
 #include "Terrain.hpp"
 
+#include "ChangeHistoryService.hpp"
 #include "Containment.hpp"
 #include "Contract.hpp"
 #include "LuaApi.hpp"
@@ -186,15 +187,29 @@ void Terrain::load_data_path(std::string path) {
             holder = other;
         }
     });
-    if (holder == nullptr) {
+    terrain::ChunkMap chunks;
+    bool found = false;
+    if (holder != nullptr) {
+        chunks = holder->volume_.chunks();
+        found = true;
+    } else if (history().enabled()) {
+        // A source that was cut: its delete's undo record holds the path's
+        // latest voxels. A load builds with history off and never asks, so
+        // reopening a project keeps each Terrain's file.
+        float stashed_size = volume_.voxel_size();
+        found = terrain::TerrainStash::get(terrain::TerrainStash::latest(path), chunks, stashed_size);
+    }
+    if (!found) {
         data_path_ = std::move(path);
         return;
     }
     // A paste: the copy starts with its source's voxels and its own file.
-    volume_.set_chunks(holder->volume_.chunks());
+    volume_.set_chunks(std::move(chunks));
     data_path_ = "terrain/" + sanitize_file_name(name(id())) + "." + guid(id()) + ".avox";
     emit_property("DataPath");
     note_unrecorded_edit(id());
+    // The paste's step recorded this Terrain empty when it was made.
+    refresh_created_record(id());
 }
 
 void Terrain::write_place(std::vector<std::byte>& out) const {
@@ -204,7 +219,7 @@ void Terrain::write_place(std::vector<std::byte>& out) const {
     const auto* l = reinterpret_cast<const std::byte*>(&length);
     out.insert(out.end(), l, l + sizeof(length));
     out.insert(out.end(), base.begin(), base.end());
-    const std::uint64_t token = terrain::TerrainStash::put(volume_.chunks(), volume_.voxel_size());
+    const std::uint64_t token = terrain::TerrainStash::put(volume_.chunks(), volume_.voxel_size(), data_path_);
     if (!simulation_running()) {
         authored_token_ = token;
     }

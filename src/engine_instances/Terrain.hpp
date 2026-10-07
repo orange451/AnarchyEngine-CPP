@@ -43,7 +43,9 @@ public:
     // from place bytes it only stores the path: the bytes' token brings the
     // voxels. Otherwise a path another live Terrain holds is a paste: this
     // one takes that Terrain's voxels (shared chunks, nothing copied) and a
-    // DataPath of its own at once, without an undo step. Any other path is
+    // DataPath of its own at once, without an undo step. With history on, a
+    // path no live Terrain holds but the stash knows (a cut source) is a
+    // paste too, from the stash's latest voxels for it. Any other path is
     // stored.
     void load_data_path(std::string path);
 

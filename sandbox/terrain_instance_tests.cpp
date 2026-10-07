@@ -389,3 +389,83 @@ TEST_CASE("TP4 a pasted Terrain starts with its source's voxels and its own file
     REQUIRE(copy.data_path().find(game.guid(copy.id())) != std::string::npos);
     REQUIRE(terrain.data_path() == "terrain/Source.avox");   // the source keeps its own
 }
+
+namespace {
+
+// What paste does (src/ide/CutSet.cpp build_copy): make one, load the saved
+// properties one by one, then parent it.
+engine_core::Terrain& paste_copy(engine_core::DataModel& game, const engine_core::PropertyBag& saved) {
+    engine_core::Terrain& copy = game.create<engine_core::Terrain>();
+    for (const engine_core::JsonValue::Member& member : saved) {
+        std::string error;
+        copy.load_property(member.first, member.second, error);
+        REQUIRE(error.empty());
+    }
+    game.set_parent(copy.id(), workspace_of(game));
+    return copy;
+}
+
+}  // namespace
+
+TEST_CASE("TP5 undo then redo of a paste brings the copy back with its voxels and its own file", "[terrain]") {
+    SimRole role;
+    engine_core::Game game;
+    engine_core::Terrain& terrain = add_terrain(game);
+    write_data_path(game, terrain, "terrain/Source.avox");
+    REQUIRE_FALSE(terrain.volume().fill(ball_at(0.f, 0.f, 0.f, 4.f), 2));
+    engine_core::PropertyBag saved;
+    terrain.save_properties(saved);
+    begin_step(game, "Paste");
+    engine_core::Terrain& copy = paste_copy(game, saved);
+    end_step(game);
+    const InstanceId copy_id = copy.id();
+    const std::string copy_path = copy.data_path();
+    REQUIRE(id_at(copy, 0, 0, 0) == 2);
+    game.history().undo();
+    REQUIRE_FALSE(game.alive(copy_id));
+    game.history().redo();
+    auto* back = dynamic_cast<engine_core::Terrain*>(game.instance(copy_id));
+    REQUIRE(back != nullptr);
+    REQUIRE(id_at(*back, 0, 0, 0) == 2);
+    REQUIRE_FALSE(back->data_path().empty());
+    REQUIRE(back->data_path() == copy_path);
+    REQUIRE(back->data_path() != terrain.data_path());
+}
+
+TEST_CASE("TP6 a Terrain cut and then pasted keeps its voxels and gets its own file", "[terrain]") {
+    SimRole role;
+    engine_core::Game game;
+    engine_core::Terrain& terrain = add_terrain(game);
+    write_data_path(game, terrain, "terrain/Cut.avox");
+    REQUIRE_FALSE(terrain.volume().fill(ball_at(0.f, 0.f, 0.f, 4.f), 4));
+    engine_core::PropertyBag saved;
+    terrain.save_properties(saved);
+    // A cut: the copy is taken, then the source is deleted in a step.
+    begin_step(game, "Cut");
+    game.destroy(terrain.id());
+    end_step(game);
+    begin_step(game, "Paste");
+    engine_core::Terrain& copy = paste_copy(game, saved);
+    end_step(game);
+    REQUIRE(id_at(copy, 0, 0, 0) == 4);
+    REQUIRE_FALSE(copy.data_path().empty());
+    REQUIRE(copy.data_path() != "terrain/Cut.avox");
+}
+
+TEST_CASE("TP7 loading a DataPath with history off never takes stashed voxels", "[terrain]") {
+    SimRole role;
+    engine_core::Game game;
+    engine_core::Terrain& terrain = add_terrain(game);
+    write_data_path(game, terrain, "terrain/Reload.avox");
+    REQUIRE_FALSE(terrain.volume().fill(ball_at(0.f, 0.f, 0.f, 4.f), 5));
+    begin_step(game, "Delete");
+    game.destroy(terrain.id());
+    end_step(game);
+    // A project load builds with history off; the path is the file's, kept as written.
+    game.history().set_enabled(false);
+    engine_core::Terrain& loaded = add_terrain(game);
+    write_data_path(game, loaded, "terrain/Reload.avox");
+    game.history().set_enabled(true);
+    REQUIRE(loaded.data_path() == "terrain/Reload.avox");
+    REQUIRE(loaded.volume().chunks().empty());
+}

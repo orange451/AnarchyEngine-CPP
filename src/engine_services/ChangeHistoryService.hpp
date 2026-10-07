@@ -180,6 +180,8 @@ public:
     bool wants_mutation() const;
 
     void note(Mutation mutation);
+    // The open recording's CreateInstance record for id, or null.
+    AuthoredRecord* open_created_record(InstanceId id);
 
     // Commit an open edit recording before simulation_running becomes true.
     void seal_edit_recording();

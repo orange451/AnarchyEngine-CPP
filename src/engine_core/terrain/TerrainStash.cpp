@@ -1,6 +1,7 @@
 #include "terrain/TerrainStash.hpp"
 
 #include <mutex>
+#include <string>
 #include <unordered_map>
 #include <utility>
 
@@ -15,6 +16,8 @@ struct Entry {
 struct Stash {
     std::mutex mu;
     std::unordered_map<std::uint64_t, Entry> entries;
+    // Each DataPath's latest token.
+    std::unordered_map<std::string, std::uint64_t> latest;
     // Never reset by clear, so a token from before a clear stays unknown.
     std::uint64_t next = 1;
 };
@@ -26,14 +29,24 @@ Stash& stash() {
 
 }  // namespace
 
-std::uint64_t TerrainStash::put(ChunkMap chunks, float voxel_size) {
+std::uint64_t TerrainStash::put(ChunkMap chunks, float voxel_size, const std::string& data_path) {
     Stash& s = stash();
     std::lock_guard<std::mutex> guard(s.mu);
     const std::uint64_t token = s.next++;
     Entry& entry = s.entries[token];
     entry.chunks = std::move(chunks);
     entry.voxel_size = voxel_size;
+    if (!data_path.empty()) {
+        s.latest[data_path] = token;
+    }
     return token;
+}
+
+std::uint64_t TerrainStash::latest(const std::string& data_path) {
+    Stash& s = stash();
+    std::lock_guard<std::mutex> guard(s.mu);
+    const auto found = s.latest.find(data_path);
+    return found != s.latest.end() ? found->second : 0;
 }
 
 bool TerrainStash::get(std::uint64_t token, ChunkMap& chunks, float& voxel_size) {
@@ -52,6 +65,7 @@ void TerrainStash::clear() {
     Stash& s = stash();
     std::lock_guard<std::mutex> guard(s.mu);
     s.entries.clear();
+    s.latest.clear();
 }
 
 }  // namespace engine_core::terrain

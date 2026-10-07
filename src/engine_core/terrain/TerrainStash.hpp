@@ -9,6 +9,7 @@
 #include "terrain/VoxelVolume.hpp"
 
 #include <cstdint>
+#include <string>
 
 namespace engine_core::terrain {
 
@@ -16,8 +17,12 @@ namespace engine_core::terrain {
 // call takes a lock, so any thread may call these.
 class TerrainStash {
 public:
-    // A new token, never 0, naming a copy of chunks.
-    static std::uint64_t put(ChunkMap chunks, float voxel_size);
+    // A new token, never 0, naming a copy of chunks. A non-empty data_path
+    // (the Terrain's DataPath) remembers it as that path's latest token.
+    static std::uint64_t put(ChunkMap chunks, float voxel_size, const std::string& data_path);
+    // The latest token put for data_path; 0 when none (or cleared). A paste
+    // whose source was cut takes the voxels from the cut's undo record.
+    static std::uint64_t latest(const std::string& data_path);
     // False when the token is unknown (0, or cleared); chunks and voxel_size
     // are then left as they were.
     static bool get(std::uint64_t token, ChunkMap& chunks, float& voxel_size);

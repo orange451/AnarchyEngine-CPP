@@ -511,6 +511,10 @@ protected:
     // marks the save set and the place dirty. Not during play, not in Core,
     // and the place only while history is on.
     void note_unrecorded_edit(InstanceId id);
+    // When the open recording created id, its record takes id's place bytes
+    // as they are now, so redo brings back what a write that records nothing
+    // set while making it (a pasted Terrain's voxels and DataPath).
+    void refresh_created_record(InstanceId id);
 
     // Successful mutators record here. Equal values return before these run.
     // Velocity is not recorded. Undo application does not record.

@@ -197,6 +197,18 @@ void ChangeHistoryService::note(Mutation mutation) {
     }
 }
 
+AuthoredRecord* ChangeHistoryService::open_created_record(InstanceId id) {
+    if (!recording_) {
+        return nullptr;
+    }
+    for (Mutation& mutation : recording_->mutations) {
+        if (mutation.kind == MutationKind::CreateInstance && mutation.id == id) {
+            return &mutation.record;
+        }
+    }
+    return nullptr;
+}
+
 void ChangeHistoryService::mark_saved() {
     dirty_.store(false, std::memory_order_relaxed);
     // What the open recording holds is now on disk. A cancel or an empty commit

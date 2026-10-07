@@ -5,6 +5,32 @@
 #include <utility>
 
 namespace engine_core::terrain {
+
+VoxelVolume::VoxelVolume(VoxelVolume&& other) noexcept : voxel_size_(other.voxel_size_) {
+    *this = std::move(other);
+}
+
+VoxelVolume& VoxelVolume::operator=(VoxelVolume&& other) noexcept {
+    if (this != &other) {
+        voxel_size_ = other.voxel_size_;
+        chunks_ = std::move(other.chunks_);
+        dirty_ = std::move(other.dirty_);
+        // Revisions must only move forward: the pane polls revision() to
+        // notice a change, so copying other.revision_ verbatim could repeat
+        // or go backward (e.g. `volume_ = VoxelVolume{}` would reset it to
+        // 0). Taking the max of both sides and bumping it keeps it ahead of
+        // anything either side has shown so far.
+        revision_ = std::max(revision_, other.revision_) + 1;
+        ids_cache_ = other.ids_cache_;
+        ids_cache_revision_ = other.ids_cache_revision_;
+        ids_cache_valid_ = other.ids_cache_valid_;
+        // other.chunks_ is now empty; its old cache must not be read back as
+        // still describing it.
+        other.ids_cache_valid_ = false;
+    }
+    return *this;
+}
+
 namespace {
 
 // Cell bounds past this are refused before they are cast to int. Far inside
@@ -92,6 +118,9 @@ template <typename Change>
 void VoxelVolume::edit(CellCoord min, CellCoord max, Change change) {
     const ChunkCoord c0 = chunk_of(min.x, min.y, min.z);
     const ChunkCoord c1 = chunk_of(max.x, max.y, max.z);
+    // Set only when some chunk actually changes, so a no-op edit (nothing in
+    // range, or every cell already at its new value) leaves revision_ alone.
+    bool changed = false;
     for (int cz = c0.z; cz <= c1.z; ++cz) {
         for (int cy = c0.y; cy <= c1.y; ++cy) {
             for (int cx = c0.x; cx <= c1.x; ++cx) {
@@ -171,8 +200,12 @@ void VoxelVolume::edit(CellCoord min, CellCoord max, Change change) {
                     chunks_[coord] = std::move(copy);
                 }
                 mark_dirty(coord);
+                changed = true;
             }
         }
+    }
+    if (changed) {
+        ++revision_;
     }
 }
 
@@ -332,30 +365,75 @@ std::optional<std::string> VoxelVolume::write(CellCoord min, CellCoord max, cons
 }
 
 void VoxelVolume::clear() {
+    if (chunks_.empty()) {
+        return;
+    }
     for (const auto& [coord, chunk] : chunks_) {
         (void)chunk;
         mark_dirty(coord);
     }
     chunks_.clear();
+    ++revision_;
 }
 
 void VoxelVolume::set_chunks(ChunkMap chunks) {
+    bool changed = false;
     for (const auto& [coord, chunk] : chunks_) {
         const auto found = chunks.find(coord);
         if (found == chunks.end() || found->second != chunk) {
             mark_dirty(coord);
+            changed = true;
         }
     }
     for (const auto& [coord, chunk] : chunks) {
         (void)chunk;
         if (chunks_.find(coord) == chunks_.end()) {
             mark_dirty(coord);
+            changed = true;
         }
     }
     chunks_ = std::move(chunks);
+    if (changed) {
+        ++revision_;
+    }
+}
+
+std::size_t VoxelVolume::replace_everywhere(std::uint8_t from, std::uint8_t to) {
+    if (from == to) {
+        return 0;
+    }
+    std::size_t changed_chunks = 0;
+    for (auto& [coord, chunk] : chunks_) {
+        const std::array<std::uint64_t, 4>& used = chunk->ids_used();
+        if (((used[from >> 6] >> (from & 63)) & 1ull) == 0ull) {
+            continue;   // from isn't used anywhere in this chunk: leave it alone
+        }
+        std::shared_ptr<ChunkData> copy = chunk->clone_dense();
+        for (int i = 0; i < kChunkCells; ++i) {
+            const Cell before = copy->dense_at(i);
+            if (before.distance != kAirDistance && before.material == from) {
+                copy->set_dense_at(i, Cell{before.distance, to});
+            }
+        }
+        copy->finish();
+        chunk = std::move(copy);
+        mark_dirty(coord);
+        ++changed_chunks;
+    }
+    if (changed_chunks > 0) {
+        ++revision_;
+    }
+    return changed_chunks;
 }
 
 std::array<std::uint64_t, 4> VoxelVolume::ids_used() const {
+    // chunks_ and revision_ are stable while this runs (no writer runs
+    // concurrently with a reader), but several readers may call this at
+    // once, so the cache fields themselves need their own lock.
+    std::lock_guard<std::mutex> lock(ids_cache_mutex_);
+    if (ids_cache_valid_ && ids_cache_revision_ == revision_) {
+        return ids_cache_;
+    }
     std::array<std::uint64_t, 4> result{};
     for (const auto& [coord, chunk] : chunks_) {
         (void)coord;
@@ -364,6 +442,9 @@ std::array<std::uint64_t, 4> VoxelVolume::ids_used() const {
             result[i] |= used[i];
         }
     }
+    ids_cache_ = result;
+    ids_cache_revision_ = revision_;
+    ids_cache_valid_ = true;
     return result;
 }
 

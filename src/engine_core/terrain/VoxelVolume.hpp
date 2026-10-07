@@ -10,6 +10,7 @@
 
 #include <array>
 #include <cstdint>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -31,6 +32,12 @@ public:
     static constexpr std::int64_t kMaxCellsPerEdit = 16777216;
 
     explicit VoxelVolume(float voxel_size = 1.f) : voxel_size_(voxel_size) {}
+    // ids_cache_mutex_ cannot be moved, so these move the rest of the fields
+    // by hand and leave each side with a fresh mutex of its own. Never copied
+    // (a copy would need to decide which side's cache to keep); nothing in
+    // the codebase does.
+    VoxelVolume(VoxelVolume&& other) noexcept;
+    VoxelVolume& operator=(VoxelVolume&& other) noexcept;
     float voxel_size() const { return voxel_size_; }
 
     const ChunkMap& chunks() const { return chunks_; }
@@ -44,6 +51,10 @@ public:
     std::optional<std::string> subtract(Shape shape);
     std::optional<std::string> paint(Shape shape, std::uint8_t material);
     std::optional<std::string> replace(CellCoord min, CellCoord max, std::uint8_t from, std::uint8_t to);
+    // Every solid or band cell with Id from takes Id to, across every chunk,
+    // with no size limit. Chunks whose Id mask lacks from are skipped
+    // untouched. Returns how many chunks changed.
+    std::size_t replace_everywhere(std::uint8_t from, std::uint8_t to);
     // Cells min..max inclusive, x fastest: distances in studs, Ids.
     std::optional<std::string> read(CellCoord min, CellCoord max, std::vector<float>& distances,
                                     std::vector<std::uint8_t>& materials) const;
@@ -51,11 +62,15 @@ public:
                                      const std::vector<std::uint8_t>& materials);
     void clear();
 
-    // Ids that some solid or band cell uses; bit i of word i / 64.
+    // Ids that some solid or band cell uses; bit i of word i / 64. Cached:
+    // recomputed only when revision() has moved since the last call.
     std::array<std::uint64_t, 4> ids_used() const;
     // Chunks changed since the last take_dirty, and every neighbor of each.
     void take_dirty(std::vector<ChunkCoord>& out);
     bool has_dirty() const { return !dirty_.empty(); }
+    // Bumped by every change to the chunk map (edit, set_chunks, clear,
+    // replace_everywhere), but only when something actually changed.
+    std::uint64_t revision() const { return revision_; }
 
 private:
     // Runs change(x, y, z, cell_before) over every cell in min..max, chunk by
@@ -68,6 +83,17 @@ private:
     float voxel_size_;
     ChunkMap chunks_;
     std::unordered_set<ChunkCoord, ChunkCoordHash> dirty_;
+    std::uint64_t revision_ = 0;
+    // ids_used()'s cache: valid when ids_cache_valid_ and ids_cache_revision_
+    // matches revision_. Mutable since ids_used() is const but still wants to
+    // remember the last scan. Several UI-thread readers may call ids_used()
+    // concurrently under the world's shared read lock, so ids_cache_mutex_
+    // guards these three together; chunks_ and revision_ themselves are not
+    // written while a read lock is held, so they need no lock here.
+    mutable std::mutex ids_cache_mutex_;
+    mutable std::array<std::uint64_t, 4> ids_cache_{};
+    mutable std::uint64_t ids_cache_revision_ = 0;
+    mutable bool ids_cache_valid_ = false;
 };
 
 }  // namespace engine_core::terrain

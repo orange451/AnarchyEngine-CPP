@@ -133,6 +133,11 @@ std::optional<std::string> write_avox(const std::filesystem::path& root, const s
 
 Terrain::Terrain(DataModel::ChildTag tag, DataModel::State& state, InstanceId id) : PVInstance(tag, state, id) {}
 
+void Terrain::context_actions(std::vector<ContextAction>& out) const {
+    out.push_back(ContextAction{InstanceAction::Edit, true});
+    PVInstance::context_actions(out);
+}
+
 std::optional<std::string> Terrain::set_transform(const Matrix4& transform) {
     require_thread(*this);
     for (float value : transform.m) {
@@ -358,6 +363,13 @@ std::optional<std::string> Terrain::edit_volume(
     note_unrecorded_edit(id());
     refresh_creation();
     return std::nullopt;
+}
+
+void Terrain::replace_material_everywhere(int from, int to) {
+    edit_volume([&](terrain::VoxelVolume& volume) -> std::optional<std::string> {
+        volume.replace_everywhere(static_cast<std::uint8_t>(from), static_cast<std::uint8_t>(to));
+        return std::nullopt;
+    });
 }
 
 void Terrain::refresh_creation() {

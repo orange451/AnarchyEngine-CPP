@@ -38,8 +38,10 @@ enum class DropSide;
 struct LayoutHost;
 class IdeScriptEditor;
 class IdePrefabEditor;
+class IdeTerrainEditor;
 class IdeCssEditor;
 struct PrefabEditorHost;
+struct TerrainEditorHost;
 class IdeSearch;
 class IdeConflicts;
 class IdeProblems;
@@ -67,7 +69,9 @@ class PropertiesPanel;
 // double-click runs it. Edit docks a script editor on the scene view's tab strip.
 // A Prefab's Edit, and a double-click on it in an explorer or the Assets pane,
 // docks a Prefab editor there instead, where its Models and the Mesh and
-// Material each pairs are made and changed. Each script or Prefab has at most
+// Material each pairs are made and changed. A Terrain's Edit docks its Configure
+// Terrain tab there, where its TerrainMaterials are added, pointed at
+// Materials, and removed. Each script, Prefab, or Terrain has at most
 // one editor: editing it again brings that one's tab forward.
 // The explorer edits a name in place and hands the result to rename. F shows
 // the selection in every explorer: the branches above it open, and it scrolls into view.
@@ -91,7 +95,7 @@ class PropertiesPanel;
 // Restore Built-in Default forgets the saved one and resets to the built-in layout.
 // Where the docks are, what each holds, which windows are closed, and the
 // main window's place and size are kept in layout.json in the config folder
-// when the window closes, and the next start puts them back. Script editors, Prefab editors,
+// when the window closes, and the next start puts them back. Script editors, Prefab editors, Terrain tabs,
 // extra scene views, and terminals are not kept. Without that file, or when it cannot be read, the studio starts
 // with its default layout.
 class IdeLayout {
@@ -221,6 +225,12 @@ private:
     std::shared_ptr<IdePrefabEditor> open_prefab_editor(std::uint32_t prefab) const;
     // A Prefab editor's writes, each one undo step on the simulation thread.
     PrefabEditorHost prefab_editor_host();
+    // Docks a Configure Terrain tab for terrain on the scene view's tab strip,
+    // or brings the one already open forward. home is where a new one docks.
+    void edit_terrain(std::uint32_t terrain, IdeDock& home);
+    std::shared_ptr<IdeTerrainEditor> open_terrain_editor(std::uint32_t terrain) const;
+    // A Configure Terrain tab's writes, each one undo step on the simulation thread.
+    TerrainEditorHost terrain_editor_host();
     void flush_editors();
     // Runs the built-in plugins again. The place was just made, opened, or rebuilt.
     void load_plugins();
@@ -276,7 +286,8 @@ private:
     void pause_test();
     void resume_test();
     void stop_test();
-    // Closes every script editor and Prefab editor: their ids belong to a place that is going away.
+    // Closes every script editor, Prefab editor, and Configure Terrain tab: their ids belong to a place
+    // that is going away.
     void close_script_editors();
     void show_error(const std::string& heading, const std::string& detail);
     // News that needs no answer, as a JadeFX toast at the bottom right of the window.
@@ -521,6 +532,8 @@ private:
     std::unordered_map<std::uint32_t, std::weak_ptr<IdeScriptEditor>> open_scripts_;
     // The open Prefab editors, by Prefab id.
     std::unordered_map<std::uint32_t, std::weak_ptr<IdePrefabEditor>> open_prefabs_;
+    // The open Configure Terrain tabs, by Terrain id.
+    std::unordered_map<std::uint32_t, std::weak_ptr<IdeTerrainEditor>> open_terrains_;
     std::unordered_map<std::uint32_t, std::weak_ptr<IdeCssEditor>> open_css_;
     std::weak_ptr<class IdeConsole> console_;
     // The Search and Conflicts pages, typed, as their window entries' make last

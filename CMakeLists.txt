@@ -586,6 +586,7 @@ add_library(engine_core STATIC
     src/engine_core/InstanceRef.cpp
     src/engine_core/LuaReflect.cpp
     src/engine_core/ScriptBindings.cpp
+    src/engine_core/TerrainBindings.cpp
     src/engine_core/ScriptRuntime.cpp
     src/engine_core/TableSnapshot.cpp
     src/engine_core/ScriptAnalysis.cpp
@@ -937,6 +938,7 @@ add_executable(sandbox
     sandbox/profiler_tests.cpp
     sandbox/terrain_voxel_tests.cpp
     sandbox/terrain_instance_tests.cpp
+    sandbox/terrain_lua_tests.cpp
 )
 target_link_libraries(sandbox PRIVATE studio_core Catch2::Catch2WithMain)
 # The dense views tests check flecs state the engine keeps private.

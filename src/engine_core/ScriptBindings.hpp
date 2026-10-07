@@ -28,6 +28,7 @@ namespace engine_core {
 class ChangeHistoryService;
 class Mesh;
 class SoundEmitter;
+class Terrain;
 enum class FinishRecordingOperation;
 
 // Enum.FinishRecordingOperation's values, which are Roblox's (Cancel 0,
@@ -309,6 +310,29 @@ struct ScriptBindings {
     static int mesh_add_plane(lua_State* state);
     static int mesh_add_teapot(lua_State* state);
     static int mesh_clear(lua_State* state);
+    // Terrain's methods, in TerrainBindings.cpp. Every voxel edit goes through
+    // Terrain::edit_volume. self as a Terrain, or raises.
+    static Terrain& terrain_self(lua_State* state);
+    // Does nothing. ScriptBindings.cpp calls it so every link that has the
+    // script runtime keeps TerrainBindings.cpp, whose registrar is otherwise
+    // referenced by nothing and dropped from the static library.
+    static void link_terrain_methods();
+    // The live instance at index, or null when the value is not one.
+    static DataModel* terrain_instance_arg(lua_State* state, int index);
+    static int terrain_fill_ball(lua_State* state);
+    static int terrain_fill_block(lua_State* state);
+    static int terrain_fill_cylinder(lua_State* state);
+    static int terrain_fill_wedge(lua_State* state);
+    static int terrain_subtract_ball(lua_State* state);
+    static int terrain_subtract_block(lua_State* state);
+    static int terrain_subtract_cylinder(lua_State* state);
+    static int terrain_subtract_wedge(lua_State* state);
+    static int terrain_paint_ball(lua_State* state);
+    static int terrain_paint_block(lua_State* state);
+    static int terrain_replace_material(lua_State* state);
+    static int terrain_add_material(lua_State* state);
+    static int terrain_read_voxels(lua_State* state);
+    static int terrain_world_to_cell(lua_State* state);
     static SoundEmitter& emitter_self(lua_State* state);
     static int emitter_play(lua_State* state);
     static int emitter_stop(lua_State* state);

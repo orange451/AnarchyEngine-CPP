@@ -7,17 +7,33 @@
 namespace engine_core::terrain {
 namespace {
 
+// Cell bounds past this are refused before they are cast to int. Far inside
+// int's range, so max - min + 1 on any axis cannot overflow either.
+constexpr double kMaxBoundCell = 1073741824.0;  // 2^30
+
 // The cells an edit of shape visits: its bounds grown by the band, in cells.
-// Returns false if the shape's bounds are not finite (nothing to edit).
+// Returns false, setting nothing, when a bound is not finite or lies past
+// kMaxBoundCell: such an edit is too large.
 bool cell_box(const Shape& shape, float voxel_size, CellCoord& min, CellCoord& max, std::int64_t& count) {
     Vec3 lo{}, hi{};
     shape_bounds(shape, kBandCells * voxel_size, lo, hi);
-    min = CellCoord{static_cast<int>(std::floor(lo.x / voxel_size)), static_cast<int>(std::floor(lo.y / voxel_size)),
-                    static_cast<int>(std::floor(lo.z / voxel_size))};
-    max = CellCoord{static_cast<int>(std::ceil(hi.x / voxel_size)), static_cast<int>(std::ceil(hi.y / voxel_size)),
-                    static_cast<int>(std::ceil(hi.z / voxel_size))};
-    count = static_cast<std::int64_t>(max.x - min.x + 1) * (max.y - min.y + 1) * (max.z - min.z + 1);
-    return std::isfinite(lo.x) && std::isfinite(hi.x);
+    const double bounds[6] = {std::floor(static_cast<double>(lo.x) / voxel_size),
+                              std::floor(static_cast<double>(lo.y) / voxel_size),
+                              std::floor(static_cast<double>(lo.z) / voxel_size),
+                              std::ceil(static_cast<double>(hi.x) / voxel_size),
+                              std::ceil(static_cast<double>(hi.y) / voxel_size),
+                              std::ceil(static_cast<double>(hi.z) / voxel_size)};
+    for (const double bound : bounds) {
+        // Also false for NaN, which fails both comparisons.
+        if (!(bound >= -kMaxBoundCell && bound <= kMaxBoundCell)) {
+            return false;
+        }
+    }
+    min = CellCoord{static_cast<int>(bounds[0]), static_cast<int>(bounds[1]), static_cast<int>(bounds[2])};
+    max = CellCoord{static_cast<int>(bounds[3]), static_cast<int>(bounds[4]), static_cast<int>(bounds[5])};
+    count = (static_cast<std::int64_t>(max.x) - min.x + 1) * (static_cast<std::int64_t>(max.y) - min.y + 1) *
+            (static_cast<std::int64_t>(max.z) - min.z + 1);
+    return true;
 }
 
 // A box's cell count, for the coordinate-range operations (replace/read/write).
@@ -175,10 +191,7 @@ std::optional<std::string> VoxelVolume::fill(Shape shape, std::uint8_t material)
     }
     CellCoord min{}, max{};
     std::int64_t count = 0;
-    if (!cell_box(shape, voxel_size_, min, max, count)) {
-        return std::nullopt;
-    }
-    if (count > kMaxCellsPerEdit) {
+    if (!cell_box(shape, voxel_size_, min, max, count) || count > kMaxCellsPerEdit) {
         return std::string(kTooLarge);
     }
     const float vs = voxel_size_;
@@ -202,10 +215,7 @@ std::optional<std::string> VoxelVolume::subtract(Shape shape) {
     }
     CellCoord min{}, max{};
     std::int64_t count = 0;
-    if (!cell_box(shape, voxel_size_, min, max, count)) {
-        return std::nullopt;
-    }
-    if (count > kMaxCellsPerEdit) {
+    if (!cell_box(shape, voxel_size_, min, max, count) || count > kMaxCellsPerEdit) {
         return std::string(kTooLarge);
     }
     const float vs = voxel_size_;
@@ -225,10 +235,7 @@ std::optional<std::string> VoxelVolume::paint(Shape shape, std::uint8_t material
     }
     CellCoord min{}, max{};
     std::int64_t count = 0;
-    if (!cell_box(shape, voxel_size_, min, max, count)) {
-        return std::nullopt;
-    }
-    if (count > kMaxCellsPerEdit) {
+    if (!cell_box(shape, voxel_size_, min, max, count) || count > kMaxCellsPerEdit) {
         return std::string(kTooLarge);
     }
     const float vs = voxel_size_;

@@ -452,9 +452,8 @@ TEST_CASE("TW1 a Terrain's chunks are meshed and shown", "[terrain]") {
     SimRole role;
     Game game;
     Terrain& t = terrain_in_workspace(game);
-    // Terrain::edit_volume (plan 1a Task 7) is not merged yet: edit through
-    // volume() directly, as VoxelVolume marks its own dirty chunks.
-    REQUIRE_FALSE(t.volume().fill(ball_at(5.f, 5.f, 5.f, 4.f), 0));
+    // Edits go through Terrain::edit_volume, as a user's do.
+    REQUIRE_FALSE(t.edit_volume([&](VoxelVolume& v) { return v.fill(ball_at(5.f, 5.f, 5.f, 4.f), 0); }));
     TerrainWorld world;
     settle(world, game);
     REQUIRE(world.views().size() == 1u);
@@ -466,7 +465,7 @@ TEST_CASE("TW2 a Terrain outside Workspace is not shown", "[terrain]") {
     Game game;
     auto& t = game.create<Terrain>();
     game.set_parent(t.id(), game.scene_service("Storage"));
-    REQUIRE_FALSE(t.volume().fill(ball_at(5.f, 5.f, 5.f, 4.f), 0));
+    REQUIRE_FALSE(t.edit_volume([&](VoxelVolume& v) { return v.fill(ball_at(5.f, 5.f, 5.f, 4.f), 0); }));
     TerrainWorld world;
     settle(world, game);
     REQUIRE(world.views().empty());
@@ -476,17 +475,17 @@ TEST_CASE("TW3 an edit re-meshes only the chunks it touched and their neighbors"
     SimRole role;
     Game game;
     Terrain& t = terrain_in_workspace(game);
-    REQUIRE_FALSE(t.volume().fill(ball_at(5.f, 5.f, 5.f, 4.f), 0));
+    REQUIRE_FALSE(t.edit_volume([&](VoxelVolume& v) { return v.fill(ball_at(5.f, 5.f, 5.f, 4.f), 0); }));
     // (208, 16, 16) sits in the middle of chunk {6, 0, 0} (16 studs from every
     // face), so the grown ball's band (radius 6 + the 4-cell band = 10 studs)
     // never reaches a second chunk on any axis -- unlike a center near 0,
     // where the band alone can cross the origin's chunk seam on two axes at
     // once and legitimately dirty more than one chunk's neighborhood.
-    REQUIRE_FALSE(t.volume().fill(ball_at(208.f, 16.f, 16.f, 4.f), 0));
+    REQUIRE_FALSE(t.edit_volume([&](VoxelVolume& v) { return v.fill(ball_at(208.f, 16.f, 16.f, 4.f), 0); }));
     TerrainWorld world;
     settle(world, game);
     const std::uint64_t before = world.meshed_count();
-    REQUIRE_FALSE(t.volume().fill(ball_at(208.f, 16.f, 16.f, 6.f), 0));
+    REQUIRE_FALSE(t.edit_volume([&](VoxelVolume& v) { return v.fill(ball_at(208.f, 16.f, 16.f, 6.f), 0); }));
     settle(world, game);
     REQUIRE(world.meshed_count() - before <= 27u);
 }
@@ -497,7 +496,7 @@ TEST_CASE("TW4 a TerrainMaterial's Material changes the look, not the meshes", "
     Terrain& t = terrain_in_workspace(game);
     TerrainMaterial* entry = nullptr;
     REQUIRE_FALSE(t.add_material(0, entry));
-    REQUIRE_FALSE(t.volume().fill(ball_at(5.f, 5.f, 5.f, 4.f), 1));
+    REQUIRE_FALSE(t.edit_volume([&](VoxelVolume& v) { return v.fill(ball_at(5.f, 5.f, 5.f, 4.f), 1); }));
     TerrainWorld world;
     settle(world, game);
     const auto chunks = world.views()[0].chunks;
@@ -519,26 +518,25 @@ TEST_CASE("TW5 Stop re-meshes only what play changed", "[terrain]") {
     SimRole role;
     Game game;
     Terrain& t = terrain_in_workspace(game);
-    REQUIRE_FALSE(t.volume().fill(ball_at(5.f, 5.f, 5.f, 4.f), 0));
-    REQUIRE_FALSE(t.volume().fill(ball_at(300.f, 5.f, 5.f, 4.f), 0));
+    REQUIRE_FALSE(t.edit_volume([&](VoxelVolume& v) { return v.fill(ball_at(5.f, 5.f, 5.f, 4.f), 0); }));
+    REQUIRE_FALSE(t.edit_volume([&](VoxelVolume& v) { return v.fill(ball_at(300.f, 5.f, 5.f, 4.f), 0); }));
     TerrainWorld world;
     settle(world, game);
-    ChunkMap saved = t.volume().chunks();
     game.capture_place();
     game.start_simulation();
-    REQUIRE_FALSE(t.volume().subtract(ball_at(5.f, 5.f, 5.f, 6.f)));
+    REQUIRE_FALSE(t.edit_volume([&](VoxelVolume& v) { return v.subtract(ball_at(5.f, 5.f, 5.f, 6.f)); }));
     settle(world, game);
     const std::uint64_t before = world.meshed_count();
+    // Stop restores the voxels Play captured (Terrain::read_place), marking
+    // dirty only the chunks whose pointers play replaced.
     game.stop_simulation();
-    // Plan 1a's place bytes (Task 7) are not merged yet, so Stop does not
-    // restore the volume on its own: this does by hand what Terrain's
-    // read_place will do once it lands (VoxelVolume::set_chunks with the map
-    // captured at Play). Switch to capture_place/stop_simulation alone once
-    // that is in.
-    t.volume().set_chunks(saved);
     settle(world, game);
     REQUIRE(world.meshed_count() - before <= 27u);
-    REQUIRE(world.views()[0].chunks->size() >= 2u);   // the near ball is back
+    REQUIRE(world.views()[0].chunks->size() >= 2u);
+    // The near ball is back: its chunk is meshed again.
+    const auto& shown = *world.views()[0].chunks;
+    REQUIRE(std::any_of(shown.begin(), shown.end(),
+                        [](const TerrainChunkView& chunk) { return chunk.coord == ChunkCoord{0, 0, 0}; }));
 }
 
 TEST_CASE("TW6 a Terrain destroyed during play keeps its TerrainTag when Stop restores it", "[terrain]") {
@@ -551,7 +549,7 @@ TEST_CASE("TW6 a Terrain destroyed during play keeps its TerrainTag when Stop re
     SimRole role;
     Game game;
     Terrain& t = terrain_in_workspace(game);
-    REQUIRE_FALSE(t.volume().fill(ball_at(5.f, 5.f, 5.f, 4.f), 0));
+    REQUIRE_FALSE(t.edit_volume([&](VoxelVolume& v) { return v.fill(ball_at(5.f, 5.f, 5.f, 4.f), 0); }));
     const InstanceId id = t.id();
     TerrainWorld world;
     settle(world, game);
@@ -583,7 +581,7 @@ TEST_CASE("TW7 a mesh from a Terrain's previous stay in Workspace is dropped, no
     // Dead center of chunk {0,0,0} (32 studs on a side): radius 4 plus the
     // 4-cell band stays 8 studs clear of every face, so this is the only
     // chunk fill() stores, and its 26 neighbors stay pure air.
-    REQUIRE_FALSE(t.volume().fill(ball_at(16.f, 16.f, 16.f, 4.f), 0));
+    REQUIRE_FALSE(t.edit_volume([&](VoxelVolume& v) { return v.fill(ball_at(16.f, 16.f, 16.f, 4.f), 0); }));
 
     std::mutex gate_mu;
     std::condition_variable gate_cv;
@@ -613,7 +611,7 @@ TEST_CASE("TW7 a mesh from a Terrain's previous stay in Workspace is dropped, no
     world.update(game);   // leaves Workspace: TerrainWorld drops its record
     // While away, repaint the same solid region -- a visible edit the stuck
     // job's mesh will not reflect once it finally lands.
-    REQUIRE_FALSE(t.volume().paint(ball_at(16.f, 16.f, 16.f, 4.f), 7));
+    REQUIRE_FALSE(t.edit_volume([&](VoxelVolume& v) { return v.paint(ball_at(16.f, 16.f, 16.f, 4.f), 7); }));
     game.set_parent(t.id(), workspace_of(game));
     world.update(game);   // returns: first sight again, re-queues all 27 coords
     const std::uint64_t before = world.meshed_count();
@@ -657,7 +655,7 @@ TEST_CASE("TW8 first sight meshes a stored chunk's footprint including an unstor
     const std::size_t plane = side * side;
     const std::vector<float> distances(plane, -4.f);   // deep solid
     const std::vector<std::uint8_t> materials(plane, 1);
-    REQUIRE_FALSE(t.volume().write(CellCoord{4, 32, 4}, CellCoord{27, 32, 27}, distances, materials));
+    REQUIRE_FALSE(t.edit_volume([&](VoxelVolume& v) { return v.write(CellCoord{4, 32, 4}, CellCoord{27, 32, 27}, distances, materials); }));
     REQUIRE(t.volume().chunks().find(ChunkCoord{0, 1, 0}) != t.volume().chunks().end());
     REQUIRE(t.volume().chunks().find(ChunkCoord{0, 0, 0}) == t.volume().chunks().end());   // never touched
 
@@ -685,8 +683,7 @@ TEST_CASE("TS1 the snapshot carries each Terrain's chunks, transform, and look",
     pump.reserve(DataModel::kMaxInstances);
     Terrain& t = terrain_in_workspace(game);
     REQUIRE_FALSE(t.set_transform(matrix4_translation(10.f, 0.f, 0.f)));
-    // Edit through volume() directly: Terrain::edit_volume is not merged yet (see TW1 above).
-    REQUIRE_FALSE(t.volume().fill(ball_at(5.f, 5.f, 5.f, 4.f), 1));
+    REQUIRE_FALSE(t.edit_volume([&](VoxelVolume& v) { return v.fill(ball_at(5.f, 5.f, 5.f, 4.f), 1); }));
     TerrainWorld world;
     settle(world, game);
     REQUIRE(world.views().size() == 1u);
@@ -770,7 +767,7 @@ struct TerrainRaycastRig : ScriptRig {
 TEST_CASE("TP1 a Terrain has a static body with a shape per meshed chunk, stopped", "[terrain][physics]") {
     PhysicsRig rig;
     Terrain& t = terrain_in_workspace(rig.game);
-    REQUIRE_FALSE(t.volume().fill(ball_at(5.f, 5.f, 5.f, 4.f), 1));
+    REQUIRE_FALSE(t.edit_volume([&](VoxelVolume& v) { return v.fill(ball_at(5.f, 5.f, 5.f, 4.f), 1); }));
     TerrainWorld world(PhysicsWorld::build_terrain_collider);
     rig.physics.set_terrain_world(&world);
     settle(world, rig.game);
@@ -791,7 +788,7 @@ TEST_CASE("TP1 a Terrain has a static body with a shape per meshed chunk, stoppe
 TEST_CASE("TP2 CanCollide false removes every shape; true brings them back", "[terrain][physics]") {
     PhysicsRig rig;
     Terrain& t = terrain_in_workspace(rig.game);
-    REQUIRE_FALSE(t.volume().fill(slab(16.f, 8.f), 1));
+    REQUIRE_FALSE(t.edit_volume([&](VoxelVolume& v) { return v.fill(slab(16.f, 8.f), 1); }));
     TerrainWorld world(PhysicsWorld::build_terrain_collider);
     rig.physics.set_terrain_world(&world);
     settle(world, rig.game);
@@ -824,7 +821,7 @@ TEST_CASE("TP3 a ray hits the terrain and reports its TerrainMaterial's Material
         TerrainMaterial* entry = nullptr;
         REQUIRE_FALSE(t.add_material(rock.id(), entry));
         REQUIRE(entry->material_id() == 1);
-        REQUIRE_FALSE(t.volume().fill(slab(16.f, 8.f), 1));
+        REQUIRE_FALSE(t.edit_volume([&](VoxelVolume& v) { return v.fill(slab(16.f, 8.f), 1); }));
         TerrainWorld world(PhysicsWorld::build_terrain_collider);
         rig.physics.set_terrain_world(&world);
         settle(world, rig.game);
@@ -841,7 +838,7 @@ TEST_CASE("TP3 a ray hits the terrain and reports its TerrainMaterial's Material
         Material& rock = add_material_asset(rig.game, "Rock");
         TerrainMaterial* entry = nullptr;
         REQUIRE_FALSE(t.add_material(rock.id(), entry));
-        REQUIRE_FALSE(t.volume().fill(slab(16.f, 8.f), 1));
+        REQUIRE_FALSE(t.edit_volume([&](VoxelVolume& v) { return v.fill(slab(16.f, 8.f), 1); }));
         settle(rig.world, rig.game);
         const std::string out = rig.run(R"(
             local r = workspace:Raycast(Vector3.new(0, 10, 0), Vector3.new(0, -20, 0))
@@ -859,7 +856,7 @@ TEST_CASE("TP4 a box resting on terrain stays up while its chunk is re-meshed", 
     using physics_rig::y_of;
     PhysicsRig rig;
     Terrain& t = terrain_in_workspace(rig.game);
-    REQUIRE_FALSE(t.volume().fill(slab(48.f, 8.f), 1));
+    REQUIRE_FALSE(t.edit_volume([&](VoxelVolume& v) { return v.fill(slab(48.f, 8.f), 1); }));
     TerrainWorld world(PhysicsWorld::build_terrain_collider);
     rig.physics.set_terrain_world(&world);
     settle(world, rig.game);
@@ -886,7 +883,7 @@ TEST_CASE("TP4 a box resting on terrain stays up while its chunk is re-meshed", 
     const ChunkCoord under{0, -1, 0};
     const std::uint64_t before = collider_revision(world, t.id(), under);
     REQUIRE(before != 0u);
-    REQUIRE_FALSE(t.volume().paint(ball_at(24.f, -1.f, 24.f, 3.f), 2));
+    REQUIRE_FALSE(t.edit_volume([&](VoxelVolume& v) { return v.paint(ball_at(24.f, -1.f, 24.f, 3.f), 2); }));
     world.update(rig.game);
     world.wait_idle();
     frames(60);
@@ -899,7 +896,7 @@ TEST_CASE("TP5 a Terrain's body survives a play then Stop round trip", "[terrain
     using physics_rig::kStep;
     PhysicsRig rig;
     Terrain& t = terrain_in_workspace(rig.game);
-    REQUIRE_FALSE(t.volume().fill(slab(16.f, 8.f), 1));
+    REQUIRE_FALSE(t.edit_volume([&](VoxelVolume& v) { return v.fill(slab(16.f, 8.f), 1); }));
     TerrainWorld world(PhysicsWorld::build_terrain_collider);
     rig.physics.set_terrain_world(&world);
     settle(world, rig.game);
@@ -997,7 +994,7 @@ TEST_CASE("TL2 during play, digging under a resting box drops it", "[terrain][ph
     using physics_rig::y_of;
     PhysicsRig rig;
     Terrain& t = terrain_in_workspace(rig.game);
-    REQUIRE_FALSE(t.volume().fill(slab(48.f, 8.f), 1));
+    REQUIRE_FALSE(t.edit_volume([&](VoxelVolume& v) { return v.fill(slab(48.f, 8.f), 1); }));
     TerrainWorld world(PhysicsWorld::build_terrain_collider);
     rig.physics.set_terrain_world(&world);
     settle(world, rig.game);
@@ -1019,14 +1016,13 @@ TEST_CASE("TL2 during play, digging under a resting box drops it", "[terrain][ph
         REQUIRE(near(y_of(box.transform()), 0.5f, 0.05f));   // at rest on the slab
     }
 
-    // Dig a hole right through the slab under the box (Terrain::edit_volume
-    // is not merged yet: edit through volume() directly). The box may be
-    // asleep by now; the old chunk shapes going must wake it.
+    // Dig a hole right through the slab under the box, as a script's
+    // Terrain:SubtractBlock does. The box may be asleep by now; the old chunk shapes going must wake it.
     Shape hole;
     hole.kind = Shape::Kind::Block;
     hole.frame = matrix4_translation(8.f, -4.f, 8.f);
     hole.size = Vec3{12.f, 20.f, 12.f};
-    REQUIRE_FALSE(t.volume().subtract(hole));
+    REQUIRE_FALSE(t.edit_volume([&](VoxelVolume& v) { return v.subtract(hole); }));
     // These frames run much faster than real time, so give the mesher's
     // workers the real time a playing Engine would: queue the edit's chunks
     // from this thread (standing in for SimulationThread), wait for the

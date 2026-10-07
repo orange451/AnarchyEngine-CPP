@@ -59,8 +59,9 @@ struct RayHit {
 //   scale, a PlayerController upright, so the body sits where it starts at
 //   play and a dragger over the GameObject's children finds it there. A
 //   write to that PhysicsBase's own Transform moves neither the body nor the
-//   GameObject; the Transform goes back to the body's. This holds on the
-//   first sync of play too, for a write made just before Play. Those stores
+//   GameObject; the Transform goes back to the body's. This holds after
+//   Play until the first step too, for a write made just before Play or by
+//   a script before that step, as when bodies were made at it. Those stores
 //   are the only writes stopped sync makes to instances: no Changed, no
 //   history, no dirty mark, and no ground for a PlayerController. Stopped,
 //   sync never decomposes a Mesh: an unanchored Custom without known pieces

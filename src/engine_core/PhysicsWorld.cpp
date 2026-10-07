@@ -501,10 +501,13 @@ struct PhysicsWorld::Impl {
     float gravity = -static_cast<float>(Workspace::kDefaultGravity);
     std::uint32_t generation = 0;
     std::uint64_t pass = 0;
-    // The last sync ran while the place played, and whether this one takes a
-    // driven body's pose from its GameObject rather than its own Transform:
-    // while stopped, and on the first sync of play, when a write made just
-    // before Play was never seen stopped (see push).
+    // A step has synced this world while the place played, and whether this
+    // sync takes a driven body's pose from its GameObject rather than its own
+    // Transform: while stopped, and until the first step of play. So a write
+    // made just before Play and never seen stopped, or a script's write before
+    // the first step, is dropped, as it was when bodies were made at that step
+    // (see push). A Raycast's sync does not end that window: whether a script
+    // cast a ray first must not change what the first step does.
     bool played = false;
     bool poses_from_game_objects = true;
     std::unordered_map<InstanceId, Body> bodies;
@@ -551,6 +554,7 @@ struct PhysicsWorld::Impl {
         def.gravity = b3Vec3{0.f, gravity, 0.f};
         world = b3CreateWorld(&def);
         generation = next_generation;
+        played = false;
     }
 
     void say(const std::string& text) const {
@@ -559,7 +563,7 @@ struct PhysicsWorld::Impl {
         }
     }
 
-    void sync(DataModel& game) {
+    void sync(DataModel& game, bool stepping = false) {
         if (!b3World_IsValid(world) || generation != game.world_generation()) {
             begin(game.world_generation());
         }
@@ -567,7 +571,7 @@ struct PhysicsWorld::Impl {
         const bool running = game.simulation_running();
         poses_from_game_objects = !running || !played;
         reconcile(game);
-        played = running;
+        played = running && (stepping || played);
     }
 
     void simulate(DataModel& game, double dt) {
@@ -584,7 +588,7 @@ struct PhysicsWorld::Impl {
         if (!game.simulation_running()) {
             return;
         }
-        sync(game);
+        sync(game, true);
         simulate(game, dt);
     }
 
@@ -1533,8 +1537,8 @@ struct PhysicsWorld::Impl {
         // Properties edit, does not move the body or the GameObject (which
         // would be a GameObject move with no Changed and no history): the
         // GameObject decides, and the Transform goes back to where the body
-        // is. The same on the first sync of play, for a write made after the
-        // last stopped sync and before Play.
+        // is. The same after Play until the first step (played), for a write
+        // made after the last stopped sync or by a script before that step.
         const bool pose_from_game_object = record.driven != 0 && poses_from_game_objects;
         if ((dirty & PhysicsObject::kDirtyPose) != 0 && pose_from_game_object) {
             const b3Vec3 position = b3Body_GetPosition(record.body);

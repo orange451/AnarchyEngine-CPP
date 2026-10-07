@@ -301,3 +301,56 @@ TEST_CASE("E14 stopped, a PhysicsObject whose GameObject an earlier body moves s
     REQUIRE(x_of(second.transform()) == 4.f);
     REQUIRE(y_of(second.transform()) == 2.f);
 }
+
+TEST_CASE("E15 a Raycast at Play start does not let a driven Transform write before the first step move its GameObject",
+          "[physics][edit][raycast]") {
+    PhysicsRig rig;
+    GameObject& part = create_part(rig.game);
+    part.set_transform(at(10.f, 0.f, 0.f));
+    PhysicsObject& body = rig.body(engine_core::matrix4_identity(), Vec3{1.f, 1.f, 1.f}, true, part.id());
+    rig.sync_steps(1);
+    rig.play();
+    // A script casts a ray, then writes the Transform, before physics steps.
+    REQUIRE(rig.physics.raycast(rig.game, Vec3{10.f, 5.f, 0.f}, Vec3{0.f, -10.f, 0.f}, engine_core::RayFilter{}));
+    REQUIRE_FALSE(body.set_transform(at(20.f, 3.f, 0.f)));
+    rig.steps(1);
+    REQUIRE(engine_core::same_matrix4(part.transform(), at(10.f, 0.f, 0.f)));
+    REQUIRE(x_of(body.transform()) == 10.f);
+}
+
+TEST_CASE("E16 after Stop, a driven Transform written before Play with no stopped sync between does not move its GameObject",
+          "[physics][edit]") {
+    PhysicsRig rig;
+    GameObject& part = create_part(rig.game);
+    part.set_transform(at(10.f, 0.f, 0.f));
+    PhysicsObject& body = rig.body(engine_core::matrix4_identity(), Vec3{1.f, 1.f, 1.f}, true, part.id());
+    rig.sync_steps(1);
+    rig.play();
+    rig.steps(2);
+    rig.game.stop_simulation();
+    REQUIRE_FALSE(body.set_transform(at(20.f, 3.f, 0.f)));
+    rig.play();
+    rig.steps(1);
+    REQUIRE(engine_core::same_matrix4(part.transform(), at(10.f, 0.f, 0.f)));
+    REQUIRE(rig.physics.body_position(body.id())->x == 10.f);
+}
+
+TEST_CASE("E17 stopped, writing a driven PlayerController's Transform puts it back upright at its GameObject",
+          "[physics][edit][player]") {
+    PhysicsRig rig;
+    GameObject& part = create_part(rig.game);
+    Matrix4 tilted = engine_core::matrix4_axis_angle(Vec3{1.f, 0.f, 0.f}, 0.5);
+    tilted.m[12] = -4.f;
+    tilted.m[13] = 1.f;
+    tilted.m[14] = 6.f;
+    part.set_transform(tilted);
+    engine_core::PlayerController& controller = rig.controller(engine_core::matrix4_identity(), part.id());
+    rig.sync_steps(1);
+    REQUIRE_FALSE(controller.set_transform(engine_core::matrix4_axis_angle(Vec3{0.f, 0.f, 1.f}, 1.0)));
+    rig.sync_steps(1);
+    REQUIRE(engine_core::same_matrix4(part.transform(), tilted));
+    REQUIRE(near(x_of(controller.transform()), -4.f, 1e-5f));
+    REQUIRE(near(z_of(controller.transform()), 6.f, 1e-5f));
+    REQUIRE(near(controller.transform().m[5], 1.f, 1e-5f));
+    REQUIRE(near(controller.transform().m[6], 0.f, 1e-5f));
+}

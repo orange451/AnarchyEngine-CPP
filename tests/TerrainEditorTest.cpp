@@ -536,6 +536,23 @@ void TE10_click_selects() {
            "TE10 and the mark follows");
 }
 
+void TE11_add_tile_disabled_at_cap() {
+    PaneRig rig;
+    std::string error;
+    // Straight through the data helper, not the host, so this does not count
+    // toward rig.adds: only the tile's own click should (or should not).
+    for (int i = 0; i < 255; ++i) {
+        Expect(ide::add_terrain_material(rig.game, rig.terrain_id, 0, error) != 0, "TE11 filling to the cap");
+    }
+    rig.frames(2);
+    Expect(rig.counter() == "255 / 255 materials", "TE11 the counter reads 255 / 255");
+    Expect(rig.editor->addTile()->isDisabled(), "TE11 the tile is disabled at the cap, like the header button");
+    rig.click(rig.editor->addTile());
+    rig.frames(2);
+    Expect(rig.adds == 0 && rig.editor->view().materials.size() == 255,
+           "TE11 a click on the tile at the cap does nothing");
+}
+
 }  // namespace
 
 int main() {
@@ -550,6 +567,7 @@ int main() {
     TE8_one_undo_step_each();
     TE9_unassigned_row();
     TE10_click_selects();
+    TE11_add_tile_disabled_at_cap();
     if (gFailures != 0) {
         std::fprintf(stderr, "%d failed\n", gFailures);
         return 1;

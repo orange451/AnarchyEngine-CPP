@@ -221,6 +221,11 @@ constexpr const char* kEditorRules = R"CSS(
     border-color: var(--accent-color);
     background-color: var(--surface-color);
 }
+.te-new:disabled {
+    background-color: var(--wash-color);
+    opacity: 0.4;
+    cursor: default;
+}
 .te-new image-view {
     image-color: var(--accent-color);
 }
@@ -608,7 +613,12 @@ void IdeTerrainEditor::show_header() {
     const std::size_t count = view_.materials.size();
     subtitle_->setText(view_.alive ? std::to_string(count) + " / " + std::to_string(kMaxMaterials) + " materials"
                                    : std::string("Deleted"));
-    add_button_->setDisable(!view_.alive || count >= static_cast<std::size_t>(kMaxMaterials));
+    const bool at_cap = !view_.alive || count >= static_cast<std::size_t>(kMaxMaterials);
+    add_button_->setDisable(at_cap);
+    // The New Material tile is another way to the same add, so it is
+    // disabled the same way the header button is: no click gets through at
+    // the cap.
+    new_tile_->setDisable(at_cap);
     gone_->setVisible(!view_.alive);
     scroll_->setVisible(view_.alive);
 }
@@ -831,7 +841,8 @@ void IdeTerrainEditor::show_card_menu(engine_core::InstanceId entry, double x, d
 }
 
 void IdeTerrainEditor::addMaterial() {
-    if (!view_.alive || !host_.add || pending_add_) {
+    if (!view_.alive || !host_.add || pending_add_ ||
+        view_.materials.size() >= static_cast<std::size_t>(kMaxMaterials)) {
         return;
     }
     closePicker();

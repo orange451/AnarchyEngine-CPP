@@ -6,7 +6,7 @@
 
 namespace engine_core::terrain {
 
-VoxelVolume::VoxelVolume(VoxelVolume&& other) noexcept {
+VoxelVolume::VoxelVolume(VoxelVolume&& other) noexcept : voxel_size_(other.voxel_size_) {
     *this = std::move(other);
 }
 
@@ -15,10 +15,18 @@ VoxelVolume& VoxelVolume::operator=(VoxelVolume&& other) noexcept {
         voxel_size_ = other.voxel_size_;
         chunks_ = std::move(other.chunks_);
         dirty_ = std::move(other.dirty_);
-        revision_ = other.revision_;
+        // Revisions must only move forward: the pane polls revision() to
+        // notice a change, so copying other.revision_ verbatim could repeat
+        // or go backward (e.g. `volume_ = VoxelVolume{}` would reset it to
+        // 0). Taking the max of both sides and bumping it keeps it ahead of
+        // anything either side has shown so far.
+        revision_ = std::max(revision_, other.revision_) + 1;
         ids_cache_ = other.ids_cache_;
         ids_cache_revision_ = other.ids_cache_revision_;
         ids_cache_valid_ = other.ids_cache_valid_;
+        // other.chunks_ is now empty; its old cache must not be read back as
+        // still describing it.
+        other.ids_cache_valid_ = false;
     }
     return *this;
 }

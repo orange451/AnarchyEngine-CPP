@@ -314,6 +314,30 @@ TEST_CASE("VR3 revision moves with every change, and ids_used follows it", "[ter
     REQUIRE(volume.revision() == r1);
 }
 
+TEST_CASE("VR4 move-assign keeps revision moving forward and refreshes ids_used", "[terrain]") {
+    VoxelVolume a;
+    REQUIRE_FALSE(a.fill(ball_at(0.f, 0.f, 0.f, 5.f), 2));
+    const std::uint64_t before = a.revision();
+    REQUIRE((a.ids_used()[0] >> 2 & 1u) == 1u);
+
+    VoxelVolume b;
+    REQUIRE_FALSE(b.fill(ball_at(0.f, 0.f, 0.f, 5.f), 5));
+    a = std::move(b);
+    // Forward, never backward or repeated, so a poller watching a's revision
+    // never mistakes this for "nothing changed".
+    REQUIRE(a.revision() > before);
+    REQUIRE((a.ids_used()[0] >> 5 & 1u) == 1u);
+    REQUIRE((a.ids_used()[0] >> 2 & 1u) == 0u);   // a's old Id is gone with its old chunks_
+
+    // Moving in a fresh, never-edited volume (as Terrain's clear does) must
+    // not reset the revision back down to the fresh side's 0.
+    const std::uint64_t before2 = a.revision();
+    a = VoxelVolume{};
+    REQUIRE(a.revision() > before2);
+    REQUIRE(a.chunks().empty());
+    REQUIRE(a.ids_used() == std::array<std::uint64_t, 4>{});
+}
+
 TEST_CASE("AV1 an .avox round-trips every chunk", "[terrain]") {
     VoxelVolume volume;
     REQUIRE_FALSE(volume.fill(ball_at(0.f, 0.f, 0.f, 9.f), 2));

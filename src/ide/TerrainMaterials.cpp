@@ -109,17 +109,19 @@ std::optional<std::string> remove_terrain_material(engine_core::DataModel& world
     if (entry == nullptr) {
         return std::string("That TerrainMaterial no longer exists");
     }
+    if (choice.kind == RemoveChoice::Kind::Replace && (choice.replace_with < 0 || choice.replace_with > 255)) {
+        return id_range_error();
+    }
+    // As delete_instances does: ask first, so a refusal leaves the entry (and
+    // its voxels, if Replace was asked for) alone. The replace below cannot
+    // be undone, so it must not run until destroy is known to go through.
+    if (std::optional<std::string> error = world.destroy_error(entry_id)) {
+        return error;
+    }
     if (choice.kind == RemoveChoice::Kind::Replace) {
-        if (choice.replace_with < 0 || choice.replace_with > 255) {
-            return id_range_error();
-        }
         if (auto* terrain = dynamic_cast<Terrain*>(world.instance(world.parent(entry_id)))) {
             terrain->replace_material_everywhere(entry->material_id(), choice.replace_with);
         }
-    }
-    // As delete_instances does: ask first, so a refusal leaves the entry alone.
-    if (std::optional<std::string> error = world.destroy_error(entry_id)) {
-        return error;
     }
     world.destroy_tree(entry_id);
     return std::nullopt;

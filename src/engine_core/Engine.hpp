@@ -138,9 +138,9 @@ private:
     PhysicsWorld physics_;
     // Splits Custom PhysicsObjects' Meshes into convex pieces while stopped.
     ConvexDecomposer decomposer_;
-    // Meshes every Terrain in Workspace, playing or stopped. {} is the
-    // collider builder until Task 4 wires PhysicsWorld::build_terrain_collider in.
-    TerrainWorld terrain_;
+    // Meshes every Terrain in Workspace, playing or stopped, building each
+    // chunk's collider on its workers for physics_'s Terrain bodies.
+    TerrainWorld terrain_{PhysicsWorld::build_terrain_collider};
     std::uint64_t terrain_failures_seen_ = 0;   // report_terrain_failures' high-water mark
     // SoundEmitter voices, stepped after the scripts each frame while the place plays.
     AudioWorld audio_;

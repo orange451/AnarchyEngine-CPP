@@ -17,6 +17,11 @@ class DataModel;
 class PhysicsBase;
 class PhysicsObject;
 class PlayerController;
+class TerrainWorld;
+
+namespace terrain {
+struct ChunkMesh;
+}
 
 // Which instances a ray sees: with include, only those that are, or are under,
 // one of instances; else every instance but those.
@@ -27,7 +32,7 @@ struct RayFilter {
 
 // What a ray hit first.
 struct RayHit {
-    InstanceId instance = 0;   // The PhysicsBase (later, Terrain) whose body was hit.
+    InstanceId instance = 0;   // The PhysicsBase or Terrain whose body was hit.
     Vec3 position{};
     Vec3 normal{};
     float distance = 0.f;
@@ -77,6 +82,14 @@ struct RayHit {
 //      GameObject's scale kept. These writes fire no Changed and record no
 //      history, as a GameObject's own velocity integration does.
 //
+// Terrain, at the end of each sync, once set_terrain_world gave it a
+// TerrainWorld: each TerrainView gets a static body at its transform, which
+// jumps there when the transform changes, and one mesh shape per chunk
+// collider, made again when that chunk's collider revision changes (the old
+// shape goes first), with none at all while CanCollide is false. A shape's
+// triangles carry the Terrain's material Ids as Box3D surface materials, so a
+// ray reports which Id it hit. A Terrain gone from the views loses its body.
+//
 // Gravity is (0, -Workspace.Gravity, 0), read again at each sync.
 class PhysicsWorld {
 public:
@@ -98,7 +111,8 @@ public:
     // zero direction or a non-finite origin. Any thread, under the write lock.
     std::optional<RayHit> raycast(DataModel& game, Vec3 origin, Vec3 direction, const RayFilter& filter);
 
-    // How many bodies the world holds, and whether this PhysicsObject has one.
+    // How many bodies the world holds, and whether this PhysicsObject or
+    // Terrain has one.
     std::size_t body_count() const;
     bool has_body(InstanceId id) const;
     // For tests: the body's mass, and each of its shapes' friction. 0 and
@@ -116,6 +130,18 @@ public:
     // For tests: a key naming its first shape's Box3D handle, changing
     // whenever the shape is remade; 0 when it has none.
     std::uint64_t shape_key(InstanceId id) const;
+
+    // Where Terrain bodies come from; null for none. SimulationThread, under
+    // the write lock. The TerrainWorld must outlive this world or be unset
+    // first.
+    void set_terrain_world(const TerrainWorld* terrains);
+    // A chunk mesh as a collider for its Terrain's body: its triangles,
+    // welded, each carrying its material Id. Null for a mesh with no
+    // triangles, or one Box3D builds nothing from. Any thread, no lock:
+    // TerrainMesher's workers call it. What it holds only PhysicsWorld reads.
+    static std::shared_ptr<void> build_terrain_collider(const terrain::ChunkMesh& mesh);
+    // For tests: how many shapes the body of this PhysicsBase or Terrain has, or 0.
+    std::size_t shape_count(InstanceId id) const;
 
     // Where a warning goes, such as a Hull that fell back to a Box. Unset, it
     // goes nowhere.

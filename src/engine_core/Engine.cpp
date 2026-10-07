@@ -66,6 +66,8 @@ Engine::Engine() {
     audio_.set_warning_sink([this](const std::string& text) {
         scripts_->append_output(ScriptRuntime::OutputKind::Print, text);
     });
+    // Each Terrain terrain_ meshes gets a body, made in physics_.sync.
+    physics_.set_terrain_world(&terrain_);
     analysis_ = std::make_unique<ScriptAnalysis>(game_);
 }
 
@@ -82,6 +84,8 @@ Engine::~Engine() {
     // during teardown. This runs after stop() has joined the simulation and
     // render threads, so nothing else touches game_ and no lock is needed.
     game_.set_physics(nullptr);
+    // terrain_ is declared after physics_, so it goes first.
+    physics_.set_terrain_world(nullptr);
 }
 
 void Engine::set_renderer(IRenderer* renderer) { renderer_ = renderer; }

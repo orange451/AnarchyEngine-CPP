@@ -9,14 +9,18 @@
 #include "PhysicsObject.hpp"
 #include "PlayerController.hpp"
 #include "SceneService.hpp"
+#include "TerrainWorld.hpp"
+#include "terrain/SurfaceNets.hpp"
 
 #pragma warning(push, 0)
 #include "box3d/box3d.h"
 #pragma warning(pop)
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
+#include <memory>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -280,6 +284,40 @@ b3MeshData* build_mesh(std::vector<b3Vec3>& points, const std::vector<std::uint3
     return b3CreateMesh(&def, nullptr, 0);
 }
 
+// What build_terrain_collider hands TerrainWorld: one chunk's triangles as a
+// Box3D mesh. Built on a TerrainMesher worker; read on SimulationThread by
+// the shape made from it, which the body record keeps it alive for. Freed by
+// whichever thread drops the last reference, as b3CreateMesh and
+// b3DestroyMesh touch no Box3D world (only its allocator).
+struct TerrainCollider {
+    b3MeshData* mesh = nullptr;
+    TerrainCollider() = default;
+    TerrainCollider(const TerrainCollider&) = delete;
+    TerrainCollider& operator=(const TerrainCollider&) = delete;
+    ~TerrainCollider() {
+        if (mesh != nullptr) {
+            b3DestroyMesh(mesh);
+        }
+    }
+};
+
+// One surface material per Terrain material Id, the index as its
+// userMaterialId, at a PhysicsObject's default Friction and Bounciness: a
+// terrain shape's triangles index it by the Id they carry.
+constexpr int kTerrainMaterialCount = 256;
+
+std::array<b3SurfaceMaterial, kTerrainMaterialCount> terrain_materials() {
+    std::array<b3SurfaceMaterial, kTerrainMaterialCount> materials{};
+    for (int index = 0; index < kTerrainMaterialCount; ++index) {
+        b3SurfaceMaterial& material = materials[static_cast<std::size_t>(index)];
+        material = b3DefaultSurfaceMaterial();
+        material.friction = static_cast<float>(PhysicsObject::kDefaultFriction);
+        material.restitution = 0.f;
+        material.userMaterialId = static_cast<std::uint64_t>(index);
+    }
+    return materials;
+}
+
 // ---- Outlines ---------------------------------------------------------
 
 void add_line(std::vector<Vec3>& lines, Vec3 a, Vec3 b) {
@@ -513,6 +551,29 @@ struct PhysicsWorld::Impl {
     std::unordered_map<InstanceId, Body> bodies;
     std::function<void(const std::string&)> warn;
 
+    // A Terrain's static body: one mesh shape per chunk collider.
+    struct TerrainChunkShape {
+        std::uint64_t revision = 0;
+        // Keeps the mesh the shape points into alive as long as the shape.
+        std::shared_ptr<void> collider;
+        b3ShapeId shape = b3_nullShapeId;
+        std::uint64_t seen = 0;
+    };
+    struct TerrainBody {
+        b3BodyId body = b3_nullBodyId;
+        Matrix4 transform{};
+        // What the shapes were last made from: the TerrainView's
+        // chunks_revision (TerrainWorld republishes the colliders with each)
+        // and CanCollide. Both the same, the shapes are too.
+        std::uint64_t chunks_revision = 0;
+        bool can_collide = false;
+        std::unordered_map<terrain::ChunkCoord, TerrainChunkShape, terrain::ChunkCoordHash> chunks;
+        std::uint64_t seen = 0;
+    };
+    const TerrainWorld* terrains = nullptr;
+    std::unordered_map<InstanceId, TerrainBody> terrain_bodies;
+    const std::array<b3SurfaceMaterial, kTerrainMaterialCount> terrain_surfaces = terrain_materials();
+
     // Scratch, kept between steps so a step does not allocate once warm.
     std::vector<InstanceId> eligible;
     std::vector<std::pair<InstanceId, InstanceId>> wanted;
@@ -546,6 +607,8 @@ struct PhysicsWorld::Impl {
             }
         }
         bodies.clear();
+        // Terrain colliders go only now that no shape points into them.
+        terrain_bodies.clear();
     }
 
     void begin(std::uint32_t next_generation) {
@@ -571,6 +634,7 @@ struct PhysicsWorld::Impl {
         const bool running = game.simulation_running();
         poses_from_game_objects = !running || !played;
         reconcile(game);
+        reconcile_terrain();
         played = running && (stepping || played);
     }
 
@@ -617,6 +681,11 @@ struct PhysicsWorld::Impl {
         out.position = from_b3(hits.point);
         out.normal = from_b3(hits.normal);
         out.distance = hits.closest * length;
+        // A Terrain's triangles carry its material Ids (terrain_materials).
+        if (terrain_bodies.count(hits.instance) != 0) {
+            out.has_material = true;
+            out.material = static_cast<std::uint8_t>(hits.material);
+        }
         return out;
     }
 
@@ -684,6 +753,119 @@ struct PhysicsWorld::Impl {
             }
             destroy(id);
         }
+    }
+
+    // ---- Terrain bodies -------------------------------------------------
+
+    // Each Terrain TerrainWorld shows gets a static body and its chunks'
+    // shapes; one it no longer shows loses them. SimulationThread, under the
+    // write lock, after reconcile (which counted this pass).
+    void reconcile_terrain() {
+        if (terrains != nullptr) {
+            for (const TerrainView& view : terrains->views()) {
+                keep_terrain(view);
+            }
+        }
+        gone.clear();
+        for (const auto& [id, record] : terrain_bodies) {
+            if (record.seen != pass) {
+                gone.push_back(id);
+            }
+        }
+        for (InstanceId id : gone) {
+            destroy_terrain(id);
+        }
+    }
+
+    void keep_terrain(const TerrainView& view) {
+        auto [found, created] = terrain_bodies.try_emplace(view.terrain);
+        TerrainBody& record = found->second;
+        record.seen = pass;
+        b3Vec3 position{};
+        b3Quat rotation{};
+        if (created) {
+            b3BodyDef def = b3DefaultBodyDef();
+            def.type = b3_staticBody;
+            pose_of(view.transform, def.position, def.rotation);
+            def.userData = user_data(view.terrain);
+            record.body = b3CreateBody(world, &def);
+            record.transform = view.transform;
+        } else if (!same_matrix4(view.transform, record.transform)) {
+            pose_of(view.transform, position, rotation);
+            b3Body_SetTransform(record.body, position, rotation);
+            record.transform = view.transform;
+        }
+        if (!created && view.chunks_revision == record.chunks_revision && view.can_collide == record.can_collide) {
+            return;
+        }
+        record.chunks_revision = view.chunks_revision;
+        record.can_collide = view.can_collide;
+        const auto* colliders = view.can_collide ? terrains->colliders(view.terrain) : nullptr;
+        if (colliders != nullptr) {
+            for (const TerrainWorld::ChunkCollider& collider : *colliders) {
+                keep_chunk(record, view.terrain, collider);
+            }
+        }
+        for (auto chunk = record.chunks.begin(); chunk != record.chunks.end();) {
+            if (chunk->second.seen != pass) {
+                drop_chunk(chunk->second);
+                chunk = record.chunks.erase(chunk);
+            } else {
+                ++chunk;
+            }
+        }
+    }
+
+    // A shape for collider on the Terrain's body, unless the one there was
+    // made from this revision already. The old shape goes first.
+    void keep_chunk(TerrainBody& record, InstanceId terrain, const TerrainWorld::ChunkCollider& collider) {
+        TerrainChunkShape& chunk = record.chunks[collider.coord];
+        chunk.seen = pass;
+        if (b3Shape_IsValid(chunk.shape) && chunk.revision == collider.revision) {
+            return;
+        }
+        drop_chunk(chunk);
+        const auto* built = static_cast<const TerrainCollider*>(collider.collider.get());
+        if (built == nullptr || built->mesh == nullptr) {
+            return;
+        }
+        b3ShapeDef def = b3DefaultShapeDef();
+        // Box3D copies the materials into the shape.
+        def.materials = const_cast<b3SurfaceMaterial*>(terrain_surfaces.data());
+        def.materialCount = kTerrainMaterialCount;
+        def.baseMaterial = terrain_surfaces[0];
+        def.userData = user_data(terrain);
+        // A static shape otherwise meets only bodies that move: one resting
+        // where a chunk was just made again would sink into it first.
+        def.invokeContactCreation = true;
+        chunk.shape = b3CreateMeshShape(record.body, &def, built->mesh, b3Vec3{1.f, 1.f, 1.f});
+        chunk.revision = collider.revision;
+        chunk.collider = collider.collider;
+    }
+
+    // Destroys the chunk's shape, waking what touched it, and only then
+    // lets go of the mesh it pointed into.
+    static void drop_chunk(TerrainChunkShape& chunk) {
+        if (b3Shape_IsValid(chunk.shape)) {
+            b3DestroyShape(chunk.shape, false);
+        }
+        chunk.shape = b3_nullShapeId;
+        chunk.collider.reset();
+        chunk.revision = 0;
+    }
+
+    void destroy_terrain(InstanceId id) {
+        const auto found = terrain_bodies.find(id);
+        if (found == terrain_bodies.end()) {
+            return;
+        }
+        for (auto& [coord, chunk] : found->second.chunks) {
+            drop_chunk(chunk);
+        }
+        if (b3Body_IsValid(found->second.body)) {
+            b3DestroyBody(found->second.body);
+        }
+        terrain_bodies.erase(found);
     }
 
     // Each claimed GameObject goes to the first of its claimants in a
@@ -1637,9 +1819,11 @@ std::optional<RayHit> PhysicsWorld::raycast(DataModel& game, Vec3 origin, Vec3 d
     return impl_->raycast(game, origin, direction, filter);
 }
 
-std::size_t PhysicsWorld::body_count() const { return impl_->bodies.size(); }
+std::size_t PhysicsWorld::body_count() const { return impl_->bodies.size() + impl_->terrain_bodies.size(); }
 
-bool PhysicsWorld::has_body(InstanceId id) const { return impl_->bodies.count(id) != 0; }
+bool PhysicsWorld::has_body(InstanceId id) const {
+    return impl_->bodies.count(id) != 0 || impl_->terrain_bodies.count(id) != 0;
+}
 
 int PhysicsWorld::shapes_made(InstanceId id) const {
     const auto found = impl_->bodies.find(id);
@@ -1686,6 +1870,66 @@ std::optional<Vec3> PhysicsWorld::body_position(InstanceId id) const {
         return std::nullopt;
     }
     return from_b3(b3Body_GetPosition(found->second.body));
+}
+
+void PhysicsWorld::set_terrain_world(const TerrainWorld* terrains) {
+    if (terrains == impl_->terrains) {
+        return;
+    }
+    // Another TerrainWorld numbers its revisions afresh: its Terrains start over.
+    impl_->gone.clear();
+    for (const auto& [id, record] : impl_->terrain_bodies) {
+        impl_->gone.push_back(id);
+    }
+    for (InstanceId id : impl_->gone) {
+        impl_->destroy_terrain(id);
+    }
+    impl_->terrains = terrains;
+}
+
+std::shared_ptr<void> PhysicsWorld::build_terrain_collider(const terrain::ChunkMesh& mesh) {
+    if (mesh.triangles.size() < 3 || mesh.positions.size() < 3) {
+        return nullptr;
+    }
+    std::vector<b3Vec3> points;
+    points.reserve(mesh.positions.size());
+    for (const Vec3& p : mesh.positions) {
+        points.push_back(to_b3(p));
+    }
+    std::vector<std::int32_t> indices(mesh.triangles.begin(), mesh.triangles.end());
+    std::vector<std::uint8_t> ids(mesh.triangle_ids.begin(), mesh.triangle_ids.end());
+    ids.resize(indices.size() / 3, 0);
+    b3MeshDef def{};
+    def.vertices = points.data();
+    def.indices = indices.data();
+    def.materialIndices = ids.data();
+    def.vertexCount = static_cast<int>(points.size());
+    def.triangleCount = static_cast<int>(indices.size() / 3);
+    // Neighboring cells share corners only by position, as an anchored
+    // Custom's faces do (build_mesh): welding joins them so edges between
+    // triangles are known, and a body slides across them without catching.
+    def.weldVertices = true;
+    def.weldTolerance = kWeldTolerance;
+    def.identifyEdges = true;
+    auto collider = std::make_shared<TerrainCollider>();
+    collider->mesh = b3CreateMesh(&def, nullptr, 0);
+    if (collider->mesh == nullptr) {
+        return nullptr;
+    }
+    return collider;
+}
+
+std::size_t PhysicsWorld::shape_count(InstanceId id) const {
+    if (const auto found = impl_->bodies.find(id); found != impl_->bodies.end()) {
+        return found->second.shapes.size();
+    }
+    std::size_t count = 0;
+    if (const auto found = impl_->terrain_bodies.find(id); found != impl_->terrain_bodies.end()) {
+        for (const auto& [coord, chunk] : found->second.chunks) {
+            count += b3Shape_IsValid(chunk.shape) ? 1u : 0u;
+        }
+    }
+    return count;
 }
 
 void PhysicsWorld::set_warning_sink(std::function<void(const std::string&)> sink) { impl_->warn = std::move(sink); }

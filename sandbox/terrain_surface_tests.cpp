@@ -1,10 +1,12 @@
 // Terrain surfaces: Surface Nets meshing, the mesher pool, TerrainWorld,
 // terrain bodies, and what the renderer is handed.
 
+#include "physics_rig.hpp"
 #include "support.hpp"
 
 #include "AssetInstances.hpp"
 #include "LuaApi.hpp"
+#include "PhysicsWorld.hpp"
 #include "Terrain.hpp"
 #include "TerrainMaterial.hpp"
 #include "TerrainWorld.hpp"
@@ -22,6 +24,7 @@
 #include <memory>
 #include <mutex>
 #include <stdexcept>
+#include <string>
 #include <tuple>
 #include <unordered_map>
 #include <utility>
@@ -650,4 +653,192 @@ TEST_CASE("TW8 first sight meshes a stored chunk's footprint including an unstor
     // result had a non-null mesh (accept_result erases the rest), so this
     // count is directly comparable to reference_count above.
     REQUIRE(world.views()[0].chunks->size() == reference_count);
+}
+
+namespace {
+
+using physics_rig::PhysicsRig;
+
+// A block of solid whose top is at y = 0: size studs across, depth deep.
+Shape slab(float size, float depth) {
+    Shape s;
+    s.kind = Shape::Kind::Block;
+    s.frame = matrix4_translation(0.f, -depth * 0.5f, 0.f);
+    s.size = Vec3{size, depth, size};
+    return s;
+}
+
+// How many of the one Terrain's published chunks have triangles: each is
+// drawn, so each should collide too.
+std::size_t chunks_with_triangles(const TerrainWorld& world) {
+    REQUIRE(world.views().size() == 1u);
+    return world.views()[0].chunks->size();
+}
+
+// The revision of the collider TerrainWorld holds for coord, or 0.
+std::uint64_t collider_revision(const TerrainWorld& world, InstanceId terrain, ChunkCoord coord) {
+    const auto* colliders = world.colliders(terrain);
+    if (colliders == nullptr) {
+        return 0;
+    }
+    for (const auto& collider : *colliders) {
+        if (collider.coord == coord) {
+            return collider.revision;
+        }
+    }
+    return 0;
+}
+
+// A ScriptRig whose Game has a physics world wired to a TerrainWorld, as an
+// Engine's does.
+struct TerrainRaycastRig : ScriptRig {
+    PhysicsWorld physics;
+    TerrainWorld world{PhysicsWorld::build_terrain_collider};
+    TerrainRaycastRig() {
+        physics.set_terrain_world(&world);
+        game.set_physics(&physics);
+    }
+    ~TerrainRaycastRig() { game.set_physics(nullptr); }
+
+    // Runs source on the command line and returns what it printed.
+    std::string run(const char* source) {
+        runtime.drain_output();
+        runtime.run_chunk(source);
+        frames(1);
+        std::string out;
+        for (const auto& line : runtime.drain_output().lines) {
+            out += line.text;
+        }
+        return out;
+    }
+};
+
+}  // namespace
+
+TEST_CASE("TP1 a Terrain has a static body with a shape per meshed chunk, stopped", "[terrain][physics]") {
+    PhysicsRig rig;
+    Terrain& t = terrain_in_workspace(rig.game);
+    REQUIRE_FALSE(t.volume().fill(ball_at(5.f, 5.f, 5.f, 4.f), 1));
+    TerrainWorld world(PhysicsWorld::build_terrain_collider);
+    rig.physics.set_terrain_world(&world);
+    settle(world, rig.game);
+    rig.physics.sync(rig.game);
+    REQUIRE(rig.physics.has_body(t.id()));
+    const std::size_t meshed = chunks_with_triangles(world);
+    REQUIRE(meshed >= 1u);
+    REQUIRE(world.colliders(t.id())->size() == meshed);
+    REQUIRE(rig.physics.shape_count(t.id()) == meshed);
+
+    // Out of Workspace, the body goes.
+    rig.game.set_parent(t.id(), rig.game.scene_service("Storage"));
+    settle(world, rig.game);
+    rig.physics.sync(rig.game);
+    REQUIRE_FALSE(rig.physics.has_body(t.id()));
+}
+
+TEST_CASE("TP2 CanCollide false removes every shape; true brings them back", "[terrain][physics]") {
+    PhysicsRig rig;
+    Terrain& t = terrain_in_workspace(rig.game);
+    REQUIRE_FALSE(t.volume().fill(slab(16.f, 8.f), 1));
+    TerrainWorld world(PhysicsWorld::build_terrain_collider);
+    rig.physics.set_terrain_world(&world);
+    settle(world, rig.game);
+    rig.physics.sync(rig.game);
+    const std::size_t meshed = chunks_with_triangles(world);
+    REQUIRE(rig.physics.shape_count(t.id()) == meshed);
+    const Vec3 origin{3.f, 10.f, 3.f};
+    const Vec3 down{0.f, -20.f, 0.f};
+    REQUIRE(rig.physics.raycast(rig.game, origin, down, {}).has_value());
+
+    REQUIRE_FALSE(t.set_can_collide(false));
+    settle(world, rig.game);
+    rig.physics.sync(rig.game);
+    REQUIRE(rig.physics.has_body(t.id()));
+    REQUIRE(rig.physics.shape_count(t.id()) == 0u);
+    REQUIRE_FALSE(rig.physics.raycast(rig.game, origin, down, {}).has_value());
+
+    REQUIRE_FALSE(t.set_can_collide(true));
+    settle(world, rig.game);
+    rig.physics.sync(rig.game);
+    REQUIRE(rig.physics.shape_count(t.id()) == meshed);
+    REQUIRE(rig.physics.raycast(rig.game, origin, down, {}).has_value());
+}
+
+TEST_CASE("TP3 a ray hits the terrain and reports its TerrainMaterial's Material", "[terrain][physics]") {
+    SECTION("from C++") {
+        PhysicsRig rig;
+        Terrain& t = terrain_in_workspace(rig.game);
+        Material& rock = add_material_asset(rig.game, "Rock");
+        TerrainMaterial* entry = nullptr;
+        REQUIRE_FALSE(t.add_material(rock.id(), entry));
+        REQUIRE(entry->material_id() == 1);
+        REQUIRE_FALSE(t.volume().fill(slab(16.f, 8.f), 1));
+        TerrainWorld world(PhysicsWorld::build_terrain_collider);
+        rig.physics.set_terrain_world(&world);
+        settle(world, rig.game);
+        const auto hit = rig.physics.raycast(rig.game, Vec3{0.f, 10.f, 0.f}, Vec3{0.f, -20.f, 0.f}, {});
+        REQUIRE(hit.has_value());
+        REQUIRE(hit->instance == t.id());
+        REQUIRE(hit->has_material);
+        REQUIRE(hit->material == 1);
+        REQUIRE(std::fabs(hit->position.y) <= 0.1f);
+    }
+    SECTION("from Lua") {
+        TerrainRaycastRig rig;
+        Terrain& t = terrain_in_workspace(rig.game);
+        Material& rock = add_material_asset(rig.game, "Rock");
+        TerrainMaterial* entry = nullptr;
+        REQUIRE_FALSE(t.add_material(rock.id(), entry));
+        REQUIRE_FALSE(t.volume().fill(slab(16.f, 8.f), 1));
+        settle(rig.world, rig.game);
+        const std::string out = rig.run(R"(
+            local r = workspace:Raycast(Vector3.new(0, 10, 0), Vector3.new(0, -20, 0))
+            print(r.Instance.ClassName, r.Material.Name)
+        )");
+        INFO(out);
+        REQUIRE(out.find("Terrain\tRock\n") != std::string::npos);
+    }
+}
+
+TEST_CASE("TP4 a box resting on terrain stays up while its chunk is re-meshed", "[terrain][physics]") {
+    using physics_rig::at;
+    using physics_rig::kStep;
+    using physics_rig::near;
+    using physics_rig::y_of;
+    PhysicsRig rig;
+    Terrain& t = terrain_in_workspace(rig.game);
+    REQUIRE_FALSE(t.volume().fill(slab(48.f, 8.f), 1));
+    TerrainWorld world(PhysicsWorld::build_terrain_collider);
+    rig.physics.set_terrain_world(&world);
+    settle(world, rig.game);
+    rig.play();
+    PhysicsObject& box = rig.body(at(8.f, 3.f, 8.f), Vec3{1.f, 1.f, 1.f}, false);
+    // One TerrainWorld update a frame and four physics steps, as the Engine runs them.
+    const auto frames = [&](int count) {
+        for (int frame = 0; frame < count; ++frame) {
+            world.update(rig.game);
+            for (int step = 0; step < 4; ++step) {
+                rig.physics.step(rig.game, kStep);
+            }
+        }
+    };
+    frames(120);
+    {
+        INFO(y_of(box.transform()));
+        REQUIRE(near(y_of(box.transform()), 0.5f, 0.05f));
+    }
+
+    // The slab's top face belongs to the chunk below y = 0, which the box
+    // sits over. Painting another Id into that chunk, away from the box,
+    // meshes it again, and its shape is made again under the box.
+    const ChunkCoord under{0, -1, 0};
+    const std::uint64_t before = collider_revision(world, t.id(), under);
+    REQUIRE(before != 0u);
+    REQUIRE_FALSE(t.volume().paint(ball_at(24.f, -1.f, 24.f, 3.f), 2));
+    world.update(rig.game);
+    world.wait_idle();
+    frames(60);
+    REQUIRE(collider_revision(world, t.id(), under) != before);
+    INFO(y_of(box.transform()));
+    REQUIRE(near(y_of(box.transform()), 0.5f, 0.05f));
 }

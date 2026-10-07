@@ -8,6 +8,8 @@
 #include "SceneService.hpp"
 #include "ScriptBindings.hpp"
 #include "ScriptRuntime.hpp"
+#include "Terrain.hpp"
+#include "TerrainMaterial.hpp"
 
 #include "lua.h"
 #include "lualib.h"
@@ -148,8 +150,8 @@ int ScriptBindings::raycast_params_index(lua_State* state) {
 }
 
 // Reads Instance (nil when it is gone since the raycast), Position, Normal,
-// Distance, and Material (always nil: nothing but Terrain, not in this
-// sub-project, fills has_material).
+// Distance, and Material (nil for anything but a Terrain whose TerrainMaterial
+// for the Id hit has a Material).
 int ScriptBindings::raycast_result_index(lua_State* state) {
     auto* result = static_cast<RaycastResultUd*>(luaL_checkudata(state, 1, kRaycastResultMeta));
     const char* key = luaL_checkstring(state, 2);
@@ -176,8 +178,20 @@ int ScriptBindings::raycast_result_index(lua_State* state) {
         return 1;
     }
     if (std::strcmp(key, "Material") == 0) {
-        // Terrain fills this in (sub-project 1); nothing else has a material yet.
-        lua_pushnil(state);
+        // A Terrain's hit names the material Id of the triangle hit: the
+        // Material of its TerrainMaterial with that Id, read now, or nil.
+        // Nothing but Terrain has a material.
+        ScriptRuntime* runtime = runtime_from(state);
+        const auto* terrain = runtime != nullptr && runtime->game_ != nullptr && hit.has_material
+                                  ? dynamic_cast<const Terrain*>(runtime->game_->instance(hit.instance))
+                                  : nullptr;
+        const TerrainMaterial* entry = terrain != nullptr ? terrain->material_by_id(hit.material) : nullptr;
+        const InstanceId material = entry != nullptr ? entry->material_instance() : 0;
+        if (material == 0) {
+            lua_pushnil(state);
+        } else {
+            runtime->push_instance(state, material);
+        }
         return 1;
     }
     luaL_error(state, "%s is not a valid member of RaycastResult", key);

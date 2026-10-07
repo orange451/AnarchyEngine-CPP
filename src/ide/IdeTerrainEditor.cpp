@@ -5,6 +5,7 @@
 #include "AssetPicker.hpp"
 #include "DataModelLock.hpp"
 #include "IdeIcons.hpp"
+#include "NodeClasses.hpp"
 #include "SelectionService.hpp"
 #include "Terrain.hpp"
 
@@ -252,22 +253,6 @@ std::shared_ptr<jadefx::Label> text_label(const std::string& text, const char* s
     label->getClassList().add(style_class);
     label->setMouseTransparent(true);
     return label;
-}
-
-bool has_class(const jadefx::Node& node, const std::string& name) {
-    const auto& items = node.getClassList().items();
-    return std::find(items.begin(), items.end(), name) != items.end();
-}
-
-void set_class(jadefx::Node& node, const std::string& name, bool on) {
-    if (on == has_class(node, name)) {
-        return;
-    }
-    if (on) {
-        node.getClassList().add(name);
-    } else {
-        node.getClassList().removeIf([&name](const std::string& item) { return item == name; });
-    }
 }
 
 // Takes the room left in a line, which pushes what follows it to the right edge.

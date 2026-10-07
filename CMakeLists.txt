@@ -453,6 +453,25 @@ endif()
 set(BOX3D_SOURCE_DIR "${box3d_SOURCE_DIR}")
 add_subdirectory(cmake/box3d "${CMAKE_BINARY_DIR}/box3d")
 
+# zstd compresses a Terrain's .avox chunks: BSD-licensed C by Meta, pinned by
+# tag. Only fetched here; cmake/zstd builds its library sources, since its own
+# CMakeLists also builds programs and wants newer options. Only AvoxFile.cpp
+# includes it.
+FetchContent_Declare(
+    zstd
+    GIT_REPOSITORY https://github.com/facebook/zstd.git
+    GIT_TAG v1.5.6
+)
+FetchContent_GetProperties(zstd)
+if(NOT zstd_POPULATED)
+    if(POLICY CMP0169)
+        cmake_policy(SET CMP0169 OLD)
+    endif()
+    FetchContent_Populate(zstd)
+endif()
+set(ZSTD_SOURCE_DIR "${zstd_SOURCE_DIR}")
+add_subdirectory(cmake/zstd "${CMAKE_BINARY_DIR}/zstd")
+
 # V-HACD splits a Custom PhysicsObject's Mesh into convex pieces: one
 # BSD-3-Clause header by Khaled Mamou, pinned by tag. Only fetched here;
 # ConvexDecomposition.cpp compiles it.
@@ -581,6 +600,7 @@ add_library(engine_core STATIC
     src/engine_core/terrain/VoxelChunk.cpp
     src/engine_core/terrain/ShapeDistance.cpp
     src/engine_core/terrain/VoxelVolume.cpp
+    src/engine_core/terrain/AvoxFile.cpp
     src/engine_core/ConvexDecomposition.cpp
     src/engine_core/DraggerMath.cpp
     src/engine_core/DraggerWorld.cpp
@@ -602,6 +622,8 @@ target_link_libraries(engine_core PRIVATE flecs)
 target_link_libraries(engine_instances PRIVATE flecs)
 # Box3D stays private too: only PhysicsWorld.cpp includes it.
 target_link_libraries(engine_core PRIVATE box3d)
+# zstd too: only AvoxFile.cpp includes it.
+target_link_libraries(engine_core PRIVATE zstd)
 # V-HACD too: only ConvexDecomposition.cpp includes it. SYSTEM, so -Wextra does not report on it.
 target_include_directories(engine_core SYSTEM PRIVATE "${vhacd_SOURCE_DIR}/include")
 # So does miniaudio: only AudioWorld.cpp and SoundPreview.cpp include it.

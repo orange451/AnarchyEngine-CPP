@@ -1,6 +1,7 @@
 // The voxel core under Terrain: chunks, shapes, the volume, and the .avox file.
 // No instances; nothing here touches the DataModel.
 
+#include "terrain/AvoxFile.hpp"
 #include "terrain/ShapeDistance.hpp"
 #include "terrain/VoxelChunk.hpp"
 #include "terrain/VoxelVolume.hpp"
@@ -273,4 +274,119 @@ TEST_CASE("V11 ids_used tracks exactly through Id reassignment and removal", "[t
     REQUIRE_FALSE(volume.subtract(ball_at(0.f, 0.f, 0.f, 20.f)));
     REQUIRE(volume.ids_used() == std::array<std::uint64_t, 4>{});
     REQUIRE(volume.chunks().empty());
+}
+
+TEST_CASE("AV1 an .avox round-trips every chunk", "[terrain]") {
+    VoxelVolume volume;
+    REQUIRE_FALSE(volume.fill(ball_at(0.f, 0.f, 0.f, 9.f), 2));
+    Shape block;
+    block.kind = Shape::Kind::Block;
+    block.frame = matrix4_translation(0.f, -40.f, 0.f);
+    block.size = Vec3{64.f, 40.f, 64.f};   // whole solid chunks inside
+    REQUIRE_FALSE(volume.fill(block, 5));
+    const std::vector<std::byte> bytes = encode_avox(volume);
+    VoxelVolume back;
+    REQUIRE_FALSE(decode_avox(bytes.data(), bytes.size(), back));
+    REQUIRE(back.voxel_size() == 1.f);
+    REQUIRE(back.chunks().size() == volume.chunks().size());
+    for (const auto& [coord, chunk] : volume.chunks()) {
+        const ChunkPtr& other = back.chunks().at(coord);
+        REQUIRE(other->is_uniform() == chunk->is_uniform());
+        for (int i = 0; i < kChunkCells; ++i) {
+            REQUIRE(other->cell(i) == chunk->cell(i));
+        }
+    }
+}
+
+TEST_CASE("AV2 a damaged .avox is refused and leaves nothing", "[terrain]") {
+    VoxelVolume volume;
+    REQUIRE_FALSE(volume.fill(ball_at(0.f, 0.f, 0.f, 4.f), 1));
+    const std::vector<std::byte> good = encode_avox(volume);
+    VoxelVolume back;
+    // A flipped byte inside a frame: zstd's checksum catches it.
+    std::vector<std::byte> bytes = good;
+    bytes[bytes.size() - 20] ^= std::byte{0x5a};
+    REQUIRE(decode_avox(bytes.data(), bytes.size(), back).has_value());
+    REQUIRE(back.chunks().empty());
+    // A flipped byte in the index: the index CRC catches it.
+    bytes = good;
+    bytes[32 + 3] ^= std::byte{0x01};
+    REQUIRE(decode_avox(bytes.data(), bytes.size(), back).has_value());
+    // Cut short.
+    REQUIRE(decode_avox(good.data(), 3, back).has_value());
+    REQUIRE(decode_avox(good.data(), good.size() - 1, back).has_value());
+}
+
+TEST_CASE("AV3 the header says AVOX 1.0, VoxelSize, and 32, and an empty file is only a header", "[terrain]") {
+    const std::vector<std::byte> bytes = encode_avox(VoxelVolume{});
+    REQUIRE(bytes.size() == 32u);
+    REQUIRE(static_cast<char>(bytes[0]) == 'A');
+    REQUIRE(static_cast<char>(bytes[3]) == 'X');
+    VoxelVolume back;
+    REQUIRE_FALSE(decode_avox(bytes.data(), bytes.size(), back));
+    REQUIRE(back.chunks().empty());
+}
+
+TEST_CASE("AV4 a surface chunk compresses to a small fraction of its 64 KB", "[terrain]") {
+    VoxelVolume volume;
+    // A slope across one chunk: every cell in its band varies.
+    Shape slope;
+    slope.kind = Shape::Kind::Wedge;
+    slope.frame = matrix4_translation(16.f, 16.f, 16.f);
+    slope.size = Vec3{32.f, 32.f, 32.f};
+    REQUIRE_FALSE(volume.fill(slope, 1));
+    const ChunkPtr& chunk = volume.chunks().at(ChunkCoord{0, 0, 0});
+    REQUIRE_FALSE(chunk->is_uniform());
+    INFO(chunk->encoded().size());
+    REQUIRE(chunk->encoded().size() < 8192u);
+}
+
+TEST_CASE("AV5 an unchanged chunk is not compressed again; a decoded one keeps its frame", "[terrain]") {
+    VoxelVolume volume;
+    REQUIRE_FALSE(volume.fill(ball_at(0.f, 0.f, 0.f, 9.f), 2));
+    const ChunkPtr chunk = volume.chunks().at(ChunkCoord{0, 0, 0});
+    const std::byte* first = chunk->encoded().data();
+    (void)encode_avox(volume);
+    REQUIRE(chunk->encoded().data() == first);   // the same cached frame
+    const std::vector<std::byte> bytes = encode_avox(volume);
+    VoxelVolume back;
+    REQUIRE_FALSE(decode_avox(bytes.data(), bytes.size(), back));
+    REQUIRE(back.chunks().at(ChunkCoord{0, 0, 0})->encoded() == chunk->encoded());
+}
+
+TEST_CASE("AV6 one thread and many decode the same", "[terrain]") {
+    VoxelVolume volume;
+    for (int i = 0; i < 12; ++i) {
+        REQUIRE_FALSE(volume.fill(ball_at(static_cast<float>(i * 40), 0.f, 0.f, 9.f), static_cast<std::uint8_t>(i + 1)));
+    }
+    const std::vector<std::byte> bytes = encode_avox(volume);
+    VoxelVolume one;
+    VoxelVolume many;
+    REQUIRE_FALSE(decode_avox(bytes.data(), bytes.size(), one, 1));
+    REQUIRE_FALSE(decode_avox(bytes.data(), bytes.size(), many, 8));
+    REQUIRE(one.chunks().size() == many.chunks().size());
+    for (const auto& [coord, chunk] : one.chunks()) {
+        REQUIRE(many.chunks().at(coord)->encoded() == chunk->encoded());
+    }
+}
+
+TEST_CASE("AV7 4,096 dense chunks decode in under a second", "[.][terrain-bench]") {
+    VoxelVolume volume;
+    // A 16 x 16 x 16-chunk block of rolling surface: every chunk dense.
+    for (int cz = 0; cz < 16; ++cz) {
+        for (int cx = 0; cx < 16; ++cx) {
+            for (int cy = 0; cy < 16; ++cy) {
+                REQUIRE_FALSE(volume.fill(ball_at(cx * 32.f + 16.f, cy * 32.f + 16.f, cz * 32.f + 16.f, 15.f),
+                                          static_cast<std::uint8_t>(1 + (cx + cy + cz) % 4)));
+            }
+        }
+    }
+    REQUIRE(volume.chunks().size() >= 4096u);
+    const std::vector<std::byte> bytes = encode_avox(volume);
+    const auto start = std::chrono::steady_clock::now();
+    VoxelVolume back;
+    REQUIRE_FALSE(decode_avox(bytes.data(), bytes.size(), back));
+    const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+    INFO(seconds << " s for " << bytes.size() << " bytes");
+    REQUIRE(seconds < 1.0);
 }

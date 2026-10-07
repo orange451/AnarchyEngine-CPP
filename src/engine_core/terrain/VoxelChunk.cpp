@@ -1,5 +1,7 @@
 #include "terrain/VoxelChunk.hpp"
 
+#include "terrain/ChunkFrame.hpp"
+
 namespace engine_core::terrain {
 
 std::size_t ChunkCoordHash::operator()(const ChunkCoord& c) const {
@@ -108,6 +110,25 @@ void ChunkData::finish_with_mask(const std::array<std::uint64_t, 4>& mask) {
     if (value_.distance != kAirDistance) {
         used_[value_.material >> 6] |= 1ull << (value_.material & 63);
     }
+}
+
+const std::vector<std::byte>& ChunkData::encoded() const {
+    // Any thread: two readers racing here compress the chunk exactly once,
+    // and the chunk's cells never change afterward, so the cached frame
+    // stays right forever.
+    std::call_once(encoded_once_, [this]() {
+        if (!uniform_) {
+            encoded_ = encode_chunk_frame(cells_.data());
+        }
+    });
+    return encoded_;
+}
+
+void ChunkData::adopt_encoded(std::vector<std::byte> frame) {
+    // Marks the flag triggered without running the encoder, so encoded()
+    // never recompresses a chunk that was just decoded from this very frame.
+    std::call_once(encoded_once_, [] {});
+    encoded_ = std::move(frame);
 }
 
 }  // namespace engine_core::terrain

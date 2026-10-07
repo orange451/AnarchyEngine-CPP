@@ -13,6 +13,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <vector>
 
 namespace engine_core::terrain {
@@ -91,6 +92,13 @@ public:
     bool is_air() const { return uniform_ && value_.distance == kAirDistance; }
     // Bit i set when a solid or band cell uses Id i.
     const std::array<std::uint64_t, 4>& ids_used() const { return used_; }
+    // This chunk's zstd frame as .avox stores it, made on first use and kept:
+    // the chunk never changes once shared, so neither does its frame. Empty
+    // for a uniform chunk. Any thread.
+    const std::vector<std::byte>& encoded() const;
+    // A decoded chunk gets the frame it was read from, so an unchanged chunk
+    // is never compressed again by the next save.
+    void adopt_encoded(std::vector<std::byte> frame);
 private:
     bool uniform_ = true;
     Cell value_{};
@@ -98,6 +106,11 @@ private:
     // arrays: half the allocations per clone_dense().
     std::vector<Cell> cells_;
     std::array<std::uint64_t, 4> used_{};
+    // clone_dense() builds its copy field by field rather than copying *this,
+    // so a clone starts with its own unset flag and never inherits a frame
+    // that belonged to the chunk it was cloned from.
+    mutable std::once_flag encoded_once_;
+    mutable std::vector<std::byte> encoded_;
 };
 using ChunkPtr = std::shared_ptr<const ChunkData>;
 

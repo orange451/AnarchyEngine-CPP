@@ -25,8 +25,8 @@ Efficiency is a design rule:
 | Latitude | number | 35 | degrees, clamped to −90–90; tilts the sun's arc |
 | Brightness | number | 3 | clamped to 0–20: the sun light's intensity; the moon light is Brightness × 0.1 |
 | Shadows | boolean | true | whether the sun/moon light casts shadows |
-| CloudCover | number | 0.5 | clamped to 0–1: how much of the sky has cloud |
-| CloudDensity | number | 0.5 | clamped to 0–1: how thick and opaque the clouds are |
+| CloudCover | number | 0.3 | clamped to 0–1: how much of the sky has cloud |
+| CloudDensity | number | 0 | clamped to 0–1: how thick and opaque the clouds are |
 | WindDirection | Vector3 | (1, 0, 0.3) | the clouds' drift; its length is the speed in studs per second; its Y is ignored |
 | SunTexture | Texture? | nil | when set, drawn in place of the procedural sun disc |
 | MoonTexture | Texture? | nil | when set, drawn in place of the procedural moon disc |

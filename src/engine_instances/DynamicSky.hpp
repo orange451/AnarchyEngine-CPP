@@ -23,8 +23,8 @@ namespace engine_core {
 // Brightness         number              the sun light's intensity; the moon's
 //                                        is a tenth of it. 3, 0 to kMaxBrightness.
 // Shadows            boolean             whether the sun or moon light casts shadows. True.
-// CloudCover         number              how much of the sky has cloud, 0 to 1. 0.5.
-// CloudDensity       number              how thick the clouds are, 0 to 1. 0.5.
+// CloudCover         number              how much of the sky has cloud, 0 to 1. 0.3.
+// CloudDensity       number              how thick the clouds are, 0 to 1. 0.
 // WindDirection      Vector3             the clouds' drift, studs per second; Y is ignored.
 // SunTexture         Texture?            drawn in place of the sun's disc. Nil.
 // MoonTexture        Texture?            drawn in place of the moon's disc. Nil.
@@ -43,8 +43,8 @@ public:
     static constexpr double kDefaultBrightness = 3.0;
     static constexpr double kMaxBrightness = 20.0;
     static constexpr bool kDefaultShadows = true;
-    static constexpr double kDefaultCloudCover = 0.5;
-    static constexpr double kDefaultCloudDensity = 0.5;
+    static constexpr double kDefaultCloudCover = 0.3;
+    static constexpr double kDefaultCloudDensity = 0.0;
     static constexpr Vec3 kDefaultWindDirection{1.f, 0.f, 0.3f};
     static constexpr double kDefaultSunSize = 2.0;
     static constexpr double kDefaultMoonSize = 2.0;

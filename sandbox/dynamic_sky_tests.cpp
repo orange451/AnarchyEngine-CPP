@@ -186,7 +186,7 @@ TEST_CASE("DS4 scripts make a DynamicSky and set it", "[dynamic_sky]") {
     add_script(rig.game, "Sky", R"(
         local sky = Instance.new("DynamicSky", game.Lighting)
         _G.defaults = sky.TimeOfDay == 14 and sky.Latitude == 35 and sky.Brightness == 3 and sky.Shadows
-            and sky.CloudCover == 0.5 and sky.CloudDensity == 0.5 and sky.SunTexture == nil
+            and sky.CloudCover == 0.3 and sky.CloudDensity == 0 and sky.SunTexture == nil
             and sky.MoonTexture == nil and sky.SunSize == 2 and sky.MoonSize == 2
             and sky.ReflectionQuality == Enum.EffectQuality.Medium
             and math.abs(sky.WindDirection.Z - 0.3) < 1e-6

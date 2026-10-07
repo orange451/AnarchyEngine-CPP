@@ -412,6 +412,9 @@ struct PhysicsWorld::Impl {
         float scale = 1.f;
         std::string prefab;
         std::uint64_t seen = 0;
+        // Its Transform was seeded from its GameObject in this play session.
+        // Bodies made while stopped are seeded on the first played sync.
+        bool seeded = false;
     };
 
     b3WorldId world = b3_nullWorldId;
@@ -471,19 +474,30 @@ struct PhysicsWorld::Impl {
         }
     }
 
-    void step(DataModel& game, double dt) {
-        if (!game.simulation_running()) {
-            return;
-        }
+    void sync(DataModel& game) {
         if (!b3World_IsValid(world) || generation != game.world_generation()) {
             begin(game.world_generation());
         }
         pull_gravity(game);
         reconcile(game);
+    }
+
+    void simulate(DataModel& game, double dt) {
+        if (!game.simulation_running()) {
+            return;
+        }
         control(game, dt);
         b3World_Step(world, static_cast<float>(dt), 1);
         unclimb(game);
         pull(game);
+    }
+
+    void step(DataModel& game, double dt) {
+        if (!game.simulation_running()) {
+            return;
+        }
+        sync(game);
+        simulate(game, dt);
     }
 
     // Workspace.Gravity into the world, when it changed.
@@ -538,8 +552,10 @@ struct PhysicsWorld::Impl {
             }
         }
         for (InstanceId id : gone) {
-            if (auto* controller = dynamic_cast<PlayerController*>(game.instance(id))) {
-                controller->store_ground(false, false);
+            if (game.simulation_running()) {
+                if (auto* controller = dynamic_cast<PlayerController*>(game.instance(id))) {
+                    controller->store_ground(false, false);
+                }
             }
             destroy(id);
         }
@@ -590,6 +606,14 @@ struct PhysicsWorld::Impl {
         Body& body = found->second;
         body.seen = pass;
         recenter(game, object, body, follow_driven(game, object, body));
+        if (game.simulation_running() && !body.seeded) {
+            body.seeded = true;
+            if (target != 0) {
+                b3Vec3 position = b3Body_GetPosition(body.body);
+                b3Quat rotation = b3Body_GetRotation(body.body);
+                object.store_simulated(matrix_of(position, rotation, object.transform()), object.velocity());
+            }
+        }
     }
 
     // A GameObject with another Prefab, or one moved or scaled by someone
@@ -1054,9 +1078,11 @@ struct PhysicsWorld::Impl {
         def.userData = user_data(object.id());
         record.body = b3CreateBody(world, &def);
         make_shape(game, object, record);
-        // Its Transform says where the body is from the start.
-        if (target != 0) {
+        // Its Transform says where the body is from the start. Stopped, the
+        // authored Transform is left alone; the first played sync seeds it.
+        if (target != 0 && game.simulation_running()) {
             object.store_simulated(matrix_of(def.position, def.rotation, object.transform()), object.velocity());
+            record.seeded = true;
         }
         return bodies.emplace(object.id(), record).first;
     }
@@ -1397,7 +1423,9 @@ struct PhysicsWorld::Impl {
             b3Body_SetAwake(record.body, true);
         }
         record.driven_pose = now;
-        object.store_simulated(matrix_of(position, rotation, object.transform()), object.velocity());
+        if (game.simulation_running()) {
+            object.store_simulated(matrix_of(position, rotation, object.transform()), object.velocity());
+        }
         return true;
     }
 
@@ -1432,6 +1460,10 @@ PhysicsWorld::PhysicsWorld() : impl_(std::make_unique<Impl>()) {}
 
 PhysicsWorld::~PhysicsWorld() = default;
 
+void PhysicsWorld::sync(DataModel& game) { impl_->sync(game); }
+
+void PhysicsWorld::simulate(DataModel& game, double dt) { impl_->simulate(game, dt); }
+
 void PhysicsWorld::step(DataModel& game, double dt) { impl_->step(game, dt); }
 
 std::size_t PhysicsWorld::body_count() const { return impl_->bodies.size(); }
@@ -1452,6 +1484,19 @@ std::vector<float> PhysicsWorld::shape_frictions(InstanceId id) const {
         }
     }
     return frictions;
+}
+
+std::uint64_t PhysicsWorld::body_key(InstanceId id) const {
+    const auto found = impl_->bodies.find(id);
+    return found == impl_->bodies.end() ? 0 : b3StoreBodyId(found->second.body);
+}
+
+std::optional<Vec3> PhysicsWorld::body_position(InstanceId id) const {
+    const auto found = impl_->bodies.find(id);
+    if (found == impl_->bodies.end()) {
+        return std::nullopt;
+    }
+    return from_b3(b3Body_GetPosition(found->second.body));
 }
 
 void PhysicsWorld::set_warning_sink(std::function<void(const std::string&)> sink) { impl_->warn = std::move(sink); }

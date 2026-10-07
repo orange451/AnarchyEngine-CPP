@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -17,23 +18,28 @@ class PhysicsBase;
 class PhysicsObject;
 class PlayerController;
 
-// The Box3D world behind PhysicsObject. Engine::step_physics calls step once
-// per physics substep while the place plays, before Heartbeat. Only this
-// class's source includes Box3D.
+// The Box3D world behind PhysicsObject. It lives while the place is stopped
+// too: then the Engine's stopped tick calls sync, and bodies follow the tree
+// but are never simulated, as if everything were anchored. While the place
+// plays, Engine::step_physics calls step once per physics substep, before
+// Heartbeat. Only this class's source includes Box3D.
 //
-// Each step, on SimulationThread under the step lock:
-//   1. A Stop since the last step (a new world_generation) drops every body.
+// sync, on SimulationThread under the write lock, playing or stopped:
+//   1. A Stop since the last sync (a new world_generation) drops every body.
 //   2. Every PhysicsBase in Workspace, at any depth, gets a body; one that
 //      left Workspace or was destroyed loses its body. Of several naming one
 //      GameObject, the first in tree order wins, and each other warns once.
-//   3. What scripts and Properties changed since the last step goes into the
+//   3. What scripts and Properties changed since the last sync goes into the
 //      bodies (PhysicsObject::take_dirty). A driven GameObject whose
 //      Transform is not what physics last wrote was moved by someone else,
 //      and its body jumps there. A body whose shape_center moved since its
-//      shape was made, as when its GameObject gets a Prefab, is made again.
-//   4. Each PlayerController probes for the ground under it, says whether
-//      it is OnGround or IsSliding, and on ground hovers its hover gap above
-//      it and slows by its Friction (PlayerController).
+//      shape was made is made again.
+//   Stopped, sync writes nothing to any instance and never decomposes a
+//   Mesh: an unanchored Custom without known pieces is a Hull until its
+//   pieces are stored, or until Play, when it is made again.
+//
+// simulate, only while playing:
+//   4. Each PlayerController probes for the ground under it (PlayerController).
 //   5. Box3D steps by dt, in one substep: the engine's own substeps are
 //      already 240 Hz.
 //   6. Every body Box3D moved writes its Transform and Velocity (and a
@@ -41,7 +47,7 @@ class PlayerController;
 //      GameObject's scale kept. These writes fire no Changed and record no
 //      history, as a GameObject's own velocity integration does.
 //
-// Gravity is (0, -Workspace.Gravity, 0), read again at the start of each step.
+// Gravity is (0, -Workspace.Gravity, 0), read again at each sync.
 class PhysicsWorld {
 public:
     PhysicsWorld();
@@ -49,7 +55,11 @@ public:
     PhysicsWorld(const PhysicsWorld&) = delete;
     PhysicsWorld& operator=(const PhysicsWorld&) = delete;
 
-    // Does nothing while game is not playing.
+    // Bodies match the tree. Playing or stopped.
+    void sync(DataModel& game);
+    // Probes, steps, and writes back. Does nothing while game is not playing.
+    void simulate(DataModel& game, double dt);
+    // Does nothing while game is not playing; else sync, then simulate.
     void step(DataModel& game, double dt);
 
     // How many bodies the world holds, and whether this PhysicsObject has one.
@@ -59,6 +69,10 @@ public:
     // empty when the PhysicsObject has no body.
     float body_mass(InstanceId id) const;
     std::vector<float> shape_frictions(InstanceId id) const;
+    // For tests: a key naming the body's Box3D handle, the same while the
+    // body lives; 0 when the PhysicsBase has none. And where the body is.
+    std::uint64_t body_key(InstanceId id) const;
+    std::optional<Vec3> body_position(InstanceId id) const;
 
     // Where a warning goes, such as a Hull that fell back to a Box. Unset, it
     // goes nowhere.

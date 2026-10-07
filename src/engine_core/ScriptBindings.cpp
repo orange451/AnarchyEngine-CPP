@@ -268,6 +268,9 @@ int ScriptBindings::instance_new(lua_State* state) {
             luaL_error(state, "Instance.new has no data model");
         }
         const char* name = luaL_checkstring(state, 1);
+        if (lua_creatable_known(name) && !lua_script_creatable(name)) {
+            luaL_error(state, "%s cannot be made with Instance.new", name);
+        }
         // The second argument is the parent, as in Instance.new("Script", game).
         // Checked before create so a bad parent does not leave an instance behind.
         InstanceId parent_id = DataModel::kNoParent;

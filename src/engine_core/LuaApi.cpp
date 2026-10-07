@@ -368,6 +368,7 @@ namespace {
 struct Creatable {
     const char* name = nullptr;
     LuaCreate create = nullptr;
+    bool from_scripts = true;
 };
 
 std::vector<Creatable>& creatables() {
@@ -389,20 +390,25 @@ const Creatable* find_creatable(const char* class_name) {
 
 }  // namespace
 
-void register_lua_creatable(const char* class_name, LuaCreate create) {
+void register_lua_creatable(const char* class_name, LuaCreate create, bool from_scripts) {
     if (class_name == nullptr || create == nullptr || find_creatable(class_name) != nullptr) {
         return;
     }
-    creatables().push_back(Creatable{class_name, create});
+    creatables().push_back(Creatable{class_name, create, from_scripts});
     registry_changed();
 }
 
 bool lua_creatable_known(const char* class_name) { return find_creatable(class_name) != nullptr; }
 
+bool lua_script_creatable(const char* class_name) {
+    const Creatable* record = find_creatable(class_name);
+    return record != nullptr && record->from_scripts;
+}
+
 void lua_creatable_names(std::vector<std::string>& out) {
     out.clear();
     for (const Creatable& record : creatables()) {
-        if (record.name != nullptr) {
+        if (record.name != nullptr && record.from_scripts) {
             out.emplace_back(record.name);
         }
     }

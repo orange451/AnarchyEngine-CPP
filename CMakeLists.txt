@@ -933,6 +933,7 @@ add_executable(sandbox
     sandbox/move_tool_tests.cpp
     sandbox/profiler_tests.cpp
     sandbox/terrain_voxel_tests.cpp
+    sandbox/terrain_instance_tests.cpp
 )
 target_link_libraries(sandbox PRIVATE studio_core Catch2::Catch2WithMain)
 # The dense views tests check flecs state the engine keeps private.

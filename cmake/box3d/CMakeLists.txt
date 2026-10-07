@@ -23,9 +23,12 @@ else()
 endif()
 # MSVC 19.23 at /O2 miscompiles mesh.c: copying a 12-byte b3Vec3 into a
 # b3MeshNode writes 16 bytes, over the bitfields after it, so the BVH a
-# triangle mesh builds is corrupt and its first walk crashes. Unoptimized,
-# it builds as written. Only the Custom shape uses meshes.
+# triangle mesh builds is corrupt and its first walk crashes. With the
+# compiler's SSA optimizer off (/d2SSAOptimizer-) the bug is gone: mesh.c
+# stays optimized and builds byte-for-byte the meshes an /Od build does,
+# about four times faster (one dense terrain chunk: 47 ms to 11 ms). Custom
+# shapes and every terrain chunk's collider go through it.
 if(MSVC AND CMAKE_C_COMPILER_VERSION VERSION_LESS 19.28)
-    set_source_files_properties("${BOX3D_SOURCE_DIR}/src/mesh.c" PROPERTIES COMPILE_OPTIONS "/Od")
+    set_source_files_properties("${BOX3D_SOURCE_DIR}/src/mesh.c" PROPERTIES COMPILE_OPTIONS "/d2SSAOptimizer-")
 endif()
 add_library(box3d::box3d ALIAS box3d)

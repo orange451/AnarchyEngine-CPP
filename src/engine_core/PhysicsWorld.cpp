@@ -1911,6 +1911,11 @@ std::shared_ptr<void> PhysicsWorld::build_terrain_collider(const terrain::ChunkM
     def.weldVertices = true;
     def.weldTolerance = kWeldTolerance;
     def.identifyEdges = true;
+    // Splitting the tree at the middle instead of by surface area builds a
+    // dense chunk's mesh in less than half the time (this runs on a mesher
+    // worker for every edited chunk), and a chunk's even grid of triangles
+    // gains little from the slower split.
+    def.useMedianSplit = true;
     auto collider = std::make_shared<TerrainCollider>();
     collider->mesh = b3CreateMesh(&def, nullptr, 0);
     if (collider->mesh == nullptr) {

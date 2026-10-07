@@ -3,9 +3,11 @@
 
 #include "terrain/ShapeDistance.hpp"
 #include "terrain/VoxelChunk.hpp"
+#include "terrain/VoxelVolume.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <chrono>
 #include <cmath>
 
 using namespace engine_core;
@@ -116,4 +118,123 @@ TEST_CASE("VC7 shape bounds cover the shape and its margin", "[terrain]") {
     shape_bounds(block, 0.f, min, max);
     REQUIRE(near(max.x, 4.f, 1e-4f));
     REQUIRE(near(max.z, 1.f, 1e-4f));
+}
+
+namespace {
+Shape ball_at(float x, float y, float z, float r) {
+    Shape s;
+    s.center = Vec3{x, y, z};
+    s.radius = r;
+    return s;
+}
+}  // namespace
+
+TEST_CASE("V1 a filled ball has the right distances and material", "[terrain]") {
+    VoxelVolume volume;
+    REQUIRE_FALSE(volume.fill(ball_at(0.f, 0.f, 0.f, 5.f), 3));
+    REQUIRE(volume.cell(CellCoord{0, 0, 0}).distance == kSolidDistance);
+    REQUIRE(volume.cell(CellCoord{0, 0, 0}).material == 3);
+    REQUIRE(near(dequantize(volume.cell(CellCoord{6, 0, 0}).distance, 1.f), 1.f, 0.05f));
+    REQUIRE(volume.cell(CellCoord{5, 0, 0}).material == 3);   // band cell at the surface (s=0): painted
+    REQUIRE(volume.cell(CellCoord{20, 0, 0}).distance == kAirDistance);
+    REQUIRE((volume.ids_used()[0] >> 3 & 1u) == 1u);
+}
+
+TEST_CASE("V2 subtracting what was filled leaves no chunks", "[terrain]") {
+    VoxelVolume volume;
+    REQUIRE_FALSE(volume.fill(ball_at(0.f, 0.f, 0.f, 5.f), 1));
+    REQUIRE_FALSE(volume.subtract(ball_at(0.f, 0.f, 0.f, 14.f)));
+    REQUIRE(volume.chunks().empty());
+    REQUIRE(volume.ids_used() == std::array<std::uint64_t, 4>{});
+}
+
+TEST_CASE("V3 an edit clones only the chunks it changes", "[terrain]") {
+    VoxelVolume volume;
+    REQUIRE_FALSE(volume.fill(ball_at(0.f, 0.f, 0.f, 3.f), 1));
+    REQUIRE_FALSE(volume.fill(ball_at(100.f, 0.f, 0.f, 3.f), 1));
+    const ChunkMap before = volume.chunks();
+    REQUIRE_FALSE(volume.fill(ball_at(100.f, 0.f, 0.f, 4.f), 2));
+    for (const auto& [coord, chunk] : before) {
+        if (coord.x <= 0) {
+            REQUIRE(volume.chunks().at(coord) == chunk);   // same pointer: untouched
+        }
+    }
+    // The old snapshot still says Id 1 at the far ball's middle.
+    REQUIRE(before.at(chunk_of(100, 0, 0))->cell(cell_index(100 - 96, 0, 0)).material == 1);
+    REQUIRE(volume.cell(CellCoord{100, 0, 0}).material == 2);
+}
+
+TEST_CASE("V4 paint changes only solid cells' Ids; replace swaps one Id", "[terrain]") {
+    VoxelVolume volume;
+    REQUIRE_FALSE(volume.fill(ball_at(0.f, 0.f, 0.f, 5.f), 1));
+    REQUIRE_FALSE(volume.paint(ball_at(0.f, 0.f, 0.f, 2.f), 4));
+    REQUIRE(volume.cell(CellCoord{0, 0, 0}).material == 4);
+    REQUIRE(volume.cell(CellCoord{4, 0, 0}).material == 1);
+    REQUIRE(volume.cell(CellCoord{0, 0, 0}).distance == kSolidDistance);   // shape unchanged
+    REQUIRE_FALSE(volume.replace(CellCoord{-10, -10, -10}, CellCoord{10, 10, 10}, 1, 6));
+    REQUIRE(volume.cell(CellCoord{4, 0, 0}).material == 6);
+    REQUIRE(volume.cell(CellCoord{0, 0, 0}).material == 4);
+}
+
+TEST_CASE("V5 read then write round-trips exactly", "[terrain]") {
+    VoxelVolume volume;
+    REQUIRE_FALSE(volume.fill(ball_at(0.f, 0.f, 0.f, 5.f), 9));
+    std::vector<float> distances;
+    std::vector<std::uint8_t> materials;
+    REQUIRE_FALSE(volume.read(CellCoord{-8, -8, -8}, CellCoord{8, 8, 8}, distances, materials));
+    REQUIRE(distances.size() == 17u * 17u * 17u);
+    VoxelVolume copy;
+    REQUIRE_FALSE(copy.write(CellCoord{-8, -8, -8}, CellCoord{8, 8, 8}, distances, materials));
+    for (int x = -8; x <= 8; ++x) {
+        REQUIRE(copy.cell(CellCoord{x, 1, 2}) == volume.cell(CellCoord{x, 1, 2}));
+    }
+}
+
+TEST_CASE("V6 an edit dirties its chunks and their neighbors", "[terrain]") {
+    VoxelVolume volume;
+    REQUIRE_FALSE(volume.fill(ball_at(16.f, 16.f, 16.f, 2.f), 1));
+    std::vector<ChunkCoord> dirty;
+    volume.take_dirty(dirty);
+    REQUIRE(dirty.size() == 27u);
+    volume.take_dirty(dirty);
+    REQUIRE(dirty.empty());
+}
+
+TEST_CASE("V7 too large an edit is refused; a zero ball changes nothing", "[terrain]") {
+    VoxelVolume volume;
+    Shape huge;
+    huge.kind = Shape::Kind::Block;
+    huge.size = Vec3{300.f, 300.f, 300.f};
+    REQUIRE(*volume.fill(huge, 1) == "Terrain edit too large: split it into smaller calls");
+    REQUIRE(volume.chunks().empty());
+    REQUIRE_FALSE(volume.fill(ball_at(0.f, 0.f, 0.f, 0.f), 1));
+    REQUIRE(volume.chunks().empty());
+}
+
+TEST_CASE("V8 set_chunks dirties only what changed", "[terrain]") {
+    VoxelVolume volume;
+    REQUIRE_FALSE(volume.fill(ball_at(0.f, 0.f, 0.f, 3.f), 1));
+    const ChunkMap saved = volume.chunks();
+    std::vector<ChunkCoord> dirty;
+    volume.take_dirty(dirty);
+    volume.set_chunks(saved);
+    volume.take_dirty(dirty);
+    REQUIRE(dirty.empty());
+    REQUIRE_FALSE(volume.fill(ball_at(200.f, 0.f, 0.f, 3.f), 1));
+    volume.take_dirty(dirty);
+    volume.set_chunks(saved);
+    volume.take_dirty(dirty);
+    REQUIRE_FALSE(dirty.empty());
+    REQUIRE(volume.chunks().size() == saved.size());
+}
+
+TEST_CASE("V9 FillBall of radius 8 is fast", "[.][terrain-bench]") {
+    VoxelVolume volume;
+    const auto start = std::chrono::steady_clock::now();
+    for (int i = 0; i < 100; ++i) {
+        REQUIRE_FALSE(volume.fill(ball_at(static_cast<float>(i * 40), 0.f, 0.f, 8.f), 1));
+    }
+    const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+    INFO(ms / 100.0);
+    REQUIRE(ms / 100.0 < 0.5);
 }

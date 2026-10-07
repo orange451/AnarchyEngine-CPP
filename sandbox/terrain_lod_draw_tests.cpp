@@ -3,6 +3,8 @@
 // view, a node drawn in place of children not all published, and cross-fades
 // between levels. Pure: synthetic node sets, no meshes, no GL.
 
+#include "runner/RenderMath.hpp"
+#include "runner/ShadowMath.hpp"
 #include "runner/TerrainSelection.hpp"
 
 #include "TerrainWorld.hpp"
@@ -622,6 +624,19 @@ TEST_CASE("SEL11 terrain out of view casts shadows at the selection it would dra
     SelectTerrainCasters(view, Looking(eye, {500.f, 4.f, 0.f}), state, casters);
     const auto behind = [&](std::size_t index) { return (*view.nodes)[index].bounds_min.z > eye.z; };
     CHECK(std::count_if(casters.begin(), casters.end(), behind) > 0);
+    // Nearest first (AppendTerrainDraws uploads the first few not yet uploaded each frame).
+    const auto distance = [&](std::size_t index) {
+        const TerrainNodeView& node = (*view.nodes)[index];
+        const float dx = std::max({node.bounds_min.x - eye.x, eye.x - node.bounds_max.x, 0.f});
+        const float dy = std::max({node.bounds_min.y - eye.y, eye.y - node.bounds_max.y, 0.f});
+        const float dz = std::max({node.bounds_min.z - eye.z, eye.z - node.bounds_max.z, 0.f});
+        return std::sqrt(dx * dx + dy * dy + dz * dz);
+    };
+    REQUIRE(casters.size() > 1);
+    CHECK(distance(casters.front()) < distance(casters.back()));
+    for (std::size_t i = 1; i < casters.size(); ++i) {
+        CHECK(distance(casters[i - 1]) <= distance(casters[i]) + 1e-3f);
+    }
     // None of them drawn; with what is drawn fading in (or steady), every chunk once.
     REQUIRE(std::any_of(out.begin(), out.end(), [](const NodeChoice& choice) { return !choice.incoming; }));
     std::vector<NodeChoice> cast;
@@ -687,4 +702,132 @@ TEST_CASE("SEL12 the children of nodes close to switching upload ahead, nearest 
         CHECK(!held(index));
         CHECK(distance(index) >= distance(first.back()));
     }
+}
+
+namespace {
+
+// Which chunks of an n x n Slab the camera sees (each chunk's box against
+// the camera's frustum, as SelectTerrainNodes culls a node's box).
+std::vector<bool> VisibleChunks(int n, const TerrainCamera& camera) {
+    const engine_core::Matrix4 viewMatrix =
+        engine_core::matrix4_inverse(engine_core::matrix4_orthonormalize(camera.world));
+    const engine_core::Matrix4 projection =
+        runner::Perspective(camera.fov_y_degrees,
+                            static_cast<float>(camera.pane_width) / static_cast<float>(camera.pane_height),
+                            runner::kSceneNear, camera.far_z);
+    const runner::Frustum frustum = runner::MakeFrustum(engine_core::matrix4_multiply(projection, viewMatrix));
+    std::vector<bool> visible(static_cast<std::size_t>(n * n), false);
+    for (int x = 0; x < n; ++x) {
+        for (int z = 0; z < n; ++z) {
+            const Vec3 center{x * 32.f + 16.f, 4.f, z * 32.f + 16.f};
+            const Vec3 half{16.f, 4.f, 16.f};
+            bool in = true;
+            for (int p = 0; p < 6 && in; ++p) {
+                const float* plane = frustum.planes[p];
+                const float d = plane[0] * center.x + plane[1] * center.y + plane[2] * center.z + plane[3];
+                const float r = std::abs(plane[0]) * half.x + std::abs(plane[1]) * half.y + std::abs(plane[2]) * half.z;
+                in = d + r >= 0.f;
+            }
+            visible[static_cast<std::size_t>(x * n + z)] = in;
+        }
+    }
+    return visible;
+}
+
+// Like Coverage, over an n x n Slab: every chunk the camera sees drawn
+// exactly once at each threshold, and none drawn more than once.
+std::string VisibleCoverage(const TerrainView& view, const std::vector<NodeChoice>& choices, int n,
+                            const std::vector<bool>& visible) {
+    std::vector<int> count(static_cast<std::size_t>(n * n * 16), 0);
+    for (const NodeChoice& choice : choices) {
+        const NodeKey& key = KeyOf(view, choice);
+        const int side = 1 << key.level;
+        for (int t = 0; t < 16; ++t) {
+            if (!Draws(choice, Threshold(t))) {
+                continue;
+            }
+            for (int x = key.x * side; x < std::min((key.x + 1) * side, n); ++x) {
+                for (int z = key.z * side; z < std::min((key.z + 1) * side, n); ++z) {
+                    ++count[static_cast<std::size_t>((x * n + z) * 16 + t)];
+                }
+            }
+        }
+    }
+    for (int x = 0; x < n; ++x) {
+        for (int z = 0; z < n; ++z) {
+            const bool seen = visible[static_cast<std::size_t>(x * n + z)];
+            for (int t = 0; t < 16; ++t) {
+                const int c = count[static_cast<std::size_t>((x * n + z) * 16 + t)];
+                if (seen ? c != 1 : c > 1) {
+                    std::string text = "chunk " + std::to_string(x) + "," + std::to_string(z) +
+                                       (seen ? " (seen)" : " (unseen)") + " threshold " +
+                                       std::to_string(Threshold(t)) + " drawn " + std::to_string(c) + " times by:";
+                    for (const NodeChoice& choice : choices) {
+                        const NodeKey& key = KeyOf(view, choice);
+                        const int side = 1 << key.level;
+                        if (x >= key.x * side && x < (key.x + 1) * side && z >= key.z * side &&
+                            z < (key.z + 1) * side) {
+                            text += " L" + std::to_string(key.level) + "(" + std::to_string(key.x) + "," +
+                                    std::to_string(key.z) + ")" + (choice.incoming ? " in " : " out ") +
+                                    std::to_string(choice.fade);
+                        }
+                    }
+                    return text;
+                }
+            }
+        }
+    }
+    return {};
+}
+
+}  // namespace
+
+TEST_CASE("SEL13 zooming and turning at once, culled, draws every pixel in view once each frame",
+          "[terrain][lod][render]") {
+    const TerrainView view = Slab(32);   // levels 0 to 5
+    const auto run = [&](const std::function<TerrainCamera(int)>& cameraAt, int frames, double dt) {
+        TerrainFadeState state;
+        int fadingFrames = 0;
+        for (int frame = 0; frame < frames; ++frame) {
+            const TerrainCamera camera = cameraAt(frame);
+            const std::vector<NodeChoice> out = Select(view, camera, frame * dt, state);
+            const Vec3 eye = engine_core::matrix4_position(camera.world);
+            INFO("frame " << frame << " eye " << eye.x << "," << eye.y << "," << eye.z);
+            REQUIRE(VisibleCoverage(view, out, 32, VisibleChunks(32, camera)) == "");
+            if (std::any_of(out.begin(), out.end(), [](const NodeChoice& choice) { return choice.fade < 1.f; })) {
+                ++fadingFrames;
+            }
+        }
+        return fadingFrames;
+    };
+    // Looking yaw radians around, pitched down by drop (studs per stud ahead).
+    const auto aimed = [](Vec3 eye, float yaw, float drop) {
+        return Looking(eye, {eye.x + std::cos(yaw), eye.y - drop, eye.z + std::sin(yaw)});
+    };
+    const auto height = [](int frame) {
+        const float t = static_cast<float>(frame) / 180.f;
+        return 20.f * std::pow(40000.f / 20.f, t);
+    };
+    // Up from 20 studs to 40,000 over 3 s at 60 frames a second, turning a full circle a second.
+    CHECK(run([&](int frame) { return aimed({500.f, height(frame), 500.f}, frame * 6.2832f / 60.f, 0.8f); }, 181,
+              1.0 / 60.0) > 0);
+    // And back down.
+    CHECK(run([&](int frame) { return aimed({500.f, height(180 - frame), 500.f}, frame * 6.2832f / 60.f, 0.8f); },
+              181, 1.0 / 60.0) > 0);
+    // Jumping and turning at random, faster than a fade, at 30 frames a second.
+    unsigned seed = 777u;
+    const auto next = [&]() {
+        seed = seed * 1664525u + 1013904223u;
+        return static_cast<float>(seed >> 8) / static_cast<float>(1u << 24);
+    };
+    std::vector<TerrainCamera> cameras;
+    for (int i = 0; i < 400; ++i) {
+        const float x = next() * 1024.f;
+        const float h = next() * next();
+        const float z = next() * 1024.f;
+        const float yaw = next() * 6.2832f;
+        const float drop = 0.2f + next() * 3.f;
+        cameras.push_back(aimed({x, 5.f + h * 20000.f, z}, yaw, drop));
+    }
+    run([&](int frame) { return cameras[static_cast<std::size_t>(frame)]; }, 400, 1.0 / 30.0);
 }

@@ -127,6 +127,9 @@ float NodePixelError(float error, float distance, float fov_y_degrees, int pane_
 // up to kTerrainFadeSeconds. Should that fail (a node of the fade gone from
 // the set, or a parent needed to split it missing a child), what is chosen
 // there draws whole at once and the rest of that fade stops: never a hole.
+// So does a coarser node replacing descendants that drew only part of its
+// region last frame (the rest out of view). A node fading out that leaves
+// the view stays in its fade, undrawn, and draws again if it comes back.
 void SelectTerrainNodes(const engine_core::TerrainView& view, const TerrainCamera& camera, double now_seconds,
                         TerrainFadeState& state, std::vector<NodeChoice>& out);
 
@@ -134,7 +137,7 @@ void SelectTerrainNodes(const engine_core::TerrainView& view, const TerrainCamer
 // that cast shadows without being drawn. Shadows come from the same
 // selection with no view culling: in view, the nodes drawn fading in (or
 // steady), which cast already; out of view, the nodes that selection would
-// draw there, which out lists.
+// draw there, which out lists, nearest the camera first.
 void SelectTerrainCasters(const engine_core::TerrainView& view, const TerrainCamera& camera,
                           TerrainFadeState& state, std::vector<std::size_t>& out);
 

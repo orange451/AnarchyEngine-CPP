@@ -286,6 +286,37 @@ bool Merge(std::pair<std::uint8_t, float>& into, std::uint8_t bits, float value)
     return into.first != before.first || into.second != before.second;
 }
 
+// Whether last frame drew all of key's region: key itself, or (where it drew
+// something under key, per drawnBelow) every child in key's child_mask,
+// each in turn. A region part culled last frame is not covered.
+bool CoveredBelow(const PerTerrain& terrain, const std::vector<TerrainNodeView>& nodes,
+                  const std::unordered_map<NodeKey, std::pair<std::uint8_t, float>, engine_core::terrain::NodeKeyHash>&
+                      drawnBelow,
+                  const NodeKey& key, double now) {
+    const auto drawn = terrain.fades.find(key);
+    if (drawn != terrain.fades.end()) {
+        float value = 0.f;
+        if (Classify(drawn->second, now, value) != 0) {
+            return true;
+        }
+    }
+    if (drawnBelow.find(key) == drawnBelow.end()) {
+        return false;
+    }
+    const std::size_t index = Find(terrain, key);
+    if (index == kNone || key.level == 0 || nodes[index].child_mask == 0) {
+        return false;
+    }
+    const std::array<NodeKey, 8> children = engine_core::terrain::children_of(key);
+    for (int i = 0; i < 8; ++i) {
+        if ((nodes[index].child_mask & (1u << i)) != 0 &&
+            !CoveredBelow(terrain, nodes, drawnBelow, children[static_cast<std::size_t>(i)], now)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 }  // namespace
 
 float TerrainFadeState::Fade::at(double now) const {
@@ -402,6 +433,7 @@ void SelectTerrainNodes(const engine_core::TerrainView& view, const TerrainCamer
                 relatives = below->second;
             }
             NodeKey up = key;
+            bool aboveDrawn = false;
             while (up.level < fadeLimit) {
                 up = engine_core::terrain::parent_of(up);
                 const auto above = terrain.fades.find(up);
@@ -409,9 +441,17 @@ void SelectTerrainNodes(const engine_core::TerrainView& view, const TerrainCamer
                     float value = 0.f;
                     const std::uint8_t bits = Classify(above->second, now_seconds, value);
                     Merge(relatives, bits, value);
+                    aboveDrawn = aboveDrawn || bits != 0;
                 }
             }
-            if (relatives.first == 0) {
+            if ((relatives.first == kSteady || relatives.first == kFadingOut) && !aboveDrawn &&
+                !CoveredBelow(terrain, nodes, state.drawnBelow, key, now_seconds)) {
+                // Replacing descendants that drew only part of its region (the
+                // rest was out of view): fading in, it would leave the rest
+                // part-drawn. Whole at once, and those descendants stop.
+                fade = Fade{1.f, now_seconds, true};
+                snapped.insert(key);
+            } else if (relatives.first == 0) {
                 // Nothing related drawn: first sight, or turning into view.
                 fade = Fade{1.f, now_seconds, true};
             } else if (relatives.first == kSteady) {
@@ -451,9 +491,9 @@ void SelectTerrainNodes(const engine_core::TerrainView& view, const TerrainCamer
             dropped.insert(key);
             continue;
         }
-        if (!sight.inView(sight.box(nodes[index]))) {
-            continue;
-        }
+        // Out of view, it stays in the fade (kept in next, left out of the
+        // draws below) so that it draws its part again should it come back
+        // into view before the fade is done.
         const Fade fade = bits == kSteady ? Fade{1.f, now_seconds, false} : last;
         out.push_back(NodeChoice{index, fade.at(now_seconds), false});
         next.emplace(key, fade);
@@ -499,6 +539,10 @@ void SelectTerrainNodes(const engine_core::TerrainView& view, const TerrainCamer
             break;
         }
     }
+    // What fades out out of view draws nothing (it stays in next).
+    out.erase(std::remove_if(out.begin() + static_cast<std::ptrdiff_t>(outgoing), out.end(),
+                             [&](const NodeChoice& choice) { return !sight.inView(sight.box(nodes[choice.index])); }),
+              out.end());
     terrain.fades.swap(next);
 }
 
@@ -522,6 +566,16 @@ void SelectTerrainCasters(const engine_core::TerrainView& view, const TerrainCam
     out.erase(std::remove_if(out.begin(), out.end(),
                              [&](std::size_t index) { return state.chosen.count(nodes[index].key) != 0; }),
               out.end());
+    // Nearest first, so the few a frame AppendTerrainDraws uploads are the nearest.
+    auto& nearest = state.nearest;
+    nearest.clear();
+    for (const std::size_t index : out) {
+        nearest.emplace_back(DistanceTo(sight.box(nodes[index]), sight.eye), index);
+    }
+    std::sort(nearest.begin(), nearest.end());
+    for (std::size_t i = 0; i < nearest.size(); ++i) {
+        out[i] = nearest[i].second;
+    }
 }
 
 void SelectTerrainPrefetch(const engine_core::TerrainView& view, const TerrainCamera& camera,

@@ -1276,3 +1276,37 @@ TEST_CASE("P37 a Hull or a Custom takes its Mesh at its own size, and Size, hidd
         REQUIRE(near(y_of(part.transform()), 1.f, 0.05f));
     }
 }
+
+TEST_CASE("P38 a body whose GameObject's Transform is scaled is not made again as it moves", "[physics]") {
+    PhysicsRig rig;
+    rig.floor();
+    // A post, scaled in its Transform and turned, that tumbles as it falls:
+    // physics rewrites that Transform every step, and the lengths of its axes
+    // wobble in the last bits as the rotation does. The shape must not care.
+    GameObject& part = create_part(rig.game);
+    Matrix4 post = engine_core::matrix4_axis_angle(Vec3{0.6f, 0.3f, 0.7f}, 0.8);
+    for (int column = 0; column < 3; ++column) {
+        const float scale = column == 1 ? 1.8f : 0.4f;
+        for (int row = 0; row < 3; ++row) {
+            post.m[column * 4 + row] *= scale;
+        }
+    }
+    post.m[13] = 6.f;
+    part.set_transform(post);
+    PhysicsObject& body = rig.body(engine_core::matrix4_identity(), Vec3{1.f, 1.f, 1.f}, false, part.id());
+    body.set_angular_velocity(Vec3{3.f, 1.f, -2.f});
+    rig.play();
+    rig.steps(1);
+    const int made = rig.physics.shapes_made(body.id());
+    REQUIRE(made >= 1);
+    rig.seconds(3.0);
+    REQUIRE(rig.physics.shapes_made(body.id()) == made);
+    // A real change of scale still makes it again.
+    Matrix4 grown = part.transform();
+    for (int row = 0; row < 3; ++row) {
+        grown.m[row] *= 2.f;
+    }
+    part.set_transform(grown);
+    rig.steps(1);
+    REQUIRE(rig.physics.shapes_made(body.id()) == made + 1);
+}

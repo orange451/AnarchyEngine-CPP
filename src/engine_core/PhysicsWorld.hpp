@@ -69,6 +69,8 @@ public:
     // empty when the PhysicsObject has no body.
     float body_mass(InstanceId id) const;
     std::vector<float> shape_frictions(InstanceId id) const;
+    // For tests: how many times this body's shape has been made, or 0.
+    int shapes_made(InstanceId id) const;
 
     // Where a warning goes, such as a Hull that fell back to a Box. Unset, it
     // goes nowhere.

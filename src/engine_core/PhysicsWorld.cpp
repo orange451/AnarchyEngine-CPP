@@ -196,6 +196,15 @@ Vec3 center_for(const DataModel& game, InstanceId driven) {
 
 bool same_vec3(Vec3 a, Vec3 b) { return a.x == b.x && a.y == b.y && a.z == b.z; }
 
+// Equal but for rounding: each axis within one part in ten thousand of the
+// larger of the two. A scale read from a Transform's axis lengths wobbles in
+// its last bits every time physics turns it, and a shape made again for that
+// drops its contacts, which lets a resting stack creep and fall.
+bool near_vec3(Vec3 a, Vec3 b) {
+    auto near = [](float x, float y) { return std::fabs(x - y) <= 1e-4f * std::max({std::fabs(x), std::fabs(y), 1e-3f}); };
+    return near(a.x, b.x) && near(a.y, b.y) && near(a.z, b.z);
+}
+
 // A hull of points, as a Hull's shape takes it. Null when Box3D builds none.
 b3HullData* build_hull(const std::vector<b3Vec3>& points) {
     const int count = static_cast<int>(points.size());
@@ -431,6 +440,8 @@ struct PhysicsWorld::Impl {
         Vec3 center{};
         Vec3 scale = kUnscaled;
         std::string prefab;
+        // How many times its shape has been made (shapes_made).
+        int made = 0;
         std::uint64_t seen = 0;
     };
 
@@ -623,12 +634,12 @@ struct PhysicsWorld::Impl {
         if (driven == nullptr) {
             return;
         }
-        const bool rescaled = !same_vec3(scale_for(game, record.driven), record.scale);
+        const bool rescaled = !near_vec3(scale_for(game, record.driven), record.scale);
         if (!moved && !rescaled && driven->prefab_guid() == record.prefab) {
             return;
         }
         record.prefab = driven->prefab_guid();
-        if (rescaled || !same_vec3(center_for(game, record.driven), record.center)) {
+        if (rescaled || !near_vec3(center_for(game, record.driven), record.center)) {
             make_shape(game, object, record);
         }
     }
@@ -1084,6 +1095,7 @@ struct PhysicsWorld::Impl {
     // Puts the body's shape on it, replacing any it had: a PlayerController's
     // cylinder, or a PhysicsObject's Shape.
     void make_shape(DataModel& game, PhysicsBase& object, Body& record) {
+        ++record.made;
         if (auto* controller = dynamic_cast<PlayerController*>(&object)) {
             make_controller_shape(*controller, record);
         } else if (auto* body = dynamic_cast<PhysicsObject*>(&object)) {
@@ -1479,6 +1491,11 @@ void PhysicsWorld::follow_game_objects(DataModel& game) {
 std::size_t PhysicsWorld::body_count() const { return impl_->bodies.size(); }
 
 bool PhysicsWorld::has_body(InstanceId id) const { return impl_->bodies.count(id) != 0; }
+
+int PhysicsWorld::shapes_made(InstanceId id) const {
+    const auto found = impl_->bodies.find(id);
+    return found != impl_->bodies.end() ? found->second.made : 0;
+}
 
 float PhysicsWorld::body_mass(InstanceId id) const {
     const auto found = impl_->bodies.find(id);

@@ -1,6 +1,7 @@
 #include "terrain/TerrainMesher.hpp"
 
 #include <algorithm>
+#include <cassert>
 #include <exception>
 #include <utility>
 
@@ -20,13 +21,16 @@ unsigned default_thread_count() {
 }  // namespace
 
 std::size_t TerrainMesher::KeyHash::operator()(const Key& k) const {
-    std::size_t h = ChunkCoordHash{}(k.coord);
+    std::size_t h = k.kind == JobKind::Chunk ? ChunkCoordHash{}(k.coord) : NodeKeyHash{}(k.node);
     h ^= std::hash<std::uint64_t>{}(k.terrain) + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
+    h ^= (static_cast<std::size_t>(k.kind) + 0x1000193u) + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
     return h;
 }
 
-TerrainMesher::TerrainMesher(BuildCollider build, unsigned threads)
-    : build_collider_(std::move(build)), thread_count_(threads != 0 ? threads : default_thread_count()) {
+TerrainMesher::TerrainMesher(BuildCollider build, unsigned threads, BuildNode build_node_fn)
+    : build_collider_(std::move(build)),
+      build_node_fn_(std::move(build_node_fn)),
+      thread_count_(threads != 0 ? threads : default_thread_count()) {
     workers_.reserve(thread_count_);
     for (unsigned i = 0; i < thread_count_; ++i) workers_.emplace_back([this] { worker_loop(); });
 }
@@ -48,14 +52,15 @@ TerrainMesher::~TerrainMesher() {
 
 void TerrainMesher::queue(std::uint64_t terrain, std::uint64_t revision, MeshInput input, float distance) {
     // Caller's thread (SimulationThread).
-    const Key key{terrain, input.coord};
+    const Key key{terrain, JobKind::Chunk, input.coord, NodeKey{}};
     std::lock_guard<std::mutex> lock(mutex_);
     const std::uint64_t sequence = next_sequence_++;
     Job job;
     job.terrain = terrain;
+    job.kind = JobKind::Chunk;
     job.coord = input.coord;
     job.revision = revision;
-    job.input = std::move(input);
+    job.mesh_input = std::move(input);
     job.distance = distance;
     job.sequence = sequence;
     // Overwrites a queued-but-not-yet-started job for this key in place; a
@@ -68,11 +73,45 @@ void TerrainMesher::queue(std::uint64_t terrain, std::uint64_t revision, MeshInp
     cv_.notify_all();
 }
 
-void TerrainMesher::collect(std::vector<MeshResult>& out) {
-    // Caller's thread.
+void TerrainMesher::queue_node(std::uint64_t terrain, std::uint64_t revision, LodInput input, float distance) {
+    // Caller's thread (SimulationThread). Shares waiting_/heap_/sequence_
+    // with queue()'s chunk jobs, so the two kinds interleave by distance.
+    const Key key{terrain, JobKind::Node, ChunkCoord{}, input.key};
     std::lock_guard<std::mutex> lock(mutex_);
+    node_job_queued_ = true;
+    const std::uint64_t sequence = next_sequence_++;
+    Job job;
+    job.terrain = terrain;
+    job.kind = JobKind::Node;
+    job.node = input.key;
+    job.revision = revision;
+    job.node_input = std::move(input);
+    job.distance = distance;
+    job.sequence = sequence;
+    waiting_[key] = std::move(job);
+    heap_.push_back(HeapEntry{distance, sequence, key});
+    std::push_heap(heap_.begin(), heap_.end(), HeapOrder{});
+    cv_.notify_all();
+}
+
+void TerrainMesher::collect(std::vector<MeshResult>& out) {
+    // Caller's thread. A node job's result has nowhere to go through this
+    // overload, so this asserts none was ever queued rather than risk
+    // silently dropping one -- a caller that queues node jobs must switch to
+    // collect(chunks, nodes) instead.
+    std::lock_guard<std::mutex> lock(mutex_);
+    assert(!node_job_queued_ && "collect(chunks only) used after queue_node(): call collect(chunks, nodes) instead");
     out.clear();
     out.swap(results_);
+}
+
+void TerrainMesher::collect(std::vector<MeshResult>& chunks, std::vector<NodeResult>& nodes) {
+    // Caller's thread.
+    std::lock_guard<std::mutex> lock(mutex_);
+    chunks.clear();
+    chunks.swap(results_);
+    nodes.clear();
+    nodes.swap(node_results_);
 }
 
 bool TerrainMesher::idle() const {
@@ -131,8 +170,8 @@ bool TerrainMesher::take_job(Job& out) {
 }
 
 void TerrainMesher::worker_loop() {
-    // Worker thread: take -> mesh -> build collider -> push result, forever
-    // until stopping_ is set.
+    // Worker thread: take -> build (mesh+collider, or LOD node) -> push
+    // result, forever until stopping_ is set.
     for (;;) {
         Job job;
         {
@@ -143,22 +182,27 @@ void TerrainMesher::worker_loop() {
                 cv_.wait(lock);
             }
         }
-        // Meshing (and the collider build) happen with no lock held: this is
-        // the whole point of the pool, and surface_nets/build_collider_ only
-        // touch this job's own immutable input.
+        // The actual build happens with no lock held: this is the whole
+        // point of the pool, and surface_nets/build_collider_/build_node (or
+        // its test override) only touch this job's own immutable input.
         ChunkMesh mesh;
         std::shared_ptr<void> collider;
+        LodResult node_result;
         bool ok = true;
         std::string failure_message;
         try {
-            mesh = surface_nets(job.input);
-            if (build_collider_) collider = build_collider_(mesh);
+            if (job.kind == JobKind::Chunk) {
+                mesh = surface_nets(job.mesh_input);
+                if (build_collider_) collider = build_collider_(mesh);
+            } else {
+                node_result = build_node_fn_ ? build_node_fn_(job.node_input) : build_node(job.node_input);
+            }
         } catch (const std::exception& error) {
             // A throw must never cross back into worker_loop's caller (an
             // uncaught exception on a non-main thread is std::terminate): a
             // bad job is dropped instead. It produces no result -- the chunk
-            // keeps whatever mesh it had until a later edit queues a fresh
-            // job for the same coordinate -- but running_ is still
+            // (or node) keeps whatever it had until a later edit queues a
+            // fresh job for the same key -- but running_ is still
             // decremented below, so the mesher never looks permanently busy.
             // The message is kept (not just discarded) so the owning thread
             // can report it once it notices failure_count_ rise.
@@ -172,7 +216,11 @@ void TerrainMesher::worker_loop() {
             std::lock_guard<std::mutex> lock(mutex_);
             --running_;
             if (ok) {
-                results_.push_back(MeshResult{job.terrain, job.coord, job.revision, std::move(mesh), std::move(collider)});
+                if (job.kind == JobKind::Chunk) {
+                    results_.push_back(MeshResult{job.terrain, job.coord, job.revision, std::move(mesh), std::move(collider)});
+                } else {
+                    node_results_.push_back(NodeResult{job.terrain, job.node, job.revision, std::move(node_result)});
+                }
             } else {
                 ++failure_count_;
                 last_failure_ = std::move(failure_message);

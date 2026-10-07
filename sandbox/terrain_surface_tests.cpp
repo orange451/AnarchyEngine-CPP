@@ -11,6 +11,7 @@
 #include "Terrain.hpp"
 #include "TerrainMaterial.hpp"
 #include "TerrainWorld.hpp"
+#include "terrain/LodBuilder.hpp"
 #include "terrain/SurfaceNets.hpp"
 #include "terrain/TerrainMesher.hpp"
 #include "terrain/VoxelVolume.hpp"
@@ -385,6 +386,103 @@ TEST_CASE("TM7 the pool meshes every chunk bit-identically to running surface_ne
             }
         }
     }
+}
+
+TEST_CASE("TM8 a queued node job comes back built", "[terrain]") {
+    VoxelVolume volume;
+    REQUIRE_FALSE(volume.fill(ball_at(5.f, 5.f, 5.f, 4.f), 2));
+    const ChunkMesh child_mesh = surface_nets(mesh_input(volume, ChunkCoord{0, 0, 0}));
+    REQUIRE(child_mesh.render != nullptr);
+
+    LodInput input;
+    input.key = NodeKey{1, 0, 0, 0};
+    input.voxel_size = 1.f;
+    input.children = {child_mesh.render};
+
+    TerrainMesher mesher;
+    mesher.queue_node(7, 1, input, 0.f);
+    mesher.wait_idle();
+    std::vector<MeshResult> chunks;
+    std::vector<NodeResult> nodes;
+    mesher.collect(chunks, nodes);
+    REQUIRE(nodes.size() == 1u);
+    REQUIRE(nodes[0].terrain == 7u);
+    REQUIRE(nodes[0].revision == 1u);
+    REQUIRE((nodes[0].key == input.key));
+}
+
+TEST_CASE("TM9 a newer node revision replaces a queued older one", "[terrain]") {
+    LodInput input;
+    input.key = NodeKey{2, 1, 0, 0};
+    TerrainMesher mesher({}, 1);
+    // Same shape as TM4: pause before either queue_node() lands, so both
+    // reach the waiting set deterministically (the replace-in-place path)
+    // rather than racing a worker that might already be running revision 1.
+    mesher.pause_for_test(true);
+    mesher.queue_node(9, 1, input, 0.f);
+    mesher.queue_node(9, 2, input, 0.f);
+    mesher.pause_for_test(false);
+    mesher.wait_idle();
+    std::vector<MeshResult> chunks;
+    std::vector<NodeResult> nodes;
+    mesher.collect(chunks, nodes);
+    REQUIRE(nodes.size() == 1u);
+    REQUIRE(nodes[0].terrain == 9u);
+    REQUIRE(nodes[0].revision == 2u);
+}
+
+TEST_CASE("TM10 node and chunk jobs interleave by distance", "[terrain]") {
+    VoxelVolume volume;   // left empty: chunk jobs just need valid MeshInput, not triangles
+    std::mutex order_mu;
+    std::vector<std::string> order;
+    TerrainMesher mesher(
+        [&](const ChunkMesh&) -> std::shared_ptr<void> {
+            std::lock_guard<std::mutex> lock(order_mu);
+            order.push_back("chunk");
+            return nullptr;
+        },
+        1,
+        [&](const LodInput& in) -> LodResult {
+            std::lock_guard<std::mutex> lock(order_mu);
+            order.push_back("node");
+            LodResult r;
+            r.key = in.key;
+            return r;
+        });
+    mesher.pause_for_test(true);
+    LodInput node_a;
+    node_a.key = NodeKey{1, 0, 0, 0};
+    LodInput node_b;
+    node_b.key = NodeKey{1, 1, 0, 0};
+    mesher.queue_node(1, 1, node_a, 1.f);                                  // nearest
+    mesher.queue_node(1, 1, node_b, 5.f);                                  // 2nd
+    mesher.queue(1, 1, mesh_input(volume, ChunkCoord{0, 0, 0}), 10.f);     // 3rd
+    mesher.queue(1, 1, mesh_input(volume, ChunkCoord{1, 0, 0}), 20.f);     // farthest
+    mesher.pause_for_test(false);
+    mesher.wait_idle();
+    REQUIRE(order == std::vector<std::string>{"node", "node", "chunk", "chunk"});
+}
+
+TEST_CASE("TM11 a node job that throws is dropped and counted", "[terrain]") {
+    // LodBuilder's build_node is written to never throw -- it reports a null
+    // mesh rather than raising on any input tried (empty children, zero
+    // triangles, a fully-collapsed simplification). So, the same way TM6
+    // injects a throw through TerrainMesher's existing BuildCollider hook
+    // rather than adding a new one, this reuses the symmetric BuildNode
+    // constructor hook (added by this task for node jobs, mirroring
+    // BuildCollider) instead of adding a test-only mechanism beyond it.
+    TerrainMesher mesher({}, 0, [](const LodInput&) -> LodResult {
+        throw std::runtime_error("TM11: a deliberately broken node build");
+    });
+    LodInput input;
+    input.key = NodeKey{1, 0, 0, 0};
+    mesher.queue_node(1, 1, input, 0.f);
+    mesher.wait_idle();   // must return: the throw must not wedge the worker or deadlock running_
+    std::vector<MeshResult> chunks;
+    std::vector<NodeResult> nodes;
+    mesher.collect(chunks, nodes);
+    REQUIRE(nodes.empty());
+    REQUIRE(mesher.failure_count() == 1u);
 }
 
 TEST_CASE("SN6 meshing one dense chunk is fast", "[.][terrain-bench]") {

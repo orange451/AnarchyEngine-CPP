@@ -185,7 +185,11 @@ void TerrainWorld::publish_chunks(TerrainRecord& record) {
 void TerrainWorld::update(DataModel& game) {
     // SimulationThread, under game's write lock (the Engine's contract).
     std::vector<terrain::MeshResult> results;
-    mesher_.collect(results);
+    // No node jobs are queued yet (Task 5 adds that, and will consume this
+    // vector); passed so collect() never has node results with nowhere to
+    // go, instead of this caller using the chunks-only overload.
+    std::vector<terrain::NodeResult> node_results;
+    mesher_.collect(results, node_results);
     for (const terrain::MeshResult& result : results) {
         accept_result(result);
     }

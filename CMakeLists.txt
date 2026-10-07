@@ -631,6 +631,7 @@ add_library(engine_core STATIC
     src/engine_core/terrain/SurfaceNets.cpp
     src/engine_core/terrain/TerrainMesher.cpp
     src/engine_core/terrain/LodNode.cpp
+    src/engine_core/terrain/VoxelSampler.cpp
     src/engine_core/terrain/LodBuilder.cpp
     src/engine_core/TerrainWorld.cpp
     src/engine_core/terrain/TerrainStash.cpp

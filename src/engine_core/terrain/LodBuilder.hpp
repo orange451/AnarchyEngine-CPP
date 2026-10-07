@@ -1,11 +1,13 @@
 #pragma once
 
-// Task 2 of the terrain LOD plan: LodBuilder merges a node's children's
+// Tasks 2-3 of the terrain LOD plan: LodBuilder merges a node's children's
 // meshes, simplifies the result with meshoptimizer to a level-appropriate
-// error budget, and collects the merged mesh's border edges (for Task 3's
-// skirts). Pure function of its LodInput: no octree, no voxel reads yet
-// (voxels is accepted but unused until Task 3's re-shading). See docs/
-// superpowers/specs/2026-10-06-terrain-lod-design.md's Implementation notes.
+// error budget, re-shades the kept attempt's vertices from the full-
+// resolution voxel field (input.voxels, via VoxelSampler), and folds a skirt
+// quad inward from every border edge (an edge used by exactly one triangle)
+// to hide cracks against a lower-detail neighbor. Pure function of its
+// LodInput: no octree. See docs/superpowers/specs/2026-10-06-terrain-lod-
+// design.md's Implementation notes.
 
 #include "amesh.hpp"
 #include "terrain/LodNode.hpp"
@@ -27,14 +29,17 @@ struct LodInput {
     // missing (vector shorter than children, or empty altogether) counts as
     // 0, which is always correct for a level-0 child (an exact chunk mesh).
     std::vector<float> child_errors;
-    std::shared_ptr<const ChunkMap> voxels;                              // for re-shading (Task 3)
+    std::shared_ptr<const ChunkMap> voxels;  // full-resolution voxels, for re-shading; null skips it
 };
 
 struct LodResult {
     NodeKey key;
-    std::shared_ptr<const anarchy::amesh::Data> mesh;  // null: no triangles
+    std::shared_ptr<const anarchy::amesh::Data> mesh;  // null: no triangles (includes skirts, once added)
     float error = 0.f;                                  // studs
-    std::vector<std::uint32_t> border_edges;            // pairs of vertex indices
+    // The simplified surface's border edges, pairs of vertex indices, as it
+    // stood before skirts were appended to mesh (so these indices still
+    // address mesh's first vertices/triangles; skirt geometry follows).
+    std::vector<std::uint32_t> border_edges;
 };
 
 // The level's simplification budget, in studs: 0.25 * voxel_size * 2^level.
@@ -42,15 +47,27 @@ float target_error(int level, float voxel_size);
 
 // Concatenates input's children (offsetting indices), welds exactly-equal
 // positions, simplifies to target_error(input.key.level, input.voxel_size)
-// with meshoptimizer, compacts, and collects border edges (edges used by
-// exactly one triangle). The recorded error is a cumulative bound: this
-// level's own honest measured distance (every child vertex's distance to the
-// simplified surface) plus the worst of input.child_errors (R8). If that
-// exceeds target_error, build_node retries from the welded mesh with
-// meshopt's own target error halved, up to 4 attempts in total; it keeps the
-// first attempt within budget, or, failing that, the attempt with the
-// lowest recorded error. Callable from any thread. Task 3 adds re-shading
-// from input.voxels and skirts.
+// with meshoptimizer, and compacts. The recorded error is a cumulative
+// bound: this level's own honest measured distance (every child vertex's
+// distance to the simplified surface) plus the worst of input.child_errors
+// (R8). If that exceeds target_error, build_node retries from the welded
+// mesh with meshopt's own target error halved, up to 4 attempts in total; it
+// keeps the first attempt within budget, or, failing that, the attempt with
+// the lowest recorded error. A fully-collapsed attempt (0 triangles left)
+// reports a null mesh, same as an empty input.
+//
+// On the kept attempt, if input.voxels is non-null, re-shades every vertex
+// (positions untouched) from the full-resolution field: normal = the
+// distance field's gradient at the vertex's position, and Id = the lowest-
+// distance corner's Id of the full-resolution cell around it (both via
+// VoxelSampler) -- the same rule Surface Nets itself uses, just read back at
+// whatever resolution the simplified vertex landed at. Then collects border
+// edges (edges used by exactly one triangle) and, for each one, appends a
+// skirt quad folded inward along -normal by max(2 * result.error,
+// input.voxel_size), copying the edge's own two vertices' normals and Ids.
+// border_edges is reported as it stood before skirts were appended.
+//
+// Callable from any thread (voxels, like children, is only ever read).
 LodResult build_node(const LodInput& input);
 
 }  // namespace engine_core::terrain

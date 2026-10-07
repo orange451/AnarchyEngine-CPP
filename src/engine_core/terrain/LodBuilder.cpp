@@ -1,5 +1,7 @@
 #include "terrain/LodBuilder.hpp"
 
+#include "terrain/VoxelSampler.hpp"
+
 #include <meshoptimizer.h>
 
 #include <algorithm>
@@ -244,6 +246,77 @@ std::vector<std::uint32_t> collect_border_edges(const anarchy::amesh::Data& mesh
     return out;
 }
 
+// Re-shades every vertex of mesh from the full-resolution field sampler
+// reads: normal = the field's gradient at the vertex's (unchanged) position;
+// Id = the lowest-distance corner's Id of the full-resolution cell around
+// it. Mirrors exactly what SurfaceNets.cpp's build_vertices writes for a
+// vertex's n/rgba (rgba[1..3] stay 0; weight[] is untouched -- a Surface
+// Nets mesh carries no skinning weights to begin with).
+void reshade_vertices(anarchy::amesh::Data& mesh, const VoxelSampler& sampler) {
+    for (anarchy::amesh::Vertex& v : mesh.vertices) {
+        const Vec3 p{v.p[0], v.p[1], v.p[2]};
+        const Vec3 n = sampler.gradient(p);
+        v.n[0] = n.x;
+        v.n[1] = n.y;
+        v.n[2] = n.z;
+        v.rgba[0] = sampler.id(p);
+        v.rgba[1] = 0;
+        v.rgba[2] = 0;
+        v.rgba[3] = 0;
+    }
+}
+
+// Appends, for every border edge (a, b) in border_edges (pairs of vertex
+// indices into mesh, in the forward order collect_border_edges extracted
+// them: the same direction their one owning triangle's winding visits them
+// in), a quad folded inward along -normal by depth: two new vertices
+// a' = a - n_a * depth, b' = b - n_b * depth (copying a/b's own position,
+// normal and Id), and two triangles.
+//
+// Winding: let e = b - a and n = the edge's own (averaged) normal. For any
+// triangle (p0, p1, p2) this mesh actually stores, cross(p1 - p0, p2 - p0)
+// points the same way the vertex normals do (outward -- Surface Nets winds
+// every quad "from solid toward air", and simplification/compaction never
+// change that). Because collect_border_edges reads a triangle's 3 indices in
+// their own forward (cyclic) order, (a, b) always lands in that same
+// solid-to-air-consistent order, whatever the triangle's third vertex c
+// happens to be -- so cross(e, c - a) is outward for this mesh's actual c,
+// and since n is (to first order) parallel to that same cross product,
+// t = cross(e, n) points away from the solid side of the edge (toward c's
+// opposite side) regardless of c. Triangles (a, b', b) and (a, a', b') both
+// come out to cross(second - a, third - a) == depth * t (worked out exactly
+// for the planar case, where n_a == n_b == n: substituting b' = b - n*depth
+// and a' = a - n*depth into each cross product cancels every n x n term and
+// leaves depth * cross(e, n) both times) -- i.e. both skirt triangles face
+// the same way the border edge's own triangle does, never flipped.
+void add_skirts(anarchy::amesh::Data& mesh, const std::vector<std::uint32_t>& border_edges, float depth) {
+    const std::size_t edge_count = border_edges.size() / 2;
+    for (std::size_t e = 0; e < edge_count; ++e) {
+        const std::uint32_t a_index = border_edges[e * 2 + 0];
+        const std::uint32_t b_index = border_edges[e * 2 + 1];
+        const anarchy::amesh::Vertex& a = mesh.vertices[a_index];
+        const anarchy::amesh::Vertex& b = mesh.vertices[b_index];
+
+        anarchy::amesh::Vertex a_prime = a;
+        a_prime.p[0] = a.p[0] - a.n[0] * depth;
+        a_prime.p[1] = a.p[1] - a.n[1] * depth;
+        a_prime.p[2] = a.p[2] - a.n[2] * depth;
+
+        anarchy::amesh::Vertex b_prime = b;
+        b_prime.p[0] = b.p[0] - b.n[0] * depth;
+        b_prime.p[1] = b.p[1] - b.n[1] * depth;
+        b_prime.p[2] = b.p[2] - b.n[2] * depth;
+
+        const auto a_prime_index = static_cast<std::uint32_t>(mesh.vertices.size());
+        mesh.vertices.push_back(a_prime);
+        const auto b_prime_index = static_cast<std::uint32_t>(mesh.vertices.size());
+        mesh.vertices.push_back(b_prime);
+
+        mesh.indices.insert(mesh.indices.end(), {a_index, b_prime_index, b_index});
+        mesh.indices.insert(mesh.indices.end(), {a_index, a_prime_index, b_prime_index});
+    }
+}
+
 }  // namespace
 
 float target_error(int level, float voxel_size) { return 0.25f * voxel_size * static_cast<float>(1 << level); }
@@ -319,7 +392,10 @@ LodResult build_node(const LodInput& input) {
     // index-count target never changes) if the previous attempt's honest
     // recorded error came in over budget. Keep the first attempt within
     // budget; failing that, keep whichever attempt recorded the lowest error.
-    std::shared_ptr<const anarchy::amesh::Data> best_mesh;
+    // Kept as a plain Data (not yet a shared_ptr<const ...>) since the kept
+    // attempt still needs re-shading and skirts appended below.
+    anarchy::amesh::Data best_mesh;
+    bool have_best = false;
     float best_error = std::numeric_limits<float>::max();
     constexpr int kMaxAttempts = 4;
     for (int attempt = 0; attempt < kMaxAttempts; ++attempt) {
@@ -342,14 +418,14 @@ LodResult build_node(const LodInput& input) {
         mesh.vertices = std::move(compacted);
         mesh.indices.assign(simplified.begin(), simplified.end());
         anarchy::amesh::compute_aabb(mesh);
-        auto mesh_ptr = std::make_shared<const anarchy::amesh::Data>(std::move(mesh));
 
-        const float measured = max_child_distance(input.children, *mesh_ptr);
+        const float measured = max_child_distance(input.children, mesh);
         const float candidate_error = measured + max_child_error;
         const bool within_budget = candidate_error <= target;
         if (within_budget || candidate_error < best_error) {
             best_error = candidate_error;
-            best_mesh = std::move(mesh_ptr);
+            best_mesh = std::move(mesh);
+            have_best = true;
         }
         if (within_budget) {
             break;
@@ -357,9 +433,37 @@ LodResult build_node(const LodInput& input) {
         normalized_target_error *= 0.5f;
     }
 
+    // have_best is always true here: the very first attempt always satisfies
+    // "candidate_error < best_error" (best_error starts at float max).
     result.error = best_error;
-    result.mesh = best_mesh;
-    result.border_edges = collect_border_edges(*best_mesh);
+    // A fully-collapsed attempt (every attempt simplified away to 0
+    // triangles) reports a null mesh, same as an empty input -- the
+    // contract is that null means no triangles, full stop.
+    if (!have_best || best_mesh.indices.empty()) {
+        return result;
+    }
+
+    // Re-shade from the full-resolution voxel field, if given: positions
+    // stay put, but every vertex's normal and Id are read back from voxels
+    // rather than kept from whichever child contributed that welded vertex
+    // (which, after simplification, may not even be one of this mesh's own
+    // positions' original sources any more).
+    if (input.voxels) {
+        const VoxelSampler sampler(*input.voxels, input.voxel_size);
+        reshade_vertices(best_mesh, sampler);
+    }
+
+    // Border edges, as the simplified (and possibly re-shaded) surface
+    // stands before skirts are appended -- this is what the result reports.
+    result.border_edges = collect_border_edges(best_mesh);
+
+    // Skirts: one quad per border edge, folded inward along -normal by this
+    // node's own recorded error (R8) and the input voxel size.
+    const float skirt_depth = std::max(2.f * result.error, input.voxel_size);
+    add_skirts(best_mesh, result.border_edges, skirt_depth);
+    anarchy::amesh::compute_aabb(best_mesh);  // skirt vertices can lie outside the pre-skirt AABB
+
+    result.mesh = std::make_shared<const anarchy::amesh::Data>(std::move(best_mesh));
     return result;
 }
 

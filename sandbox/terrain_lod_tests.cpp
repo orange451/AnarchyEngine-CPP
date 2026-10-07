@@ -5,8 +5,10 @@
 #include "amesh.hpp"
 #include "terrain/LodBuilder.hpp"
 #include "terrain/LodNode.hpp"
+#include "terrain/ShapeDistance.hpp"
 #include "terrain/SurfaceNets.hpp"
 #include "terrain/VoxelChunk.hpp"
+#include "terrain/VoxelSampler.hpp"
 #include "terrain/VoxelVolume.hpp"
 
 #include <catch2/catch_approx.hpp>
@@ -698,4 +700,302 @@ TEST_CASE("LB4 an empty child set gives a null mesh", "[terrain][lod]") {
     REQUIRE(result.mesh == nullptr);
     REQUIRE(result.error == 0.f);
     REQUIRE(result.border_edges.empty());
+}
+
+// Task 3: re-shading LOD node vertices from full-resolution voxels
+// (VoxelSampler), and skirts along a node's border edges.
+
+namespace {
+
+// Builds key's node bottom-up from volume: level 0 is the chunk's own exact
+// Surface Nets mesh (no simplification; build_node is never called on it);
+// level >= 1 recurses into children_of(key) first, then calls build_node
+// with every non-null child's mesh and recorded error, and voxels threaded
+// through at every level (re-shading always reads the full-resolution
+// field, regardless of which level is being built).
+LodResult build_lod_node(VoxelVolume& volume, const NodeKey& key, const std::shared_ptr<const ChunkMap>& voxels) {
+    if (key.level == 0) {
+        const ChunkCoord coord{key.x, key.y, key.z};
+        const ChunkMesh mesh = surface_nets(mesh_input(volume, coord));
+        LodResult result;
+        result.key = key;
+        result.mesh = mesh.render;
+        return result;
+    }
+    LodInput input;
+    input.key = key;
+    input.voxel_size = volume.voxel_size();
+    input.voxels = voxels;
+    for (const NodeKey& child_key : children_of(key)) {
+        const LodResult child = build_lod_node(volume, child_key, voxels);
+        if (child.mesh) {
+            input.children.push_back(child.mesh);
+            input.child_errors.push_back(child.error);
+        }
+    }
+    return build_node(input);
+}
+
+// add_skirts (LodBuilder.cpp) appends exactly 2 new vertices per border edge
+// to the tail of mesh->vertices, in border_edges' own order, after whatever
+// vertices the simplified (pre-skirt) surface already had -- so the
+// pre-skirt vertex count is recoverable from the result alone, letting a
+// test tell a node's original surface vertices apart from its skirts'.
+std::size_t original_vertex_count(const LodResult& result) {
+    return result.mesh->vertices.size() - result.border_edges.size();
+}
+
+}  // namespace
+
+TEST_CASE("RS1 a level-2 node of a ball re-shades every original vertex's normal to the analytic gradient",
+          "[terrain][lod]") {
+    VoxelVolume volume;
+    const Vec3 center{64.f, 64.f, 64.f};
+    const float radius = 40.f;
+    REQUIRE_FALSE(volume.fill(ball_at(center.x, center.y, center.z, radius), 1));
+    const auto voxels = std::make_shared<const ChunkMap>(volume.chunks());
+
+    const NodeKey level2_key{2, 0, 0, 0};
+    const LodResult result = build_lod_node(volume, level2_key, voxels);
+    REQUIRE(result.mesh != nullptr);
+
+    const std::size_t original_count = original_vertex_count(result);
+    REQUIRE(original_count > 0);
+
+    int checked = 0;
+    for (std::size_t i = 0; i < original_count; ++i) {
+        const anarchy::amesh::Vertex& v = result.mesh->vertices[i];
+        const Vec3 to_vertex{v.p[0] - center.x, v.p[1] - center.y, v.p[2] - center.z};
+        const float r = std::sqrt(to_vertex.x * to_vertex.x + to_vertex.y * to_vertex.y + to_vertex.z * to_vertex.z);
+        REQUIRE(r > 0.f);
+        const Vec3 analytic{to_vertex.x / r, to_vertex.y / r, to_vertex.z / r};
+
+        const float n_len = std::sqrt(v.n[0] * v.n[0] + v.n[1] * v.n[1] + v.n[2] * v.n[2]);
+        REQUIRE(n_len > 0.f);
+        const float dot = (v.n[0] * analytic.x + v.n[1] * analytic.y + v.n[2] * analytic.z) / n_len;
+        INFO("vertex " << i << " position (" << v.p[0] << ", " << v.p[1] << ", " << v.p[2] << "), dot " << dot);
+        REQUIRE(dot >= 0.95);
+        ++checked;
+    }
+    REQUIRE(checked > 0);
+}
+
+namespace {
+
+// Independent of VoxelSampler: the same "lowest-distance corner's Id" rule
+// Surface Nets uses, but read straight from volume.cell() (VoxelVolume's
+// own chunk-map lookup, not VoxelSampler's) rather than calling the
+// production sampler under test.
+std::uint8_t expected_id_at(const VoxelVolume& volume, Vec3 p) {
+    const float voxel_size = volume.voxel_size();
+    const int ix = static_cast<int>(std::floor(p.x / voxel_size));
+    const int iy = static_cast<int>(std::floor(p.y / voxel_size));
+    const int iz = static_cast<int>(std::floor(p.z / voxel_size));
+
+    int lowest_distance = std::numeric_limits<int>::max();
+    std::uint8_t lowest_id = 0;
+    for (int dz = 0; dz <= 1; ++dz) {
+        for (int dy = 0; dy <= 1; ++dy) {
+            for (int dx = 0; dx <= 1; ++dx) {
+                const Cell cell = volume.cell(CellCoord{ix + dx, iy + dy, iz + dz});
+                if (static_cast<int>(cell.distance) < lowest_distance) {
+                    lowest_distance = cell.distance;
+                    lowest_id = cell.material;
+                }
+            }
+        }
+    }
+    return lowest_id;
+}
+
+}  // namespace
+
+TEST_CASE("RS2 a node spanning a two-material boundary assigns each vertex the full-resolution cell's "
+          "independently-sampled Id",
+          "[terrain][lod]") {
+    VoxelVolume volume;
+    REQUIRE_FALSE(volume.fill(ball_at(32.f, 32.f, 32.f, 25.f), 2));
+    Shape half;
+    half.kind = Shape::Kind::Block;
+    half.frame = matrix4_translation(48.f, 32.f, 32.f);  // x in [32, 64): the ball's +x half
+    half.size = Vec3{32.f, 64.f, 64.f};
+    REQUIRE_FALSE(volume.paint(half, 5));
+    const auto voxels = std::make_shared<const ChunkMap>(volume.chunks());
+
+    const NodeKey level1_key{1, 0, 0, 0};
+    const LodResult result = build_lod_node(volume, level1_key, voxels);
+    REQUIRE(result.mesh != nullptr);
+
+    const std::size_t original_count = original_vertex_count(result);
+    REQUIRE(original_count > 0);
+
+    bool saw_material_a = false, saw_material_b = false;
+    for (std::size_t i = 0; i < original_count; ++i) {
+        const anarchy::amesh::Vertex& v = result.mesh->vertices[i];
+        const Vec3 p{v.p[0], v.p[1], v.p[2]};
+        const std::uint8_t expected = expected_id_at(volume, p);
+        INFO("vertex " << i << " position (" << p.x << ", " << p.y << ", " << p.z << "), rgba[0] " << int(v.rgba[0])
+                        << ", expected " << int(expected));
+        REQUIRE(static_cast<int>(v.rgba[0]) == static_cast<int>(expected));
+        saw_material_a = saw_material_a || v.rgba[0] == 2;
+        saw_material_b = saw_material_b || v.rgba[0] == 5;
+    }
+    // The boundary must actually fall inside this node's mesh, or the test
+    // would pass trivially with only one material ever seen.
+    REQUIRE(saw_material_a);
+    REQUIRE(saw_material_b);
+}
+
+TEST_CASE("RS3 every border edge gets exactly one skirt quad, its far edge displaced by max(2*error, VoxelSize)",
+          "[terrain][lod]") {
+    VoxelVolume volume;
+    const NodeKey level1_key{1, 2, 0, 2};
+    Vec3 node_min, node_max;
+    node_bounds(level1_key, 1.f, node_min, node_max);
+    fill_rolling_wave(volume, (node_min.x + node_max.x) * 0.5f, (node_min.z + node_max.z) * 0.5f);
+    const float voxel_size = volume.voxel_size();
+
+    std::size_t children_triangles = 0;
+    const std::vector<std::shared_ptr<const anarchy::amesh::Data>> children =
+        mesh_level1_children(volume, level1_key, children_triangles);
+    REQUIRE(children_triangles > 0);
+
+    LodInput input;
+    input.key = level1_key;
+    input.voxel_size = voxel_size;
+    input.children = children;
+    input.voxels = std::make_shared<const ChunkMap>(volume.chunks());
+    const LodResult result = build_node(input);
+    REQUIRE(result.mesh != nullptr);
+
+    const std::size_t edge_count = result.border_edges.size() / 2;
+    REQUIRE(edge_count > 0);  // the node's own footprint cuts the (wider) wave: there must be a rim
+
+    const float depth = std::max(2.f * result.error, voxel_size);
+    const std::size_t original_count = original_vertex_count(result);
+    REQUIRE(result.mesh->vertices.size() == original_count + edge_count * 2);
+
+    for (std::size_t e = 0; e < edge_count; ++e) {
+        const std::uint32_t a_index = result.border_edges[e * 2 + 0];
+        const std::uint32_t b_index = result.border_edges[e * 2 + 1];
+        const anarchy::amesh::Vertex& a = result.mesh->vertices[a_index];
+        const anarchy::amesh::Vertex& b = result.mesh->vertices[b_index];
+        // add_skirts appends a' then b' per edge, in border_edges' own order.
+        const anarchy::amesh::Vertex& a_prime = result.mesh->vertices[original_count + e * 2 + 0];
+        const anarchy::amesh::Vertex& b_prime = result.mesh->vertices[original_count + e * 2 + 1];
+
+        const float expected_ax = a.p[0] - a.n[0] * depth;
+        const float expected_ay = a.p[1] - a.n[1] * depth;
+        const float expected_az = a.p[2] - a.n[2] * depth;
+        REQUIRE(std::fabs(a_prime.p[0] - expected_ax) <= 1e-4f);
+        REQUIRE(std::fabs(a_prime.p[1] - expected_ay) <= 1e-4f);
+        REQUIRE(std::fabs(a_prime.p[2] - expected_az) <= 1e-4f);
+
+        const float expected_bx = b.p[0] - b.n[0] * depth;
+        const float expected_by = b.p[1] - b.n[1] * depth;
+        const float expected_bz = b.p[2] - b.n[2] * depth;
+        REQUIRE(std::fabs(b_prime.p[0] - expected_bx) <= 1e-4f);
+        REQUIRE(std::fabs(b_prime.p[1] - expected_by) <= 1e-4f);
+        REQUIRE(std::fabs(b_prime.p[2] - expected_bz) <= 1e-4f);
+
+        // Normal and Id carried over unchanged from the edge's own vertex.
+        for (int c = 0; c < 3; ++c) {
+            REQUIRE(a_prime.n[c] == a.n[c]);
+            REQUIRE(b_prime.n[c] == b.n[c]);
+        }
+        for (int c = 0; c < 4; ++c) {
+            REQUIRE(a_prime.rgba[c] == a.rgba[c]);
+            REQUIRE(b_prime.rgba[c] == b.rgba[c]);
+        }
+    }
+
+    // Exactly one skirt quad (2 triangles) per border edge: every triangle
+    // beyond the pre-skirt surface's own count references at least one
+    // appended (>= original_count) vertex, and there are exactly 2 per edge.
+    std::size_t skirt_triangles = 0;
+    for (std::size_t t = 0; t < result.mesh->indices.size(); t += 3) {
+        const bool touches_skirt = result.mesh->indices[t + 0] >= original_count ||
+                                    result.mesh->indices[t + 1] >= original_count ||
+                                    result.mesh->indices[t + 2] >= original_count;
+        if (touches_skirt) {
+            ++skirt_triangles;
+        }
+    }
+    REQUIRE(skirt_triangles == edge_count * 2);
+}
+
+TEST_CASE("RS4 a level-1 node's skirt triangles face consistently with their source edge's triangle",
+          "[terrain][lod]") {
+    VoxelVolume volume;
+    const NodeKey level1_key{1, 2, 0, 2};
+    Vec3 node_min, node_max;
+    node_bounds(level1_key, 1.f, node_min, node_max);
+    fill_rolling_wave(volume, (node_min.x + node_max.x) * 0.5f, (node_min.z + node_max.z) * 0.5f);
+    const float voxel_size = volume.voxel_size();
+
+    std::size_t children_triangles = 0;
+    const std::vector<std::shared_ptr<const anarchy::amesh::Data>> children =
+        mesh_level1_children(volume, level1_key, children_triangles);
+    REQUIRE(children_triangles > 0);
+
+    LodInput input;
+    input.key = level1_key;
+    input.voxel_size = voxel_size;
+    input.children = children;
+    input.voxels = std::make_shared<const ChunkMap>(volume.chunks());
+    const LodResult result = build_node(input);
+    REQUIRE(result.mesh != nullptr);
+
+    const std::size_t edge_count = result.border_edges.size() / 2;
+    REQUIRE(edge_count > 0);
+    const std::size_t original_count = original_vertex_count(result);
+
+    // For a border edge (a, b) extracted (by LodBuilder.cpp's
+    // collect_border_edges) in the same forward order its one owning
+    // triangle stores it in, cross(b - a, c - a) is outward for that
+    // triangle's real third vertex c (Surface Nets winds every triangle
+    // solid-to-air, and neither simplification nor compaction change that).
+    // t = cross(b - a, (n_a + n_b)) approximates that same outward
+    // direction without needing c (n is parallel to it to first order), so
+    // a correctly-wound skirt triangle's own face normal should point the
+    // same way as t, not away from it.
+    int checked = 0;
+    for (std::size_t e = 0; e < edge_count; ++e) {
+        const std::uint32_t a_index = result.border_edges[e * 2 + 0];
+        const std::uint32_t b_index = result.border_edges[e * 2 + 1];
+        const anarchy::amesh::Vertex& a = result.mesh->vertices[a_index];
+        const anarchy::amesh::Vertex& b = result.mesh->vertices[b_index];
+        const anarchy::amesh::Vertex& a_prime = result.mesh->vertices[original_count + e * 2 + 0];
+        const anarchy::amesh::Vertex& b_prime = result.mesh->vertices[original_count + e * 2 + 1];
+
+        const Vec3 pa{a.p[0], a.p[1], a.p[2]};
+        const Vec3 pb{b.p[0], b.p[1], b.p[2]};
+        const Vec3 pap{a_prime.p[0], a_prime.p[1], a_prime.p[2]};
+        const Vec3 pbp{b_prime.p[0], b_prime.p[1], b_prime.p[2]};
+
+        const Vec3 e_dir{pb.x - pa.x, pb.y - pa.y, pb.z - pa.z};
+        const Vec3 n_sum{a.n[0] + b.n[0], a.n[1] + b.n[1], a.n[2] + b.n[2]};
+        const Vec3 t{e_dir.y * n_sum.z - e_dir.z * n_sum.y, e_dir.z * n_sum.x - e_dir.x * n_sum.z,
+                      e_dir.x * n_sum.y - e_dir.y * n_sum.x};
+        const float t_len = std::sqrt(t.x * t.x + t.y * t.y + t.z * t.z);
+        if (!(t_len > 1e-6f)) {
+            continue;  // a degenerate (near-zero) edge direction x normal sum: no reliable reference here
+        }
+
+        auto face_normal = [](Vec3 p0, Vec3 p1, Vec3 p2) {
+            const Vec3 u{p1.x - p0.x, p1.y - p0.y, p1.z - p0.z};
+            const Vec3 v{p2.x - p0.x, p2.y - p0.y, p2.z - p0.z};
+            return Vec3{u.y * v.z - u.z * v.y, u.z * v.x - u.x * v.z, u.x * v.y - u.y * v.x};
+        };
+        // The two skirt triangles LodBuilder.cpp's add_skirts appends: (a, b', b) and (a, a', b').
+        const Vec3 n1 = face_normal(pa, pbp, pb);
+        const Vec3 n2 = face_normal(pa, pap, pbp);
+
+        INFO("edge " << e << ": dot(n1,t) " << (n1.x * t.x + n1.y * t.y + n1.z * t.z) << ", dot(n2,t) "
+                      << (n2.x * t.x + n2.y * t.y + n2.z * t.z));
+        REQUIRE(n1.x * t.x + n1.y * t.y + n1.z * t.z > 0.f);
+        REQUIRE(n2.x * t.x + n2.y * t.y + n2.z * t.z > 0.f);
+        ++checked;
+    }
+    REQUIRE(checked > 0);
 }

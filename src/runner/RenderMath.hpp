@@ -12,9 +12,10 @@ namespace runner {
 constexpr float kDegree = 0.01745329252f;
 
 // The Scene View's near and far planes, which the renderer and billboard
-// placement both project with, so a billboard's depth is the scene's.
-constexpr float kSceneNear = 0.1f;
-constexpr float kSceneFar = 1000.f;
+// placement both project with, so a billboard's depth is the scene's. With
+// a 24-bit depth buffer, depth steps are about 4.8 units apart at 4000.
+constexpr float kSceneNear = 0.2f;
+constexpr float kSceneFar = 4000.f;
 
 // Vec3 has no operators; these are the few the matrices need.
 inline engine_core::Vec3 Add(engine_core::Vec3 a, engine_core::Vec3 b) { return {a.x + b.x, a.y + b.y, a.z + b.z}; }

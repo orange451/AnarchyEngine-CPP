@@ -59,7 +59,8 @@
 // by 720 offscreen under a DynamicSky, and scenes taken through the snapshot
 // path (a Game's Terrain, a TerrainWorld, a SnapshotPump), each written to dir
 // as a PNG and its path printed; and terrain LOD on a large island (lod-*.png):
-// a grazing and a far shot and a 30-frame descent, each frame checked
+// a grazing and a far shot, a 30-frame descent, and a shot from 1300 units
+// off (terrain past 1000 units), each frame checked
 // against full detail for cracks, geometry outside the true silhouette and
 // wrong materials (TerrainLodShots), plus, with --terrain-lod-colors, the
 // still shots tinted by level. They take some seconds (about 15 in Release),
@@ -967,7 +968,7 @@ void TerrainLodShots(runner::Renderer& renderer, OffscreenTarget& target, int wi
         };
         const auto ground = [](float x, float z) { return std::max(IslandHeight(x, z), 2.f); };
 
-        // The shots: a low grazing look across the island, a high far one.
+        // The shots: a low grazing look across the island, a high far one, and one from far off.
         const engine_core::Vec3 grazingEye{150.f, ground(150.f, 380.f) + 9.f, 380.f};
         const engine_core::Vec3 grazingAt{760.f, 26.f, 610.f};
         const engine_core::Vec3 farEye{250.f, 450.f, 250.f};
@@ -1251,6 +1252,13 @@ void TerrainLodShots(runner::Renderer& renderer, OffscreenTarget& target, int wi
             litShot(mostFadingDraws, mostFadingCamera, name);
         }
         Expect(mostFading > 0, "the sequence cross-fades between levels");
+
+        // From off the island's corner, 1300 units from its middle: its far
+        // half lies past 1000 units, which the far plane (kSceneFar) once cut off.
+        const engine_core::Vec3 outerEye{-350.f, 500.f, -350.f};
+        const engine_core::Matrix4 outer = lookFrom(outerEye, farAt);
+        settle(400);
+        stillShot(outer, "far-4000");
 
         draws.clear();
         runner::TerrainFadeState none;

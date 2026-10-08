@@ -84,12 +84,14 @@ struct MeshDraw {
     bool shadowOnly = false;
 };
 
-// A Terrain's look table: a 256 x 2 GL_RGBA8 texture, GL_NEAREST, from
-// rgba256x2's 256 * 2 * 4 bytes, row 0 first. Row 0's texel i is material
-// Id i's color (sRGB, alpha unused); row 1's is its metalness, roughness and
-// reflectivity (0 to 255) and 255. The GL context has to be current; the
-// caller deletes the texture.
-unsigned MakeTerrainLookTexture(const std::uint8_t* rgba256x2);
+// A Terrain's look table: a 256 x 4 GL_RGBA32F texture, GL_NEAREST, from
+// rgba256x4's 256 * 4 * 4 floats, row 0 first. Row 0's texel i is material Id
+// i's color (sRGB, alpha unused); row 1's is its metalness, roughness,
+// reflectivity, and 1; row 2's is its texture layer index, TextureScale,
+// BlendSharpness, and HeightStrength (Task 6 reads it; nothing draws
+// textured yet); row 3 is reserved (0). The GL context has to be current;
+// the caller deletes the texture.
+unsigned MakeTerrainLookTexture(const float* rgba256x4);
 
 // A debug view of terrain LOD, for every Renderer in the process: while on,
 // each terrain draw is tinted by its MeshDraw::terrainLevel, levels 0 to 7

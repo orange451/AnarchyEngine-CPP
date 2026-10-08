@@ -140,6 +140,9 @@ using GLuint64 = unsigned long long;
 #ifdef GL_RGBA8
 #undef GL_RGBA8
 #endif
+#ifdef GL_RGBA32F
+#undef GL_RGBA32F
+#endif
 #ifdef GL_UNPACK_ALIGNMENT
 #undef GL_UNPACK_ALIGNMENT
 #endif
@@ -195,6 +198,10 @@ constexpr GLenum GL_LINEAR = 0x2601;
 constexpr GLenum GL_LINEAR_MIPMAP_LINEAR = 0x2703;
 constexpr GLenum GL_REPEAT = 0x2901;
 constexpr GLenum GL_RGBA8 = 0x8058;
+// The terrain look table (Task 5, decision R1): 256 x 4 floats, one row per
+// (color, metalness/roughness/reflectivity, layer/scale/sharpness/height,
+// reserved).
+constexpr GLenum GL_RGBA32F = 0x8814;
 constexpr GLenum GL_UNPACK_ALIGNMENT = 0x0CF5;
 
 // The Scene View's offscreen passes. Prefixed RT_ so no platform header's

@@ -701,6 +701,17 @@ TerrainEditorHost IdeLayout::terrain_editor_host() {
             });
     };
     host.notice = [this](std::string text) { show_toast(std::move(text)); };
+    // Task 5: the header's "N MB textures" figure and its refresh trigger.
+    // Read-only, so no on_simulation hop; TerrainTextures::published and
+    // memory_bytes are safe to call from any thread.
+    host.texture_memory_bytes = [this](engine_core::InstanceId terrain) {
+        return runner_.simulation().terrain_textures().memory_bytes(terrain);
+    };
+    host.texture_revision = [this](engine_core::InstanceId terrain) -> std::uint64_t {
+        const std::shared_ptr<const engine_core::TerrainTextureSet> set =
+            runner_.simulation().terrain_textures().published(terrain);
+        return set ? set->revision : 0;
+    };
     return host;
 }
 

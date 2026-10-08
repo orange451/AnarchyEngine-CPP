@@ -33,6 +33,13 @@ struct TerrainEditorHost {
     std::function<void(engine_core::InstanceId terrain, int from, int to)> replace_unassigned;
     // A short message for the person, such as why an add did nothing.
     std::function<void(std::string text)> notice;
+    // Task 5: the header's "· N MB textures" figure, from
+    // TerrainTextures::memory_bytes, and the published set's revision (so
+    // refresh() notices a new build even when nothing else about the
+    // Terrain changed). Both empty in a test that does not wire an Engine
+    // in: the header then shows no textures figure.
+    std::function<std::size_t(engine_core::InstanceId terrain)> texture_memory_bytes;
+    std::function<std::uint64_t(engine_core::InstanceId terrain)> texture_revision;
 };
 
 class AssetPicker;
@@ -123,6 +130,8 @@ private:
     const TerrainMaterialView* entry_view(engine_core::InstanceId entry) const;
     // The Terrain's voxel revision, or 0 when it is gone. The caller holds a read lock.
     std::uint64_t voxel_revision() const;
+    // The host's texture_revision(terrain_), or 0 with no host callback.
+    std::uint64_t texture_revision() const;
 
     engine_core::DataModel& world_;
     engine_core::InstanceId terrain_;
@@ -130,6 +139,7 @@ private:
 
     TerrainMaterialsView view_;
     std::uint64_t seen_tree_ = ~std::uint64_t{0};
+    std::uint64_t seen_texture_revision_ = ~std::uint64_t{0};
     ChangeFlag edited_;
     std::uint64_t watch_ = 0;
     std::vector<engine_core::InstanceId> watched_;

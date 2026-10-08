@@ -1,8 +1,10 @@
 #version 330 core
 // The G-buffer for a terrain LOD node (level 0: a chunk): each material Id's look from the
-// Terrain's 256 x 2 table (row 0 color, row 1 metalness, roughness,
-// reflectivity). Writes the same four targets, packed the same way, as
-// deferred.frag.
+// Terrain's 256 x 4 RGBA32F table (row 0 color, row 1 metalness, roughness,
+// reflectivity; row 2 texture layer/TextureScale/BlendSharpness/
+// HeightStrength and row 3, reserved, are Task 6's -- this shader still
+// draws flat-colored, reading only rows 0 and 1). Writes the same four
+// targets, packed the same way, as deferred.frag.
 in vec3 vViewPosition;
 in vec3 vViewNormal;
 flat in int vMaterial;

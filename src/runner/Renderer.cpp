@@ -1379,14 +1379,13 @@ void Renderer::handlePass(const float* projection) {
 
 namespace {
 
-// Puts rgba256x2 into texture, as MakeTerrainLookTexture describes. The
+// Puts rgba256x4 into texture, as MakeTerrainLookTexture describes. The
 // renderer binds every unit it reads before each draw, so leaving unit 0
 // unbound here disturbs no pass.
-void FillTerrainLookTexture(unsigned texture, const std::uint8_t* rgba256x2) {
+void FillTerrainLookTexture(unsigned texture, const float* rgba256x4) {
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, texture);
-    // Rows of 256 RGBA texels are whole words, so the default unpack alignment adds no padding.
-    glTexImage2D(GL_TEXTURE_2D, 0, static_cast<GLint>(GL_RGBA8), 256, 2, 0, GL_RGBA, GL_UNSIGNED_BYTE, rgba256x2);
+    glTexImage2D(GL_TEXTURE_2D, 0, static_cast<GLint>(GL_RGBA32F), 256, 4, 0, GL_RGBA, GL_FLOAT, rgba256x4);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, static_cast<GLint>(RT_GL_NEAREST));
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, static_cast<GLint>(RT_GL_NEAREST));
     glBindTexture(GL_TEXTURE_2D, 0);
@@ -1408,10 +1407,10 @@ const TerrainLodColor kTerrainLodColors[8] = {
     {"cyan", {40, 200, 220}}, {"blue", {50, 80, 230}},    {"purple", {140, 60, 200}}, {"magenta", {235, 60, 200}},
 };
 
-unsigned MakeTerrainLookTexture(const std::uint8_t* rgba256x2) {
+unsigned MakeTerrainLookTexture(const float* rgba256x4) {
     unsigned texture = 0;
     glGenTextures(1, &texture);
-    FillTerrainLookTexture(texture, rgba256x2);
+    FillTerrainLookTexture(texture, rgba256x4);
     return texture;
 }
 

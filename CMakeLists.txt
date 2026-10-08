@@ -638,6 +638,7 @@ add_library(engine_core STATIC
     src/engine_core/terrain/HeightDerive.cpp
     src/engine_core/terrain/LayerBuilder.cpp
     src/engine_core/TerrainWorld.cpp
+    src/engine_core/TerrainTextures.cpp
     src/engine_core/terrain/TerrainStash.cpp
     src/engine_core/ConvexDecomposition.cpp
     src/engine_core/DraggerMath.cpp
@@ -994,6 +995,7 @@ add_executable(sandbox
     sandbox/terrain_texture_tests.cpp
     sandbox/terrain_height_tests.cpp
     sandbox/terrain_layer_tests.cpp
+    sandbox/terrain_textures_tests.cpp
 )
 target_link_libraries(sandbox PRIVATE studio_core Catch2::Catch2WithMain)
 # The dense views tests check flecs state the engine keeps private.

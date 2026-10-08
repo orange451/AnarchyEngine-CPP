@@ -5,6 +5,7 @@
 #include "SceneService.hpp"
 #include "Terrain.hpp"
 #include "TerrainMaterial.hpp"
+#include "TerrainTextures.hpp"
 #include "terrain/VoxelVolume.hpp"
 
 #include <algorithm>
@@ -28,13 +29,6 @@ float distance(const Vec3& a, const Vec3& b) {
     const float dx = a.x - b.x, dy = a.y - b.y, dz = a.z - b.z;
     return std::sqrt(dx * dx + dy * dy + dz * dz);
 }
-
-std::uint8_t to_u8(float value) {
-    const float clamped = std::clamp(value, 0.f, 1.f);
-    return static_cast<std::uint8_t>(std::lround(clamped * 255.f));
-}
-
-std::uint8_t to_u8(double value) { return to_u8(static_cast<float>(value)); }
 
 // Task 8: a collider not asked for by set_collider_interest in this long
 // goes (spec: "a few seconds", R8 fixes it at 5 s).
@@ -342,7 +336,7 @@ void TerrainWorld::update_collider_interest(InstanceId terrain_id, Terrain& terr
     }
 }
 
-void TerrainWorld::rebuild_look(Terrain& terrain, TerrainRecord& record, bool force) {
+void TerrainWorld::rebuild_look(InstanceId terrain_id, Terrain& terrain, TerrainRecord& record, bool force) {
     std::array<LookInput, 256> candidate{};   // index 0 stays default: the engine default material
     for (TerrainMaterial* entry : terrain.materials()) {
         const int id = entry->material_id();
@@ -354,11 +348,14 @@ void TerrainWorld::rebuild_look(Terrain& terrain, TerrainRecord& record, bool fo
         if (asset == nullptr) {
             continue;   // nil or dead Material: this Id keeps the default, LookInput{}
         }
+        const int layer = textures_ != nullptr ? textures_->layer_of(terrain_id, material_id) : 0;
         candidate[static_cast<std::size_t>(id)] =
-            LookInput{material_id, asset->color(), asset->metalness(), asset->roughness(), asset->reflectivity()};
+            LookInput{material_id,          asset->color(),           asset->metalness(), asset->roughness(),
+                      asset->reflectivity(), asset->texture_scale(), asset->blend_sharpness(),
+                      asset->height_strength(), layer};
     }
     if (!force && candidate == record.look_inputs) {
-        return;   // nothing a TerrainMaterial, its Material, or that Material's PBR values did changed
+        return;   // nothing a TerrainMaterial, its Material, that Material's numbers, or its layer changed
     }
     record.look_inputs = candidate;
     auto look = std::make_shared<TerrainLook>();
@@ -369,16 +366,27 @@ void TerrainWorld::rebuild_look(Terrain& terrain, TerrainRecord& record, bool fo
         const double metalness = input.material != 0 ? input.metalness : Material::kDefaultMetalness;
         const double roughness = input.material != 0 ? input.roughness : Material::kDefaultRoughness;
         const double reflectivity = input.material != 0 ? input.reflectivity : Material::kDefaultReflectivity;
+        const double texture_scale = input.material != 0 ? input.texture_scale : Material::kDefaultTextureScale;
+        const double blend_sharpness =
+            input.material != 0 ? input.blend_sharpness : Material::kDefaultBlendSharpness;
+        const double height_strength =
+            input.material != 0 ? input.height_strength : Material::kDefaultHeightStrength;
         const std::size_t row0 = static_cast<std::size_t>(id) * 4;
         const std::size_t row1 = 256 * 4 + static_cast<std::size_t>(id) * 4;
-        look->texels[row0 + 0] = to_u8(color.r);
-        look->texels[row0 + 1] = to_u8(color.g);
-        look->texels[row0 + 2] = to_u8(color.b);
-        look->texels[row0 + 3] = to_u8(color.a);
-        look->texels[row1 + 0] = to_u8(metalness);
-        look->texels[row1 + 1] = to_u8(roughness);
-        look->texels[row1 + 2] = to_u8(reflectivity);
-        look->texels[row1 + 3] = 255;
+        const std::size_t row2 = 2 * 256 * 4 + static_cast<std::size_t>(id) * 4;
+        look->texels[row0 + 0] = static_cast<float>(color.r);
+        look->texels[row0 + 1] = static_cast<float>(color.g);
+        look->texels[row0 + 2] = static_cast<float>(color.b);
+        look->texels[row0 + 3] = static_cast<float>(color.a);
+        look->texels[row1 + 0] = static_cast<float>(metalness);
+        look->texels[row1 + 1] = static_cast<float>(roughness);
+        look->texels[row1 + 2] = static_cast<float>(reflectivity);
+        look->texels[row1 + 3] = 1.f;
+        look->texels[row2 + 0] = static_cast<float>(input.material != 0 ? input.layer : 0);
+        look->texels[row2 + 1] = static_cast<float>(texture_scale);
+        look->texels[row2 + 2] = static_cast<float>(blend_sharpness);
+        look->texels[row2 + 3] = static_cast<float>(height_strength);
+        // row 3 stays 0: default std::array<float,...>{} zero-initializes it.
     }
     record.look = std::move(look);
 }
@@ -488,7 +496,7 @@ void TerrainWorld::update(DataModel& game, double now_ms) {
             record.collider_interest.clear();
         }
         update_collider_interest(id, *terrain, record, now_ms);
-        rebuild_look(*terrain, record, first_seen);
+        rebuild_look(id, *terrain, record, first_seen);
         if (record.chunks_dirty || first_seen) {
             publish_chunks(record);
         }
@@ -623,6 +631,15 @@ bool TerrainWorld::build_colliders_now(InstanceId terrain, const std::vector<ter
         }
     }
     return ok;
+}
+
+void TerrainWorld::attach_textures(const TerrainTextures& textures) {
+    // The Engine, right after textures.update(game). views_ already reflects
+    // this update()'s Terrains; each view just gets handed the latest set
+    // its own TerrainTextures record has (null before its first publish).
+    for (TerrainView& view : views_) {
+        view.textures = textures.published(view.terrain);
+    }
 }
 
 }  // namespace engine_core

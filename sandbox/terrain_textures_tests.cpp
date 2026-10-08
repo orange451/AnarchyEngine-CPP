@@ -1,0 +1,316 @@
+// TerrainTextures: which layers each Terrain needs, caching them across
+// Terrains that share a Material, building them on a worker thread off
+// SimulationThread, and publishing immutable sets. Task 5 of the terrain
+// textures sub-project; Task 6 uploads what this publishes.
+
+#include "support.hpp"
+
+#include "AssetInstances.hpp"
+#include "Enum.hpp"
+#include "LuaApi.hpp"
+#include "Terrain.hpp"
+#include "TerrainMaterial.hpp"
+#include "TerrainTextures.hpp"
+#include "TerrainWorld.hpp"
+#include "terrain/LayerBuilder.hpp"
+
+#include <catch2/catch_test_macros.hpp>
+
+#include <chrono>
+#include <cstdint>
+#include <filesystem>
+#include <fstream>
+#include <string>
+#include <thread>
+#include <vector>
+
+using engine_core::Game;
+using engine_core::InstanceId;
+using engine_core::LuaSlot;
+using engine_core::Material;
+using engine_core::Terrain;
+using engine_core::TerrainMaterial;
+using engine_core::TerrainTextures;
+using engine_core::TerrainTextureSet;
+using engine_core::TerrainWorld;
+using engine_core::TextureSize;
+using engine_core::Texture;
+
+namespace {
+
+// Writes a binary PPM (P6), as sandbox/terrain_layer_tests.cpp does: the
+// simplest format stb_image can decode, so no PNG/TGA encoder is needed here.
+std::filesystem::path write_ppm(const std::filesystem::path& dir, const char* name, int w, int h,
+                                 const std::vector<std::uint8_t>& rgb) {
+    REQUIRE(rgb.size() == size_t(w) * size_t(h) * 3);
+    std::filesystem::create_directories(dir);
+    const std::filesystem::path path = dir / name;
+    std::ofstream out(path, std::ios::binary);
+    out << "P6\n" << w << " " << h << "\n255\n";
+    out.write(reinterpret_cast<const char*>(rgb.data()), std::streamsize(rgb.size()));
+    REQUIRE(bool(out));
+    return path;
+}
+
+std::vector<std::uint8_t> flat_rgb(int w, int h, std::uint8_t r, std::uint8_t g, std::uint8_t b) {
+    std::vector<std::uint8_t> out(size_t(w) * size_t(h) * 3);
+    for (size_t i = 0; i < size_t(w) * size_t(h); ++i) {
+        out[i * 3 + 0] = r;
+        out[i * 3 + 1] = g;
+        out[i * 3 + 2] = b;
+    }
+    return out;
+}
+
+Terrain& add_terrain(Game& game) {
+    Terrain& terrain = game.create<Terrain>();
+    game.set_parent(terrain.id(), workspace_of(game));
+    return terrain;
+}
+
+Material& add_material(Game& game, const char* name) {
+    Material& material = game.create<Material>();
+    game.set_name(material.id(), name);
+    game.set_parent(material.id(), game.service("Materials"));
+    return material;
+}
+
+// Creates a Texture under the Textures service whose Path is name, relative
+// to game's resources root (so it must already have one set).
+InstanceId add_texture(Game& game, const char* label, const char* name) {
+    Texture& texture = game.create<Texture>();
+    game.set_name(texture.id(), label);
+    game.set_parent(texture.id(), game.service("Textures"));
+    REQUIRE_FALSE(texture.set_path(name));
+    return texture.id();
+}
+
+void set_diffuse(Material& material, InstanceId texture) {
+    LuaSlot slot;
+    slot.kind = LuaSlot::Kind::Instance;
+    slot.id = texture;
+    REQUIRE_FALSE(material.set_reference(Material::kDiffuseTextureReference, slot));
+}
+
+// Runs update()+wait_idle() a few times, as TerrainWorld's own settle() in
+// terrain_surface_tests.cpp does, so every build this update() queued has
+// landed and been drained by a following update() before the test reads
+// published()/layer_of().
+void settle(TerrainTextures& textures, Game& game) {
+    for (int i = 0; i < 6; ++i) {
+        textures.update(game);
+        textures.wait_idle();
+    }
+    textures.update(game);
+}
+
+}  // namespace
+
+TEST_CASE("TT1 a Terrain with two textured Materials publishes a set with 3 layers, and the look points each Id at "
+          "its layer",
+          "[terrain][textures]") {
+    SimRole role;
+    Game game;
+    TempDir dir;
+    game.set_resources_root(dir.path);
+    write_ppm(dir.path, "diffuseA.ppm", 4, 4, flat_rgb(4, 4, 200, 10, 10));
+    write_ppm(dir.path, "diffuseB.ppm", 4, 4, flat_rgb(4, 4, 10, 200, 10));
+
+    Material& matA = add_material(game, "A");
+    set_diffuse(matA, add_texture(game, "TexA", "diffuseA.ppm"));
+    Material& matB = add_material(game, "B");
+    set_diffuse(matB, add_texture(game, "TexB", "diffuseB.ppm"));
+
+    Terrain& t = add_terrain(game);
+    REQUIRE_FALSE(t.set_texture_size(static_cast<int>(TextureSize::Small)));
+    TerrainMaterial* e1 = nullptr;
+    REQUIRE_FALSE(t.add_material(matA.id(), e1));
+    TerrainMaterial* e2 = nullptr;
+    REQUIRE_FALSE(t.add_material(matB.id(), e2));
+    REQUIRE(e1 != nullptr);
+    REQUIRE(e2 != nullptr);
+
+    TerrainTextures textures;
+    settle(textures, game);
+
+    const auto set = textures.published(t.id());
+    REQUIRE(set != nullptr);
+    REQUIRE(set->size == 256);
+    REQUIRE(set->layers.size() == 3u);
+    REQUIRE(textures.layer_of(t.id(), matA.id()) == 1);
+    REQUIRE(textures.layer_of(t.id(), matB.id()) == 2);
+
+    TerrainWorld world;
+    world.set_terrain_textures(&textures);
+    world.update(game);
+    REQUIRE(world.views().size() == 1u);
+    const engine_core::TerrainLook& look = *world.views()[0].look;
+    const std::size_t row2 = 2 * 256 * 4;
+    REQUIRE(look.texels[row2 + static_cast<std::size_t>(e1->material_id()) * 4] == 1.f);
+    REQUIRE(look.texels[row2 + static_cast<std::size_t>(e2->material_id()) * 4] == 2.f);
+}
+
+TEST_CASE("TT2 two Terrains using the same Material at the same size share the built layer", "[terrain][textures]") {
+    SimRole role;
+    Game game;
+    TempDir dir;
+    game.set_resources_root(dir.path);
+    write_ppm(dir.path, "diffuse.ppm", 4, 4, flat_rgb(4, 4, 50, 60, 70));
+
+    Material& mat = add_material(game, "Shared");
+    set_diffuse(mat, add_texture(game, "Tex", "diffuse.ppm"));
+
+    Terrain& t1 = add_terrain(game);
+    Terrain& t2 = add_terrain(game);
+    REQUIRE_FALSE(t1.set_texture_size(static_cast<int>(TextureSize::Small)));
+    REQUIRE_FALSE(t2.set_texture_size(static_cast<int>(TextureSize::Small)));
+    TerrainMaterial* e1 = nullptr;
+    REQUIRE_FALSE(t1.add_material(mat.id(), e1));
+    TerrainMaterial* e2 = nullptr;
+    REQUIRE_FALSE(t2.add_material(mat.id(), e2));
+
+    TerrainTextures textures;
+    settle(textures, game);
+
+    const auto set1 = textures.published(t1.id());
+    const auto set2 = textures.published(t2.id());
+    REQUIRE(set1 != nullptr);
+    REQUIRE(set2 != nullptr);
+    REQUIRE(set1->layers.size() == 2u);
+    REQUIRE(set2->layers.size() == 2u);
+    REQUIRE(set1->layers[0] == set2->layers[0]);   // layer 0: same empty-sources key
+    REQUIRE(set1->layers[1] == set2->layers[1]);   // the shared Material's layer
+}
+
+TEST_CASE("TT3 changing a Material's TextureScale changes the look only, not the published texture set",
+          "[terrain][textures]") {
+    SimRole role;
+    Game game;
+    TempDir dir;
+    game.set_resources_root(dir.path);
+    write_ppm(dir.path, "diffuse.ppm", 4, 4, flat_rgb(4, 4, 80, 80, 80));
+
+    Material& mat = add_material(game, "M");
+    set_diffuse(mat, add_texture(game, "Tex", "diffuse.ppm"));
+    Terrain& t = add_terrain(game);
+    REQUIRE_FALSE(t.set_texture_size(static_cast<int>(TextureSize::Small)));
+    TerrainMaterial* entry = nullptr;
+    REQUIRE_FALSE(t.add_material(mat.id(), entry));
+
+    TerrainTextures textures;
+    settle(textures, game);
+    const auto before = textures.published(t.id());
+    REQUIRE(before != nullptr);
+
+    TerrainWorld world;
+    world.set_terrain_textures(&textures);
+    world.update(game);
+    REQUIRE(world.views().size() == 1u);
+    const std::uint64_t look_before = world.views()[0].look->revision;
+
+    REQUIRE_FALSE(mat.set_texture_scale(16.0));
+    textures.update(game);
+    world.update(game);
+
+    const auto after = textures.published(t.id());
+    REQUIRE(after == before);   // same set: TextureScale is not a build input
+    REQUIRE(world.views()[0].look->revision != look_before);   // but the look changed
+    const std::size_t row2 = 2 * 256 * 4;
+    REQUIRE(world.views()[0].look->texels[row2 + static_cast<std::size_t>(entry->material_id()) * 4 + 1] == 16.f);
+}
+
+TEST_CASE("TT4 touching one texture file rebuilds only its layer; the old set stays published until the new one "
+          "lands",
+          "[terrain][textures]") {
+    SimRole role;
+    Game game;
+    TempDir dir;
+    game.set_resources_root(dir.path);
+    write_ppm(dir.path, "diffuseA.ppm", 4, 4, flat_rgb(4, 4, 90, 90, 90));
+    write_ppm(dir.path, "diffuseB.ppm", 4, 4, flat_rgb(4, 4, 30, 30, 30));
+
+    Material& matA = add_material(game, "A");
+    set_diffuse(matA, add_texture(game, "TexA", "diffuseA.ppm"));
+    Material& matB = add_material(game, "B");
+    set_diffuse(matB, add_texture(game, "TexB", "diffuseB.ppm"));
+
+    Terrain& t = add_terrain(game);
+    REQUIRE_FALSE(t.set_texture_size(static_cast<int>(TextureSize::Small)));
+    TerrainMaterial* e1 = nullptr;
+    REQUIRE_FALSE(t.add_material(matA.id(), e1));
+    TerrainMaterial* e2 = nullptr;
+    REQUIRE_FALSE(t.add_material(matB.id(), e2));
+
+    TerrainTextures textures;
+    settle(textures, game);
+    const auto old_set = textures.published(t.id());
+    REQUIRE(old_set != nullptr);
+    REQUIRE(old_set->layers.size() == 3u);
+
+    // Past the once-a-second stamp check, so the next update() actually
+    // re-stats the files instead of reusing what it already has.
+    std::this_thread::sleep_for(std::chrono::milliseconds(1100));
+    write_ppm(dir.path, "diffuseA.ppm", 4, 4, flat_rgb(4, 4, 5, 5, 5));   // touched: new content and mtime
+
+    textures.update(game);   // drains nothing new yet; only queues the rebuild
+    REQUIRE(textures.published(t.id()) == old_set);   // still the old set: the rebuild has not landed
+
+    textures.wait_idle();
+    textures.update(game);   // drains the finished rebuild
+    const auto new_set = textures.published(t.id());
+    REQUIRE(new_set != nullptr);
+    REQUIRE(new_set != old_set);
+    REQUIRE(new_set->layers.size() == 3u);
+    REQUIRE(new_set->layers[0] == old_set->layers[0]);   // untouched
+    REQUIRE(new_set->layers[1] != old_set->layers[1]);   // A's layer rebuilt
+    REQUIRE(new_set->layers[2] == old_set->layers[2]);   // B's layer untouched
+}
+
+TEST_CASE("TT5 toggling TextureSize Small and Max ten times quickly ends with one set at the last size",
+          "[terrain][textures]") {
+    SimRole role;
+    Game game;
+    TempDir dir;
+    game.set_resources_root(dir.path);
+    Terrain& t = add_terrain(game);
+
+    TerrainTextures textures;
+    TextureSize last = TextureSize::Small;
+    for (int i = 0; i < 10; ++i) {
+        last = (i % 2 == 0) ? TextureSize::Small : TextureSize::Max;
+        REQUIRE_FALSE(t.set_texture_size(static_cast<int>(last)));
+        textures.update(game);   // each one supersedes an older queued request for this Terrain
+    }
+    settle(textures, game);
+
+    const auto set = textures.published(t.id());
+    REQUIRE(set != nullptr);
+    REQUIRE(set->layers.size() == 1u);
+    const int expected_size = last == TextureSize::Max ? 2048 : 256;
+    REQUIRE(set->size == expected_size);
+    REQUIRE(textures.memory_bytes(t.id()) == engine_core::terrain::layer_bytes(expected_size));
+}
+
+TEST_CASE("TT6 memory_bytes matches layers * layer_bytes(size)", "[terrain][textures]") {
+    SimRole role;
+    Game game;
+    TempDir dir;
+    game.set_resources_root(dir.path);
+    write_ppm(dir.path, "diffuse.ppm", 4, 4, flat_rgb(4, 4, 1, 2, 3));
+
+    Material& mat = add_material(game, "M");
+    set_diffuse(mat, add_texture(game, "Tex", "diffuse.ppm"));
+    Terrain& t = add_terrain(game);
+    REQUIRE_FALSE(t.set_texture_size(static_cast<int>(TextureSize::Small)));
+    TerrainMaterial* entry = nullptr;
+    REQUIRE_FALSE(t.add_material(mat.id(), entry));
+
+    TerrainTextures textures;
+    settle(textures, game);
+
+    const auto set = textures.published(t.id());
+    REQUIRE(set != nullptr);
+    REQUIRE(set->layers.size() == 2u);
+    const std::size_t expected = 2u * engine_core::terrain::layer_bytes(256);
+    REQUIRE(textures.memory_bytes(t.id()) == expected);
+}

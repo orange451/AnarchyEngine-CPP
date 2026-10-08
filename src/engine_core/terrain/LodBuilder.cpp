@@ -116,7 +116,11 @@ TriangleGrid build_triangle_grid(const anarchy::amesh::Data& mesh) {
     const Vec3 extent{std::max(box_max.x - box_min.x, 1e-4f), std::max(box_max.y - box_min.y, 1e-4f),
                        std::max(box_max.z - box_min.z, 1e-4f)};
     const float volume = extent.x * extent.y * extent.z;
-    const float cell = std::max(1e-3f, std::cbrt(volume / static_cast<float>(triangle_count)));
+    // At most 128 cells per axis must still span the box: a flat mesh (no
+    // y extent) would otherwise get cells so small that the clamped grid
+    // covered a tenth of it, piling every other triangle into its edge cells.
+    const float span = std::max({extent.x, extent.y, extent.z});
+    const float cell = std::max({1e-3f, std::cbrt(volume / static_cast<float>(triangle_count)), span / 128.f});
 
     grid.origin = box_min;
     grid.cell = cell;
@@ -510,9 +514,11 @@ void weld_vertices(const std::vector<anarchy::amesh::Vertex>& vertices, const st
 // (v1, v2, c), ..., (vk, b, c), winding unchanged. Done on both sides, the
 // two polylines become the same one and the seam's edges pair up. children
 // holds a bit per child for each vertex; a vertex is only inserted into a
-// triangle of a child it does not belong to.
+// triangle of a child it does not belong to. The search grid's cells are at
+// least voxel_size, so an edge costs (length / cell + 1) look-ups of a few
+// cells however small tolerance is.
 void stitch_seams(const std::vector<anarchy::amesh::Vertex>& vertices, std::vector<unsigned int>& indices,
-                  const std::vector<std::uint32_t>& children, float tolerance) {
+                  const std::vector<std::uint32_t>& children, float tolerance, float voxel_size) {
     struct BorderEdge {
         unsigned int a, b, c;
     };
@@ -540,7 +546,11 @@ void stitch_seams(const std::vector<anarchy::amesh::Vertex>& vertices, std::vect
         return;
     }
 
-    const float cell = std::max(tolerance, 1e-4f);
+    // Cells at least a voxel across: border vertices are about a voxel apart
+    // or more, so a cell holds a few, and an edge's search below walks
+    // (length / cell + 1) samples of a few cells each, however small the
+    // tolerance (near 0 on planar terrain, where children simplify exactly).
+    const float cell = std::max({tolerance, voxel_size, 1e-4f});
     auto cell_of = [cell](float v) { return static_cast<std::int64_t>(std::floor(v / cell)); };
     std::unordered_map<WeldCell, std::vector<unsigned int>, WeldCellHash> grid;
     std::vector<bool> on_border(vertices.size(), false);
@@ -556,6 +566,7 @@ void stitch_seams(const std::vector<anarchy::amesh::Vertex>& vertices, std::vect
 
     const float tolerance_sq = tolerance * tolerance;
     std::vector<std::pair<float, unsigned int>> splits;
+    std::vector<unsigned int> candidates;
     for (const BorderEdge& edge : borders) {
         const std::uint32_t own = children[edge.a] & children[edge.b] & children[edge.c];
         if (own == 0) {
@@ -569,30 +580,43 @@ void stitch_seams(const std::vector<anarchy::amesh::Vertex>& vertices, std::vect
             continue;
         }
         splits.clear();
-        const std::int64_t x0 = cell_of(std::min(a.x, b.x) - tolerance), x1 = cell_of(std::max(a.x, b.x) + tolerance);
-        const std::int64_t y0 = cell_of(std::min(a.y, b.y) - tolerance), y1 = cell_of(std::max(a.y, b.y) + tolerance);
-        const std::int64_t z0 = cell_of(std::min(a.z, b.z) - tolerance), z1 = cell_of(std::max(a.z, b.z) + tolerance);
-        for (std::int64_t z = z0; z <= z1; ++z) {
-            for (std::int64_t y = y0; y <= y1; ++y) {
-                for (std::int64_t x = x0; x <= x1; ++x) {
-                    const auto found = grid.find(WeldCell{x, y, z});
-                    if (found == grid.end()) {
-                        continue;
-                    }
-                    for (unsigned int v : found->second) {
-                        if (v == edge.a || v == edge.b || v == edge.c || (children[v] & own) != 0) {
-                            continue;
-                        }
-                        const Vec3 p = vertex_position_of(vertices[v]);
-                        const float s = dot3(sub3(p, a), ab) / length_sq;
-                        if (s <= 1e-4f || s >= 1.f - 1e-4f) {
-                            continue;
-                        }
-                        if (length_sq3(sub3(p, add3(a, scale3(ab, s)))) <= tolerance_sq) {
-                            splits.emplace_back(s, v);
+        candidates.clear();
+        // Samples along the edge at most a cell apart; every point within
+        // tolerance of the edge lies within half a step plus tolerance of
+        // a sample on each axis, so the cells that box spans hold every
+        // candidate. Cost: (length / cell + 1) samples of at most 4^3 cells.
+        const float length = std::sqrt(length_sq);
+        const int steps = std::max(1, static_cast<int>(std::ceil(length / cell)));
+        const float reach = 0.5f * length / static_cast<float>(steps) + tolerance;
+        for (int i = 0; i <= steps; ++i) {
+            const Vec3 at = add3(a, scale3(ab, static_cast<float>(i) / static_cast<float>(steps)));
+            const std::int64_t x0 = cell_of(at.x - reach), x1 = cell_of(at.x + reach);
+            const std::int64_t y0 = cell_of(at.y - reach), y1 = cell_of(at.y + reach);
+            const std::int64_t z0 = cell_of(at.z - reach), z1 = cell_of(at.z + reach);
+            for (std::int64_t z = z0; z <= z1; ++z) {
+                for (std::int64_t y = y0; y <= y1; ++y) {
+                    for (std::int64_t x = x0; x <= x1; ++x) {
+                        const auto found = grid.find(WeldCell{x, y, z});
+                        if (found != grid.end()) {
+                            candidates.insert(candidates.end(), found->second.begin(), found->second.end());
                         }
                     }
                 }
+            }
+        }
+        std::sort(candidates.begin(), candidates.end());
+        candidates.erase(std::unique(candidates.begin(), candidates.end()), candidates.end());
+        for (unsigned int v : candidates) {
+            if (v == edge.a || v == edge.b || v == edge.c || (children[v] & own) != 0) {
+                continue;
+            }
+            const Vec3 p = vertex_position_of(vertices[v]);
+            const float s = dot3(sub3(p, a), ab) / length_sq;
+            if (s <= 1e-4f || s >= 1.f - 1e-4f) {
+                continue;
+            }
+            if (length_sq3(sub3(p, add3(a, scale3(ab, s)))) <= tolerance_sq) {
+                splits.emplace_back(s, v);
             }
         }
         if (splits.empty()) {
@@ -720,7 +744,7 @@ LodResult build_node(const LodInput& input) {
     // two polylines. Exact (level-0) children share every border vertex, so
     // there is nothing to stitch for them.
     if (max_child_error > 0.f) {
-        stitch_seams(welded, welded_indices, welded_children, 2.f * max_child_error + weld_step);
+        stitch_seams(welded, welded_indices, welded_children, 2.f * max_child_error + weld_step, input.voxel_size);
     }
 
     // Simplify to this level's error budget. R8: the recorded error is

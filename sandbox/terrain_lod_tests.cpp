@@ -16,6 +16,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <limits>
@@ -1449,4 +1450,118 @@ TEST_CASE("RS8 skirts cover the gap between neighbor nodes at different levels, 
     }
     WARN("RS8: " << misses << " of " << rays << " rays miss");
     REQUIRE(misses == 0);
+}
+
+// Fix round 1 (finding 1): stitch_seams' cost is bounded by edge length.
+
+namespace {
+
+// Writes field(x, y, z) (a signed distance, in units) over the cells
+// lo..hi, material 1.
+template <typename Field>
+void fill_field(VoxelVolume& volume, CellCoord lo, CellCoord hi, const Field& field) {
+    const int width = hi.x - lo.x + 1, height = hi.y - lo.y + 1, depth = hi.z - lo.z + 1;
+    std::vector<float> distances(static_cast<std::size_t>(width) * static_cast<std::size_t>(height) *
+                                  static_cast<std::size_t>(depth));
+    std::vector<std::uint8_t> materials(distances.size(), 1);
+    for (int z = lo.z; z <= hi.z; ++z) {
+        for (int y = lo.y; y <= hi.y; ++y) {
+            for (int x = lo.x; x <= hi.x; ++x) {
+                const std::size_t i = static_cast<std::size_t>((x - lo.x) + width * ((y - lo.y) + height * (z - lo.z)));
+                distances[i] = field(static_cast<float>(x), static_cast<float>(y), static_cast<float>(z));
+            }
+        }
+    }
+    REQUIRE_FALSE(volume.write(lo, hi, distances, materials));
+}
+
+// The signed distance to a box of half extents half, centered at center,
+// turned by yaw about y and then pitch about x (radians).
+float rotated_box_distance(Vec3 p, Vec3 center, Vec3 half, float yaw, float pitch) {
+    const Vec3 d{p.x - center.x, p.y - center.y, p.z - center.z};
+    // Into the box's frame: undo pitch (about x), then yaw (about y).
+    const float cp = std::cos(pitch), sp = std::sin(pitch), cy = std::cos(yaw), sy = std::sin(yaw);
+    const Vec3 u{d.x, cp * d.y + sp * d.z, -sp * d.y + cp * d.z};
+    const Vec3 q{cy * u.x - sy * u.z, u.y, sy * u.x + cy * u.z};
+    const Vec3 e{std::fabs(q.x) - half.x, std::fabs(q.y) - half.y, std::fabs(q.z) - half.z};
+    const Vec3 outside{std::max(e.x, 0.f), std::max(e.y, 0.f), std::max(e.z, 0.f)};
+    return std::sqrt(outside.x * outside.x + outside.y * outside.y + outside.z * outside.z) +
+           std::min(std::max({e.x, e.y, e.z}), 0.f);
+}
+
+// key's level-2 build from compact level-1 children (built first, untimed),
+// and how long build_node alone took, in seconds.
+LodResult timed_level2_build(VoxelVolume& volume, const NodeKey& key, double& seconds) {
+    const auto voxels = std::make_shared<const ChunkMap>(volume.chunks());
+    LodInput input;
+    input.key = key;
+    input.voxel_size = volume.voxel_size();
+    input.voxels = voxels;
+    for (const NodeKey& child_key : children_of(key)) {
+        const LodResult child = build_lod_node(volume, child_key, voxels);
+        if (!child.mesh) {
+            continue;
+        }
+        const anarchy::amesh::Data round_tripped = compact_round_trip(child, child_key, volume.voxel_size());
+        input.children.push_back(std::make_shared<const anarchy::amesh::Data>(round_tripped));
+        input.child_errors.push_back(child.error);
+        input.child_surface_index_counts.push_back(child.surface_index_count);
+    }
+    REQUIRE(input.children.size() >= 2);
+    const auto start = std::chrono::steady_clock::now();
+    LodResult result = build_node(input);
+    seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+    return result;
+}
+
+}  // namespace
+
+TEST_CASE("LB6 a level-2 node of a planar 45-degree slope or a turned block builds within a per-node budget",
+          "[terrain][lod]") {
+    // Planar surfaces simplify to long edges, and their children's errors
+    // are near 0, so the seam stitch's tolerance is tiny (about 0.004 units,
+    // the weld step): a search whose cells were that size scanned every cell
+    // of a long diagonal edge's box. Budget per level-2 build: 2 s in a
+    // Debug build (the Release LOD build of a whole island is a few seconds).
+    constexpr double kBudgetSeconds = 2.0;
+    const NodeKey key{2, 0, 0, 0};   // chunks 0..3 on each axis: 128 units
+
+    SECTION("a 45-degree plane rising along x and z") {
+        VoxelVolume volume;
+        fill_field(volume, CellCoord{-8, -8, -8}, CellCoord{135, 135, 135}, [](float x, float y, float z) {
+            return (y - 0.5f * (x + z) - 2.f) / std::sqrt(1.5f);
+        });
+        double seconds = 0.0;
+        const LodResult result = timed_level2_build(volume, key, seconds);
+        REQUIRE(result.mesh != nullptr);
+        WARN("LB6 plane: build_node took " << seconds << " s, " << result.mesh->indices.size() / 3
+                                           << " triangles, error " << result.error);
+        REQUIRE(seconds < kBudgetSeconds);
+        WARN("LB6 open seam edges inside the node: " << interior_border_edges(result, key, volume.voxel_size(), 2.f * volume.voxel_size()));
+    }
+    SECTION("a flat floor") {
+        VoxelVolume volume;
+        fill_field(volume, CellCoord{-8, -8, -8}, CellCoord{135, 40, 135},
+                   [](float, float y, float) { return y - 16.5f; });
+        double seconds = 0.0;
+        const LodResult result = timed_level2_build(volume, key, seconds);
+        REQUIRE(result.mesh != nullptr);
+        WARN("LB6 floor: build_node took " << seconds << " s, " << result.mesh->indices.size() / 3
+                                           << " triangles, error " << result.error);
+        REQUIRE(seconds < kBudgetSeconds);
+        WARN("LB6 open seam edges inside the node: " << interior_border_edges(result, key, volume.voxel_size(), 2.f * volume.voxel_size()));
+    }
+    SECTION("a block turned 30 degrees about y and 20 about x") {
+        VoxelVolume volume;
+        fill_field(volume, CellCoord{-8, -8, -8}, CellCoord{135, 135, 135}, [](float x, float y, float z) {
+            return rotated_box_distance(Vec3{x, y, z}, Vec3{61.f, 59.f, 66.f}, Vec3{38.f, 30.f, 34.f}, 0.5236f, 0.3491f);
+        });
+        double seconds = 0.0;
+        const LodResult result = timed_level2_build(volume, key, seconds);
+        REQUIRE(result.mesh != nullptr);
+        WARN("LB6 block: build_node took " << seconds << " s, " << result.mesh->indices.size() / 3
+                                           << " triangles, error " << result.error);
+        REQUIRE(seconds < kBudgetSeconds);
+        WARN("LB6 open seam edges inside the node: " << interior_border_edges(result, key, volume.voxel_size(), 2.f * volume.voxel_size()));
+    }
 }

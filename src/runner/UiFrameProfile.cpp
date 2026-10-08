@@ -41,6 +41,24 @@ profiler::ScopeId phase_scope(jadefx::FramePhase phase) {
 
 constexpr std::size_t kPhaseCount = static_cast<std::size_t>(jadefx::FramePhase::Swap) + 1;
 
+profiler::ScopeId pass_scope(jadefx::LayoutPass pass) {
+    using profiler::Group;
+    static const profiler::ScopeId kStyles = profiler::intern("Styles", Group::Engine);
+    static const profiler::ScopeId kLayout = profiler::intern("Layout", Group::Engine);
+    static const profiler::ScopeId kPopups = profiler::intern("Popups", Group::Engine);
+    switch (pass) {
+        case jadefx::LayoutPass::Styles:
+            return kStyles;
+        case jadefx::LayoutPass::Layout:
+            return kLayout;
+        case jadefx::LayoutPass::Popups:
+            return kPopups;
+    }
+    return kStyles;
+}
+
+constexpr std::size_t kPassCount = static_cast<std::size_t>(jadefx::LayoutPass::Popups) + 1;
+
 }  // namespace
 
 void register_ui_thread() {
@@ -65,6 +83,22 @@ void profile_ui_frames(jadefx::Stage& stage) {
             open[at] = profiler::enabled();
             if (open[at]) {
                 profiler::begin(phase_scope(phase));
+            }
+        } else if (open[at]) {
+            open[at] = false;
+            profiler::end();
+        }
+    });
+    // The styles, layout, and popups passes inside the layout phase, as nested scopes.
+    stage.setLayoutPassHook([open = std::array<bool, kPassCount>{}](jadefx::LayoutPass pass, bool begin) mutable {
+        const std::size_t at = static_cast<std::size_t>(pass);
+        if (at >= kPassCount) {
+            return;
+        }
+        if (begin) {
+            open[at] = profiler::enabled();
+            if (open[at]) {
+                profiler::begin(pass_scope(pass));
             }
         } else if (open[at]) {
             open[at] = false;

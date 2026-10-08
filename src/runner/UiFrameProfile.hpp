@@ -15,7 +15,8 @@ void register_ui_thread();
 // the frame tail, and the buffer swap. Without them the profiler shows the
 // window's work between two Scene View paints as a gap, with the Render
 // thread's Prepare alone at the start of the frame. Called on the window's
-// thread, which it registers.
+// thread, which it registers. Styles and layout is split into its styles,
+// layout, and popups passes.
 void profile_ui_frames(jadefx::Stage& stage);
 
 }  // namespace runner

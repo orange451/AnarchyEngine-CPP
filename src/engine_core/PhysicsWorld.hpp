@@ -86,9 +86,9 @@ struct RayHit {
 // before reconcile_terrain, each dynamic (not Anchored) PhysicsObject or
 // PlayerController's body asks that TerrainWorld (set_collider_interest) for
 // colliders within kColliderChunks of it, per Terrain, in that Terrain's
-// local chunk space, and a body with none built around it yet gets them
-// built right there, synchronously (build_colliders_now) -- no falling
-// through. Then, at the end of sync: each TerrainView gets a static body at
+// local chunk space, and the chunk under each body and its immediate
+// neighbors, any whose collider TerrainWorld does not know yet, are built
+// right there, synchronously (build_colliders_now) -- no falling through. Then, at the end of sync: each TerrainView gets a static body at
 // its transform, which jumps there when the transform changes, and one mesh
 // shape per chunk collider TerrainWorld now holds for it, made again when
 // that chunk's collider revision changes (the old shape goes first), with

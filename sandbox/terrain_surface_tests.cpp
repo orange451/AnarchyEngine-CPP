@@ -1328,6 +1328,72 @@ TEST_CASE("CS4 a PlayerController walking across chunk boundaries keeps ground u
 
 namespace {
 
+// A long strip 1 chunk wide (x 0..1024, z 0..32, top at y = 0), as CS3 uses.
+void fill_collider_strip(Terrain& t) {
+    Shape strip;
+    strip.kind = Shape::Kind::Block;
+    strip.frame = matrix4_translation(512.f, -4.f, 16.f);
+    strip.size = Vec3{1024.f, 8.f, 32.f};
+    REQUIRE_FALSE(t.edit_volume([&](VoxelVolume& v) { return v.fill(strip, 1); }));
+}
+
+}  // namespace
+
+TEST_CASE("CS5 a resting body's collider interest settles: no chunk is meshed again once its collider is known",
+          "[terrain][physics]") {
+    using physics_rig::at;
+    PhysicsRig rig;
+    Terrain& t = terrain_in_workspace(rig.game);
+    fill_collider_strip(t);
+    TerrainWorld world(PhysicsWorld::build_terrain_collider);
+    rig.physics.set_terrain_world(&world);
+    settle(world, rig.game);
+
+    double now_ms = 0.0;
+    rig.play();
+    rig.body(at(16.f, 3.f, 16.f), Vec3{1.f, 1.f, 1.f}, false);
+    const auto round = [&] {
+        rig.physics.sync(rig.game);
+        world.update(rig.game, now_ms);
+        world.wait_idle();
+        world.update(rig.game, now_ms);
+    };
+    for (int i = 0; i < 4; ++i) round();   // every chunk around it known by now
+    REQUIRE(collider_revision(world, t.id(), ChunkCoord{0, -1, 0}) != 0u);
+
+    // Most of the kColliderChunks box around the body is empty (air, or
+    // solid below the strip): such a chunk has no collider to keep, but once
+    // meshed for interest it is known, not meshed again every update.
+    const std::uint64_t meshed = world.meshed_count();
+    for (int i = 0; i < 10; ++i) round();
+    REQUIRE(world.meshed_count() == meshed);
+}
+
+TEST_CASE("CS6 a body moved next to a chunk with a collider still gets its own chunk's collider in the same sync",
+          "[terrain][physics]") {
+    using physics_rig::at;
+    PhysicsRig rig;
+    Terrain& t = terrain_in_workspace(rig.game);
+    fill_collider_strip(t);
+    TerrainWorld world(PhysicsWorld::build_terrain_collider);
+    rig.physics.set_terrain_world(&world);
+    settle(world, rig.game);
+
+    rig.play();
+    PhysicsObject& box = rig.body(at(16.f, 3.f, 16.f), Vec3{1.f, 1.f, 1.f}, false);
+    rig.physics.sync(rig.game);   // builds the chunks around x = 16 right here
+    REQUIRE(collider_revision(world, t.id(), ChunkCoord{0, -1, 0}) != 0u);
+
+    // Into chunk 4 (x 128..160), with no update() in between, so nothing
+    // queued for it could have landed: whatever the neighbors hold, the
+    // chunk under the body must be built in this sync, before Box3D steps.
+    REQUIRE_FALSE(box.set_transform(at(144.f, 3.f, 16.f)));
+    rig.physics.sync(rig.game);
+    REQUIRE(collider_revision(world, t.id(), ChunkCoord{4, -1, 0}) != 0u);
+}
+
+namespace {
+
 // A rolling slab over 16 x 16 chunks (512 x 512 studs), built as a sum of
 // balls whose centers rise and fall: its top wanders across y = 32 and its
 // bottom across y = 0, so most columns have surface in two or more chunks.

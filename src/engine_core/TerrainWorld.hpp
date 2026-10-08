@@ -85,26 +85,24 @@ public:
     // Task 8: PhysicsWorld's ask, at the start of its own sync, for the
     // chunks (terrain-local) within kColliderChunks of each dynamic
     // PhysicsObject or PlayerController. Takes effect from the next update():
-    // a chunk newly asked for, with a mesh but no collider, gets one (a
-    // re-mesh flagged to build it, unless build_colliders_now already did);
-    // one no longer asked for keeps its collider for kColliderReleaseMs
-    // after it was last asked for, then loses it. No-op for a terrain this
-    // TerrainWorld has not (yet, or any longer) seen.
+    // a chunk newly asked for whose collider is not known yet gets a re-mesh
+    // flagged to build one (unless build_colliders_now already did), once:
+    // a chunk meshed with nothing to collide with is known too, and is not
+    // meshed again until an edit changes it; one no longer asked for keeps
+    // its collider for kColliderReleaseMs after it was last asked for, then
+    // loses it. No-op for a terrain this TerrainWorld has not (yet, or any
+    // longer) seen.
     void set_collider_interest(InstanceId terrain, std::vector<terrain::ChunkCoord> chunks);
     // SimulationThread, called from PhysicsWorld's own sync: meshes and
     // builds colliders for chunks right here, off the job queue -- the
-    // no-fall-through rule for a body this sync found with none around it.
-    // Skips a chunk that already has a collider. False when terrain is not
-    // one this TerrainWorld has published a view for (nothing built).
+    // no-fall-through rule for the chunks under a body. Skips a chunk whose
+    // collider is already known (built, or meshed empty), so calling it
+    // every sync costs lookups only. False when terrain is not one this
+    // TerrainWorld has published a view for (nothing built), or a build threw.
     bool build_colliders_now(InstanceId terrain, const std::vector<terrain::ChunkCoord>& chunks);
 
     // For tests.
     void wait_idle() { mesher_.wait_idle(); }
-    // For tests: holds every worker before it takes its next job (see
-    // TerrainMesher::pause_for_test). Paused before anything is queued, this
-    // makes a chunk job's "stuck in flight" deterministic without a custom
-    // BuildCollider that blocks mid-build.
-    void pause_mesher_for_test(bool paused) { mesher_.pause_for_test(paused); }
     std::uint64_t meshed_count() const { return meshed_count_; }
     const terrain::LodTree* lod_tree(InstanceId terrain) const {
         const auto found = terrains_.find(terrain);
@@ -210,6 +208,12 @@ private:
         // the second only when its collider goes.
         std::unordered_set<terrain::ChunkCoord, terrain::ChunkCoordHash> collider_interest;
         std::unordered_map<terrain::ChunkCoord, double, terrain::ChunkCoordHash> collider_last_interest_ms;
+        // Chunks whose collider_map entry reflects their voxels: a job that
+        // wanted a collider landed for them (with one, or with none because
+        // the chunk has no surface). Interest and build_colliders_now skip
+        // these; an edit landing without a collider, or the release, takes
+        // a chunk out again.
+        std::unordered_set<terrain::ChunkCoord, terrain::ChunkCoordHash> collider_ready;
         // The Terrain this record was last built from (every update()):
         // build_colliders_now, called from PhysicsWorld's own sync, has no
         // DataModel to look it up again and reuses this pointer. Tolerates

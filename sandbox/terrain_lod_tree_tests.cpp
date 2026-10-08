@@ -201,6 +201,23 @@ Terrain& island_terrain(DataModel& game, int n, int lift = 0) {
     return t;
 }
 
+// Task 8: asks for colliders on every chunk an n x n island (no lift)
+// can have, as PhysicsWorld would with a body on each. One
+// update first: set_collider_interest is a no-op for a Terrain TerrainWorld
+// has not seen yet.
+void ask_island_colliders(TerrainWorld& world, DataModel& game, const Terrain& t, int n, double now) {
+    world.update(game, now);
+    std::vector<ChunkCoord> coords;
+    for (int z = -1; z <= n; ++z) {
+        for (int y = -1; y <= 1; ++y) {
+            for (int x = -1; x <= n; ++x) {
+                coords.push_back(ChunkCoord{x, y, z});
+            }
+        }
+    }
+    world.set_collider_interest(t.id(), std::move(coords));
+}
+
 // Updates TerrainWorld until its workers are idle and nothing new was
 // queued, with a clock that passes the debounce window every update.
 void settle_lod(TerrainWorld& world, DataModel& game, double& now) {
@@ -287,6 +304,7 @@ TEST_CASE("LT2 levels >= 2 stay resident far from the camera; levels 0-1 drop an
         return mesh.triangles.empty() ? nullptr : std::make_shared<int>(1);
     });
     double now = 0.0;
+    ask_island_colliders(world, game, t, 4, now);   // Task 8: colliders exist only where asked for
     const auto collider_revisions = [&] {
         std::unordered_map<ChunkCoord, std::uint64_t, ChunkCoordHash> out;
         for (const TerrainWorld::ChunkCollider& c : *world.colliders(t.id())) out[c.coord] = c.revision;
@@ -545,6 +563,7 @@ TEST_CASE("LT8 a chunk job that fails keeps its old mesh and does not block its 
         return std::make_shared<int>(1);
     });
     double now = 0.0;
+    ask_island_colliders(world, game, t, 4, now);   // Task 8: so the edit's job builds (and fails) a collider
     settle_lod(world, game, now);
     const ChunkCoord edited{1, 0, 1};
     const auto chunk_revision = [&]() -> std::uint64_t {

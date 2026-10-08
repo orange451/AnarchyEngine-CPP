@@ -793,12 +793,13 @@ struct PhysicsWorld::Impl {
 
     // Each dynamic (not Anchored) PhysicsObject or PlayerController's chunks
     // within kColliderChunks, per Terrain, in that Terrain's local chunk
-    // space -- set_collider_interest's ask -- and, for a body with none of
-    // them already built, build_colliders_now right here (no falling
-    // through). SimulationThread, under the write lock, after reconcile (so
-    // every body's Box3D position is current) and before reconcile_terrain
-    // (so a shape exists this very sync for whatever build_colliders_now
-    // just built).
+    // space -- set_collider_interest's ask -- and, every sync, the chunk
+    // under each body and its immediate neighbors built right here
+    // (build_colliders_now) unless TerrainWorld already knows their collider
+    // (no falling through). SimulationThread, under the write lock, after
+    // reconcile (so every body's Box3D position is current) and before
+    // reconcile_terrain (so a shape exists this very sync for whatever
+    // build_colliders_now just built).
     void update_terrain_collider_interest(DataModel& game) {
         if (terrains == nullptr) {
             return;
@@ -811,16 +812,7 @@ struct PhysicsWorld::Impl {
                 const float voxel_size = tree != nullptr ? tree->voxel_size() : 1.f;
                 const float span = terrain::kChunkSize * voxel_size;
                 const Matrix4 inverse = matrix4_inverse(view.transform);
-
-                // What already has a collider, to tell whether a body has
-                // none built around it yet.
-                std::unordered_set<terrain::ChunkCoord, terrain::ChunkCoordHash> have;
-                if (const auto* colliders = terrains->colliders(view.terrain)) {
-                    for (const TerrainWorld::ChunkCollider& collider : *colliders) {
-                        have.insert(collider.coord);
-                    }
-                }
-
+                std::vector<terrain::ChunkCoord> under_body;
                 for (const auto& [id, body] : bodies) {
                     if (!b3Body_IsValid(body.body)) {
                         continue;
@@ -833,43 +825,30 @@ struct PhysicsWorld::Impl {
                     const terrain::ChunkCoord center{static_cast<int>(std::floor(local.x / span)),
                                                      static_cast<int>(std::floor(local.y / span)),
                                                      static_cast<int>(std::floor(local.z / span))};
-                    std::vector<terrain::ChunkCoord> near_body;
-                    // "Has none around it yet" is checked tightly (its own
-                    // chunk and immediate neighbors), not over the whole
-                    // kColliderChunks box: a body moving every sync (a
-                    // PlayerController walking, a falling box) must have
-                    // this re-checked, and re-pass, every single sync, not
-                    // just once per update_collider_interest's async catch-
-                    // up -- otherwise a slow worker thread under load can
-                    // leave a walking body outrunning it into a gap it then
-                    // free-falls through, and once below its terrain, its
-                    // own interest (next sync) centers on where it now is,
-                    // never again on the surface it fell through.
-                    bool covered = false;
+                    under_body.clear();
                     for (int dz = -kColliderChunks; dz <= kColliderChunks; ++dz) {
                         for (int dy = -kColliderChunks; dy <= kColliderChunks; ++dy) {
                             for (int dx = -kColliderChunks; dx <= kColliderChunks; ++dx) {
                                 const terrain::ChunkCoord c{center.x + dx, center.y + dy, center.z + dz};
-                                near_body.push_back(c);
                                 if (interest_set.insert(c).second) {
                                     interest.push_back(c);
                                 }
-                                if (dx >= -1 && dx <= 1 && dy >= -1 && dy <= 1 && dz >= -1 && dz <= 1 &&
-                                    have.count(c) != 0) {
-                                    covered = true;
+                                if (dx >= -1 && dx <= 1 && dy >= -1 && dy <= 1 && dz >= -1 && dz <= 1) {
+                                    under_body.push_back(c);
                                 }
                             }
                         }
                     }
-                    if (!covered) {
-                        // No fall-through: build them right here, before
-                        // Box3D steps. They then count as covered for a
-                        // later body in this same pass sharing this patch.
-                        terrains->build_colliders_now(view.terrain, near_body);
-                        for (const terrain::ChunkCoord& c : near_body) {
-                            have.insert(c);
-                        }
-                    }
+                    // No fall-through: the body's own chunk and its immediate
+                    // neighbors (a surface at a chunk border can belong to
+                    // either side) must hold their colliders before Box3D
+                    // steps. Each one TerrainWorld already knows (built, or
+                    // meshed empty) is skipped, so this costs lookups only,
+                    // unless the job queue has not caught up with the body --
+                    // and then a collider elsewhere around it is no cover:
+                    // checked per chunk, every sync, never "some neighbor has
+                    // one".
+                    terrains->build_colliders_now(view.terrain, under_body);
                 }
             }
             terrains->set_collider_interest(view.terrain, std::move(interest));

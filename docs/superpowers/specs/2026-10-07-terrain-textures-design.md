@@ -53,7 +53,7 @@ Look settings belong to **Material**, not TerrainMaterial, because a future prec
 | Question | Decision |
 | --- | --- |
 | Materials | Up to 4 per pixel from the interpolated vertex weights; those under 0.01 are skipped. |
-| Projections | Triplanar weights from the surface normal, sharpened (power 4) so most surfaces use one or two projections; a projection under 5% is skipped. Coordinates: world position ÷ the Material's TextureScale. |
+| Projections | Triplanar weights from the surface normal, sharpened by a fixed shader constant (power 4, not a setting: lower ghosts doubled texture onto slopes and keeps extra projections active, higher shows a seam on rounded surfaces) so most surfaces use one or two projections; a projection under 5% is skipped. Coordinates: world position ÷ the Material's TextureScale. |
 | Height blend | Each material's score is `weight + height × HeightStrength`; scores within a band of `(1 − BlendSharpness) × 0.5` of the highest blend smoothly, the rest drop out. |
 | Normals | Each projection's normal is reoriented onto its axis ("whiteout" blend), then projections and materials are blended by their final weights. |
 | Output | The same G-buffer as today: lighting, shadows, ambient occlusion, reflections, and bloom apply unchanged. The LOD dither stays first. |

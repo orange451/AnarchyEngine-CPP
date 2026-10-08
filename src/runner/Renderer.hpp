@@ -76,6 +76,9 @@ struct MeshDraw {
     // once. Shadows draw only the fading-in node, whole.
     float terrainFade = 1.f;
     bool terrainFadeIn = true;
+    // The terrain LOD node's level (0 for a chunk): the color it is tinted
+    // while SetTerrainLodColors is on.
+    int terrainLevel = 0;
     // Casts shadows only, never drawn in view: terrain out of the camera's
     // view that still shadows what is in it (TerrainDraws).
     bool shadowOnly = false;
@@ -87,6 +90,22 @@ struct MeshDraw {
 // reflectivity (0 to 255) and 255. The GL context has to be current; the
 // caller deletes the texture.
 unsigned MakeTerrainLookTexture(const std::uint8_t* rgba256x2);
+
+// A debug view of terrain LOD, for every Renderer in the process: while on,
+// each terrain draw is tinted by its MeshDraw::terrainLevel, levels 0 to 7
+// in kTerrainLodColors' colors (higher levels take level 7's). Off by
+// default, when terrain draws as its look table says. The studio turns it on
+// at startup when ANARCHY_TERRAIN_LOD_COLORS=1; scene-render-check for its
+// --terrain-lod-colors shots. Any thread.
+void SetTerrainLodColors(bool on);
+bool TerrainLodColors();
+// The tint per level (sRGB, 0 to 255), as terrain.frag's kLodColors, and
+// each one's name for a legend.
+struct TerrainLodColor {
+    const char* name;
+    std::uint8_t rgb[3];
+};
+extern const TerrainLodColor kTerrainLodColors[8];
 
 // A PointLight, SpotLight, or DirectionalLight, in world space.
 struct LightDraw {
@@ -396,6 +415,8 @@ private:
         // terrain.frag: a LOD node's cross-fade.
         int fade = -1;
         int fadeIn = -1;
+        // terrain.frag: SetTerrainLodColors' level, or -1 for none.
+        int lodLevel = -1;
         // G-buffer inputs.
         int depth = -1;
         int albedo = -1;

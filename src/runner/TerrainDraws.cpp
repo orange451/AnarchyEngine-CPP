@@ -46,6 +46,7 @@ void AppendTerrainDraws(const std::vector<engine_core::TerrainView>& terrains, c
             draw.terrainLook = look;
             draw.terrainFade = fade;
             draw.terrainFadeIn = incoming;
+            draw.terrainLevel = node.key.level;
             draw.shadowOnly = shadowOnly;
             draw.owner = view.terrain;
             draw.slot = 0;

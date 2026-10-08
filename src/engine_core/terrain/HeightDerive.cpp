@@ -230,6 +230,16 @@ std::vector<GradientLevel> build_pyramid(std::vector<float> gx, std::vector<floa
     return levels;
 }
 
+// Sweep counts for the multigrid cascade below: the coarsest level is
+// cheap (its grid is tiny), so it gets many sweeps to fully settle; every
+// finer level starts from that settled, upsampled guess and so only needs
+// a few sweeps of its own. Tuned on a Release build so 1024x1024 stays
+// well inside the ~200ms target (measured ~131ms) while 128x128's HD1
+// correlation stays comfortably above the 0.9 the brief requires (measured
+// ~0.999, with equal cycle counts on both axes -- see HD1's comment).
+constexpr int kCoarsestIterations = 120;
+constexpr int kRefineIterations = 16;
+
 // Full-multigrid-style solve: start at the coarsest level (cheap, so it can
 // afford many relaxation sweeps to fully settle), then use each solved
 // level, upsampled, as the initial guess for the next finer one. Because
@@ -242,7 +252,7 @@ std::vector<float> solve_height_from_gradient(std::vector<float> gx, std::vector
     for (int li = static_cast<int>(levels.size()) - 1; li >= 0; --li) {
         const GradientLevel& level = levels[size_t(li)];
         const std::vector<float> div = divergence(level.gx, level.gy, level.w, level.h);
-        const int iterations = (li == static_cast<int>(levels.size()) - 1) ? 120 : 16;
+        const int iterations = (li == static_cast<int>(levels.size()) - 1) ? kCoarsestIterations : kRefineIterations;
         gauss_seidel_relax(height, div, level.w, level.h, iterations);
         if (li > 0) {
             const GradientLevel& finer = levels[size_t(li - 1)];

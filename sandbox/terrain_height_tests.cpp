@@ -75,6 +75,72 @@ struct SineField {
     }
 };
 
+// Builds a tileable field with a large-amplitude, low-frequency "dome"
+// (low_k cycles) plus a smaller-amplitude, higher-frequency "detail"
+// (high_k cycles), summed per axis, and its matching normal map. Used to
+// show the high-pass actually does something: HD1's equal-frequency sine,
+// HD2's constant tilt, and HD3's 1-pixel checkerboard all give the same
+// result with or without the box-blur subtraction (see HD6's comment), so
+// none of them alone would catch that step being deleted.
+struct TwoFreqField {
+    int w, h;
+    float low_amplitude, low_k;
+    float high_amplitude, high_k;
+
+    void slope(int x, int y, float& sx, float& sy) const {
+        const float fx = float(x) / float(w);
+        const float fy = float(y) / float(h);
+        const float two_pi = 2.f * 3.14159265f;
+        sx = low_amplitude * two_pi * low_k / float(w) * std::cos(two_pi * low_k * fx) +
+             high_amplitude * two_pi * high_k / float(w) * std::cos(two_pi * high_k * fx);
+        sy = low_amplitude * two_pi * low_k / float(h) * std::cos(two_pi * low_k * fy) +
+             high_amplitude * two_pi * high_k / float(h) * std::cos(two_pi * high_k * fy);
+    }
+
+    std::vector<std::uint8_t> normal_map() const {
+        std::vector<std::uint8_t> rgba(size_t(w) * size_t(h) * 4);
+        for (int y = 0; y < h; ++y) {
+            for (int x = 0; x < w; ++x) {
+                float sx, sy;
+                slope(x, y, sx, sy);
+                const float norm = std::sqrt(sx * sx + sy * sy + 1.f);
+                put_normal(rgba, size_t(y) * size_t(w) + size_t(x), -sx / norm, -sy / norm, 1.f / norm);
+            }
+        }
+        return rgba;
+    }
+};
+
+// A wrapped box blur, independent of HeightDerive's own (it is the thing
+// HD6 uses to check HeightDerive's own high-pass actually ran); radius may
+// be much larger than production code ever uses, so this is the simple
+// O(window) per pixel version rather than the prefix-sum one.
+std::vector<float> wrap_box_blur(const std::vector<float>& field, int w, int h, int radius) {
+    std::vector<float> tmp(field.size());
+    for (int y = 0; y < h; ++y) {
+        for (int x = 0; x < w; ++x) {
+            float sum = 0.f;
+            for (int k = -radius; k <= radius; ++k) {
+                const int xx = ((x + k) % w + w) % w;
+                sum += field[size_t(y) * size_t(w) + size_t(xx)];
+            }
+            tmp[size_t(y) * size_t(w) + size_t(x)] = sum / float(2 * radius + 1);
+        }
+    }
+    std::vector<float> out(field.size());
+    for (int x = 0; x < w; ++x) {
+        for (int y = 0; y < h; ++y) {
+            float sum = 0.f;
+            for (int k = -radius; k <= radius; ++k) {
+                const int yy = ((y + k) % h + h) % h;
+                sum += tmp[size_t(yy) * size_t(w) + size_t(x)];
+            }
+            out[size_t(y) * size_t(w) + size_t(x)] = sum / float(2 * radius + 1);
+        }
+    }
+    return out;
+}
+
 double pearson_correlation(const std::vector<float>& a, const std::vector<float>& b) {
     REQUIRE(a.size() == b.size());
     double ma = 0.0, mb = 0.0;
@@ -230,4 +296,43 @@ TEST_CASE("HD5 height_from_normals stays fast at 1024x1024", "[terrain][textures
 
     REQUIRE(derived.size() == size_t(sine.w) * size_t(sine.h));
     for (const float v : derived) REQUIRE_FALSE(std::isnan(v));
+}
+
+TEST_CASE("HD6 height_from_normals' high-pass suppresses a dome's bias but keeps its detail",
+          "[terrain][textures]") {
+    // A low-frequency "dome" (1 cycle, amplitude 5) has a wavelength (the
+    // whole image) much wider than the high-pass's own box width (1/8 of
+    // the image), so that box blur nearly reproduces the dome unchanged;
+    // subtracting it removes nearly all of the dome. A higher-frequency
+    // "detail" (8 cycles, amplitude 1) has a wavelength close to the box
+    // width instead, so the blur attenuates *that*, and subtracting it
+    // leaves the detail almost intact. Without the high-pass subtraction,
+    // the result would still be dominated by the dome (5x the detail's
+    // amplitude, and already most of the signal's dynamic range on its
+    // own) -- which is exactly what the box-blur high-pass step exists to
+    // remove. (Verified by temporarily deleting the subtraction in
+    // HeightDerive.cpp and re-running: this test fails, span ~0.9+, while
+    // HD1-HD4 all still pass -- see task-3-report.md.)
+    const int w = 128, h = 128;
+    const TwoFreqField field{w, h, /*low*/ 5.0f, 1.0f, /*high*/ 1.0f, 8.0f};
+    const std::vector<std::uint8_t> rgba = field.normal_map();
+
+    const std::vector<float> derived = height_from_normals(rgba.data(), w, h);
+    REQUIRE(derived.size() == size_t(w) * size_t(h));
+
+    // Re-extract whatever large-scale, dome-like trend is still left in
+    // the final (already high-passed and normalized) result, with a box
+    // blur much wider than the production high-pass's own radius (w/16).
+    // If the dome survived, this trend spans most of the 0..1 output
+    // range; if the high-pass did its job, only the detail (which this
+    // wide a blur also averages away) is left, and the trend is nearly
+    // flat.
+    const std::vector<float> low_freq_trend = wrap_box_blur(derived, w, h, w / 4);
+    float mn = low_freq_trend[0], mx = low_freq_trend[0];
+    for (const float v : low_freq_trend) {
+        REQUIRE_FALSE(std::isnan(v));
+        mn = std::min(mn, v);
+        mx = std::max(mx, v);
+    }
+    REQUIRE((mx - mn) < 0.25f);
 }

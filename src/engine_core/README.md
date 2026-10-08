@@ -30,6 +30,8 @@ Physics may substep inside one sim frame (240 Hz). Display rate does not set tha
 
 Terrain meshing is the one other set of threads. `TerrainWorld` runs on SimulationThread under the write lock: each tick it hands the dirty chunks of every Terrain in Workspace to `TerrainMesher`, whose workers (hardware threads less one, at most 4) run `surface_nets` (`terrain/SurfaceNets`) and build each chunk's collider. Workers read only the immutable chunks a job holds and take only the mesher's own lock; finished meshes are collected on the next tick and published for `PhysicsWorld` and `SnapshotPump`.
 
+`TerrainWorld` also keeps each Terrain's LOD octree (`terrain/LodTree`), on the same mesher workers: `terrain/LodNode` keys a node by level and chunk coordinate, `terrain/LodBuilder` builds one node's mesh from its 8 children by sampling the voxels through `terrain/VoxelSampler`, and `LodTree` is the bookkeeping that decides which nodes are stale and ready to build. Levels 0-1 publish full chunk meshes and stay resident only within `kNearChunks` of the camera; levels 2 and up always stay resident, as a compact mesh, within a per-vertex/per-triangle RAM budget. `PhysicsWorld` streams colliders only around chunks a moving body is actually near, not the whole LOD tree, and a raycast that finds no collider there (far terrain, or a chunk never asked for one) marches the voxels directly instead, so it still hits the terrain's surface at any distance.
+
 ## ThreadSanitizer
 
 ```sh

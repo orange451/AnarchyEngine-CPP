@@ -2,9 +2,16 @@
 // LOD plan): node_of/parent_of/children_of, node_bounds, and pack()/unpack()
 // of a CompactMesh against a Surface Nets ball.
 
+#include "support.hpp"
+
+#include "Camera.hpp"
+#include "SceneService.hpp"
+#include "Terrain.hpp"
+#include "TerrainWorld.hpp"
 #include "amesh.hpp"
 #include "terrain/LodBuilder.hpp"
 #include "terrain/LodNode.hpp"
+#include "terrain/LodTree.hpp"
 #include "terrain/ShapeDistance.hpp"
 #include "terrain/SurfaceNets.hpp"
 #include "terrain/VoxelChunk.hpp"
@@ -21,7 +28,9 @@
 #include <cstdint>
 #include <limits>
 #include <memory>
+#include <thread>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 using Catch::Approx;
@@ -1698,4 +1707,222 @@ TEST_CASE("LB7 a thin wall and a cave crossing level-3 and level-4 seams stitch 
                                         << " of " << total << " faces against the gradient");
         REQUIRE(against == 0);
     }
+}
+
+// Task 10 of the terrain LOD plan: large-island budgets for the whole
+// TerrainWorld loop (chunks, LodTree levels, residency ordering) rather than
+// one node's build. [.][terrain-bench]: opt-in, Release only.
+namespace {
+
+// A rolling island over n x n chunks (one y layer), its walls and floor kept
+// 4 cells inside the outer chunks so every one of the n x n columns has
+// surface (fill_island's own shape, scaled up), with two materials banded
+// across x. Written one z-row of chunks (one VoxelVolume::write call) at a
+// time so no call passes VoxelVolume::kMaxCellsPerEdit.
+std::optional<std::string> fill_big_island(VoxelVolume& volume, int n) {
+    const int x1 = kChunkSize * n - 1, z1 = x1, y1 = kChunkSize - 1;
+    const int lo = 4, hi = kChunkSize * n - 5;
+    const int width = x1 + 1, height = y1 + 1;
+    std::vector<float> distances(static_cast<std::size_t>(width) * static_cast<std::size_t>(height) *
+                                  static_cast<std::size_t>(kChunkSize));
+    std::vector<std::uint8_t> materials(distances.size());
+    for (int cz = 0; cz < n; ++cz) {
+        const int z0 = cz * kChunkSize;
+        for (int dz = 0; dz < kChunkSize; ++dz) {
+            const int z = z0 + dz;
+            for (int x = 0; x <= x1; ++x) {
+                const float surface = 16.f + 2.f * std::sin(static_cast<float>(x) / 40.f) *
+                                                  std::cos(static_cast<float>(z) / 50.f);
+                const auto material = static_cast<std::uint8_t>(1 + (x / 128) % 2);   // a couple of materials
+                for (int y = 0; y <= y1; ++y) {
+                    const float d = std::max({static_cast<float>(y) - surface, static_cast<float>(lo - y),
+                                              static_cast<float>(lo - x), static_cast<float>(x - hi),
+                                              static_cast<float>(lo - z), static_cast<float>(z - hi)});
+                    const std::size_t i = static_cast<std::size_t>(x + width * (y + height * dz));
+                    distances[i] = d;
+                    materials[i] = material;
+                }
+            }
+        }
+        std::optional<std::string> error =
+            volume.write(CellCoord{0, 0, z0}, CellCoord{x1, y1, z0 + kChunkSize - 1}, distances, materials);
+        if (error) return error;
+    }
+    return std::nullopt;
+}
+
+Terrain& big_island_terrain(Game& game, int n) {
+    auto& t = game.create<Terrain>();
+    game.set_parent(t.id(), workspace_of(game));
+    REQUIRE_FALSE(t.edit_volume([&](VoxelVolume& v) { return fill_big_island(v, n); }));
+    return t;
+}
+
+Camera& bench_camera_at(DataModel& game, Vec3 at) {
+    Camera& camera = game.create<Camera>();
+    camera.set_transform(matrix4_translation(at.x, at.y, at.z));
+    game.set_parent(camera.id(), workspace_of(game));
+    auto* workspace = dynamic_cast<Workspace*>(game.instance(workspace_of(game)));
+    REQUIRE(workspace != nullptr);
+    REQUIRE(workspace->set_current_camera(camera.id()));
+    return camera;
+}
+
+// 1 (level 0) + 1 per coarser level, as LT1 counts per level, down to the
+// single top-level root: n^2 + (n/2)^2 + (n/4)^2 + ... + 1.
+std::size_t expected_node_total(int n) {
+    std::size_t total = 0;
+    for (int level = 0; (n >> level) >= 1; ++level) {
+        const std::size_t count = static_cast<std::size_t>(n >> level);
+        total += count * count;
+    }
+    return total;
+}
+
+// Every node exists, level 0 has no chunk job in flight, and levels >= 1 are
+// built and resident: nothing left for next_builds or a chunk job to do.
+bool lod_tree_settled(const terrain::LodTree& tree, std::size_t expected_nodes) {
+    const auto& nodes = tree.nodes();
+    if (nodes.size() != expected_nodes) return false;
+    for (const auto& [key, node] : nodes) {
+        if (key.level == 0) {
+            if (node.in_flight) return false;
+        } else if (node.stale() || !node.resident) {
+            return false;
+        }
+    }
+    return true;
+}
+
+}  // namespace
+
+TEST_CASE("LB8 building every level of a 4,096-chunk island settles under 5 s with 4 workers",
+          "[.][terrain-bench]") {
+    SimRole role;
+    Game game;
+    constexpr int n = 64;   // 64 x 64 chunks, one y layer: 4,096 chunks total
+    Terrain& t = big_island_terrain(game, n);
+    TerrainWorld world({}, 4);   // no collider builder: this budget is about LOD levels, not colliders
+    const std::size_t expected_nodes = expected_node_total(n);
+
+    const auto start = std::chrono::steady_clock::now();
+    const terrain::LodTree* tree = nullptr;
+    bool settled = false;
+    double meshed_seconds = -1.0;   // profiling: when every chunk (level 0) finished meshing
+    while (std::chrono::steady_clock::now() - start < std::chrono::seconds(20)) {
+        world.update(game);
+        tree = world.lod_tree(t.id());
+        if (meshed_seconds < 0.0 && !world.views().empty() &&
+            world.views()[0].chunks->size() == static_cast<std::size_t>(n * n)) {
+            meshed_seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+        }
+        if (tree != nullptr && lod_tree_settled(*tree, expected_nodes)) {
+            settled = true;
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+    REQUIRE(world.views().size() == 1u);
+    const std::size_t surface_chunks = world.views()[0].chunks->size();
+    INFO("nodes built: " << (tree != nullptr ? tree->nodes().size() : 0u) << " of " << expected_nodes);
+    WARN("LB8: " << n * n << "-chunk island (" << surface_chunks << " with surface, " << expected_nodes
+                 << " LOD nodes) settled in " << seconds << " s with 4 workers (level 0 chunks alone meshed in "
+                 << meshed_seconds << " s)");
+    REQUIRE(settled);
+    REQUIRE(surface_chunks == static_cast<std::size_t>(n * n));
+    REQUIRE(seconds < 5.0);
+}
+
+TEST_CASE("LB9 levels >= 2 of a 4,096-chunk island stay within the compact RAM budget", "[.][terrain-bench]") {
+    SimRole role;
+    Game game;
+    constexpr int n = 64;   // same island as LB8
+    Terrain& t = big_island_terrain(game, n);
+    TerrainWorld world({}, 4);
+    const std::size_t expected_nodes = expected_node_total(n);
+
+    const auto start = std::chrono::steady_clock::now();
+    const terrain::LodTree* tree = nullptr;
+    while (std::chrono::steady_clock::now() - start < std::chrono::seconds(20)) {
+        world.update(game);
+        tree = world.lod_tree(t.id());
+        if (tree != nullptr && lod_tree_settled(*tree, expected_nodes)) break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    REQUIRE(tree != nullptr);
+    REQUIRE(lod_tree_settled(*tree, expected_nodes));
+
+    // R1, as LT6 computes it: 16 B/vertex (6+2+4+4) + 6 B/triangle (12 with indices32).
+    std::size_t bytes = 0, vertices = 0, triangles = 0, nodes = 0;
+    for (const auto& [key, node] : tree->nodes()) {
+        if (key.level < 2) continue;
+        REQUIRE(node.resident);
+        REQUIRE(node.compact != nullptr);
+        const CompactMesh& mesh = *node.compact;
+        const std::size_t v = mesh.positions.size() / 3;
+        const std::size_t tris = (mesh.indices.size() + mesh.indices32.size()) / 3;
+        const std::size_t held = mesh.positions.size() * sizeof(std::uint16_t) + mesh.normals.size() +
+                                 mesh.ids.size() + mesh.weights.size() +
+                                 mesh.indices.size() * sizeof(std::uint16_t) +
+                                 mesh.indices32.size() * sizeof(std::uint32_t);
+        REQUIRE(mesh.bytes() == held);
+        bytes += held;
+        vertices += v;
+        triangles += tris;
+        ++nodes;
+    }
+    std::size_t budget = 16 * vertices;
+    for (const auto& [key, node] : tree->nodes()) {
+        if (key.level < 2) continue;
+        const std::size_t tris = (node.compact->indices.size() + node.compact->indices32.size()) / 3;
+        budget += (node.compact->indices32.empty() ? 6 : 12) * tris;
+    }
+    WARN("LB9 levels >= 2 of the " << n * n << "-chunk island: " << nodes << " nodes, " << vertices
+                                   << " vertices, " << triangles << " triangles, " << bytes << " bytes (budget "
+                                   << budget << " B)");
+    REQUIRE(bytes > 0u);
+    REQUIRE(bytes <= budget);
+}
+
+TEST_CASE("LB10 a 16,384-chunk (2 km) island's first view appears progressively: near chunks publish within 1 s",
+          "[.][terrain-bench]") {
+    SimRole role;
+    Game game;
+    constexpr int n = 128;   // 128 x 128 chunks, one y layer: 16,384 chunks total
+    Terrain& t = big_island_terrain(game, n);
+    const float span = static_cast<float>(kChunkSize) * static_cast<float>(t.volume().voxel_size());
+    const int center = n / 2;
+    // A camera near the island's middle, placed before the first update so
+    // queue_dirty's first-sight jobs are already ordered by distance to it.
+    bench_camera_at(game, Vec3{(static_cast<float>(center) + 0.5f) * span, 20.f,
+                               (static_cast<float>(center) + 0.5f) * span});
+
+    std::vector<ChunkCoord> near_chunks;
+    for (int dz = -kNearChunks; dz <= kNearChunks; ++dz) {
+        for (int dx = -kNearChunks; dx <= kNearChunks; ++dx) {
+            near_chunks.push_back(ChunkCoord{center + dx, 0, center + dz});
+        }
+    }
+
+    TerrainWorld world({}, 4);
+    const auto start = std::chrono::steady_clock::now();
+    bool all_near_published = false;
+    double seconds = 0.0;
+    while (std::chrono::steady_clock::now() - start < std::chrono::seconds(5)) {
+        world.update(game);
+        if (!world.views().empty()) {
+            std::unordered_set<ChunkCoord, ChunkCoordHash> published;
+            for (const TerrainChunkView& chunk : *world.views()[0].chunks) published.insert(chunk.coord);
+            all_near_published = std::all_of(near_chunks.begin(), near_chunks.end(),
+                                             [&](const ChunkCoord& c) { return published.count(c) != 0; });
+        }
+        seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+        if (all_near_published) break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    WARN("LB10: " << near_chunks.size() << " near chunks (kNearChunks = " << kNearChunks << ") of the " << n * n
+                  << "-chunk island published in " << seconds << " s");
+    REQUIRE(all_near_published);
+    REQUIRE(seconds < 1.0);
 }

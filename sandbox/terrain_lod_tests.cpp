@@ -1521,9 +1521,17 @@ TEST_CASE("LB6 a level-2 node of a planar 45-degree slope or a turned block buil
     // Planar surfaces simplify to long edges, and their children's errors
     // are near 0, so the seam stitch's tolerance is tiny (about 0.004 units,
     // the weld step): a search whose cells were that size scanned every cell
-    // of a long diagonal edge's box. Budget per level-2 build: 2 s in a
-    // Debug build (the Release LOD build of a whole island is a few seconds).
-    constexpr double kBudgetSeconds = 2.0;
+    // of a long diagonal edge's box. Budget per level-2 build: 0.5 s in
+    // Release (about 0.06 s measured; the old search took 0.1 s on the flat
+    // floor), 5 s in Debug, which is about 20x slower and noisy under load.
+    // The error measurement's grid was fixed too: its
+    // cells, sized from the box's volume and clamped to 128 per axis, covered
+    // a tenth of a flat mesh (2.4 s of Debug time on the floor).
+#ifdef NDEBUG
+    constexpr double kBudgetSeconds = 0.5;
+#else
+    constexpr double kBudgetSeconds = 5.0;
+#endif
     const NodeKey key{2, 0, 0, 0};   // chunks 0..3 on each axis: 128 units
 
     SECTION("a 45-degree plane rising along x and z") {

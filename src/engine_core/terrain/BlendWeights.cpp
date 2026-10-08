@@ -25,19 +25,36 @@ bool by_weight_desc_id_asc(const Entry& a, const Entry& b) {
     return a.id < b.id;
 }
 
-// The set of Ids a vertex carries with nonzero weight: at most 4, sorted and
-// deduplicated, held inline (no heap allocation) since split_border_triangles
-// computes one of these per vertex of the mesh -- cheap enough to precompute
-// for every vertex once, rather than re-deriving it per corner per triangle.
-struct IdSet {
+// A vertex's occupied slots, in its own slot order (NOT resorted): at most
+// 4, held inline (no heap allocation) since split_border_triangles computes
+// one of these per vertex of the mesh -- cheap enough to precompute for
+// every vertex once, rather than re-deriving it per corner per triangle.
+//
+// R9 (terrain textures, fix round 2): an unsplit triangle's three corners
+// keep their own, independently-sorted (blend_weights' descending-weight
+// order) rgba/t slots -- terrain.vert's `flat` ids come from one corner (the
+// provoking vertex) while `smooth` weights are interpolated per slot number
+// across all three. Two corners can carry the same Ids as a SET but in
+// different slot order (A: grass .7, sand .3; B: sand .6, grass .4) --
+// comparing only the set (as this used to) let such a triangle report
+// "already agrees" and skip splitting, so slot 0's interpolated weight
+// silently crossed from grass at one corner to sand at another: wrong
+// material blended across the whole triangle, with hard borders at its own
+// edges (indistinguishable, without inspecting per-vertex weights, from the
+// "flat-shaded triangle" the border split exists to remove). Comparing the
+// exact ordered slot layout instead means only a triangle whose corners
+// already share one consistent slot-to-Id mapping is left unsplit; any
+// other same-set-different-order triangle now splits (its own merged order
+// applied to all three corners, as every split triangle's already is).
+struct OrderedIds {
     std::uint8_t ids[4] = {0, 0, 0, 0};
-    int count = 0;
-    bool operator==(const IdSet& o) const {
-        if (count != o.count) {
-            return false;
-        }
-        for (int k = 0; k < count; ++k) {
-            if (ids[k] != o.ids[k]) {
+    bool active[4] = {false, false, false, false};
+    bool operator==(const OrderedIds& o) const {
+        for (int k = 0; k < 4; ++k) {
+            if (active[k] != o.active[k]) {
+                return false;
+            }
+            if (active[k] && ids[k] != o.ids[k]) {
                 return false;
             }
         }
@@ -45,17 +62,12 @@ struct IdSet {
     }
 };
 
-// decision 1: "Identical sets" compares Ids with nonzero weight as a set;
-// weights may differ between corners.
-IdSet id_set_of(const anarchy::amesh::Vertex& v) {
-    IdSet out;
+OrderedIds ordered_ids_of(const anarchy::amesh::Vertex& v) {
+    OrderedIds out;
     for (int k = 0; k < 4; ++k) {
-        if (v.t[k] > 0.f) {
-            out.ids[out.count++] = v.rgba[k];
-        }
+        out.active[k] = v.t[k] > 0.f;
+        out.ids[k] = v.rgba[k];
     }
-    std::sort(out.ids, out.ids + out.count);
-    out.count = static_cast<int>(std::unique(out.ids, out.ids + out.count) - out.ids);
     return out;
 }
 
@@ -172,16 +184,16 @@ void split_border_triangles(anarchy::amesh::Data& render) {
     const std::size_t vertex_count = render.vertices.size();
     const std::size_t original_triangle_count = render.indices.size() / 3;
 
-    // Each vertex's occupied-Id set, computed once rather than re-derived
+    // Each vertex's ordered slot layout, computed once rather than re-derived
     // per corner per triangle (an interior vertex is typically shared by
     // about 6 triangles): the one allocation this function pays up front
     // when it has any work to do at all, instead of one small vector per
-    // id_set() call as a first version of this code did -- measurably
+    // ordered_ids_of() call as a first version of this code did -- measurably
     // cheaper for a large chunk mesh, and this runs on every chunk Surface
     // Nets meshes plus every LOD node build_node re-shades.
-    std::vector<IdSet> sets(vertex_count);
+    std::vector<OrderedIds> sets(vertex_count);
     for (std::size_t i = 0; i < vertex_count; ++i) {
-        sets[i] = id_set_of(render.vertices[i]);
+        sets[i] = ordered_ids_of(render.vertices[i]);
     }
 
     // Set once some triangle actually needs splitting. A single-material

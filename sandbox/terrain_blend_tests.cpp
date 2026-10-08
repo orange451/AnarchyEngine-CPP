@@ -63,8 +63,9 @@ float weight_sum(const anarchy::amesh::Vertex& v) {
 // triangle's corner has 0 weight for still carries that triangle's merged
 // Id (so the shader reads the same Id per slot at all three corners; only
 // the weight varies). Used to check a *post-split* triangle's three corners
-// agree; the pre-split "Identical sets" trigger rule (nonzero weight only)
-// is id_set(), above.
+// agree; the pre-split trigger rule compares each corner's exact ordered
+// slot layout (BlendWeights.cpp's own, internal ordered_ids_of), not just
+// the set -- see BW9.
 std::vector<std::uint8_t> raw_ids(const anarchy::amesh::Vertex& v) {
     std::vector<std::uint8_t> ids(v.rgba, v.rgba + 4);
     std::sort(ids.begin(), ids.end());
@@ -272,6 +273,61 @@ TEST_CASE("BW6 a triangle with {grass}, {grass,rock}, {rock,sand} corners splits
     for (const anarchy::amesh::Vertex& v : {a, b, c}) {
         REQUIRE(std::fabs(weight_sum(v) - 1.f) <= 1e-6f);
     }
+}
+
+// R9 (fix round 2): two corners can carry the same Id SET in different slot
+// ORDER -- each vertex's own weight-descending sort, computed from that
+// vertex's own neighborhood, not from the triangle as a whole. Comparing
+// only the set (as split_border_triangles once did) let such a triangle
+// report "already agrees" and skip splitting; terrain.vert's `flat` ids
+// (one corner) plus `smooth` weights (interpolated per slot number across
+// all three) then silently blended slot 0's weight between two different
+// materials. v0 and v1 below carry {grass, sand} in opposite slot order; v2
+// carries it in v0's order, so two of the three corners "agree" and the old
+// (set-only) rule would have left this triangle unsplit.
+TEST_CASE("BW9 a triangle whose corners share an Id set in different slot order still splits",
+          "[terrain][textures]") {
+    anarchy::amesh::Vertex v0 = make_vertex({{1, 0.7f}, {3, 0.3f}});   // grass, sand (grass first)
+    anarchy::amesh::Vertex v1 = make_vertex({{3, 0.6f}, {1, 0.4f}});   // sand, grass (sand first)
+    anarchy::amesh::Vertex v2 = make_vertex({{1, 0.55f}, {3, 0.45f}});  // grass, sand (grass first, like v0)
+    v0.p[0] = 0.f; v0.p[1] = 0.f; v0.p[2] = 0.f;
+    v1.p[0] = 1.f; v1.p[1] = 0.f; v1.p[2] = 0.f;
+    v2.p[0] = 0.f; v2.p[1] = 1.f; v2.p[2] = 0.f;
+
+    anarchy::amesh::Data render;
+    render.vertices = {v0, v1, v2};
+    render.indices = {0, 1, 2};
+
+    split_border_triangles(render);
+
+    // Split: each corner got its own copy (3 vertices in, 3 out, but not
+    // necessarily shared -- BW6 already covers the "stays at 3" shape; the
+    // real assertion here is the ordered layout, below).
+    REQUIRE(render.vertices.size() == 3);
+    REQUIRE(render.indices.size() == 3);
+
+    const anarchy::amesh::Vertex& a = render.vertices[render.indices[0]];
+    const anarchy::amesh::Vertex& b = render.vertices[render.indices[1]];
+    const anarchy::amesh::Vertex& c = render.vertices[render.indices[2]];
+
+    // Every corner now carries the SAME ORDERED layout (not just the same
+    // set) -- the whole point: slot 0 is the same material (by Id) at every
+    // corner, so terrain.vert's smooth weights interpolate one material's
+    // weight per slot, consistently, across the triangle.
+    for (int k = 0; k < 4; ++k) {
+        REQUIRE(a.rgba[k] == b.rgba[k]);
+        REQUIRE(b.rgba[k] == c.rgba[k]);
+    }
+    for (const anarchy::amesh::Vertex& v : {a, b, c}) {
+        REQUIRE(std::fabs(weight_sum(v) - 1.f) <= 1e-6f);
+    }
+    // Each corner's own weight for an Id it originally carried round-trips
+    // (projected onto the merged order, same values since both corners'
+    // sets were already {grass, sand}).
+    REQUIRE(std::fabs(a.t[static_cast<std::size_t>(std::find(a.rgba, a.rgba + 4, std::uint8_t{1}) - a.rgba)] -
+                      0.7f) <= 1e-6f);
+    REQUIRE(std::fabs(b.t[static_cast<std::size_t>(std::find(b.rgba, b.rgba + 4, std::uint8_t{1}) - b.rgba)] -
+                      0.4f) <= 1e-6f);
 }
 
 TEST_CASE("BW7 a single-material region keeps shared vertices (vertex count unchanged)", "[terrain][textures]") {

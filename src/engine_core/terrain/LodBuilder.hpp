@@ -3,9 +3,9 @@
 // Tasks 2-3 of the terrain LOD plan: LodBuilder merges a node's children's
 // meshes, simplifies the result with meshoptimizer to a level-appropriate
 // error budget, re-shades the kept attempt's vertices from the full-
-// resolution voxel field (input.voxels, via VoxelSampler), and folds a skirt
-// quad inward from every border edge (an edge used by exactly one triangle)
-// to hide cracks against a lower-detail neighbor. Pure function of its
+// resolution voxel field (input.voxels, via VoxelSampler), and hangs a
+// flanged skirt quad from every border edge (an edge used by exactly one
+// triangle) to hide cracks against a lower-detail neighbor. Pure function of its
 // LodInput: no octree. See docs/superpowers/specs/2026-10-06-terrain-lod-
 // design.md's Implementation notes.
 
@@ -61,8 +61,12 @@ struct LodResult {
 // The level's simplification budget, in studs: 0.25 * voxel_size * 2^level.
 float target_error(int level, float voxel_size);
 
-// Concatenates input's children (offsetting indices), welds exactly-equal
-// positions, simplifies to target_error(input.key.level, input.voxel_size)
+// Concatenates input's children (offsetting indices), welds positions within
+// the children's quantization tolerance and zips the seams between
+// simplified siblings (R21: borders simplify freely, so siblings keep
+// different vertices of a shared border; each one's border vertices are
+// inserted into the other's border edges),
+// simplifies to target_error(input.key.level, input.voxel_size)
 // with meshoptimizer, and compacts. The recorded error is a cumulative
 // bound: this level's own honest measured distance (every child vertex's
 // distance to the simplified surface) plus the worst of input.child_errors
@@ -79,8 +83,10 @@ float target_error(int level, float voxel_size);
 // VoxelSampler) -- the same rule Surface Nets itself uses, just read back at
 // whatever resolution the simplified vertex landed at. Then collects border
 // edges (edges used by exactly one triangle) and, for each one, appends a
-// skirt quad folded inward along -normal by max(2 * result.error,
-// input.voxel_size), copying the edge's own two vertices' normals and Ids.
+// skirt quad down -normal by depth = max(2 * result.error, input.voxel_size)
+// and out by depth / 2 (perpendicular to the edge, in its triangle's plane,
+// away from the triangle: R21),
+// copying the edge's own two vertices' normals and Ids.
 // border_edges and surface_index_count are reported as they stood before
 // skirts were appended (R10): a caller recursing to a coarser level passes
 // surface_index_count back in child_surface_index_counts so this level's own

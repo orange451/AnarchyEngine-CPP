@@ -688,6 +688,7 @@ TEST_CASE("LB3 levels 1..4 built bottom-up over a 16x1x16-chunk slab fall about 
         const float ratio = static_cast<float>(previous_triangles) / static_cast<float>(triangles);
         INFO("level " << lvl << " triangles: " << triangles << " (previous level " << previous_triangles
                        << ", ratio " << ratio << ")");
+        WARN("LB3 level " << lvl << ": " << triangles << " triangles, ratio " << ratio);
         REQUIRE(ratio >= 2.5f);
         REQUIRE(ratio <= 6.0f);
         previous_triangles = triangles;
@@ -860,7 +861,7 @@ TEST_CASE("RS2 a node spanning a two-material boundary assigns each vertex the f
     REQUIRE(saw_material_b);
 }
 
-TEST_CASE("RS3 every border edge gets exactly one skirt quad, its far edge displaced by max(2*error, VoxelSize)",
+TEST_CASE("RS3 every border edge gets exactly one skirt quad, its far edge displaced by max(2*error, VoxelSize) and flanged out",
           "[terrain][lod]") {
     VoxelVolume volume;
     const NodeKey level1_key{1, 2, 0, 2};
@@ -889,6 +890,18 @@ TEST_CASE("RS3 every border edge gets exactly one skirt quad, its far edge displ
     const std::size_t original_count = original_vertex_count(result);
     REQUIRE(result.mesh->vertices.size() == original_count + edge_count * 2);
 
+    // R21: the far edge is flanged outward by depth / 2 along the unit vector
+    // perpendicular to the edge, in its own triangle's plane, pointing away
+    // from that triangle. Find each border edge's own triangle (the one that
+    // stores (a, b) in order) among the surface's triangles.
+    std::unordered_map<std::uint64_t, std::uint32_t> third_of;
+    for (std::size_t t = 0; t < result.surface_index_count; t += 3) {
+        for (std::size_t k = 0; k < 3; ++k) {
+            const std::uint64_t a = result.mesh->indices[t + k], b = result.mesh->indices[t + (k + 1) % 3];
+            third_of[(a << 32) | b] = result.mesh->indices[t + (k + 2) % 3];
+        }
+    }
+
     for (std::size_t e = 0; e < edge_count; ++e) {
         const std::uint32_t a_index = result.border_edges[e * 2 + 0];
         const std::uint32_t b_index = result.border_edges[e * 2 + 1];
@@ -898,16 +911,31 @@ TEST_CASE("RS3 every border edge gets exactly one skirt quad, its far edge displ
         const anarchy::amesh::Vertex& a_prime = result.mesh->vertices[original_count + e * 2 + 0];
         const anarchy::amesh::Vertex& b_prime = result.mesh->vertices[original_count + e * 2 + 1];
 
-        const float expected_ax = a.p[0] - a.n[0] * depth;
-        const float expected_ay = a.p[1] - a.n[1] * depth;
-        const float expected_az = a.p[2] - a.n[2] * depth;
+        const auto third = third_of.find((static_cast<std::uint64_t>(a_index) << 32) | b_index);
+        REQUIRE(third != third_of.end());
+        const Vec3 pa = mesh_vertex_position(*result.mesh, a_index);
+        const Vec3 pb = mesh_vertex_position(*result.mesh, b_index);
+        const Vec3 pc = mesh_vertex_position(*result.mesh, third->second);
+        const Vec3 edge{pb.x - pa.x, pb.y - pa.y, pb.z - pa.z};
+        const Vec3 to_c{pc.x - pa.x, pc.y - pa.y, pc.z - pa.z};
+        // Away from c, in the triangle's plane: c's part across the edge, negated.
+        const float along = (to_c.x * edge.x + to_c.y * edge.y + to_c.z * edge.z) /
+                            (edge.x * edge.x + edge.y * edge.y + edge.z * edge.z);
+        Vec3 out{-(to_c.x - along * edge.x), -(to_c.y - along * edge.y), -(to_c.z - along * edge.z)};
+        const float out_length = std::sqrt(out.x * out.x + out.y * out.y + out.z * out.z);
+        REQUIRE(out_length > 0.f);
+        out = Vec3{out.x / out_length * depth * 0.5f, out.y / out_length * depth * 0.5f, out.z / out_length * depth * 0.5f};
+
+        const float expected_ax = a.p[0] - a.n[0] * depth + out.x;
+        const float expected_ay = a.p[1] - a.n[1] * depth + out.y;
+        const float expected_az = a.p[2] - a.n[2] * depth + out.z;
         REQUIRE(std::fabs(a_prime.p[0] - expected_ax) <= 1e-4f);
         REQUIRE(std::fabs(a_prime.p[1] - expected_ay) <= 1e-4f);
         REQUIRE(std::fabs(a_prime.p[2] - expected_az) <= 1e-4f);
 
-        const float expected_bx = b.p[0] - b.n[0] * depth;
-        const float expected_by = b.p[1] - b.n[1] * depth;
-        const float expected_bz = b.p[2] - b.n[2] * depth;
+        const float expected_bx = b.p[0] - b.n[0] * depth + out.x;
+        const float expected_by = b.p[1] - b.n[1] * depth + out.y;
+        const float expected_bz = b.p[2] - b.n[2] * depth + out.z;
         REQUIRE(std::fabs(b_prime.p[0] - expected_bx) <= 1e-4f);
         REQUIRE(std::fabs(b_prime.p[1] - expected_by) <= 1e-4f);
         REQUIRE(std::fabs(b_prime.p[2] - expected_bz) <= 1e-4f);
@@ -1209,4 +1237,216 @@ TEST_CASE("RS7 on a clay mound half-buried in a grass slab, every level-1 triang
     }
     REQUIRE(checked > 0);
     REQUIRE(long_boundary_triangles > 0);   // the scene does make mixed-Id triangles over 2 studs long
+}
+
+// Task 7 crack fix (R21): seams between LOD nodes.
+
+namespace {
+
+// key's node from compact level-1 children, the way LodTree builds it: each
+// level-1 child is built from its exact chunk meshes, packed to the union of
+// its node box and its mesh's AABB (LodTree's covering_bounds, R2), and
+// unpacked again for the parent's build (R12).
+LodResult build_from_compact_children(VoxelVolume& volume, const NodeKey& key, const std::shared_ptr<const ChunkMap>& voxels) {
+    LodInput input;
+    input.key = key;
+    input.voxel_size = volume.voxel_size();
+    input.voxels = voxels;
+    for (const NodeKey& child_key : children_of(key)) {
+        const LodResult child = build_lod_node(volume, child_key, voxels);
+        if (!child.mesh) {
+            continue;
+        }
+        Vec3 box_min, box_max;
+        node_bounds(child_key, volume.voxel_size(), box_min, box_max);
+        box_min = Vec3{std::min(box_min.x, child.mesh->bbox_min[0]), std::min(box_min.y, child.mesh->bbox_min[1]),
+                       std::min(box_min.z, child.mesh->bbox_min[2])};
+        box_max = Vec3{std::max(box_max.x, child.mesh->bbox_max[0]), std::max(box_max.y, child.mesh->bbox_max[1]),
+                       std::max(box_max.z, child.mesh->bbox_max[2])};
+        const CompactMesh compact = pack(*child.mesh, box_min, box_max, child.surface_index_count);
+        input.children.push_back(std::make_shared<const anarchy::amesh::Data>(unpack(compact)));
+        input.child_errors.push_back(child.error);
+        input.child_surface_index_counts.push_back(compact.surface_index_count);
+    }
+    return build_node(input);
+}
+
+// The border edges of result (its surface, before skirts) whose midpoint
+// lies farther than tolerance from every face of key's node box: open
+// seams inside the node.
+std::size_t interior_border_edges(const LodResult& result, const NodeKey& key, float voxel_size, float tolerance) {
+    Vec3 box_min, box_max;
+    node_bounds(key, voxel_size, box_min, box_max);
+    std::size_t interior = 0;
+    for (std::size_t e = 0; e + 1 < result.border_edges.size(); e += 2) {
+        const Vec3 a = mesh_vertex_position(*result.mesh, result.border_edges[e]);
+        const Vec3 b = mesh_vertex_position(*result.mesh, result.border_edges[e + 1]);
+        const Vec3 m{(a.x + b.x) * 0.5f, (a.y + b.y) * 0.5f, (a.z + b.z) * 0.5f};
+        const float to_face = std::min({m.x - box_min.x, box_max.x - m.x, m.y - box_min.y, box_max.y - m.y,
+                                        m.z - box_min.z, box_max.z - m.z});
+        if (to_face > tolerance) {
+            ++interior;
+        }
+    }
+    return interior;
+}
+
+}  // namespace
+
+TEST_CASE("LB5 a level-2 node built from compact level-1 siblings has no open seam inside it", "[terrain][lod]") {
+    VoxelVolume volume;
+    fill_rolling_slab(volume);
+    const float voxel_size = volume.voxel_size();
+    const auto voxels = std::make_shared<const ChunkMap>(volume.chunks());
+
+    std::size_t total_interior = 0, total_border = 0;
+    for (const NodeKey& key : {NodeKey{2, 1, 0, 1}, NodeKey{2, 2, 0, 1}, NodeKey{2, 1, 0, 2}}) {
+        const LodResult result = build_from_compact_children(volume, key, voxels);
+        REQUIRE(result.mesh != nullptr);
+        const std::size_t interior = interior_border_edges(result, key, voxel_size, 2.f * voxel_size);
+        WARN("LB5 L2(" << key.x << "," << key.y << "," << key.z << "): " << result.border_edges.size() / 2
+                       << " border edges, " << interior << " inside the node");
+        total_interior += interior;
+        total_border += result.border_edges.size() / 2;
+    }
+    REQUIRE(total_border > 0);   // the node's own rim is a border
+    REQUIRE(total_interior == 0);
+}
+
+namespace {
+
+// result's mesh packed to its covering box and unpacked again, as a node is
+// drawn (R2, R12).
+anarchy::amesh::Data compact_round_trip(const LodResult& result, const NodeKey& key, float voxel_size) {
+    Vec3 box_min, box_max;
+    node_bounds(key, voxel_size, box_min, box_max);
+    box_min = Vec3{std::min(box_min.x, result.mesh->bbox_min[0]), std::min(box_min.y, result.mesh->bbox_min[1]),
+                   std::min(box_min.z, result.mesh->bbox_min[2])};
+    box_max = Vec3{std::max(box_max.x, result.mesh->bbox_max[0]), std::max(box_max.y, result.mesh->bbox_max[1]),
+                   std::max(box_max.z, result.mesh->bbox_max[2])};
+    return unpack(pack(*result.mesh, box_min, box_max, result.surface_index_count));
+}
+
+// Double-sided Moller-Trumbore: does the ray origin + s * direction (s > 0)
+// cross triangle (a, b, c)?
+bool ray_hits_triangle(Vec3 origin, Vec3 direction, Vec3 a, Vec3 b, Vec3 c) {
+    const Vec3 e1{b.x - a.x, b.y - a.y, b.z - a.z};
+    const Vec3 e2{c.x - a.x, c.y - a.y, c.z - a.z};
+    const Vec3 p{direction.y * e2.z - direction.z * e2.y, direction.z * e2.x - direction.x * e2.z,
+                 direction.x * e2.y - direction.y * e2.x};
+    const float det = e1.x * p.x + e1.y * p.y + e1.z * p.z;
+    if (std::fabs(det) < 1e-12f) {
+        return false;
+    }
+    const float inv = 1.f / det;
+    const Vec3 s{origin.x - a.x, origin.y - a.y, origin.z - a.z};
+    const float u = (s.x * p.x + s.y * p.y + s.z * p.z) * inv;
+    if (u < 0.f || u > 1.f) {
+        return false;
+    }
+    const Vec3 q{s.y * e1.z - s.z * e1.y, s.z * e1.x - s.x * e1.z, s.x * e1.y - s.y * e1.x};
+    const float v = (direction.x * q.x + direction.y * q.y + direction.z * q.z) * inv;
+    if (v < 0.f || u + v > 1.f) {
+        return false;
+    }
+    return (e2.x * q.x + e2.y * q.y + e2.z * q.z) * inv > 0.f;
+}
+
+
+// Diagonal ridges, steep enough (slope up to about 0.85) that a border's
+// Surface Nets vertices wander across the node face rather than lining up on
+// one plane, so two simplifications of it leave a gap seen from above.
+void fill_steep_ridges(VoxelVolume& volume) {
+    const int x0 = 0, x1 = 319, z0 = 64, z1 = 319;
+    const int y0 = -8, y1 = kChunkSize - 1;
+    const int width = x1 - x0 + 1, height = y1 - y0 + 1, depth = z1 - z0 + 1;
+    std::vector<float> distances(static_cast<std::size_t>(width) * static_cast<std::size_t>(height) *
+                                  static_cast<std::size_t>(depth));
+    std::vector<std::uint8_t> materials(distances.size(), 1);
+    for (int z = z0; z <= z1; ++z) {
+        for (int x = x0; x <= x1; ++x) {
+            const float surface_y = 16.f + 9.f * std::sin(static_cast<float>(x + z) / 15.f);
+            const float slope = std::sqrt(1.f + 2.f * std::pow(9.f / 15.f * std::cos(static_cast<float>(x + z) / 15.f), 2.f));
+            for (int y = y0; y <= y1; ++y) {
+                const std::size_t i = static_cast<std::size_t>((x - x0) + width * ((y - y0) + height * (z - z0)));
+                distances[i] = (static_cast<float>(y) - surface_y) / slope;
+            }
+        }
+    }
+    REQUIRE_FALSE(volume.write(CellCoord{x0, y0, z0}, CellCoord{x1, y1, z1}, distances, materials));
+}
+
+}  // namespace
+
+TEST_CASE("RS8 skirts cover the gap between neighbor nodes at different levels, seen head-on",
+          "[terrain][lod]") {
+    // A level-1 node (x 64..128) beside a level-2 node (x 128..256) on steep
+    // ridges: each simplified the shared border at x = 128 its own way, so
+    // their border polylines differ and there is a sliver between them
+    // unless a skirt fills it. Rays cast down the surface normal (the head-on
+    // view, where a skirt hanging along -normal is seen edge-on) across the
+    // shared border must all hit one node or the other.
+    VoxelVolume volume;
+    fill_steep_ridges(volume);
+    const float voxel_size = volume.voxel_size();
+    const auto voxels = std::make_shared<const ChunkMap>(volume.chunks());
+    const VoxelSampler sampler(*voxels, voxel_size);
+
+    const NodeKey fine_key{1, 1, 0, 2};    // chunks x 2..3, z 4..5
+    const NodeKey coarse_key{2, 1, 0, 1};  // chunks x 4..7, z 4..7
+    const LodResult fine = build_lod_node(volume, fine_key, voxels);
+    const LodResult coarse = build_from_compact_children(volume, coarse_key, voxels);
+    REQUIRE(fine.mesh != nullptr);
+    REQUIRE(coarse.mesh != nullptr);
+
+    const float seam_x = 128.f, strip = 8.f;
+    struct Triangle {
+        Vec3 a, b, c;
+    };
+    std::vector<Triangle> near_seam;
+    for (const anarchy::amesh::Data& mesh : {compact_round_trip(fine, fine_key, voxel_size),
+                                             compact_round_trip(coarse, coarse_key, voxel_size)}) {
+        for (std::size_t t = 0; t + 2 < mesh.indices.size(); t += 3) {
+            const Triangle tri{mesh_vertex_position(mesh, mesh.indices[t]), mesh_vertex_position(mesh, mesh.indices[t + 1]),
+                               mesh_vertex_position(mesh, mesh.indices[t + 2])};
+            if (std::max({tri.a.x, tri.b.x, tri.c.x}) >= seam_x - strip &&
+                std::min({tri.a.x, tri.b.x, tri.c.x}) <= seam_x + strip) {
+                near_seam.push_back(tri);
+            }
+        }
+    }
+    REQUIRE_FALSE(near_seam.empty());
+
+    int rays = 0, misses = 0;
+    for (float z = 129.f; z <= 191.f; z += 0.25f) {
+        const Vec3 seam{seam_x, 16.f + 9.f * std::sin((seam_x + z) / 15.f), z};
+        const Vec3 n = sampler.gradient(seam);
+        // Across the seam, perpendicular to the view: x with its n part removed.
+        Vec3 across{1.f - n.x * n.x, -n.x * n.y, -n.x * n.z};
+        const float across_length = std::sqrt(across.x * across.x + across.y * across.y + across.z * across.z);
+        across = Vec3{across.x / across_length, across.y / across_length, across.z / across_length};
+        for (float s = -1.5f; s <= 1.5f; s += 0.01f) {
+            ++rays;
+            const Vec3 origin{seam.x + across.x * s + n.x * 4.f, seam.y + across.y * s + n.y * 4.f,
+                              seam.z + across.z * s + n.z * 4.f};
+            const Vec3 direction{-n.x, -n.y, -n.z};
+            bool hit = false;
+            for (const Triangle& tri : near_seam) {
+                if (ray_hits_triangle(origin, direction, tri.a, tri.b, tri.c)) {
+                    hit = true;
+                    break;
+                }
+            }
+            if (!hit) {
+                if (misses < 5) {
+                    WARN("RS8 ray from (" << origin.x << ", " << origin.y << ", " << origin.z << ") along -normal ("
+                                          << direction.x << ", " << direction.y << ", " << direction.z
+                                          << ") misses both nodes");
+                }
+                ++misses;
+            }
+        }
+    }
+    WARN("RS8: " << misses << " of " << rays << " rays miss");
+    REQUIRE(misses == 0);
 }

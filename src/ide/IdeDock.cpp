@@ -138,6 +138,8 @@ void IdeDock::layoutChildren() {
     if ((minChanged || shortOfMin) && onFit_) {
         onFit_();
     }
+    // Its tabs can close from anywhere, so the dock checks them again next frame.
+    markLayoutDirty(LayoutDirt::Arrange);
 }
 
 void IdeDock::select(const IdePane* pane) {

@@ -699,6 +699,8 @@ void IdeProblems::layoutChildren() {
     tick(scene != nullptr ? scene->timeSeconds() : now_);
     fit_toggles();
     IdePane::layoutChildren();
+    // Problems arrive on their own, so the pane checks again next frame.
+    markLayoutDirty(LayoutDirt::Arrange);
 }
 
 }  // namespace ide

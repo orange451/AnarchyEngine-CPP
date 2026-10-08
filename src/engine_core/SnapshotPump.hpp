@@ -92,6 +92,8 @@ struct VisualSky {
     bool present = false;
     // Texture Paths, relative to the resources folder. Empty for none.
     std::string image;
+    // The Texture's FlipY.
+    bool image_flip_y = false;
     float exposure = 1.f;
     // Multiplies the light the sky gives surfaces, not the sky as drawn.
     float light_scale = 1.f;
@@ -117,6 +119,9 @@ struct VisualDynamicSky {
     // Texture Paths, relative to the resources folder. Empty for none.
     std::string sun_texture;
     std::string moon_texture;
+    // Each Texture's FlipY.
+    bool sun_flip_y = false;
+    bool moon_flip_y = false;
     // Degrees across.
     float sun_size = 2.f;
     float moon_size = 2.f;
@@ -193,6 +198,12 @@ struct VisualMesh {
     std::string roughness_texture;
     std::string metalness_texture;
     std::string emissive_texture;
+    // Each texture's FlipY, false for none.
+    bool diffuse_flip_y = false;
+    bool normal_flip_y = false;
+    bool roughness_flip_y = false;
+    bool metalness_flip_y = false;
+    bool emissive_flip_y = false;
     ColorRgb emissive{0.f, 0.f, 0.f, 1.f};
     float metalness = 0.f;
     float roughness = 0.4f;

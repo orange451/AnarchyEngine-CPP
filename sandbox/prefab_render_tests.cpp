@@ -188,6 +188,16 @@ TEST_CASE("a Model draws its Material's DiffuseTexture Path and Color", "[render
     REQUIRE_FALSE(varnish.set_reference(engine_core::Material::kDiffuseTextureReference, instance_slot(wood.id())));
     scene.frame();
     REQUIRE(surface().diffuse_texture == "textures/wood.png");
+    REQUIRE_FALSE(surface().diffuse_flip_y);
+
+    // The Texture's FlipY goes with its Path.
+    wood.set_flip_y(true);
+    scene.frame();
+    REQUIRE(surface().diffuse_flip_y);
+    REQUIRE_FALSE(surface().normal_flip_y);
+    wood.set_flip_y(false);
+    scene.frame();
+    REQUIRE_FALSE(surface().diffuse_flip_y);
 
     // Edits to the Texture's Path show on the next frame, and clearing the Material undoes both.
     REQUIRE_FALSE(wood.set_path("textures/oak.png"));

@@ -68,6 +68,8 @@ void IdeConsole::layoutChildren() {
         }
     }
     StackPane::layoutChildren();
+    // New output arrives on its own, so the console pulls again next frame.
+    markLayoutDirty(LayoutDirt::Arrange);
 }
 
 void IdeConsole::onClose() {

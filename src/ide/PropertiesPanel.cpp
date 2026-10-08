@@ -1901,12 +1901,16 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
     // they are placed, so a change lays it out again with the new height.
     void layout_page() {
         const double before = content;
+        // The rows follow the polled selection, so they are placed again every frame.
+        body->markLayoutDirty(jadefx::Node::LayoutDirt::Arrange);
         auto lay = [this] {
             scroller->performLayout(pane->inner_left(), pane->inner_top(), std::max(0.0, pane->inner_width()),
                                     std::max(0.0, pane->inner_height()));
         };
         lay();
         if (content != before) {
+            // The rows' height is the body's preferred height, so the scroller measures it again.
+            body->markLayoutDirty();
             lay();
         }
     }
@@ -2135,6 +2139,8 @@ void PropertiesPane::layoutChildren() {
         impl->poll();
         impl->layout_page();
     }
+    // The selection and its properties change on their own, so the panel checks them again next frame.
+    markLayoutDirty(LayoutDirt::Arrange);
 }
 
 void PropertiesBody::layoutChildren() {

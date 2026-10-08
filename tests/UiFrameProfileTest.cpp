@@ -124,6 +124,44 @@ int RunUiFrameProfileTests() {
         }
     }
 
+    // The layout phase's own passes nest under it, so the profiler shows where
+    // the styles-and-layout time goes.
+    at(40);
+    profiler::frame_boundary();
+    at(41);
+    stage.notePhase(FramePhase::Layout, true);
+    stage.noteLayoutPass(jadefx::LayoutPass::Styles, true);
+    at(43);
+    stage.noteLayoutPass(jadefx::LayoutPass::Styles, false);
+    stage.noteLayoutPass(jadefx::LayoutPass::Layout, true);
+    at(44);
+    stage.noteLayoutPass(jadefx::LayoutPass::Layout, false);
+    stage.noteLayoutPass(jadefx::LayoutPass::Popups, true);
+    at(45);
+    stage.noteLayoutPass(jadefx::LayoutPass::Popups, false);
+    stage.notePhase(FramePhase::Layout, false);
+    at(50);
+    profiler::frame_boundary();
+    profiler::collect();
+    {
+        const profiler::History history = live();
+        expect(!history.frames.empty(), "a frame with layout passes");
+        if (!history.frames.empty()) {
+            const profiler::Frame& frame = history.frames.back();
+            const profiler::ScopeRecord* phase = find(history, frame, "Styles and layout");
+            const profiler::ScopeRecord* styles = find(history, frame, "Styles");
+            const profiler::ScopeRecord* layout = find(history, frame, "Layout");
+            const profiler::ScopeRecord* popups = find(history, frame, "Popups");
+            expect(phase != nullptr && ms(*phase) == 4.0, "the layout phase is a 4 ms scope");
+            expect(styles != nullptr && ms(*styles) == 2.0, "the styles pass is a 2 ms scope");
+            expect(layout != nullptr && ms(*layout) == 1.0, "the layout pass is a 1 ms scope");
+            expect(popups != nullptr && ms(*popups) == 1.0, "the popups pass is a 1 ms scope");
+            expect(styles != nullptr && styles->depth == 1 && layout != nullptr && layout->depth == 1 &&
+                       popups != nullptr && popups->depth == 1,
+                   "the passes nest inside the layout phase");
+        }
+    }
+
     profiler::release();
     profiler::reset_for_testing();
     profiler::set_clock_for_testing(nullptr);

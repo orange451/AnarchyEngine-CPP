@@ -674,6 +674,8 @@ void IdeScriptEditor::layoutChildren() {
     }
     StackPane::layoutChildren();
     place_find_bar();
+    // The script saves after a pause and can change in the place, so the editor checks again next frame.
+    markLayoutDirty(LayoutDirt::Arrange);
 }
 
 void IdeScriptEditor::refresh_crumbs() {

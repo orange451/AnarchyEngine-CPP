@@ -20,7 +20,7 @@ Two rules decide every trade-off:
 | Roblox | One global grid, occupancy 0..1 per cell | Yes | A fixed built-in list |
 | **Anarchy** | **One sparse grid per Terrain, signed distance per cell** | **Yes** | **Any project Material** |
 
-Heightmaps cannot make overhangs or tunnels, so Anarchy is volumetric. It stores a signed distance (how far the cell is from the surface, in studs) instead of Roblox's occupancy. Occupancy is a distance clamped to a one-cell band, which is why smoothing erodes and grow/shrink is guesswork in Roblox. A distance clamped to a wider band costs the same byte per cell and makes add, subtract, smooth, grow, shrink, blends, and future resampling exact and stable.
+Heightmaps cannot make overhangs or tunnels, so Anarchy is volumetric. It stores a signed distance (how far the cell is from the surface, in units) instead of Roblox's occupancy. Occupancy is a distance clamped to a one-cell band, which is why smoothing erodes and grow/shrink is guesswork in Roblox. A distance clamped to a wider band costs the same byte per cell and makes add, subtract, smooth, grow, shrink, blends, and future resampling exact and stable.
 
 ## Sub-projects
 
@@ -30,7 +30,7 @@ Heightmaps cannot make overhangs or tunnels, so Anarchy is volumetric. It stores
 | 1 | Terrain core, in three plans: 1a data (`2026-10-06-terrain-data.md`), 1b surface (meshing, colliders, drawing), 1c Configure Terrain tab | `2026-10-06-terrain-core-design.md` | 0 |
 | 1d | Terrain LOD | `2026-10-06-terrain-lod-design.md` | 1b |
 | 2 | Sculpt tools and terrain undo | to be written | 1 |
-| 3 | Multi-material rendering | to be written | 1, 1d |
+| 3 | Textured materials | `2026-10-07-terrain-textures-design.md` | 1, 1d |
 | 4 | Extras: generators, water, resampling | to be written | 1 |
 
 ### 0. Edit-mode physics and `workspace:Raycast`
@@ -46,7 +46,7 @@ The Terrain instance; hidden `TerrainMaterial` children that choose which Materi
 Distant terrain must look nearly the same as it does up close. Roblox's looks chopped and banded because it makes LODs by coarsening the voxels: surfaces move, thin parts vanish, slopes terrace, and normals from the coarse shape change the lighting. Anarchy simplifies meshes instead, after Unreal's Nanite:
 
 - **Source:** the full-detail chunk meshes from 1b. Groups of 2×2×2 chunks are merged and simplified by quadric error metrics with [meshoptimizer](https://github.com/zeux/meshoptimizer) (MIT), each level about a quarter of the triangles of the one below.
-- **Choice by screen-space error:** each LOD node records its geometric error in studs; the renderer draws the coarsest node whose error projects under about one pixel. Silhouettes stay put.
+- **Choice by screen-space error:** each LOD node records its geometric error in units; the renderer draws the coarsest node whose error projects under about one pixel. Silhouettes stay put.
 - **Full-detail shading:** LOD vertices take their normals (the distance field's gradient) and material weights from the full-resolution voxels, not from the simplified triangles, so lighting and material edges do not shift at distance.
 - **No cracks, no popping:** shared borders are locked while simplifying; switching level is a short dithered cross-fade.
 - **Physics is unaffected:** colliders stay full detail; Box3D only tests chunks near moving bodies.
@@ -73,7 +73,7 @@ Distant terrain must look nearly the same as it does up close. Roblox's looks ch
 
 - Generators (noise, heightmap import) and an Erode brush.
 - Water.
-- A Studio "Resample" action that changes VoxelSize (sub-project 1 keeps the data resample-ready: distances are in studs and the file records VoxelSize).
+- A Studio "Resample" action that changes VoxelSize (sub-project 1 keeps the data resample-ready: distances are in units and the file records VoxelSize).
 - `Terrain:Flush()`, to finish pending chunk colliders synchronously, if a script needs one.
 - A smooth-union blend argument on the Fill methods.
 - Per-material friction (Box3D carries a material per triangle).

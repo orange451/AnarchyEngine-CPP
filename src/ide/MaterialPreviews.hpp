@@ -23,8 +23,8 @@ class Image;
 namespace ide {
 
 // What a Material's preview is drawn from: its properties as the Scene View
-// draws them, numbers held between 0 and 1, and the Path of each Texture it
-// uses, empty for none. The defaults are a new Material's.
+// draws them, numbers held between 0 and 1, and the Path and FlipY of each
+// Texture it uses, empty and false for none. The defaults are a new Material's.
 struct MaterialLook {
     engine_core::ColorRgb color{1.f, 1.f, 1.f, 1.f};
     engine_core::ColorRgb emissive{0.f, 0.f, 0.f, 1.f};
@@ -37,6 +37,11 @@ struct MaterialLook {
     std::string roughness_texture;
     std::string metalness_texture;
     std::string emissive_texture;
+    bool diffuse_flip_y = false;
+    bool normal_flip_y = false;
+    bool roughness_flip_y = false;
+    bool metalness_flip_y = false;
+    bool emissive_flip_y = false;
 
     bool operator==(const MaterialLook& other) const;
     bool operator!=(const MaterialLook& other) const { return !(*this == other); }

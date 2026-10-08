@@ -42,6 +42,16 @@ bool IsOpenExr(const std::string& path) {
     return extension == "exr";
 }
 
+// Reverses the order of height rows of row values each, in place.
+template <class T>
+void FlipRows(std::vector<T>& values, std::size_t row, int height) {
+    for (int top = 0, bottom = height - 1; top < bottom; ++top, --bottom) {
+        std::swap_ranges(values.begin() + static_cast<std::ptrdiff_t>(static_cast<std::size_t>(top) * row),
+                         values.begin() + static_cast<std::ptrdiff_t>(static_cast<std::size_t>(top + 1) * row),
+                         values.begin() + static_cast<std::ptrdiff_t>(static_cast<std::size_t>(bottom) * row));
+    }
+}
+
 }  // namespace
 
 bool DecodeTexture(const std::uint8_t* bytes, std::size_t size, TexturePixels& out, std::string& error) {
@@ -137,7 +147,12 @@ TextureCache::TextureCache(Report report) : report_(std::move(report)) {}
 
 TextureCache::~TextureCache() {
     // The context may be gone, and its textures with it.
-    entries_.clear();
+    for (auto& entries : entries_) {
+        entries.clear();
+    }
+    for (auto& entries : environments_) {
+        entries.clear();
+    }
 }
 
 void TextureCache::setRoot(const std::filesystem::path& root) {
@@ -149,7 +164,7 @@ void TextureCache::setRoot(const std::filesystem::path& root) {
 }
 
 void TextureCache::clear() {
-    for (auto* entries : {&entries_, &environments_}) {
+    for (auto* entries : {&entries_[0], &entries_[1], &environments_[0], &environments_[1]}) {
         for (auto& [path, entry] : *entries) {
             if (entry.texture != 0) {
                 glDeleteTextures(1, &entry.texture);
@@ -160,28 +175,28 @@ void TextureCache::clear() {
 }
 
 TextureCache::Entry& TextureCache::find(std::unordered_map<std::string, Entry>& entries, const std::string& path,
-                                        bool linear) {
+                                        bool linear, bool flipY) {
     Entry& entry = entries[path];
     const auto now = std::chrono::steady_clock::now();
     if (!entry.tried || now - entry.checked >= kRecheck) {
         entry.checked = now;
-        load(path, entry, linear);
+        load(path, entry, linear, flipY);
     }
     return entry;
 }
 
-unsigned TextureCache::get(const std::string& path) {
+unsigned TextureCache::get(const std::string& path, bool flipY) {
     if (root_.empty() || path.empty()) {
         return 0;
     }
-    return find(entries_, path, false).texture;
+    return find(entries_[flipY ? 1 : 0], path, false, flipY).texture;
 }
 
-EnvironmentTexture TextureCache::getEnvironment(const std::string& path) {
+EnvironmentTexture TextureCache::getEnvironment(const std::string& path, bool flipY) {
     if (root_.empty() || path.empty()) {
         return {};
     }
-    const Entry& entry = find(environments_, path, true);
+    const Entry& entry = find(environments_[flipY ? 1 : 0], path, true, flipY);
     return entry.texture != 0 ? EnvironmentTexture{entry.texture, entry.revision} : EnvironmentTexture{};
 }
 
@@ -196,7 +211,7 @@ void TextureCache::fail(Entry& entry, const std::string& message) {
     }
 }
 
-void TextureCache::load(const std::string& path, Entry& entry, bool linear) {
+void TextureCache::load(const std::string& path, Entry& entry, bool linear, bool flipY) {
     // Texture Paths use '/', which every platform's path splits on.
     const std::filesystem::path file = root_ / std::filesystem::u8path(path);
     std::error_code error;
@@ -238,6 +253,11 @@ void TextureCache::load(const std::string& path, Entry& entry, bool linear) {
             fail(entry, "Texture " + path + " is not an image it can draw: " + why);
         }
         return;
+    }
+    if (flipY && linear) {
+        FlipRows(linearPixels.rgb, static_cast<std::size_t>(linearPixels.width) * 3, linearPixels.height);
+    } else if (flipY) {
+        FlipRows(pixels.rgba, static_cast<std::size_t>(pixels.width) * 4, pixels.height);
     }
 
     if (entry.texture == 0) {

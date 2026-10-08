@@ -684,6 +684,8 @@ void IdeAssets::layoutChildren() {
         scroll_right_ = false;
         scroll_->setHvalue(scroll_->getHmax());
     }
+    // The place, the selection and the thumbnails change on their own, so the pane checks them again next frame.
+    markLayoutDirty(LayoutDirt::Arrange);
 }
 
 void IdeAssets::renderContent(jadefx::UiRenderer& renderer, float opacity) {

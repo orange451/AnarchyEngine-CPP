@@ -233,13 +233,16 @@ const EnumType kAntialiasingModeType{"AntialiasingMode", kAntialiasingModes, cou
 // How much an effect spends for how good it looks, shared by effects.
 const EnumEntry kEffectQualities[] = {{"Low", 0}, {"Medium", 1}, {"High", 2}};
 const EnumType kEffectQualityType{"EffectQuality", kEffectQualities, count_of(kEffectQualities)};
+// How large a Terrain's packed textures are, in pixels: 256, 512, 1024, 2048.
+const EnumEntry kTextureSizes[] = {{"Small", 0}, {"Medium", 1}, {"Large", 2}, {"Max", 3}};
+const EnumType kTextureSizeType{"TextureSize", kTextureSizes, count_of(kTextureSizes)};
 
 const EnumType* const kTypes[] = {&kNormalIdType,       &kAxisType,          &kRotationOrderType,
                                   &kKeyCodeType,        &kUserInputTypeType, &kUserInputStateType,
                                   &kMouseBehaviorType,  &kPhysicsShapeType,  &kRollOffModeType,
                                   &kGuiAlignmentType,   &kTransformSpaceType,  &kDraggerHandleType,
                                   &kFinishRecordingOperationType, &kAntialiasingModeType, &kEffectQualityType,
-                                  &kRaycastFilterTypeType};
+                                  &kRaycastFilterTypeType, &kTextureSizeType};
 
 int enum_item_index(lua_State* state) {
     auto* item = static_cast<EnumItemUd*>(luaL_checkudata(state, 1, kEnumItemMeta));
@@ -322,6 +325,7 @@ const EnumType& raycast_filter_type_enum() { return kRaycastFilterTypeType; }
 const EnumType& dragger_handle_enum() { return kDraggerHandleType; }
 const EnumType& antialiasing_mode_enum() { return kAntialiasingModeType; }
 const EnumType& effect_quality_enum() { return kEffectQualityType; }
+const EnumType& texture_size_enum() { return kTextureSizeType; }
 
 int enum_item_value(const EnumType& type, std::string_view name) {
     for (int index = 0; index < type.count; ++index) {

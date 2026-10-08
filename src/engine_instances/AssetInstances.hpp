@@ -188,7 +188,7 @@ struct ReferenceSpec {
 // GUID (InstanceRef). Its subclass lists them once, in reference_specs.
 class ReferenceAsset : public DataModel {
 public:
-    static constexpr std::size_t kMaxReferences = 5;
+    static constexpr std::size_t kMaxReferences = 6;
 
     ReferenceAsset(DataModel::ChildTag tag, DataModel::State& state, InstanceId id) : DataModel(tag, state, id) {}
 
@@ -208,13 +208,16 @@ private:
 };
 
 // A PBR material: DiffuseTexture, NormalTexture, RoughnessTexture,
-// MetalnessTexture, and EmissiveTexture, each a Texture or nil; Color, a
-// Color3 that tints the surface; Emissive, a Color3 of light the surface
-// gives off itself; and Metalness, Roughness, Reflectivity, and Transparency,
-// each 0 to 1 on its slider. Metalness, Roughness, and Emissive scale their
-// textures. Those four take any
+// MetalnessTexture, EmissiveTexture, and HeightTexture, each a Texture or
+// nil; Color, a Color3 that tints the surface; Emissive, a Color3 of light
+// the surface gives off itself; Metalness, Roughness, Reflectivity, and
+// Transparency, each 0 to 1 on its slider; and, for terrain texturing,
+// TextureScale (units per texture repeat, > 0), BlendSharpness (0 to 1), and
+// HeightStrength (>= 0). Metalness, Roughness, and Emissive scale their
+// textures. Metalness, Roughness, Reflectivity, and Transparency take any
 // finite number, as a Roblox Transparency does; whatever draws them reads
-// them clamped to 0..1.
+// them clamped to 0..1. TextureScale, BlendSharpness, and HeightStrength are
+// range-checked instead: a value outside their range is refused, saying why.
 class Material : public ReferenceAsset {
 public:
     // reference() indices.
@@ -223,6 +226,7 @@ public:
     static constexpr std::size_t kRoughnessTextureReference = 2;
     static constexpr std::size_t kMetalnessTextureReference = 3;
     static constexpr std::size_t kEmissiveTextureReference = 4;
+    static constexpr std::size_t kHeightTextureReference = 5;
 
     static constexpr double kDefaultReflectivity = 0.5;
     static constexpr double kDefaultTransparency = 0.0;
@@ -230,6 +234,9 @@ public:
     static constexpr double kDefaultRoughness = 0.4;
     static constexpr ColorRgb kDefaultColor{1.f, 1.f, 1.f, 1.f};
     static constexpr ColorRgb kDefaultEmissive{0.f, 0.f, 0.f, 1.f};
+    static constexpr double kDefaultTextureScale = 8.0;
+    static constexpr double kDefaultBlendSharpness = 0.5;
+    static constexpr double kDefaultHeightStrength = 1.0;
 
     using ReferenceAsset::ReferenceAsset;
     const char* class_name() const override;
@@ -240,6 +247,9 @@ public:
     double roughness() const { return roughness_; }
     ColorRgb color() const { return color_; }
     ColorRgb emissive() const { return emissive_; }
+    double texture_scale() const { return texture_scale_; }
+    double blend_sharpness() const { return blend_sharpness_; }
+    double height_strength() const { return height_strength_; }
     // SimulationThread. A value that is not finite is refused: returns why and changes nothing.
     std::optional<std::string> set_reflectivity(double value);
     std::optional<std::string> set_transparency(double value);
@@ -247,6 +257,11 @@ public:
     std::optional<std::string> set_roughness(double value);
     std::optional<std::string> set_color(ColorRgb color);
     std::optional<std::string> set_emissive(ColorRgb color);
+    // SimulationThread. A value outside the property's range is refused,
+    // saying why; nothing changes.
+    std::optional<std::string> set_texture_scale(double value);
+    std::optional<std::string> set_blend_sharpness(double value);
+    std::optional<std::string> set_height_strength(double value);
 
 protected:
     const ReferenceSpec* reference_specs(std::size_t& count) const override;
@@ -255,6 +270,9 @@ protected:
 private:
     std::optional<std::string> set_number(const char* property, double& slot, double value);
     std::optional<std::string> set_color3(const char* property, ColorRgb& slot, ColorRgb color);
+    // valid, called only with a finite value, decides whether it is in range.
+    std::optional<std::string> set_ranged_number(const char* property, double& slot, double value,
+                                                 bool (*valid)(double), const char* message);
 
     double reflectivity_ = kDefaultReflectivity;
     double transparency_ = kDefaultTransparency;
@@ -262,6 +280,9 @@ private:
     double roughness_ = kDefaultRoughness;
     ColorRgb color_ = kDefaultColor;
     ColorRgb emissive_ = kDefaultEmissive;
+    double texture_scale_ = kDefaultTextureScale;
+    double blend_sharpness_ = kDefaultBlendSharpness;
+    double height_strength_ = kDefaultHeightStrength;
 };
 
 // Joins a Mesh and a Material. Lives only in a Prefab.

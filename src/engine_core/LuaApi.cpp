@@ -1058,6 +1058,9 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
     add("Lighting", "Antialiasing",
         "How the 3D scene's edges are smoothed: Enum.AntialiasingMode.FXAA, or None for hard pixel edges.",
         "Enum.AntialiasingMode", false, {});
+    add("Lighting", "TerrainQuality",
+        "Enum.EffectQuality: how much terrain texturing spends for how good it looks (Low, Medium, High).",
+        "Enum.EffectQuality", false, {});
     add("BloomEffect", "Enabled", "When false, this BloomEffect draws no bloom.", "boolean", false, {});
     add("BloomEffect", "Intensity",
         "How much of the image moves into its blurred copy, from 0 to 1. 0 draws no bloom.", "number", false, {});
@@ -1075,6 +1078,10 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
         "Matrix4", false, {});
     add("Terrain", "VoxelSize", "The size of one cell, in studs. Read-only; always 1.", "number", false, {});
     add("Terrain", "CanCollide", "When false, nothing collides with this island.", "boolean", false, {});
+    add("Terrain", "TextureSize",
+        "Enum.TextureSize: how large this Terrain's packed textures are (Small 256, Medium 512, Large 1024, Max "
+        "2048 pixels).",
+        "Enum.TextureSize", false, {});
     // The voxel methods take positions and frames in world space unless space
     // is Enum.TransformSpace.Local, and a TerrainMaterial of this Terrain or nil
     // for the default material.
@@ -1204,6 +1211,21 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
     add("Material", "Reflectivity", "How much this material reflects its surroundings, from 0 to 1.", "number", false,
         {});
     add("Material", "Transparency", "How much this material lets through what is behind it, from 0 (opaque) to 1.",
+        "number", false, {});
+    add("Material", "HeightTexture",
+        "A height map for terrain texturing's blend. Nil falls back to NormalTexture, then DiffuseTexture's "
+        "brightness, then flat.",
+        "Texture?", false, {});
+    add("Material", "TextureScale",
+        "For terrain texturing: units per texture repeat when this material is applied in world space. Must be "
+        "greater than 0.",
+        "number", false, {});
+    add("Material", "BlendSharpness",
+        "For terrain texturing: how sharp the height blend against other materials is, from 0 (soft) to 1 (sharp).",
+        "number", false, {});
+    add("Material", "HeightStrength",
+        "For terrain texturing: how much HeightTexture's height, over the plain blend weight, decides which "
+        "material wins. Must not be negative.",
         "number", false, {});
     // Every Add writes the Mesh's AMESH file under the project's resources folder, giving
     // the Mesh a Path first if it has none. During play they change a copy for the session

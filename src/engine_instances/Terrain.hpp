@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Enum.hpp"
 #include "PVInstance.hpp"
 #include "terrain/VoxelVolume.hpp"
 
@@ -24,6 +25,8 @@ class TerrainMaterial;
 //                      Transform with scale or shear is refused.
 // VoxelSize   number   read-only, always 1: the size of one cell in studs.
 // CanCollide  boolean  true. Saved.
+// TextureSize Enum.TextureSize  how large this Terrain's packed textures
+//                      are: Small, Medium, Large, or Max. Large.
 // DataPath    string   hidden, saved: the island's .avox file under resources.
 class Terrain : public PVInstance {
 public:
@@ -40,6 +43,9 @@ public:
     double voxel_size() const { return volume_.voxel_size(); }
     bool can_collide() const { return can_collide_; }
     std::optional<std::string> set_can_collide(bool value);
+    TextureSize texture_size() const { return texture_size_; }
+    // SimulationThread. A value that is not an Enum.TextureSize's is refused.
+    std::optional<std::string> set_texture_size(int value);
     const std::string& data_path() const { return data_path_; }
     // SimulationThread. What writing DataPath through its registry property
     // does (load, paste, Stop, undo). While read_place restores this Terrain
@@ -112,6 +118,7 @@ private:
 
     Matrix4 transform_ = matrix4_identity();
     bool can_collide_ = true;
+    TextureSize texture_size_ = TextureSize::Large;
     std::string data_path_;
     terrain::VoxelVolume volume_;
     // True while read_place loads the base properties with a known token.

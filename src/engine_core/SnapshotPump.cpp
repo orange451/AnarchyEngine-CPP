@@ -23,7 +23,8 @@ namespace {
 static_assert(VisualLighting{}.exposure == static_cast<float>(Lighting::kDefaultExposure) &&
                   VisualLighting{}.saturation == static_cast<float>(Lighting::kDefaultSaturation) &&
                   VisualLighting{}.gamma == static_cast<float>(Lighting::kDefaultGamma) &&
-                  VisualLighting{}.antialiasing == static_cast<int>(Lighting::kDefaultAntialiasing),
+                  VisualLighting{}.antialiasing == static_cast<int>(Lighting::kDefaultAntialiasing) &&
+                  VisualLighting{}.terrain_quality == static_cast<int>(Lighting::kDefaultTerrainQuality),
               "a place with no Lighting draws with Lighting's defaults");
 
 static_assert(VisualBloom{}.enabled == BloomEffect::kDefaultEnabled &&
@@ -566,6 +567,7 @@ void SnapshotPump::resolve_lighting(DataModel& game) {
     base_.lighting.saturation = static_cast<float>(lighting->saturation());
     base_.lighting.gamma = static_cast<float>(lighting->gamma());
     base_.lighting.antialiasing = static_cast<int>(lighting->antialiasing());
+    base_.lighting.terrain_quality = static_cast<int>(lighting->terrain_quality());
 }
 
 

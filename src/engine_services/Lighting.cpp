@@ -24,6 +24,14 @@ LuaSlot mode_slot(AntialiasingMode mode) {
     return slot;
 }
 
+LuaSlot quality_slot(EffectQuality quality) {
+    LuaSlot slot;
+    slot.kind = LuaSlot::Kind::Enum;
+    slot.enum_type = &effect_quality_enum();
+    slot.number = static_cast<int>(quality);
+    return slot;
+}
+
 LuaSlot color_slot(ColorRgb color) {
     LuaSlot slot;
     slot.kind = LuaSlot::Kind::Color;
@@ -103,6 +111,23 @@ std::optional<std::string> Lighting::set_antialiasing(int mode) {
     return std::nullopt;
 }
 
+std::optional<std::string> Lighting::set_terrain_quality(int quality) {
+    if (!on_gameplay_thread()) {
+        contract_fail("Lighting setters run on SimulationThread");
+    }
+    if (enum_item_name(effect_quality_enum(), quality) == nullptr) {
+        return std::string("TerrainQuality must be an Enum.EffectQuality");
+    }
+    const EffectQuality next = static_cast<EffectQuality>(quality);
+    if (next == terrain_quality_) {
+        return std::nullopt;
+    }
+    const EffectQuality previous = terrain_quality_;
+    terrain_quality_ = next;
+    note_property_change("TerrainQuality", quality_slot(previous), quality_slot(next));
+    return std::nullopt;
+}
+
 namespace {
 
 Lighting* lighting_of(DataModel& object) { return dynamic_cast<Lighting*>(&object); }
@@ -168,6 +193,27 @@ bool write_antialiasing(DataModel&, DataModel& object, LuaSlot& in) {
     return refuse(in, lighting->set_antialiasing(static_cast<int>(in.number)));
 }
 
+bool read_terrain_quality(DataModel&, DataModel& object, LuaSlot& out) {
+    Lighting* lighting = lighting_of(object);
+    if (lighting == nullptr) {
+        return false;
+    }
+    out = quality_slot(lighting->terrain_quality());
+    return true;
+}
+
+bool write_terrain_quality(DataModel&, DataModel& object, LuaSlot& in) {
+    Lighting* lighting = lighting_of(object);
+    if (lighting == nullptr) {
+        return false;
+    }
+    if (in.kind != LuaSlot::Kind::Enum || in.enum_type != &effect_quality_enum()) {
+        in.error = "TerrainQuality must be an Enum.EffectQuality";
+        return false;
+    }
+    return refuse(in, lighting->set_terrain_quality(static_cast<int>(in.number)));
+}
+
 std::string number_json(double value) { return write_json(JsonValue::number(value)); }
 
 std::string color_json(ColorRgb color) {
@@ -197,6 +243,8 @@ ANARCHY_LUA_REGISTER(register_lighting_lua) {
                                       write_number<&Lighting::set_gamma>, gamma.c_str()),
                    0.0, 4.0),
         lua_saved_enum("Antialiasing", antialiasing_mode_enum(), read_antialiasing, write_antialiasing, "\"FXAA\""),
+        lua_saved_enum("TerrainQuality", effect_quality_enum(), read_terrain_quality, write_terrain_quality,
+                      "\"High\""),
     };
     register_lua_class("Lighting", "SceneService", fields, static_cast<int>(sizeof(fields) / sizeof(fields[0])));
 }

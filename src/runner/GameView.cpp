@@ -428,6 +428,9 @@ void GameView::collectMeshes() {
     lighting.saturation = snapshot.lighting.saturation;
     lighting.gamma = snapshot.lighting.gamma;
     lighting.antialiasing = snapshot.lighting.antialiasing == 0 ? SceneAntialiasing::None : SceneAntialiasing::FXAA;
+    lighting.terrainQuality = snapshot.lighting.terrain_quality == 0   ? SceneQuality::Low
+                              : snapshot.lighting.terrain_quality == 2 ? SceneQuality::High
+                                                                       : SceneQuality::Medium;
     // The Skybox's images, uploaded linear; a missing or unreadable one draws no sky.
     const engine_core::VisualSky& sky = snapshot.sky;
     if (sky.present) {

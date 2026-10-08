@@ -446,6 +446,7 @@ constexpr ReferenceSpec kMaterialRefs[] = {
     {"RoughnessTexture", "Texture"},
     {"MetalnessTexture", "Texture"},
     {"EmissiveTexture", "Texture"},
+    {"HeightTexture", "Texture"},
 };
 
 constexpr ReferenceSpec kModelRefs[] = {
@@ -546,6 +547,38 @@ std::optional<std::string> Material::set_roughness(double value) {
     return set_number("Roughness", roughness_, value);
 }
 
+std::optional<std::string> Material::set_ranged_number(const char* property, double& slot, double value,
+                                                       bool (*valid)(double), const char* message) {
+    if (!on_gameplay_thread()) {
+        contract_fail("asset setters run on SimulationThread");
+    }
+    if (!std::isfinite(value) || !valid(value)) {
+        return std::string(message);
+    }
+    if (slot == value) {
+        return std::nullopt;
+    }
+    const double previous = slot;
+    slot = value;
+    note_property_change(property, number_slot(previous), number_slot(value));
+    return std::nullopt;
+}
+
+std::optional<std::string> Material::set_texture_scale(double value) {
+    return set_ranged_number("TextureScale", texture_scale_, value, [](double v) { return v > 0.0; },
+                             "TextureScale must be greater than 0");
+}
+
+std::optional<std::string> Material::set_blend_sharpness(double value) {
+    return set_ranged_number("BlendSharpness", blend_sharpness_, value,
+                             [](double v) { return v >= 0.0 && v <= 1.0; }, "BlendSharpness must be from 0 to 1");
+}
+
+std::optional<std::string> Material::set_height_strength(double value) {
+    return set_ranged_number("HeightStrength", height_strength_, value, [](double v) { return v >= 0.0; },
+                             "HeightStrength must not be negative");
+}
+
 std::optional<std::string> Material::set_color3(const char* property, ColorRgb& slot, ColorRgb color) {
     if (!on_gameplay_thread()) {
         contract_fail("asset setters run on SimulationThread");
@@ -576,6 +609,9 @@ void Material::on_reuse() {
     roughness_ = kDefaultRoughness;
     color_ = kDefaultColor;
     emissive_ = kDefaultEmissive;
+    texture_scale_ = kDefaultTextureScale;
+    blend_sharpness_ = kDefaultBlendSharpness;
+    height_strength_ = kDefaultHeightStrength;
 }
 
 namespace {
@@ -711,6 +747,9 @@ ANARCHY_LUA_REGISTER(register_asset_instances_lua) {
     static const std::string roughness = write_json(JsonValue::number(Material::kDefaultRoughness));
     static const std::string color = color_json(Material::kDefaultColor);
     static const std::string emissive = color_json(Material::kDefaultEmissive);
+    static const std::string texture_scale = write_json(JsonValue::number(Material::kDefaultTextureScale));
+    static const std::string blend_sharpness = write_json(JsonValue::number(Material::kDefaultBlendSharpness));
+    static const std::string height_strength = write_json(JsonValue::number(Material::kDefaultHeightStrength));
     const LuaField file_fields[] = {
         lua_saved_property("Path", "string", read_path, write_path, "\"\""),
     };
@@ -735,6 +774,7 @@ ANARCHY_LUA_REGISTER(register_asset_instances_lua) {
         lua_saved_property("RoughnessTexture", "Texture?", read_reference<2>, write_reference<2>, "null"),
         lua_saved_property("MetalnessTexture", "Texture?", read_reference<3>, write_reference<3>, "null"),
         lua_saved_property("EmissiveTexture", "Texture?", read_reference<4>, write_reference<4>, "null"),
+        lua_saved_property("HeightTexture", "Texture?", read_reference<5>, write_reference<5>, "null"),
         lua_saved_property("Color", "Color3", read_material_color<&Material::color>,
                            write_material_color<&Material::set_color>, color.c_str()),
         lua_saved_property("Emissive", "Color3", read_material_color<&Material::emissive>,
@@ -751,6 +791,14 @@ ANARCHY_LUA_REGISTER(register_asset_instances_lua) {
         lua_slider(lua_saved_property("Transparency", "number", read_material_number<&Material::transparency>,
                                       write_material_number<&Material::set_transparency>, transparency.c_str()),
                    0.0, 1.0),
+        lua_saved_property("TextureScale", "number", read_material_number<&Material::texture_scale>,
+                           write_material_number<&Material::set_texture_scale>, texture_scale.c_str()),
+        lua_slider(lua_saved_property("BlendSharpness", "number", read_material_number<&Material::blend_sharpness>,
+                                      write_material_number<&Material::set_blend_sharpness>,
+                                      blend_sharpness.c_str()),
+                   0.0, 1.0),
+        lua_saved_property("HeightStrength", "number", read_material_number<&Material::height_strength>,
+                           write_material_number<&Material::set_height_strength>, height_strength.c_str()),
     };
     register_lua_class("Material", "ReferenceAsset", material_fields,
                        static_cast<int>(sizeof(material_fields) / sizeof(material_fields[0])));

@@ -20,6 +20,8 @@ namespace engine_core {
 // Saturation  number  1 leaves color as it is, 0 is gray. Not below 0.
 // Gamma       number  the display's gamma the image is corrected for. Not below 0.
 // Antialiasing  Enum.AntialiasingMode  how the 3D scene's edges are smoothed. FXAA.
+// TerrainQuality  Enum.EffectQuality  how much terrain texturing spends for
+//                 how good it looks, settable by scripts at runtime. High.
 class Lighting : public SceneService {
 public:
     static constexpr ColorRgb kDefaultAmbient{0.5f, 0.5f, 0.5f, 1.f};
@@ -28,6 +30,7 @@ public:
     static constexpr double kDefaultSaturation = 1.2;
     static constexpr double kDefaultGamma = 2.2;
     static constexpr AntialiasingMode kDefaultAntialiasing = AntialiasingMode::FXAA;
+    static constexpr EffectQuality kDefaultTerrainQuality = EffectQuality::High;
 
     using SceneService::SceneService;
     const char* class_name() const override;
@@ -47,6 +50,9 @@ public:
     AntialiasingMode antialiasing() const { return antialiasing_; }
     // An Enum.AntialiasingMode's value; any other is refused.
     std::optional<std::string> set_antialiasing(int mode);
+    EffectQuality terrain_quality() const { return terrain_quality_; }
+    // An Enum.EffectQuality's value; any other is refused.
+    std::optional<std::string> set_terrain_quality(int quality);
 
 private:
     std::optional<std::string> set_number(const char* property, double& slot, double value);
@@ -58,6 +64,7 @@ private:
     double saturation_ = kDefaultSaturation;
     double gamma_ = kDefaultGamma;
     AntialiasingMode antialiasing_ = kDefaultAntialiasing;
+    EffectQuality terrain_quality_ = kDefaultTerrainQuality;
 };
 
 }  // namespace engine_core

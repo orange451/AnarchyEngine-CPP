@@ -244,6 +244,8 @@ struct SceneLighting {
     float saturation = 1.2f;
     float gamma = 2.2f;
     SceneAntialiasing antialiasing = SceneAntialiasing::FXAA;
+    // How much terrain texturing spends for how good it looks.
+    SceneQuality terrainQuality = SceneQuality::High;
     SceneSky sky;
     SceneDynamicSky dynamicSky;
     SceneBloom bloom;

@@ -548,6 +548,8 @@ void IdeTerrainEditor::layoutChildren() {
         }
     }
     IdePane::layoutChildren();
+    // The Terrain, its TerrainMaterials, and the selection change on their own, so the tab checks them again next frame.
+    markLayoutDirty(LayoutDirt::Arrange);
     // A picker waits for its card to be laid out in view.
     if (pending_picker_) {
         jadefx::Node* slot = materialSlot(pending_picker_->entry);

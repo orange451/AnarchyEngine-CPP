@@ -3946,6 +3946,279 @@ int main(int argc, char** argv) {
                 runner::DeleteTexture(texLook);
             }
 
+            // TX-R6/TX-R8 (Task 7): Lighting.TerrainQuality caps how many
+            // triplanar projections a pixel uses (High <= 3, Medium <= 2,
+            // Low <= 1, TX-R6), and a far LOD node caps at 2 even at High
+            // (TX-R8) -- both read through a test-only debug mode
+            // (SetTerrainProjectionDebug) that, instead of the usual shaded
+            // color, writes the pixel's active projection count as a flat
+            // color into the emissive target alone (red 1, green 2, blue
+            // 3), independent of lighting/shadows/tonemapping. A stone ball
+            // on a stone floor gives every normal direction (so every
+            // projection count) somewhere on one shot. FXAA is turned off
+            // for every debug-mode shot in this scene: it would blend a
+            // silhouette edge's debug color with the sky behind it, and
+            // that blend can land on a third, wrong count by accident; the
+            // real (non-debug) shaded render TX-R6 also takes is unaffected
+            // either way, so it is left under the scene's usual FXAA.
+            {
+                terrain::VoxelVolume volume;
+                Edit(volume.fill(Block(0.f, -4.f, 0.f, 48.f, 6.f, 48.f), 1), "TX-R6/R8's stone floor");
+                Edit(volume.fill(Ball(0.f, 6.f, 0.f, 8.f), 1), "TX-R6/R8's stone ball");
+                const auto set = MakeTextureSet(256, {0}, 9501);
+                unsigned texLook =
+                    runner::MakeTerrainLookTexture(TexturedLookFloats({{1, 122, 110, 98, 1, 8.f}}).data());
+                const auto chunks = UploadTerrain(volume);
+                std::vector<runner::MeshDraw> draws;
+                for (int frame = 0; frame < 4; ++frame) {
+                    draws = TexturedTerrainDraws(chunks, renderer, 9501, texLook, set);
+                }
+                const TerrainShot shot{"terrain-tx6-quality.png", {0.f, 6.f, 0.f}, 35.f, 22.f, 20.f, 50.f};
+
+                const runner::SceneAntialiasing originalAA = lighting.antialiasing;
+
+                // The real shaded render at each quality, exactly like any
+                // other TX-R scene: never missing-texture black.
+                struct QualityCase {
+                    runner::SceneQuality quality;
+                    const char* name;
+                    int maxProjections;
+                };
+                const QualityCase cases[] = {
+                    {runner::SceneQuality::Low, "Low", 1},
+                    {runner::SceneQuality::Medium, "Medium", 2},
+                    {runner::SceneQuality::High, "High", 3},
+                };
+                for (const QualityCase& qc : cases) {
+                    lighting.terrainQuality = qc.quality;
+                    lighting.antialiasing = originalAA;
+                    renderer.setLighting(lighting);
+                    renderer.setCamera(ShotCamera(shot), shot.fov);
+                    runner::LightDraw realSun = runner::SkyLightDraw(state, true);
+                    realSun.shadowDistance = shot.distance * 2.f + 60.f;
+                    runner::ViewPixels realSky, realPixels;
+                    const bool realSkyShot = target.shoot(renderer, {}, realSun, realSky);
+                    const bool realDrawn = target.shoot(renderer, draws, realSun, realPixels);
+                    Expect(realSkyShot && realDrawn, std::string("TX-R6 ") + qc.name + " draws and reads back");
+                    if (realSkyShot && realDrawn) {
+                        ExpectTerrainShown(std::string("TX-R6 ") + qc.name, realPixels, realSky);
+                        if (qc.quality == runner::SceneQuality::High) {
+                            std::filesystem::create_directories(terrainShots);
+                            std::ofstream(terrainShots / shot.file, std::ios::binary) << runner::EncodePng(realPixels);
+                            std::printf("wrote %s\n", (terrainShots / shot.file).string().c_str());
+                        }
+                    }
+
+                    // The debug count render: every terrain pixel's active
+                    // projection count, read back directly.
+                    lighting.antialiasing = runner::SceneAntialiasing::None;
+                    renderer.setLighting(lighting);
+                    runner::SetTerrainProjectionDebug(true);
+                    renderer.setCamera(ShotCamera(shot), shot.fov);
+                    runner::LightDraw sun = runner::SkyLightDraw(state, true);
+                    sun.shadowDistance = shot.distance * 2.f + 60.f;
+                    runner::ViewPixels sky, pixels;
+                    const bool skyShot = target.shoot(renderer, {}, sun, sky);
+                    const bool drawn = target.shoot(renderer, draws, sun, pixels);
+                    runner::SetTerrainProjectionDebug(false);
+                    Expect(skyShot && drawn, std::string("TX-R6 ") + qc.name + " debug count draws and reads back");
+                    if (skyShot && drawn) {
+                        int maxCount = 0;
+                        int terrainPixels = 0;
+                        int blackCount = 0;
+                        for (int y = 0; y < pixels.height; ++y) {
+                            for (int x = 0; x < pixels.width; ++x) {
+                                if (std::abs(PixelSum(pixels, x, y) - PixelSum(sky, x, y)) <= 12) {
+                                    continue;   // sky/background, not terrain
+                                }
+                                ++terrainPixels;
+                                const unsigned char* p =
+                                    pixels.rgba.data() + (static_cast<std::size_t>(y) * pixels.width + x) * 4;
+                                const int count = p[0] >= p[1] && p[0] >= p[2] ? 1 : (p[1] >= p[2] ? 2 : 3);
+                                maxCount = std::max(maxCount, count);
+                                if (p[0] < 8 && p[1] < 8 && p[2] < 8) {
+                                    ++blackCount;
+                                }
+                            }
+                        }
+                        Expect(terrainPixels > 1000, std::string("TX-R6 ") + qc.name + " debug shot covers real " +
+                                                          "terrain (" + std::to_string(terrainPixels) + " px)");
+                        Expect(maxCount <= qc.maxProjections,
+                               std::string("TX-R6 ") + qc.name + " uses at most " +
+                                   std::to_string(qc.maxProjections) + " projections per pixel (saw " +
+                                   std::to_string(maxCount) + ")");
+                        Expect(blackCount == 0, std::string("TX-R6 ") + qc.name +
+                                                     " never draws missing-texture black (" +
+                                                     std::to_string(blackCount) + " black px)");
+                    }
+                }
+
+                // TX-R8: the same debug mode, forced onto a draw whose
+                // terrainLevel is 2 (a far LOD node): even at High quality's
+                // usual 3, it caps at 2.
+                lighting.terrainQuality = runner::SceneQuality::High;
+                lighting.antialiasing = runner::SceneAntialiasing::None;
+                renderer.setLighting(lighting);
+                std::vector<runner::MeshDraw> lodDraws = draws;
+                for (runner::MeshDraw& d : lodDraws) {
+                    d.terrainLevel = 2;
+                }
+                runner::SetTerrainProjectionDebug(true);
+                renderer.setCamera(ShotCamera(shot), shot.fov);
+                runner::LightDraw lodSun = runner::SkyLightDraw(state, true);
+                lodSun.shadowDistance = shot.distance * 2.f + 60.f;
+                runner::ViewPixels lodSky, lodPixels;
+                const bool lodSkyShot = target.shoot(renderer, {}, lodSun, lodSky);
+                const bool lodDrawn = target.shoot(renderer, lodDraws, lodSun, lodPixels);
+                runner::SetTerrainProjectionDebug(false);
+                Expect(lodSkyShot && lodDrawn, "TX-R8 debug count (LOD level 2) draws and reads back");
+                if (lodSkyShot && lodDrawn) {
+                    int maxCount = 0;
+                    int terrainPixels = 0;
+                    for (int y = 0; y < lodPixels.height; ++y) {
+                        for (int x = 0; x < lodPixels.width; ++x) {
+                            if (std::abs(PixelSum(lodPixels, x, y) - PixelSum(lodSky, x, y)) <= 12) {
+                                continue;
+                            }
+                            ++terrainPixels;
+                            const unsigned char* p =
+                                lodPixels.rgba.data() + (static_cast<std::size_t>(y) * lodPixels.width + x) * 4;
+                            const int count = p[0] >= p[1] && p[0] >= p[2] ? 1 : (p[1] >= p[2] ? 2 : 3);
+                            maxCount = std::max(maxCount, count);
+                        }
+                    }
+                    Expect(terrainPixels > 1000,
+                           "TX-R8 debug shot covers real terrain (" + std::to_string(terrainPixels) + " px)");
+                    Expect(maxCount <= 2,
+                           "TX-R8: a LOD level >= 2 node uses at most 2 projections even at High quality (saw " +
+                               std::to_string(maxCount) + ")");
+                }
+
+                lighting.terrainQuality = runner::SceneQuality::High;
+                lighting.antialiasing = originalAA;
+                renderer.setLighting(lighting);
+                runner::DeleteTexture(texLook);
+                Expect(runner::rt_glGetError() == runner::GL_NO_ERROR, "TX-R6/TX-R8 leave no GL error");
+            }
+
+            // TX-R7 (Task 7): anti-tiling breaks up the color array's own
+            // repeat -- the fixed TextureScale period at which the whole
+            // texture tile repeats -- without changing anything else: a
+            // far, narrow-FOV ("telephoto") shot of one flat stone wall,
+            // nearly orthographic across one row, has no strong narrow peak
+            // in a simple DFT of that row at the tile's repeat frequency
+            // with anti-tiling forced on; forcing it off (same scene, same
+            // High quality otherwise) restores that peak, proving the check
+            // would have caught it if anti-tiling did not work. Forced
+            // through the test-only uAntiTilingOverride (SetTerrainAntiTilingOverride)
+            // rather than toggling quality, so projections/height
+            // blend/normals all stay fixed between the two shots -- only
+            // anti-tiling differs.
+            {
+                terrain::VoxelVolume volume;
+                Edit(volume.fill(Block(0.f, 20.f, 0.f, 4.f, 80.f, 300.f), 1), "TX-R7's stone wall");
+                constexpr float kScale = 5.f;
+                const auto set = MakeTextureSet(256, {0}, 9601);
+                unsigned texLook =
+                    runner::MakeTerrainLookTexture(TexturedLookFloats({{1, 122, 110, 98, 1, kScale}}).data());
+                const auto chunks = UploadTerrain(volume);
+                std::vector<runner::MeshDraw> draws;
+                for (int frame = 0; frame < 4; ++frame) {
+                    draws = TexturedTerrainDraws(chunks, renderer, 9601, texLook, set);
+                }
+                const TerrainShot shot{"terrain-tx7-antitiling.png", {0.f, 20.f, 0.f}, 0.f, 0.f, 400.f, 10.f};
+
+                const runner::SceneAntialiasing originalAA = lighting.antialiasing;
+                const runner::SceneQuality originalQuality = lighting.terrainQuality;
+                lighting.terrainQuality = runner::SceneQuality::High;
+                lighting.antialiasing = runner::SceneAntialiasing::None;
+                renderer.setLighting(lighting);
+
+                // A simple DFT (the brief's "FFT, or a simple DFT over one
+                // row") of kWindow samples: magnitude per frequency bin.
+                constexpr int kWindow = 512;
+                constexpr double kPi = 3.14159265358979323846;
+                const auto RowMagnitudes = [&](const runner::ViewPixels& pixels, int x0, int y) {
+                    std::vector<double> samples(kWindow);
+                    for (int i = 0; i < kWindow; ++i) {
+                        samples[static_cast<std::size_t>(i)] = static_cast<double>(Luma(pixels, x0 + i, y));
+                    }
+                    std::vector<double> magnitude(kWindow / 2, 0.0);
+                    for (int k = 1; k < kWindow / 2; ++k) {
+                        double re = 0.0, im = 0.0;
+                        for (int n = 0; n < kWindow; ++n) {
+                            const double angle = 2.0 * kPi * k * n / kWindow;
+                            re += samples[static_cast<std::size_t>(n)] * std::cos(angle);
+                            im += samples[static_cast<std::size_t>(n)] * std::sin(angle);
+                        }
+                        magnitude[static_cast<std::size_t>(k)] = std::sqrt(re * re + im * im);
+                    }
+                    return magnitude;
+                };
+                // The fundamental's expected bin: one array-texture repeat
+                // (TextureScale world units), at this near-orthographic
+                // shot's own pixels-per-world-unit, over kWindow pixels --
+                // a generous (half to double) band around it, since the
+                // camera is only approximately orthographic.
+                const double pixelsPerUnit =
+                    kShotHeight / (2.0 * shot.distance * std::tan(shot.fov * kPi / 180.0 / 2.0));
+                const double expectedPeriodPx = kScale * pixelsPerUnit;
+                const int expectedBin = std::max(2, static_cast<int>(std::lround(kWindow / expectedPeriodPx)));
+                const int bandLow = std::max(2, expectedBin / 2);
+                const int bandHigh = std::min(kWindow / 2 - 1, expectedBin * 2);
+                const auto PeakOverMedian = [&](const std::vector<double>& magnitude) {
+                    std::vector<double> sorted(magnitude.begin() + 1, magnitude.end());
+                    std::sort(sorted.begin(), sorted.end());
+                    const double median = sorted[sorted.size() / 2];
+                    double peak = 0.0;
+                    for (int k = bandLow; k <= bandHigh; ++k) {
+                        peak = std::max(peak, magnitude[static_cast<std::size_t>(k)]);
+                    }
+                    return median > 1e-6 ? peak / median : 0.0;
+                };
+
+                const auto shootRatio = [&](int forceAntiTiling, const char* label) {
+                    runner::SetTerrainAntiTilingOverride(forceAntiTiling);
+                    renderer.setCamera(ShotCamera(shot), shot.fov);
+                    runner::LightDraw sun = runner::SkyLightDraw(state, true);
+                    sun.shadowDistance = shot.distance * 2.f + 60.f;
+                    runner::ViewPixels sky, pixels;
+                    const bool skyShot = target.shoot(renderer, {}, sun, sky);
+                    const bool drawn = target.shoot(renderer, draws, sun, pixels);
+                    runner::SetTerrainAntiTilingOverride(-1);
+                    Expect(skyShot && drawn, std::string("TX-R7 ") + label + " draws and reads back");
+                    double ratio = 0.0;
+                    if (skyShot && drawn) {
+                        if (std::string(label) == "anti-tiling on") {
+                            std::filesystem::create_directories(terrainShots);
+                            std::ofstream(terrainShots / shot.file, std::ios::binary) << runner::EncodePng(pixels);
+                            std::printf("wrote %s\n", (terrainShots / shot.file).string().c_str());
+                        }
+                        const int centerY = pixels.height / 2;
+                        const int x0 = pixels.width / 2 - kWindow / 2;
+                        const std::vector<double> magnitude = RowMagnitudes(pixels, x0, centerY);
+                        ratio = PeakOverMedian(magnitude);
+                    }
+                    return ratio;
+                };
+
+                const double onRatio = shootRatio(1, "anti-tiling on");
+                const double offRatio = shootRatio(0, "anti-tiling off");
+
+                lighting.terrainQuality = originalQuality;
+                lighting.antialiasing = originalAA;
+                renderer.setLighting(lighting);
+
+                Expect(onRatio < 2.0,
+                       "TX-R7: anti-tiling on has no strong periodic peak at the repeat frequency (ratio " +
+                           std::to_string(onRatio) + ", expected bin " + std::to_string(expectedBin) + ")");
+                Expect(offRatio >= 2.0,
+                       "TX-R7: anti-tiling off does have one, proving the check works (ratio " +
+                           std::to_string(offRatio) + ")");
+                runner::DeleteTexture(texLook);
+                Expect(runner::rt_glGetError() == runner::GL_NO_ERROR, "TX-R7 leaves no GL error");
+            }
+
             // Through the snapshot path, as the Scene View sees a place: a Game
             // with a Terrain in Workspace, edited through volume() (the Lua
             // Terrain:FillBall is not on this branch), a TerrainWorld settled on

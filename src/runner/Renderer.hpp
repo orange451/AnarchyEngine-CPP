@@ -113,6 +113,25 @@ unsigned MakeTerrainLookTexture(const float* rgba256x4);
 // --terrain-lod-colors shots. Any thread.
 void SetTerrainLodColors(bool on);
 bool TerrainLodColors();
+
+// Test-only overrides (Task 7, TX-R6/TX-R7/TX-R8), for every Renderer in the
+// process, read by terrain.frag; both off/-1 by default, so normal drawing
+// (the studio, the player) is unaffected.
+//
+// SetTerrainAntiTilingOverride: -1 leaves anti-tiling to Lighting.TerrainQuality
+// as usual; 0 or 1 forces it off or on regardless of quality, so a test can
+// compare anti-tiling on vs. off with every other quality falloff (projection
+// count, height blend, normal maps) held fixed.
+void SetTerrainAntiTilingOverride(int value);
+int TerrainAntiTilingOverride();
+// SetTerrainProjectionDebug: while on, terrain.frag skips its usual shading
+// and instead writes the number of active triplanar projections at that
+// pixel (after quality's and the far-LOD node cap's falloffs) as a flat
+// color into the emissive target alone -- red for 1, green for 2, blue for
+// 3 -- so a test can read it back independent of lighting, shadows, or
+// tonemapping.
+void SetTerrainProjectionDebug(bool on);
+bool TerrainProjectionDebug();
 // The tint per level (sRGB, 0 to 255), as terrain.frag's kLodColors, and
 // each one's name for a legend.
 struct TerrainLodColor {
@@ -455,6 +474,13 @@ private:
         int hasSurface = -1;
         int nodeLevel = -1;
         int terrainQuality = -1;
+        // terrain.frag, test-only (Task 7): SetTerrainAntiTilingOverride's
+        // value (-1 follows quality as usual; 0/1 forces anti-tiling off/on,
+        // isolating it from quality's other falloffs for TX-R7), and
+        // SetTerrainProjectionDebug's switch (1 replaces the shaded color
+        // with the active triplanar projection count, for TX-R6/TX-R8).
+        int antiTilingOverride = -1;
+        int projectionDebug = -1;
         // G-buffer inputs.
         int depth = -1;
         int albedo = -1;

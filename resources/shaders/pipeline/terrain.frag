@@ -38,6 +38,16 @@ uniform int uFadeIn;   // 1: this draw is fading in; 0: fading out
 // A debug view (SetTerrainLodColors): the node's level, 0 to 7, tints it in
 // that level's color; -1 draws the look table's colors.
 uniform int uLodLevel;
+// Test-only (Task 7, TX-R7): -1 leaves anti-tiling to uTerrainQuality as
+// usual; 0 or 1 forces it off or on, so a test can isolate anti-tiling from
+// quality's other falloffs.
+uniform int uAntiTilingOverride;
+// Test-only (Task 7, TX-R6/TX-R8): while 1, this pixel's shaded color is
+// replaced by a flat color encoding the number of active triplanar
+// projections (after quality's and the far-LOD cap's falloffs) -- red 1,
+// green 2, blue 3 -- written to the emissive target alone, so a test can
+// read it back independent of lighting, shadows, or tonemapping.
+uniform int uProjectionDebug;
 // mat3(uView) * aNormalMatrix: constant across one instanced draw (both
 // factors are per-instance), so a perturbed LOCAL-space normal can be turned
 // into view space per pixel without passing the model matrix itself through.
@@ -214,8 +224,22 @@ void main() {
     float awSum2 = aw.x + aw.y + aw.z;
     aw = awSum2 > 1e-6 ? aw / awSum2 : aw;
 
+    if (uProjectionDebug == 1) {
+        // TX-R6/TX-R8: the active projection count alone, as a flat color in
+        // the emissive target, with albedo black so lighting (ambient, sun,
+        // tonemapping) contributes nothing a test would need to see through.
+        int activeCount = (aw.x > 0.0 ? 1 : 0) + (aw.y > 0.0 ? 1 : 0) + (aw.z > 0.0 ? 1 : 0);
+        vec3 debugColor = activeCount <= 1 ? vec3(1.0, 0.0, 0.0)
+                                            : (activeCount == 2 ? vec3(0.0, 1.0, 0.0) : vec3(0.0, 0.0, 1.0));
+        gAlbedo = vec4(0.0, 0.0, 0.0, 1.0);
+        gNormal = vec4(normalize(vViewNormal), 1.0);
+        gMaterial = vec4(0.0, 1.0, 0.0, 1.0);
+        gEmissive = vec4(debugColor, 1.0);
+        return;
+    }
+
     bool heightBlendOn = uTerrainQuality != 0;
-    bool antiTiling = uTerrainQuality != 0;
+    bool antiTiling = uAntiTilingOverride >= 0 ? (uAntiTilingOverride == 1) : (uTerrainQuality != 0);
     bool normalsOn = uTerrainQuality == 2 || uNodeLevel < 2;
     float mipBias = uNodeLevel >= 2 ? 1.0 : 0.0;
 

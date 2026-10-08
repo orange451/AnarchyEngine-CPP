@@ -243,6 +243,8 @@ bool Renderer::buildProgram(Program& program, const char* name, const char* vert
     program.hasSurface = at("uHasSurface");
     program.nodeLevel = at("uNodeLevel");
     program.terrainQuality = at("uTerrainQuality");
+    program.antiTilingOverride = at("uAntiTilingOverride");
+    program.projectionDebug = at("uProjectionDebug");
     program.depth = at("uDepth");
     program.albedo = at("uAlbedo");
     program.normal = at("uNormal");
@@ -1526,11 +1528,21 @@ void UploadTerrainLayer(unsigned arrayA, unsigned arrayB, int layerIndex,
 
 namespace {
 std::atomic<bool> gTerrainLodColors{false};
+std::atomic<int> gTerrainAntiTilingOverride{-1};
+std::atomic<bool> gTerrainProjectionDebug{false};
 }  // namespace
 
 void SetTerrainLodColors(bool on) { gTerrainLodColors.store(on, std::memory_order_relaxed); }
 
 bool TerrainLodColors() { return gTerrainLodColors.load(std::memory_order_relaxed); }
+
+void SetTerrainAntiTilingOverride(int value) { gTerrainAntiTilingOverride.store(value, std::memory_order_relaxed); }
+
+int TerrainAntiTilingOverride() { return gTerrainAntiTilingOverride.load(std::memory_order_relaxed); }
+
+void SetTerrainProjectionDebug(bool on) { gTerrainProjectionDebug.store(on, std::memory_order_relaxed); }
+
+bool TerrainProjectionDebug() { return gTerrainProjectionDebug.load(std::memory_order_relaxed); }
 
 // terrain.frag's kLodColors, in the same order.
 const TerrainLodColor kTerrainLodColors[8] = {
@@ -1933,6 +1945,8 @@ bool Renderer::geometryPass(const MeshDraw* meshes, const float* projection) {
         glUniformMatrix4fv(terrain_.view, 1, GL_FALSE, view_.m);
         glUniformMatrix4fv(terrain_.projection, 1, GL_FALSE, projection);
         glUniform1i(terrain_.terrainQuality, static_cast<int>(lighting_.terrainQuality));
+        glUniform1i(terrain_.antiTilingOverride, TerrainAntiTilingOverride());
+        glUniform1i(terrain_.projectionDebug, TerrainProjectionDebug() ? 1 : 0);
         const bool lodColors = TerrainLodColors();
         bool asked = false;
         for (int index = terrainBegin; index < batches_.opaqueRuns; ++index) {

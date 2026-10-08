@@ -29,6 +29,8 @@ struct DrawItem {
     bool terrain = false;
     // An uploaded mesh, and transparency below 1. Anything else draws nothing.
     bool drawable = false;
+    // Shadows only (MeshDraw::shadowOnly): its sphere is found, but it is never visible.
+    bool shadowOnly = false;
 };
 
 // A drawable mesh the camera may see.
@@ -53,9 +55,9 @@ struct VisibilityResult {
 };
 
 // Each drawable item's world sphere and, when cull is set, whether it is in
-// camera's view. With cull false every drawable item is visible. Conservative:
-// an item just past a corner of the view may count as visible; one in view never
-// counts as culled.
+// camera's view. With cull false every drawable item is visible but a
+// shadowOnly one, which is never visible. Conservative: an item just past a
+// corner of the view may count as visible; one in view never counts as culled.
 void FindVisible(const DrawItem* items, int count, const CameraView& camera, bool cull, VisibilityResult& out);
 
 // sphere's radius in pixels as camera sees it: radius * paneHeight /

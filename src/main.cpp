@@ -3,7 +3,9 @@
 #include "jadefx/jadefx.hpp"
 
 #include "Engine.hpp"
+#include "Environment.hpp"
 #include "Project.hpp"
+#include "runner/Renderer.hpp"
 
 #include <filesystem>
 #include <memory>
@@ -26,6 +28,8 @@ namespace {
 class AnarchyEngine : public jadefx::Application {
 public:
     void start(jadefx::Stage& stage, int argc, char** argv) override {
+        // A debug view: ANARCHY_TERRAIN_LOD_COLORS=1 tints terrain by LOD level, read once here.
+        runner::SetTerrainLodColors(engine_core::environment_variable("ANARCHY_TERRAIN_LOD_COLORS").value_or("") == "1");
         const jadefx::Size size = defaultWindowSize();
         // The shell owns the runner, which owns the Lua engine. It has to outlive
         // start(); the scene keeps the widgets, and this member keeps the engine.

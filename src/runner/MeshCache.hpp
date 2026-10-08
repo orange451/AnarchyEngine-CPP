@@ -1,7 +1,7 @@
 #pragma once
 
 #include "amesh.hpp"
-#include "terrain/VoxelChunk.hpp"
+#include "terrain/LodNode.hpp"
 #include "types.hpp"
 
 #include <chrono>
@@ -43,18 +43,32 @@ public:
     // such as those a Stop ended. Call once a frame, after that frame's
     // getSession calls: the uploads they returned stay.
     void sweepSessions();
-    // The upload of one Terrain chunk's mesh (TerrainChunkView::mesh), kept per
-    // (terrain, coord) and uploaded again when revision changes. Static: a
-    // chunk changes only when its voxels are edited. Null for a mesh with no
-    // triangles. Its bounds, which culling reads, are the chunk's own, in the
-    // Terrain's space.
-    const anarchy::amesh::GpuMesh* getTerrainChunk(engine_core::InstanceId terrain,
-                                                  engine_core::terrain::ChunkCoord coord,
-                                                  const anarchy::amesh::Data& data, std::uint64_t revision);
-    // Deletes the chunk uploads no getTerrainChunk asked for since the last
-    // sweep: chunks that emptied, and Terrains that left Workspace. Call once
-    // a frame, after that frame's getTerrainChunk calls.
-    void sweepTerrainChunks();
+    // The upload of one Terrain LOD node's mesh, kept per (terrain, key) and
+    // uploaded again when revision (TerrainNodeView::revision) changes. A
+    // level-0 node's chunk mesh (data) uploads as it is; a coarser node's
+    // compact mesh is unpacked only when its revision is new to the cache,
+    // and the unpacked copy is let go once uploaded. Null for a mesh with no
+    // triangles. Its bounds, which culling reads, are in the Terrain's space.
+    const anarchy::amesh::GpuMesh* getTerrainNode(engine_core::InstanceId terrain,
+                                                 const engine_core::terrain::NodeKey& key,
+                                                 const anarchy::amesh::Data& data, std::uint64_t revision);
+    const anarchy::amesh::GpuMesh* getTerrainNode(engine_core::InstanceId terrain,
+                                                 const engine_core::terrain::NodeKey& key,
+                                                 const engine_core::terrain::CompactMesh& compact,
+                                                 std::uint64_t revision);
+    // Whether the node's upload of revision is held already (uploaded, or found
+    // to have no triangles); if so it counts as asked for, as getTerrainNode
+    // would, so the sweep keeps it. Uploads nothing: for prefetching.
+    bool touchTerrainNode(engine_core::InstanceId terrain, const engine_core::terrain::NodeKey& key,
+                          std::uint64_t revision);
+    // Deletes the node uploads no getTerrainNode (or touchTerrainNode) asked for in the last
+    // kTerrainNodeGraceSeconds by now_seconds (the caller's clock, never
+    // decreasing): nodes no longer drawn, and Terrains that left Workspace.
+    // Call once a frame, after that frame's getTerrainNode calls.
+    void sweepTerrainNodes(double now_seconds);
+    static constexpr double kTerrainNodeGraceSeconds = 5.0;
+    // How many node uploads the cache holds, for tests.
+    std::size_t terrainNodeCount() const { return nodes_.size(); }
     // Deletes every mesh.
     void clear();
 
@@ -75,13 +89,18 @@ private:
         bool asked = false;
     };
 
-    struct ChunkKey {
-        engine_core::InstanceId terrain = 0;
-        engine_core::terrain::ChunkCoord coord;
-        bool operator==(const ChunkKey& other) const { return terrain == other.terrain && coord == other.coord; }
+    struct NodeEntry {
+        SessionEntry upload;
+        // now_seconds at the last sweep that found it asked for.
+        double used = 0.0;
     };
-    struct ChunkKeyHash {
-        std::size_t operator()(const ChunkKey& key) const;
+    struct NodeCacheKey {
+        engine_core::InstanceId terrain = 0;
+        engine_core::terrain::NodeKey key;
+        bool operator==(const NodeCacheKey& other) const { return terrain == other.terrain && key == other.key; }
+    };
+    struct NodeCacheKeyHash {
+        std::size_t operator()(const NodeCacheKey& key) const;
     };
 
     void load(const std::string& path, Entry& entry);
@@ -94,7 +113,7 @@ private:
     std::filesystem::path root_;
     std::unordered_map<std::string, Entry> entries_;
     std::unordered_map<engine_core::InstanceId, SessionEntry> sessions_;
-    std::unordered_map<ChunkKey, SessionEntry, ChunkKeyHash> chunks_;
+    std::unordered_map<NodeCacheKey, NodeEntry, NodeCacheKeyHash> nodes_;
 };
 
 }  // namespace runner

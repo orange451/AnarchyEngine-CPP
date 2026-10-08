@@ -11,6 +11,7 @@
 #include "Terrain.hpp"
 #include "TerrainMaterial.hpp"
 #include "TerrainWorld.hpp"
+#include "terrain/LodBuilder.hpp"
 #include "terrain/SurfaceNets.hpp"
 #include "terrain/TerrainMesher.hpp"
 #include "terrain/VoxelVolume.hpp"
@@ -24,6 +25,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <random>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -387,6 +389,140 @@ TEST_CASE("TM7 the pool meshes every chunk bit-identically to running surface_ne
     }
 }
 
+TEST_CASE("TM8 a queued node job comes back built", "[terrain]") {
+    VoxelVolume volume;
+    REQUIRE_FALSE(volume.fill(ball_at(5.f, 5.f, 5.f, 4.f), 2));
+    const ChunkMesh child_mesh = surface_nets(mesh_input(volume, ChunkCoord{0, 0, 0}));
+    REQUIRE(child_mesh.render != nullptr);
+
+    LodInput input;
+    input.key = NodeKey{1, 0, 0, 0};
+    input.voxel_size = 1.f;
+    input.children = {child_mesh.render};
+
+    TerrainMesher mesher;
+    mesher.queue_node(7, 1, input, 0.f);
+    mesher.wait_idle();
+    std::vector<MeshResult> chunks;
+    std::vector<NodeResult> nodes;
+    mesher.collect(chunks, nodes);
+    REQUIRE(nodes.size() == 1u);
+    REQUIRE(nodes[0].terrain == 7u);
+    REQUIRE(nodes[0].revision == 1u);
+    REQUIRE((nodes[0].key == input.key));
+}
+
+TEST_CASE("TM9 a newer node revision replaces a queued older one", "[terrain]") {
+    LodInput input;
+    input.key = NodeKey{2, 1, 0, 0};
+    TerrainMesher mesher({}, 1);
+    // Same shape as TM4: pause before either queue_node() lands, so both
+    // reach the waiting set deterministically (the replace-in-place path)
+    // rather than racing a worker that might already be running revision 1.
+    mesher.pause_for_test(true);
+    mesher.queue_node(9, 1, input, 0.f);
+    mesher.queue_node(9, 2, input, 0.f);
+    mesher.pause_for_test(false);
+    mesher.wait_idle();
+    std::vector<MeshResult> chunks;
+    std::vector<NodeResult> nodes;
+    mesher.collect(chunks, nodes);
+    REQUIRE(nodes.size() == 1u);
+    REQUIRE(nodes[0].terrain == 9u);
+    REQUIRE(nodes[0].revision == 2u);
+}
+
+TEST_CASE("TM10 node and chunk jobs interleave by distance", "[terrain]") {
+    VoxelVolume volume;   // left empty: chunk jobs just need valid MeshInput, not triangles
+    std::mutex order_mu;
+    std::vector<std::string> order;
+    TerrainMesher mesher(
+        [&](const ChunkMesh&) -> std::shared_ptr<void> {
+            std::lock_guard<std::mutex> lock(order_mu);
+            order.push_back("chunk");
+            return nullptr;
+        },
+        1,
+        [&](const LodInput& in) -> LodResult {
+            std::lock_guard<std::mutex> lock(order_mu);
+            order.push_back("node");
+            LodResult r;
+            r.key = in.key;
+            return r;
+        });
+    mesher.pause_for_test(true);
+    LodInput node_a;
+    node_a.key = NodeKey{1, 0, 0, 0};
+    LodInput node_b;
+    node_b.key = NodeKey{1, 1, 0, 0};
+    mesher.queue_node(1, 1, node_a, 1.f);                                  // nearest
+    mesher.queue_node(1, 1, node_b, 5.f);                                  // 2nd
+    mesher.queue(1, 1, mesh_input(volume, ChunkCoord{0, 0, 0}), 10.f);     // 3rd
+    mesher.queue(1, 1, mesh_input(volume, ChunkCoord{1, 0, 0}), 20.f);     // farthest
+    mesher.pause_for_test(false);
+    mesher.wait_idle();
+    REQUIRE(order == std::vector<std::string>{"node", "node", "chunk", "chunk"});
+}
+
+TEST_CASE("TM11 a node job that throws is dropped and counted", "[terrain]") {
+    // LodBuilder's build_node is written to never throw -- it reports a null
+    // mesh rather than raising on any input tried (empty children, zero
+    // triangles, a fully-collapsed simplification). So, the same way TM6
+    // injects a throw through TerrainMesher's existing BuildCollider hook
+    // rather than adding a new one, this reuses the symmetric BuildNode
+    // constructor hook (added by this task for node jobs, mirroring
+    // BuildCollider) instead of adding a test-only mechanism beyond it.
+    TerrainMesher mesher({}, 0, [](const LodInput&) -> LodResult {
+        throw std::runtime_error("TM11: a deliberately broken node build");
+    });
+    LodInput input;
+    input.key = NodeKey{1, 0, 0, 0};
+    mesher.queue_node(1, 1, input, 0.f);
+    mesher.wait_idle();   // must return: the throw must not wedge the worker or deadlock running_
+    std::vector<MeshResult> chunks;
+    std::vector<NodeResult> nodes;
+    mesher.collect(chunks, nodes);
+    // The failure is reported through collect, so the caller stops waiting on it.
+    REQUIRE(chunks.empty());
+    REQUIRE(nodes.size() == 1u);
+    REQUIRE(nodes[0].failed);
+    REQUIRE(nodes[0].terrain == 1u);
+    REQUIRE(nodes[0].revision == 1u);
+    REQUIRE((nodes[0].key == input.key));
+    REQUIRE(nodes[0].result.mesh == nullptr);
+    REQUIRE(mesher.failure_count() == 1u);
+}
+
+TEST_CASE("TM12 a chunk job that throws comes back through collect(chunks, nodes) flagged failed", "[terrain]") {
+    VoxelVolume volume;
+    REQUIRE_FALSE(volume.fill(ball_at(5.f, 5.f, 5.f, 4.f), 2));
+    TerrainMesher mesher([](const ChunkMesh& mesh) -> std::shared_ptr<void> {
+        if (mesh.triangles.empty()) {
+            return nullptr;
+        }
+        throw std::runtime_error("TM12: a deliberately broken collider build");
+    });
+    mesher.queue(3, 4, mesh_input(volume, ChunkCoord{0, 0, 0}), 0.f);
+    mesher.queue(3, 5, mesh_input(volume, ChunkCoord{5, 5, 5}), 0.f);   // empty: succeeds
+    mesher.wait_idle();
+    std::vector<MeshResult> chunks;
+    std::vector<NodeResult> nodes;
+    mesher.collect(chunks, nodes);
+    REQUIRE(nodes.empty());
+    REQUIRE(chunks.size() == 2u);
+    for (const MeshResult& result : chunks) {
+        REQUIRE(result.terrain == 3u);
+        const bool broken = result.coord == ChunkCoord{0, 0, 0};
+        REQUIRE(result.failed == broken);
+        REQUIRE(result.revision == (broken ? 4u : 5u));
+        if (broken) {
+            REQUIRE(result.mesh.render == nullptr);
+            REQUIRE(result.collider == nullptr);
+        }
+    }
+    REQUIRE(mesher.failure_count() == 1u);
+}
+
 TEST_CASE("SN6 meshing one dense chunk is fast", "[.][terrain-bench]") {
     VoxelVolume volume;
     for (int i = 0; i < 6; ++i) {
@@ -578,10 +714,6 @@ TEST_CASE("TW7 a mesh from a Terrain's previous stay in Workspace is dropped, no
     SimRole role;
     Game game;
     Terrain& t = terrain_in_workspace(game);
-    // Dead center of chunk {0,0,0} (32 studs on a side): radius 4 plus the
-    // 4-cell band stays 8 studs clear of every face, so this is the only
-    // chunk fill() stores, and its 26 neighbors stay pure air.
-    REQUIRE_FALSE(t.edit_volume([&](VoxelVolume& v) { return v.fill(ball_at(16.f, 16.f, 16.f, 4.f), 0); }));
 
     std::mutex gate_mu;
     std::condition_variable gate_cv;
@@ -600,7 +732,18 @@ TEST_CASE("TW7 a mesh from a Terrain's previous stay in Workspace is dropped, no
         },
         1);   // one worker: exactly one job can ever be "running" at a time
 
-    world.update(game);   // first sight: queues the stored chunk and its 26 neighbors
+    // First sight while the volume is still empty queues nothing, so the
+    // record exists with nothing in flight -- the only window in which
+    // set_collider_interest can name a coord before it is ever queued
+    // (Task 8: the mesher's collider builder, and so this blocking hook,
+    // runs only for a job in collider interest).
+    world.update(game);
+    world.set_collider_interest(t.id(), {ChunkCoord{0, 0, 0}});
+    // Dead center of chunk {0,0,0} (32 studs on a side): radius 4 plus the
+    // 4-cell band stays 8 studs clear of every face, so this edit dirties
+    // only that one chunk.
+    REQUIRE_FALSE(t.edit_volume([&](VoxelVolume& v) { return v.fill(ball_at(16.f, 16.f, 16.f, 4.f), 0); }));
+    world.update(game);   // the edit's job, in collider interest: blocks
     {
         std::unique_lock<std::mutex> lock(gate_mu);
         gate_cv.wait(lock, [&] { return blocked; });
@@ -724,6 +867,17 @@ std::size_t chunks_with_triangles(const TerrainWorld& world) {
     return world.views()[0].chunks->size();
 }
 
+// Every coord the one Terrain currently shows a mesh for: Task 8's interest
+// API, called directly as PhysicsWorld would for a body near all of them.
+std::vector<ChunkCoord> meshed_chunk_coords(const TerrainWorld& world) {
+    REQUIRE(world.views().size() == 1u);
+    std::vector<ChunkCoord> coords;
+    for (const TerrainChunkView& chunk : *world.views()[0].chunks) {
+        coords.push_back(chunk.coord);
+    }
+    return coords;
+}
+
 // The revision of the collider TerrainWorld holds for coord, or 0.
 std::uint64_t collider_revision(const TerrainWorld& world, InstanceId terrain, ChunkCoord coord) {
     const auto* colliders = world.colliders(terrain);
@@ -764,17 +918,73 @@ struct TerrainRaycastRig : ScriptRig {
 
 }  // namespace
 
-TEST_CASE("TP1 a Terrain has a static body with a shape per meshed chunk, stopped", "[terrain][physics]") {
+TEST_CASE("TW9 an edit to a chunk already in collider interest always refreshes its collider",
+          "[terrain]") {
+    // Must also fix (Task 7 review): the mesher's per-job collider flag must
+    // follow collider_interest for every kind of job, edits included -- an
+    // edit must not be treated as if it were out of interest (or as if
+    // residency's "not an edit" bit also meant "skip the collider"), and
+    // apply_result must decide the collider write from want_collider, not
+    // from whether the job also marks LOD ancestors stale.
+    SimRole role;
+    Game game;
+    Terrain& t = terrain_in_workspace(game);
+    // A wide-enough slab that a level-1 ancestor exists above chunk
+    // {0, -1, 0} (a single isolated chunk, as TW3 edits, is its own root:
+    // top_level 0, no ancestor to check staleness on).
+    REQUIRE_FALSE(t.edit_volume([&](VoxelVolume& v) { return v.fill(slab(96.f, 8.f), 1); }));
+    TerrainWorld world(PhysicsWorld::build_terrain_collider);
+    settle(world, game);
+    const ChunkCoord coord{0, -1, 0};
+    REQUIRE(world.colliders(t.id()) != nullptr);
+    REQUIRE(world.colliders(t.id())->empty());   // nothing has asked for it yet
+
+    world.set_collider_interest(t.id(), {coord});
+    settle(world, game);
+    const std::uint64_t collider_before = collider_revision(world, t.id(), coord);
+    REQUIRE(collider_before != 0u);
+
+    const terrain::LodTree* tree = world.lod_tree(t.id());
+    REQUIRE(tree != nullptr);
+    const terrain::NodeKey parent = terrain::parent_of(terrain::node_of(coord, 0));
+    const auto* parent_before = tree->find(parent);
+    REQUIRE(parent_before != nullptr);
+    const std::uint64_t ancestor_revision_before = parent_before->revision;
+
+    // An edit well inside the same chunk (8 units clear of its 32-unit
+    // faces), still in collider interest.
+    REQUIRE_FALSE(t.edit_volume([&](VoxelVolume& v) { return v.paint(ball_at(8.f, -4.f, 8.f, 3.f), 2); }));
+    settle(world, game);
+
+    REQUIRE(collider_revision(world, t.id(), coord) != 0u);
+    REQUIRE(collider_revision(world, t.id(), coord) != collider_before);   // refreshed, never skipped
+    const auto* parent_after = tree->find(parent);
+    REQUIRE(parent_after != nullptr);
+    REQUIRE(parent_after->revision != ancestor_revision_before);   // the edit still marked it stale
+}
+
+TEST_CASE("TP1 a Terrain has a static body with a shape per chunk asked for, stopped", "[terrain][physics]") {
+    // Task 8: colliders exist only within collider interest, so with no
+    // dynamic body or PlayerController a meshed Terrain has none at all; the
+    // interest API (set_collider_interest), called directly here the way
+    // PhysicsWorld would for a body near every chunk, is what CS1 and TP2/
+    // TP3/TP5 below also use in place of one.
     PhysicsRig rig;
     Terrain& t = terrain_in_workspace(rig.game);
     REQUIRE_FALSE(t.edit_volume([&](VoxelVolume& v) { return v.fill(ball_at(5.f, 5.f, 5.f, 4.f), 1); }));
     TerrainWorld world(PhysicsWorld::build_terrain_collider);
     rig.physics.set_terrain_world(&world);
     settle(world, rig.game);
-    rig.physics.sync(rig.game);
-    REQUIRE(rig.physics.has_body(t.id()));
     const std::size_t meshed = chunks_with_triangles(world);
     REQUIRE(meshed >= 1u);
+    rig.physics.sync(rig.game);
+    REQUIRE(rig.physics.has_body(t.id()));
+    REQUIRE(world.colliders(t.id())->empty());
+    REQUIRE(rig.physics.shape_count(t.id()) == 0u);
+
+    world.set_collider_interest(t.id(), meshed_chunk_coords(world));
+    settle(world, rig.game);
+    rig.physics.sync(rig.game);
     REQUIRE(world.colliders(t.id())->size() == meshed);
     REQUIRE(rig.physics.shape_count(t.id()) == meshed);
 
@@ -792,8 +1002,12 @@ TEST_CASE("TP2 CanCollide false removes every shape; true brings them back", "[t
     TerrainWorld world(PhysicsWorld::build_terrain_collider);
     rig.physics.set_terrain_world(&world);
     settle(world, rig.game);
-    rig.physics.sync(rig.game);
     const std::size_t meshed = chunks_with_triangles(world);
+    // Task 8's interest API, as PhysicsWorld would call it for a body near
+    // every meshed chunk.
+    world.set_collider_interest(t.id(), meshed_chunk_coords(world));
+    settle(world, rig.game);
+    rig.physics.sync(rig.game);
     REQUIRE(rig.physics.shape_count(t.id()) == meshed);
     const Vec3 origin{3.f, 10.f, 3.f};
     const Vec3 down{0.f, -20.f, 0.f};
@@ -807,6 +1021,9 @@ TEST_CASE("TP2 CanCollide false removes every shape; true brings them back", "[t
     REQUIRE_FALSE(rig.physics.raycast(rig.game, origin, down, {}).has_value());
 
     REQUIRE_FALSE(t.set_can_collide(true));
+    // CanCollide false let collider interest lapse (update_collider_interest):
+    // ask again, as a body that stayed near it the whole time would have.
+    world.set_collider_interest(t.id(), meshed_chunk_coords(world));
     settle(world, rig.game);
     rig.physics.sync(rig.game);
     REQUIRE(rig.physics.shape_count(t.id()) == meshed);
@@ -825,6 +1042,8 @@ TEST_CASE("TP3 a ray hits the terrain and reports its TerrainMaterial's Material
         TerrainWorld world(PhysicsWorld::build_terrain_collider);
         rig.physics.set_terrain_world(&world);
         settle(world, rig.game);
+        world.set_collider_interest(t.id(), meshed_chunk_coords(world));
+        settle(world, rig.game);
         const auto hit = rig.physics.raycast(rig.game, Vec3{0.f, 10.f, 0.f}, Vec3{0.f, -20.f, 0.f}, {});
         REQUIRE(hit.has_value());
         REQUIRE(hit->instance == t.id());
@@ -839,6 +1058,8 @@ TEST_CASE("TP3 a ray hits the terrain and reports its TerrainMaterial's Material
         TerrainMaterial* entry = nullptr;
         REQUIRE_FALSE(t.add_material(rock.id(), entry));
         REQUIRE_FALSE(t.edit_volume([&](VoxelVolume& v) { return v.fill(slab(16.f, 8.f), 1); }));
+        settle(rig.world, rig.game);
+        rig.world.set_collider_interest(t.id(), meshed_chunk_coords(rig.world));
         settle(rig.world, rig.game);
         const std::string out = rig.run(R"(
             local r = workspace:Raycast(Vector3.new(0, 10, 0), Vector3.new(0, -20, 0))
@@ -900,10 +1121,14 @@ TEST_CASE("TP5 a Terrain's body survives a play then Stop round trip", "[terrain
     TerrainWorld world(PhysicsWorld::build_terrain_collider);
     rig.physics.set_terrain_world(&world);
     settle(world, rig.game);
-    rig.physics.sync(rig.game);
-    REQUIRE(rig.physics.has_body(t.id()));
     const std::size_t meshed = chunks_with_triangles(world);
     REQUIRE(meshed >= 1u);
+    // Task 8's interest API, as PhysicsWorld would call it for a body near
+    // every meshed chunk.
+    world.set_collider_interest(t.id(), meshed_chunk_coords(world));
+    settle(world, rig.game);
+    rig.physics.sync(rig.game);
+    REQUIRE(rig.physics.has_body(t.id()));
     REQUIRE(rig.physics.shape_count(t.id()) == meshed);
 
     rig.play();
@@ -929,6 +1154,243 @@ TEST_CASE("TP5 a Terrain's body survives a play then Stop round trip", "[terrain
     const auto hit = rig.physics.raycast(rig.game, origin, down, {});
     REQUIRE(hit.has_value());
     REQUIRE(hit->instance == t.id());
+}
+
+TEST_CASE("CS1 with no dynamic bodies, a settled island has zero chunk shapes", "[terrain][physics]") {
+    PhysicsRig rig;
+    Terrain& t = terrain_in_workspace(rig.game);
+    REQUIRE_FALSE(t.edit_volume([&](VoxelVolume& v) { return v.fill(slab(48.f, 8.f), 1); }));
+    TerrainWorld world(PhysicsWorld::build_terrain_collider);
+    rig.physics.set_terrain_world(&world);
+    settle(world, rig.game);
+    REQUIRE(chunks_with_triangles(world) >= 1u);
+    rig.physics.sync(rig.game);
+    REQUIRE(rig.physics.has_body(t.id()));
+    REQUIRE(rig.physics.shape_count(t.id()) == 0u);
+    REQUIRE(world.colliders(t.id())->empty());
+
+    // Playing changes nothing: nothing ever asks for a collider.
+    rig.play();
+    for (int i = 0; i < 8; ++i) {
+        world.update(rig.game);
+        rig.physics.step(rig.game, physics_rig::kStep);
+    }
+    REQUIRE(rig.physics.shape_count(t.id()) == 0u);
+}
+
+TEST_CASE("CS2 a box dropped on bare terrain no camera or edit has ever touched gets colliders "
+          "under it in the same sync and lands",
+          "[terrain][physics]") {
+    using physics_rig::at;
+    using physics_rig::kStep;
+    using physics_rig::near;
+    using physics_rig::y_of;
+    PhysicsRig rig;
+    Terrain& t = terrain_in_workspace(rig.game);
+    // Far from the origin: nothing (no camera, no prior edit) has ever asked
+    // TerrainWorld to mesh this area before the box arrives.
+    const float cx = 2048.f, cz = 2048.f;
+    Shape far_slab;
+    far_slab.kind = Shape::Kind::Block;
+    far_slab.frame = matrix4_translation(cx, -4.f, cz);
+    far_slab.size = Vec3{48.f, 8.f, 48.f};
+    REQUIRE_FALSE(t.edit_volume([&](VoxelVolume& v) { return v.fill(far_slab, 1); }));
+    TerrainWorld world(PhysicsWorld::build_terrain_collider);
+    rig.physics.set_terrain_world(&world);
+    settle(world, rig.game);
+    rig.physics.sync(rig.game);
+    REQUIRE(rig.physics.shape_count(t.id()) == 0u);   // no body yet: nothing asked for one
+
+    rig.play();
+    PhysicsObject& box = rig.body(at(cx, 3.f, cz), Vec3{1.f, 1.f, 1.f}, false);
+    // The no-fall-through rule: built right here, before Box3D steps, in
+    // this very sync -- not a frame later through the job queue.
+    rig.physics.sync(rig.game);
+    REQUIRE(rig.physics.shape_count(t.id()) >= 1u);
+
+    const auto frames = [&](int count) {
+        for (int frame = 0; frame < count; ++frame) {
+            world.update(rig.game);
+            for (int step = 0; step < 4; ++step) {
+                rig.physics.step(rig.game, kStep);
+            }
+        }
+    };
+    frames(120);   // 2 s
+    INFO(y_of(box.transform()));
+    REQUIRE(near(y_of(box.transform()), 0.5f, 0.05f));   // at rest on the slab, not through it
+}
+
+TEST_CASE("CS3 colliders follow a moving body, stay bounded, and release 5 s after it leaves",
+          "[terrain][physics]") {
+    using physics_rig::at;
+    PhysicsRig rig;
+    Terrain& t = terrain_in_workspace(rig.game);
+    // A long, 1-chunk-wide strip (32 chunks along x): far more total chunks
+    // than fit in one body's kColliderChunks box, so "bounded" is a real test.
+    Shape strip;
+    strip.kind = Shape::Kind::Block;
+    strip.frame = matrix4_translation(512.f, -4.f, 16.f);
+    strip.size = Vec3{1024.f, 8.f, 32.f};
+    REQUIRE_FALSE(t.edit_volume([&](VoxelVolume& v) { return v.fill(strip, 1); }));
+    TerrainWorld world(PhysicsWorld::build_terrain_collider);
+    rig.physics.set_terrain_world(&world);
+    settle(world, rig.game);
+    const std::size_t total_meshed = chunks_with_triangles(world);
+    REQUIRE(total_meshed >= 30u);
+
+    double now_ms = 0.0;
+    rig.play();
+    PhysicsObject& box = rig.body(at(16.f, 3.f, 16.f), Vec3{1.f, 1.f, 1.f}, false);
+    rig.physics.sync(rig.game);         // asks for colliders around x = 16
+    world.update(rig.game, now_ms);     // builds the ones the job queue owes
+    world.wait_idle();
+    world.update(rig.game, now_ms);
+    rig.physics.sync(rig.game);
+
+    // The slab's top face belongs to the chunk below y = 0 (as TP4 notes).
+    const ChunkCoord near_start{0, -1, 0};
+    REQUIRE(collider_revision(world, t.id(), near_start) != 0u);
+    const std::size_t near_shapes = rig.physics.shape_count(t.id());
+    REQUIRE(near_shapes > 0u);
+    REQUIRE(near_shapes < total_meshed / 2);   // bounded: nowhere near every chunk
+
+    // Move far down the strip.
+    REQUIRE_FALSE(box.set_transform(at(624.f, 3.f, 16.f)));
+    now_ms += 100.0;
+    rig.physics.sync(rig.game);         // asks for colliders around x = 624 now
+    world.update(rig.game, now_ms);
+    world.wait_idle();
+    world.update(rig.game, now_ms);
+    rig.physics.sync(rig.game);
+
+    const ChunkCoord near_end{19, -1, 0};
+    REQUIRE(collider_revision(world, t.id(), near_end) != 0u);
+    REQUIRE(rig.physics.shape_count(t.id()) < total_meshed / 2);   // still bounded
+    // The old spot's collider stays: the body left less than 5 s ago.
+    REQUIRE(collider_revision(world, t.id(), near_start) != 0u);
+
+    // 5 s after the body left it, it is gone.
+    now_ms += 5001.0;
+    rig.physics.sync(rig.game);         // still only asks around x = 624
+    world.update(rig.game, now_ms);     // releases what has not been asked for since
+    rig.physics.sync(rig.game);
+    REQUIRE(collider_revision(world, t.id(), near_start) == 0u);
+    REQUIRE(collider_revision(world, t.id(), near_end) != 0u);
+}
+
+TEST_CASE("CS4 a PlayerController walking across chunk boundaries keeps ground under it, no fall-through over 30 s",
+          "[terrain][physics]") {
+    using physics_rig::at;
+    using physics_rig::kStep;
+    using physics_rig::x_of;
+    using physics_rig::y_of;
+    PhysicsRig rig;
+    Terrain& t = terrain_in_workspace(rig.game);
+    Shape strip;
+    strip.kind = Shape::Kind::Block;
+    strip.frame = matrix4_translation(160.f, -4.f, 4.f);
+    strip.size = Vec3{320.f, 8.f, 8.f};
+    REQUIRE_FALSE(t.edit_volume([&](VoxelVolume& v) { return v.fill(strip, 1); }));
+    TerrainWorld world(PhysicsWorld::build_terrain_collider);
+    rig.physics.set_terrain_world(&world);
+    settle(world, rig.game);
+
+    rig.play();
+    PlayerController& c = rig.controller(at(4.f, 0.5f, 4.f));
+    const auto frame = [&] {
+        world.update(rig.game);
+        for (int step = 0; step < 4; ++step) {
+            rig.physics.step(rig.game, kStep);
+        }
+    };
+    for (int i = 0; i < 60; ++i) frame();   // 1 s to settle before walking
+    REQUIRE(c.on_ground());
+
+    // Tracks the deepest it ever gets, rather than failing on the first
+    // step past some fixed line: a hover's own small settle each time a
+    // chunk's shape is remade is not the fall-through this guards against,
+    // only a sustained drop (never recovering) is.
+    const int walk_frames = static_cast<int>(30.0 / (4.0 * kStep) + 0.5);
+    float min_y = 0.f;
+    for (int i = 0; i < walk_frames; ++i) {
+        world.update(rig.game);
+        for (int step = 0; step < 4; ++step) {
+            REQUIRE_FALSE(c.set_velocity(Vec3{10.f, c.velocity().y, 0.f}));
+            rig.physics.step(rig.game, kStep);
+            min_y = std::min(min_y, y_of(c.transform()));
+        }
+    }
+    INFO(x_of(c.transform()) << " " << y_of(c.transform()) << " min_y=" << min_y);
+    REQUIRE(x_of(c.transform()) > 100.f);   // it actually crossed several chunk boundaries
+    REQUIRE(c.on_ground());
+    REQUIRE(min_y > -3.f);
+}
+
+namespace {
+
+// A long strip 1 chunk wide (x 0..1024, z 0..32, top at y = 0), as CS3 uses.
+void fill_collider_strip(Terrain& t) {
+    Shape strip;
+    strip.kind = Shape::Kind::Block;
+    strip.frame = matrix4_translation(512.f, -4.f, 16.f);
+    strip.size = Vec3{1024.f, 8.f, 32.f};
+    REQUIRE_FALSE(t.edit_volume([&](VoxelVolume& v) { return v.fill(strip, 1); }));
+}
+
+}  // namespace
+
+TEST_CASE("CS5 a resting body's collider interest settles: no chunk is meshed again once its collider is known",
+          "[terrain][physics]") {
+    using physics_rig::at;
+    PhysicsRig rig;
+    Terrain& t = terrain_in_workspace(rig.game);
+    fill_collider_strip(t);
+    TerrainWorld world(PhysicsWorld::build_terrain_collider);
+    rig.physics.set_terrain_world(&world);
+    settle(world, rig.game);
+
+    double now_ms = 0.0;
+    rig.play();
+    rig.body(at(16.f, 3.f, 16.f), Vec3{1.f, 1.f, 1.f}, false);
+    const auto round = [&] {
+        rig.physics.sync(rig.game);
+        world.update(rig.game, now_ms);
+        world.wait_idle();
+        world.update(rig.game, now_ms);
+    };
+    for (int i = 0; i < 4; ++i) round();   // every chunk around it known by now
+    REQUIRE(collider_revision(world, t.id(), ChunkCoord{0, -1, 0}) != 0u);
+
+    // Most of the kColliderChunks box around the body is empty (air, or
+    // solid below the strip): such a chunk has no collider to keep, but once
+    // meshed for interest it is known, not meshed again every update.
+    const std::uint64_t meshed = world.meshed_count();
+    for (int i = 0; i < 10; ++i) round();
+    REQUIRE(world.meshed_count() == meshed);
+}
+
+TEST_CASE("CS6 a body moved next to a chunk with a collider still gets its own chunk's collider in the same sync",
+          "[terrain][physics]") {
+    using physics_rig::at;
+    PhysicsRig rig;
+    Terrain& t = terrain_in_workspace(rig.game);
+    fill_collider_strip(t);
+    TerrainWorld world(PhysicsWorld::build_terrain_collider);
+    rig.physics.set_terrain_world(&world);
+    settle(world, rig.game);
+
+    rig.play();
+    PhysicsObject& box = rig.body(at(16.f, 3.f, 16.f), Vec3{1.f, 1.f, 1.f}, false);
+    rig.physics.sync(rig.game);   // builds the chunks around x = 16 right here
+    REQUIRE(collider_revision(world, t.id(), ChunkCoord{0, -1, 0}) != 0u);
+
+    // Into chunk 4 (x 128..160), with no update() in between, so nothing
+    // queued for it could have landed: whatever the neighbors hold, the
+    // chunk under the body must be built in this sync, before Box3D steps.
+    REQUIRE_FALSE(box.set_transform(at(144.f, 3.f, 16.f)));
+    rig.physics.sync(rig.game);
+    REQUIRE(collider_revision(world, t.id(), ChunkCoord{4, -1, 0}) != 0u);
 }
 
 namespace {
@@ -1034,4 +1496,424 @@ TEST_CASE("TL2 during play, digging under a resting box drops it", "[terrain][ph
     REQUIRE_FALSE(rig.physics.raycast(rig.game, Vec3{4.f, 10.f, 4.f}, Vec3{0.f, -20.f, 0.f}, {}).has_value());
     INFO(y_of(box.transform()));
     REQUIRE(y_of(box.transform()) < -10.f);
+}
+
+// Task 9: workspace:Raycast (PhysicsWorld::raycast) must ray-march a
+// Terrain's voxel distance field over any chunk PhysicsWorld holds no
+// collider for, so a Raycast hits terrain at any distance and gives the
+// same answer whether or not colliders are loaded where it hits.
+
+namespace {
+
+// What RM1 and RM6 compare between two collider states.
+struct RayResult {
+    bool hit = false;
+    InstanceId instance = 0;
+    bool has_material = false;
+    std::uint8_t material = 0;
+    Vec3 position{};
+    Vec3 normal{};
+};
+
+constexpr float kDegreesToRadians = 3.14159265f / 180.f;
+
+std::vector<RayResult> cast_rays(PhysicsRig& rig, const std::vector<Vec3>& origins,
+                                 const std::vector<Vec3>& directions) {
+    std::vector<RayResult> results;
+    results.reserve(origins.size());
+    for (std::size_t i = 0; i < origins.size(); ++i) {
+        RayResult r;
+        if (const auto hit = rig.physics.raycast(rig.game, origins[i], directions[i], {})) {
+            r.hit = true;
+            r.instance = hit->instance;
+            r.has_material = hit->has_material;
+            r.material = hit->material;
+            r.position = hit->position;
+            r.normal = hit->normal;
+        }
+        results.push_back(r);
+    }
+    return results;
+}
+
+// The same hits: instance, material, position within 0.05 x VoxelSize (the
+// spec's own bound), and normals within kNormalParity of each other. A
+// collider's normal is its hit triangle's face normal; the march's is the
+// normalized central-difference gradient of the trilinear field. On the
+// planar surfaces RM1 and RM6 use, SurfaceNets puts every vertex on the
+// plane and the gradient of a trilinear blend of a linear field is that
+// plane's normal, so both are exact but for the stored distances' int8
+// steps (4/127 of a cell, about 0.03): half a step moves a triangle's
+// corners or the gradient's samples a degree or two over a one-cell edge or
+// a two-cell difference. 0.98 (about 11 degrees) leaves room for that
+// without letting a hit on the wrong side or the wrong surface through.
+constexpr float kNormalParity = 0.98f;
+
+// Under 10 degrees to the surface, a ray is grazing: the collider's
+// triangles and the march's trilinear zero sit a few hundredths of a cell
+// apart even on a plane (the int8 steps again), and a ray at angle a
+// meets two surfaces that far apart 1 / sin(a) times further apart along
+// itself -- about 0.15 units at 3 degrees for 0.007 units off the plane. So
+// for a grazing ray the 0.05 x VoxelSize bound applies along the normal,
+// and along the ray it is that bound over sin(a).
+const float kGrazingSine = std::sin(10.f * kDegreesToRadians);
+
+void require_same_hits(const std::vector<RayResult>& expected, const std::vector<RayResult>& actual,
+                       const std::vector<Vec3>& origins, const std::vector<Vec3>& directions, float voxel_size) {
+    REQUIRE(expected.size() == actual.size());
+    REQUIRE(origins.size() == expected.size());
+    REQUIRE(directions.size() == expected.size());
+    const float tolerance = 0.05f * voxel_size;
+    for (std::size_t i = 0; i < expected.size(); ++i) {
+        const RayResult& a = expected[i];
+        const RayResult& b = actual[i];
+        INFO("from (" << origins[i].x << ", " << origins[i].y << ", " << origins[i].z << ") along (" << directions[i].x
+                      << ", " << directions[i].y << ", " << directions[i].z << ")");
+        INFO("ray " << i << ": (" << a.position.x << ", " << a.position.y << ", " << a.position.z << ") vs ("
+                    << b.position.x << ", " << b.position.y << ", " << b.position.z << ")");
+        INFO("normals (" << a.normal.x << ", " << a.normal.y << ", " << a.normal.z << ") vs (" << b.normal.x
+                         << ", " << b.normal.y << ", " << b.normal.z << ")");
+        REQUIRE(a.hit == b.hit);
+        REQUIRE(a.instance == b.instance);
+        REQUIRE(a.has_material == b.has_material);
+        REQUIRE(a.material == b.material);
+        const Vec3 d = directions[i];
+        const float d_length = std::sqrt(d.x * d.x + d.y * d.y + d.z * d.z);
+        const float sine = std::fabs(d.x * a.normal.x + d.y * a.normal.y + d.z * a.normal.z) / d_length;
+        if (sine >= kGrazingSine) {
+            REQUIRE(std::fabs(a.position.x - b.position.x) <= tolerance);
+            REQUIRE(std::fabs(a.position.y - b.position.y) <= tolerance);
+            REQUIRE(std::fabs(a.position.z - b.position.z) <= tolerance);
+        } else {
+            // Grazing: the two surfaces within tolerance of each other
+            // along the normal, and so the hits within tolerance / sine
+            // along the ray.
+            const Vec3 apart{b.position.x - a.position.x, b.position.y - a.position.y, b.position.z - a.position.z};
+            const float off_surface = apart.x * a.normal.x + apart.y * a.normal.y + apart.z * a.normal.z;
+            const float distance = std::sqrt(apart.x * apart.x + apart.y * apart.y + apart.z * apart.z);
+            INFO("grazing, sine " << sine);
+            REQUIRE(std::fabs(off_surface) <= tolerance);
+            REQUIRE(distance <= tolerance / sine);
+        }
+        const float dot = a.normal.x * b.normal.x + a.normal.y * b.normal.y + a.normal.z * b.normal.z;
+        REQUIRE(dot >= kNormalParity);
+    }
+}
+
+// A ray from height h above a plane with unit normal up, heading along the
+// plane at a random azimuth and angle below it, reaching 4 units past
+// where it meets the plane.
+Vec3 ray_into_plane(std::mt19937_64& random, Vec3 up, float h, float angle) {
+    std::uniform_real_distribution<float> azimuth(0.f, 6.2831853f);
+    const float phi = azimuth(random);
+    Vec3 along{std::cos(phi), 0.f, std::sin(phi)};
+    const float into = along.x * up.x + along.y * up.y + along.z * up.z;
+    along = Vec3{along.x - up.x * into, along.y - up.y * into, along.z - up.z * into};
+    const float along_length = std::sqrt(along.x * along.x + along.y * along.y + along.z * along.z);
+    const float reach = h / std::sin(angle) + 4.f;
+    const float c = std::cos(angle) * reach / along_length;
+    const float s = std::sin(angle) * reach;
+    return Vec3{along.x * c - up.x * s, along.y * c - up.y * s, along.z * c - up.z * s};
+}
+
+// A grazing ray: 2 to 5 degrees below the plane.
+Vec3 grazing_ray(std::mt19937_64& random, Vec3 up, float h) {
+    std::uniform_real_distribution<float> angle(2.f, 5.f);
+    return ray_into_plane(random, up, h, angle(random) * kDegreesToRadians);
+}
+
+}  // namespace
+
+TEST_CASE("RM1 a raycast at a settled island returns the same instance, material, position, and normal "
+          "whether colliders are loaded everywhere or not loaded at all",
+          "[terrain][physics]") {
+    PhysicsRig rig;
+    Terrain& t = terrain_in_workspace(rig.game);
+    Material& rock = add_material_asset(rig.game, "Rock");
+    TerrainMaterial* entry = nullptr;
+    REQUIRE_FALSE(t.add_material(rock.id(), entry));
+    REQUIRE_FALSE(t.edit_volume([&](VoxelVolume& v) { return v.fill(slab(96.f, 8.f), 1); }));
+    TerrainWorld world(PhysicsWorld::build_terrain_collider);
+    rig.physics.set_terrain_world(&world);
+    // An explicit, controlled clock throughout (CS3's own pattern), not
+    // settle()'s real one: the "no colliders" phase below fast-forwards
+    // past the 5 s release grace, which a real clock would have to wait out.
+    double now_ms = 0.0;
+    const auto settle_now = [&] {
+        for (int i = 0; i < 4; ++i) {
+            world.update(rig.game, now_ms);
+            world.wait_idle();
+        }
+        world.update(rig.game, now_ms);
+    };
+    settle_now();
+
+    // 200 rays from above, mostly straight down but tilted enough to cross
+    // several voxel cells at an angle, all landing well clear of the slab's
+    // edges (it spans -48..48 on x and z).
+    std::mt19937_64 random(7);
+    std::uniform_real_distribution<float> plane(-40.f, 40.f);
+    std::uniform_real_distribution<float> tilt(-6.f, 6.f);
+    constexpr int kRays = 200;
+    std::vector<Vec3> origins;
+    std::vector<Vec3> directions;
+    for (int i = 0; i < kRays; ++i) {
+        origins.push_back(Vec3{plane(random), 10.f, plane(random)});
+        directions.push_back(Vec3{tilt(random), -20.f, tilt(random)});
+    }
+    // And 20 grazing rays, 2 to 5 degrees below the slab's top, starting
+    // half a unit above it.
+    std::uniform_real_distribution<float> near_middle(-25.f, 25.f);
+    for (int i = 0; i < 20; ++i) {
+        const Vec3 origin{near_middle(random), 0.5f, near_middle(random)};
+        origins.push_back(origin);
+        directions.push_back(grazing_ray(random, Vec3{0.f, 1.f, 0.f}, 0.5f));
+    }
+
+    // Colliders loaded everywhere: force interest over the whole island.
+    world.set_collider_interest(t.id(), meshed_chunk_coords(world));
+    settle_now();
+    rig.physics.sync(rig.game);
+    REQUIRE(rig.physics.shape_count(t.id()) == chunks_with_triangles(world));
+    const std::vector<RayResult> with_colliders = cast_rays(rig, origins, directions);
+    REQUIRE(std::all_of(with_colliders.begin(), with_colliders.end(), [](const RayResult& r) { return r.hit; }));
+
+    // No colliders loaded anywhere: drop interest, and fast-forward the
+    // clock past the 5 s release grace.
+    world.set_collider_interest(t.id(), {});
+    now_ms += 5001.0;
+    settle_now();
+    rig.physics.sync(rig.game);
+    REQUIRE(rig.physics.shape_count(t.id()) == 0u);
+    const std::vector<RayResult> without_colliders = cast_rays(rig, origins, directions);
+
+    require_same_hits(with_colliders, without_colliders, origins, directions, static_cast<float>(t.voxel_size()));
+}
+
+TEST_CASE("RM6 with colliders loaded around only some chunks, oblique and grazing rays across collided and "
+          "uncollided chunks hit exactly where they would with colliders everywhere",
+          "[terrain][physics]") {
+    PhysicsRig rig;
+    Terrain& t = terrain_in_workspace(rig.game);
+    Material& rock = add_material_asset(rig.game, "Rock");
+    TerrainMaterial* entry = nullptr;
+    REQUIRE_FALSE(t.add_material(rock.id(), entry));
+    // A tilted slab, its top a plane through the origin, so the surface
+    // crosses chunk borders on every axis at an angle and its normal is
+    // no axis.
+    const Matrix4 rotation = matrix4_axis_angle(Vec3{1.f, 0.f, 0.6f}, 12.f * kDegreesToRadians);
+    const Vec3 up = matrix4_vector(rotation, Vec3{0.f, 1.f, 0.f});
+    Shape tilted;
+    tilted.kind = Shape::Kind::Block;
+    tilted.frame = rotation;
+    tilted.frame.m[12] = -4.f * up.x;
+    tilted.frame.m[13] = -4.f * up.y;
+    tilted.frame.m[14] = -4.f * up.z;
+    tilted.size = Vec3{200.f, 8.f, 200.f};
+    REQUIRE_FALSE(t.edit_volume([&](VoxelVolume& v) { return v.fill(tilted, 1); }));
+    TerrainWorld world(PhysicsWorld::build_terrain_collider);
+    rig.physics.set_terrain_world(&world);
+    double now_ms = 0.0;
+    const auto settle_now = [&] {
+        for (int i = 0; i < 4; ++i) {
+            world.update(rig.game, now_ms);
+            world.wait_idle();
+        }
+        world.update(rig.game, now_ms);
+    };
+    settle_now();
+
+    // Rays starting just above the plane over x, z in [0, 64), heading
+    // outward at every azimuth and 2 to 60 degrees below the plane: they
+    // cross out of the collided columns below through faces, edges and
+    // corners into uncollided neighbours, and back. A quarter are grazing
+    // (2 to 5 degrees).
+    std::mt19937_64 random(11);
+    std::uniform_real_distribution<float> over(0.f, 64.f);
+    std::uniform_real_distribution<float> steep(5.f, 60.f);
+    std::uniform_real_distribution<float> height(0.3f, 3.f);
+    std::vector<Vec3> origins;
+    std::vector<Vec3> directions;
+    for (int i = 0; i < 400; ++i) {
+        const float x = over(random), z = over(random);
+        const float y = -(up.x * x + up.z * z) / up.y;   // on the plane
+        const bool grazing = i % 4 == 0;
+        const float h = grazing ? 0.3f + 0.7f * height(random) / 3.f : height(random);   // grazing: under 1 unit up
+        origins.push_back(Vec3{x + up.x * h, y + up.y * h, z + up.z * h});
+        directions.push_back(grazing ? grazing_ray(random, up, h)
+                                     : ray_into_plane(random, up, h, steep(random) * kDegreesToRadians));
+    }
+
+    // Colliders everywhere: the reference answers.
+    world.set_collider_interest(t.id(), meshed_chunk_coords(world));
+    settle_now();
+    rig.physics.sync(rig.game);
+    REQUIRE(rig.physics.shape_count(t.id()) == chunks_with_triangles(world));
+    const std::vector<RayResult> everywhere = cast_rays(rig, origins, directions);
+    REQUIRE(std::all_of(everywhere.begin(), everywhere.end(),
+                        [&](const RayResult& r) { return r.hit && r.instance == t.id(); }));
+
+    // Colliders only in the columns x, z = (0, 0) and (1, 1), diagonal
+    // neighbours sharing one vertical edge; every other chunk has none
+    // once the 5 s grace has passed.
+    std::vector<ChunkCoord> some;
+    for (const ChunkCoord& coord : meshed_chunk_coords(world)) {
+        if ((coord.x == 0 && coord.z == 0) || (coord.x == 1 && coord.z == 1)) {
+            some.push_back(coord);
+        }
+    }
+    REQUIRE(!some.empty());
+    world.set_collider_interest(t.id(), some);
+    now_ms += 5001.0;
+    settle_now();
+    rig.physics.sync(rig.game);
+    REQUIRE(rig.physics.shape_count(t.id()) == some.size());
+    const std::vector<RayResult> mixed = cast_rays(rig, origins, directions);
+
+    require_same_hits(everywhere, mixed, origins, directions, static_cast<float>(t.voxel_size()));
+}
+
+TEST_CASE("RM2 a ray toward terrain hits a part in front of it, not the march behind the part",
+          "[terrain][physics]") {
+    using physics_rig::at;
+    PhysicsRig rig;
+    Terrain& t = terrain_in_workspace(rig.game);
+    REQUIRE_FALSE(t.edit_volume([&](VoxelVolume& v) { return v.fill(slab(48.f, 8.f), 1); }));
+    TerrainWorld world(PhysicsWorld::build_terrain_collider);
+    rig.physics.set_terrain_world(&world);
+    settle(world, rig.game);
+    // No collider interest anywhere: the terrain's own surface, at y = 0, is
+    // reached only through the march.
+    rig.physics.sync(rig.game);
+    REQUIRE(rig.physics.shape_count(t.id()) == 0u);
+
+    PhysicsObject& part = rig.body(at(8.f, 4.f, 8.f), Vec3{2.f, 2.f, 2.f}, true);   // spans y in [3, 5]
+    rig.physics.sync(rig.game);
+
+    const auto hit = rig.physics.raycast(rig.game, Vec3{8.f, 10.f, 8.f}, Vec3{0.f, -20.f, 0.f}, {});
+    REQUIRE(hit.has_value());
+    REQUIRE(hit->instance == part.id());
+    REQUIRE_FALSE(hit->has_material);
+    REQUIRE(hit->position.y > 4.f);   // the part's top, well above the terrain's y = 0
+}
+
+TEST_CASE("RM3 a CanCollide false Terrain is never hit by the march", "[terrain][physics]") {
+    PhysicsRig rig;
+    Terrain& t = terrain_in_workspace(rig.game);
+    REQUIRE_FALSE(t.edit_volume([&](VoxelVolume& v) { return v.fill(slab(48.f, 8.f), 1); }));
+    REQUIRE_FALSE(t.set_can_collide(false));
+    TerrainWorld world(PhysicsWorld::build_terrain_collider);
+    rig.physics.set_terrain_world(&world);
+    settle(world, rig.game);
+    rig.physics.sync(rig.game);
+    REQUIRE(rig.physics.shape_count(t.id()) == 0u);
+
+    REQUIRE_FALSE(rig.physics.raycast(rig.game, Vec3{8.f, 10.f, 8.f}, Vec3{0.f, -20.f, 0.f}, {}).has_value());
+}
+
+TEST_CASE("RM4 a 2 km ray across an island with no colliders marches fast", "[.][terrain-bench]") {
+    PhysicsRig rig;
+    Terrain& t = terrain_in_workspace(rig.game);
+    REQUIRE_FALSE(t.edit_volume([&](VoxelVolume& v) { return v.fill(slab(96.f, 8.f), 1); }));
+    TerrainWorld world(PhysicsWorld::build_terrain_collider);
+    rig.physics.set_terrain_world(&world);
+    settle(world, rig.game);
+    rig.physics.sync(rig.game);
+    REQUIRE(rig.physics.shape_count(t.id()) == 0u);   // no colliders anywhere
+
+    const Vec3 origin{-1000.f, 10.f, 0.f};
+    const Vec3 direction{2000.f, -20.f, 0.f};   // 2 km across, crossing the island's surface at its middle
+    REQUIRE(rig.physics.raycast(rig.game, origin, direction, {}).has_value());   // sanity: it does hit
+
+    constexpr int kIterations = 50;
+    const auto start = std::chrono::steady_clock::now();
+    for (int i = 0; i < kIterations; ++i) {
+        (void)rig.physics.raycast(rig.game, origin, direction, {});
+    }
+    const double ms =
+        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count() / kIterations;
+    WARN("RM4: " << ms << " ms per ray");
+    REQUIRE(ms < 0.2);
+}
+
+TEST_CASE("RM4b a 2 km ray across a 4,096-chunk island with no colliders marches fast", "[.][terrain-bench]") {
+    // Final review: the march's bounds came from a scan of every stored
+    // chunk on every raycast; on a large island that scan dominated.
+    PhysicsRig rig;
+    Terrain& t = terrain_in_workspace(rig.game);
+    // A 2,048 x 8 x 2,048 slab (64 x 64 chunks across, like LB8's island),
+    // its top at y = 0, filled in strips so no edit passes kMaxCellsPerEdit.
+    for (int strip = 0; strip < 8; ++strip) {
+        Shape s;
+        s.kind = Shape::Kind::Block;
+        s.frame = matrix4_translation(0.f, -4.f, -1024.f + 128.f + 256.f * static_cast<float>(strip));
+        s.size = Vec3{2048.f, 8.f, 256.f};
+        REQUIRE_FALSE(t.edit_volume([&](VoxelVolume& v) { return v.fill(s, 1); }));
+    }
+    TerrainWorld world(PhysicsWorld::build_terrain_collider);
+    rig.physics.set_terrain_world(&world);
+    settle(world, rig.game);
+    rig.physics.sync(rig.game);
+    REQUIRE(rig.physics.shape_count(t.id()) == 0u);   // no colliders anywhere
+    REQUIRE(t.volume().chunks().size() >= 4096u);
+
+    const Vec3 origin{-1000.f, 10.f, 0.f};
+    const Vec3 direction{2000.f, -20.f, 0.f};   // 2 km, crossing the slab's top at its middle
+    REQUIRE(rig.physics.raycast(rig.game, origin, direction, {}).has_value());   // sanity: it does hit
+
+    constexpr int kIterations = 50;
+    const auto start = std::chrono::steady_clock::now();
+    for (int i = 0; i < kIterations; ++i) {
+        (void)rig.physics.raycast(rig.game, origin, direction, {});
+    }
+    const double ms =
+        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count() / kIterations;
+    WARN("RM4b: " << t.volume().chunks().size() << " stored chunks, " << ms << " ms per ray");
+    REQUIRE(ms < 0.2);
+}
+
+TEST_CASE("RM5 an edit to a chunk outside collider interest drops its stale collider at once, so a raycast "
+          "sees the dug hole right after the update",
+          "[terrain][physics]") {
+    // Carried from Task 8's review: apply_result must not leave a chunk's
+    // pre-edit collider live for up to kColliderReleaseMs after an edit
+    // outside collider_interest lands for it -- the march (RM1-RM4) relies
+    // on PhysicsWorld's own notion of "no collider" matching the voxels'
+    // current state, not a stale one.
+    PhysicsRig rig;
+    Terrain& t = terrain_in_workspace(rig.game);
+    REQUIRE_FALSE(t.edit_volume([&](VoxelVolume& v) { return v.fill(slab(48.f, 8.f), 1); }));
+    TerrainWorld world(PhysicsWorld::build_terrain_collider);
+    rig.physics.set_terrain_world(&world);
+    settle(world, rig.game);
+
+    // The slab's top face belongs to the chunk below y = 0 (as TP4 notes).
+    const ChunkCoord coord{0, -1, 0};
+    // Force a collider for this chunk once, as if a body had been near it,
+    // then let it fall out of interest -- but still within its 5 s grace --
+    // before editing it.
+    world.set_collider_interest(t.id(), {coord});
+    settle(world, rig.game);
+    rig.physics.sync(rig.game);
+    REQUIRE(collider_revision(world, t.id(), coord) != 0u);
+    world.set_collider_interest(t.id(), {});
+    settle(world, rig.game);
+    rig.physics.sync(rig.game);
+    REQUIRE(collider_revision(world, t.id(), coord) != 0u);   // the grace period, not an edit, would keep it
+
+    // Dig a hole straight through the slab at this chunk (TL2's own hole),
+    // far from collider interest (nothing asks for it), still well inside
+    // the 5 s grace.
+    Shape hole;
+    hole.kind = Shape::Kind::Block;
+    hole.frame = matrix4_translation(8.f, -4.f, 8.f);
+    hole.size = Vec3{12.f, 20.f, 12.f};
+    REQUIRE_FALSE(t.edit_volume([&](VoxelVolume& v) { return v.subtract(hole); }));
+    world.update(rig.game);
+    world.wait_idle();
+    world.update(rig.game);
+
+    REQUIRE(collider_revision(world, t.id(), coord) == 0u);   // dropped at once: the edit landed without one
+    rig.physics.sync(rig.game);
+    REQUIRE_FALSE(rig.physics.raycast(rig.game, Vec3{4.f, 10.f, 4.f}, Vec3{0.f, -20.f, 0.f}, {}).has_value());
 }

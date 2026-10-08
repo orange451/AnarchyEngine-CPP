@@ -9,8 +9,10 @@
 #include "PhysicsObject.hpp"
 #include "PlayerController.hpp"
 #include "SceneService.hpp"
+#include "Terrain.hpp"
 #include "TerrainWorld.hpp"
 #include "terrain/SurfaceNets.hpp"
+#include "terrain/VoxelSampler.hpp"
 
 #pragma warning(push, 0)
 #include "box3d/box3d.h"
@@ -20,6 +22,7 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <unordered_map>
 #include <unordered_set>
@@ -62,6 +65,9 @@ constexpr float kOverhangNormal = 0.05f;
 // not hover on it, but falls along it.
 constexpr float kWallNormal = 0.05f;
 constexpr float kPi = 3.14159265359f;
+// Task 8 (spec "Physics"): a Terrain's chunk colliders exist only within
+// this many chunks of a dynamic PhysicsObject or PlayerController.
+constexpr int kColliderChunks = 3;
 
 b3Vec3 to_b3(Vec3 v) { return b3Vec3{v.x, v.y, v.z}; }
 
@@ -600,7 +606,7 @@ struct PhysicsWorld::Impl {
         std::unordered_map<terrain::ChunkCoord, TerrainChunkShape, terrain::ChunkCoordHash> chunks;
         std::uint64_t seen = 0;
     };
-    const TerrainWorld* terrains = nullptr;
+    TerrainWorld* terrains = nullptr;
     std::unordered_map<InstanceId, TerrainBody> terrain_bodies;
     const std::array<b3SurfaceMaterial, kTerrainMaterialCount> terrain_surfaces = terrain_materials();
 
@@ -664,6 +670,7 @@ struct PhysicsWorld::Impl {
         const bool running = game.simulation_running();
         poses_from_game_objects = !running || !played;
         reconcile(game);
+        update_terrain_collider_interest(game);
         reconcile_terrain();
         played = running && (stepping || played);
     }
@@ -686,6 +693,216 @@ struct PhysicsWorld::Impl {
         simulate(game, dt);
     }
 
+    // Task 9 (spec "Physics"): whether PhysicsWorld currently has a shape
+    // for coord on terrain's body -- what Box3D's own cast in raycast()
+    // above has already tested. A chunk present but with no shape (meshed
+    // with nothing to collide with, or not built yet) reads as no collider,
+    // same as one never asked for.
+    bool terrain_chunk_has_collider(InstanceId terrain_id, const terrain::ChunkCoord& coord) const {
+        const auto found = terrain_bodies.find(terrain_id);
+        if (found == terrain_bodies.end()) {
+            return false;
+        }
+        const auto chunk = found->second.chunks.find(coord);
+        return chunk != found->second.chunks.end() && b3Shape_IsValid(chunk->second.shape);
+    }
+
+    // Task 9: where view's voxel distance field crosses zero along the
+    // world ray (origin, direction, up to length), over the chunks
+    // PhysicsWorld holds no collider shape for. Updates hits in place when
+    // this is nearer than whatever it already holds.
+    void march_terrain(DataModel& game, const TerrainView& view, Vec3 origin, Vec3 direction, float length,
+                       RayHits& hits) const {
+        auto* terrain_instance = dynamic_cast<Terrain*>(game.instance(view.terrain));
+        if (terrain_instance == nullptr) {
+            return;
+        }
+        const terrain::VoxelVolume& volume = terrain_instance->volume();
+        const terrain::ChunkMap& chunks = volume.chunks();
+        terrain::ChunkCoord lo, hi;
+        if (!volume.chunk_extent(lo, hi)) {
+            return;   // nothing stored: no surface anywhere, nothing to march
+        }
+        const float voxel_size = static_cast<float>(volume.voxel_size());
+        const float span = terrain::kChunkSize * voxel_size;
+
+        // Terrain-local bounds of every stored chunk (chunk_extent: kept by
+        // VoxelVolume as chunks come and go, never scanned here), padded by the
+        // distance band's width: a stored chunk holds only cells within
+        // kBandCells of a surface, so nothing closer than that to the
+        // padded box's own faces can be solid -- the march below may start
+        // right at the box without first checking what lies further out
+        // (always air). Also RM4: clips a long ray down to the island's own
+        // size rather than marching empty space all the way to its end.
+        const float margin = terrain::kBandCells * voxel_size;
+        const Vec3 bounds_min{lo.x * span - margin, lo.y * span - margin, lo.z * span - margin};
+        const Vec3 bounds_max{(hi.x + 1) * span + margin, (hi.y + 1) * span + margin, (hi.z + 1) * span + margin};
+
+        // Terrain-local ray: view.transform has no scale or shear (Terrain
+        // refuses one), so matrix4_vector keeps direction's length, and a
+        // local distance equals the same world distance.
+        const Matrix4 inverse = matrix4_inverse(view.transform);
+        const Vec3 local_origin = matrix4_point(inverse, origin);
+        const Vec3 local_direction = matrix4_vector(inverse, direction);
+        const float dir_length = std::sqrt(local_direction.x * local_direction.x +
+                                           local_direction.y * local_direction.y +
+                                           local_direction.z * local_direction.z);
+        if (!(dir_length > 0.f)) {
+            return;
+        }
+        const Vec3 dir_unit{local_direction.x / dir_length, local_direction.y / dir_length,
+                            local_direction.z / dir_length};
+        const auto at = [&](float t) {
+            return Vec3{local_origin.x + dir_unit.x * t, local_origin.y + dir_unit.y * t,
+                        local_origin.z + dir_unit.z * t};
+        };
+
+        // Clip [0, length] to the padded bounds: a slab test per axis. The
+        // far end starts at the nearest hit found so far (Box3D's, or an
+        // earlier Terrain's march): nothing past it can win, and a march
+        // crossing inside a collided chunk (below) is then always behind
+        // Box3D's own hit on that chunk's front face.
+        float t0 = 0.f;
+        float t1 = length * hits.closest;
+        const float origin_axis[3] = {local_origin.x, local_origin.y, local_origin.z};
+        const float dir_axis[3] = {dir_unit.x, dir_unit.y, dir_unit.z};
+        const float min_axis[3] = {bounds_min.x, bounds_min.y, bounds_min.z};
+        const float max_axis[3] = {bounds_max.x, bounds_max.y, bounds_max.z};
+        for (int axis = 0; axis < 3; ++axis) {
+            if (std::fabs(dir_axis[axis]) < 1e-9f) {
+                if (origin_axis[axis] < min_axis[axis] || origin_axis[axis] > max_axis[axis]) {
+                    return;
+                }
+                continue;
+            }
+            float ta = (min_axis[axis] - origin_axis[axis]) / dir_axis[axis];
+            float tb = (max_axis[axis] - origin_axis[axis]) / dir_axis[axis];
+            if (ta > tb) {
+                std::swap(ta, tb);
+            }
+            t0 = std::max(t0, ta);
+            t1 = std::min(t1, tb);
+            if (t0 > t1) {
+                return;
+            }
+        }
+
+        terrain::VoxelSampler sampler(chunks, voxel_size);
+        const auto chunk_coord_at = [&](Vec3 p) {
+            return terrain::ChunkCoord{static_cast<int>(std::floor(p.x / span)),
+                                       static_cast<int>(std::floor(p.y / span)),
+                                       static_cast<int>(std::floor(p.z / span))};
+        };
+        // Which chunk's collider holds the triangles at a point is fuzzy
+        // within a cell of a chunk face: SurfaceNets gives a chunk the
+        // quads around the lattice edges it owns (lower sample 0..31 on
+        // each axis), whose vertices sit in cells -1..31 -- so its
+        // triangles reach up to a cell below its box's min faces and stop
+        // anywhere in the last cell below its max faces. A point is surely
+        // inside a collided chunk's triangles only when the chunks at it
+        // and at it plus one cell on any mix of axes all have colliders.
+        const auto surely_collided = [&](Vec3 p) {
+            for (int corner = 0; corner < 8; ++corner) {
+                const Vec3 q{p.x + ((corner & 1) != 0 ? voxel_size : 0.f),
+                             p.y + ((corner & 2) != 0 ? voxel_size : 0.f),
+                             p.z + ((corner & 4) != 0 ? voxel_size : 0.f)};
+                if (!terrain_chunk_has_collider(view.terrain, chunk_coord_at(q))) {
+                    return false;
+                }
+            }
+            return true;
+        };
+        // The ray's exact exit parameter (a slab test, Terrain-local) from
+        // the part of coord's box its own collider surely covers: the box
+        // less its last cell below each max face (see surely_collided).
+        const auto sure_exit_of = [&](const terrain::ChunkCoord& coord) {
+            const int index[3] = {coord.x, coord.y, coord.z};
+            float exit = std::numeric_limits<float>::max();
+            for (int axis = 0; axis < 3; ++axis) {
+                if (dir_axis[axis] > 1e-9f) {
+                    exit = std::min(exit,
+                                    ((index[axis] + 1) * span - voxel_size - origin_axis[axis]) / dir_axis[axis]);
+                } else if (dir_axis[axis] < -1e-9f) {
+                    exit = std::min(exit, (index[axis] * span - origin_axis[axis]) / dir_axis[axis]);
+                }
+            }
+            return exit;
+        };
+        const auto in_sure_part = [&](const terrain::ChunkCoord& coord, Vec3 p) {
+            return p.x < (coord.x + 1) * span - voxel_size && p.y < (coord.y + 1) * span - voxel_size &&
+                   p.z < (coord.z + 1) * span - voxel_size;   // coord is p's own chunk: its min faces hold
+        };
+
+        const float min_step = 0.25f * voxel_size;
+        // Past a face by this much, so the next chunk lookup lands beyond it
+        // rather than rounding back.
+        const float past_face = 1e-3f * voxel_size;
+        constexpr int kBisections = 8;
+        float t = t0;
+        float prev_t = t0;   // always a sample known to be outside (d > 0)
+        if (!(sampler.distance(at(t0)) > 0.f)) {
+            return;   // already inside (or exactly on) the surface where the march begins
+        }
+        while (t < t1) {
+            const float d = sampler.distance(at(t));
+            if (d <= 0.f) {
+                // A crossing between prev_t (outside) and t (inside).
+                float lo_t = prev_t;
+                float hi_t = t;
+                for (int i = 0; i < kBisections; ++i) {
+                    const float mid = (lo_t + hi_t) * 0.5f;
+                    if (sampler.distance(at(mid)) > 0.f) {
+                        lo_t = mid;
+                    } else {
+                        hi_t = mid;
+                    }
+                }
+                const Vec3 local_point = at(hi_t);
+                // Within a collider's triangles the crossing is Box3D's: its
+                // own hit there, nearer than t1, is in hits already.
+                if (surely_collided(local_point)) {
+                    return;
+                }
+                const float world_fraction = hi_t / length;
+                if (world_fraction < hits.closest) {
+                    const Vec3 world_point = matrix4_point(view.transform, local_point);
+                    const Vec3 world_normal = matrix4_vector(view.transform, sampler.gradient(local_point));
+                    hits.hit = true;
+                    hits.closest = world_fraction;
+                    hits.instance = view.terrain;
+                    hits.point = to_b3(world_point);
+                    hits.normal = to_b3(world_normal);
+                    hits.material = sampler.id(local_point);
+                }
+                return;   // only the nearest crossing in this Terrain matters
+            }
+            const Vec3 p = at(t);
+            const terrain::ChunkCoord coord = chunk_coord_at(p);
+            if (in_sure_part(coord, p) && terrain_chunk_has_collider(view.terrain, coord)) {
+                // Box3D's own cast already tested this chunk's shape: jump
+                // to the ray's exact exit from what that shape surely
+                // covers (R28) rather than testing it again. Solid there
+                // means the crossing lies inside it, where Box3D's
+                // front-face hit is nearer: stop. In the chunk's last cell
+                // below a max face, march on as usual.
+                const float exit = sure_exit_of(coord) + past_face;
+                if (exit > t) {
+                    if (exit >= t1) {
+                        return;
+                    }
+                    if (!(sampler.distance(at(exit)) > 0.f)) {
+                        return;
+                    }
+                    prev_t = exit;
+                    t = exit;
+                    continue;
+                }
+            }
+            prev_t = t;
+            t += std::max(d, min_step);
+        }
+    }
+
     std::optional<RayHit> raycast(DataModel& game, Vec3 origin, Vec3 direction, const RayFilter& filter) {
         const float length =
             std::sqrt(direction.x * direction.x + direction.y * direction.y + direction.z * direction.z);
@@ -703,6 +920,23 @@ struct PhysicsWorld::Impl {
         hits.game = &game;
         hits.filter = &filter;
         b3World_CastRay(world, to_b3(origin), to_b3(direction), b3DefaultQueryFilter(), ray_hit, &hits);
+        // Task 9 (spec "Physics"): Box3D's cast above tested every chunk that
+        // has a collider shape; march each Terrain's own voxel distance
+        // field, in its own local space, over exactly the chunks that do
+        // not, so a chunk is tested once either way and a Raycast hits
+        // terrain at any distance, the same whether or not colliders are
+        // loaded where it hits (RM1). Keeps hits' nearest-so-far.
+        if (terrains != nullptr) {
+            for (const TerrainView& view : terrains->views()) {
+                if (!view.can_collide) {
+                    continue;   // no shapes at all (RM3): the march sees none either
+                }
+                if (under_any(game, view.terrain, filter.instances) != filter.include) {
+                    continue;   // the filter would have hidden its collider shape too
+                }
+                march_terrain(game, view, origin, direction, length, hits);
+            }
+        }
         if (!hits.hit) {
             return std::nullopt;
         }
@@ -782,6 +1016,78 @@ struct PhysicsWorld::Impl {
                 }
             }
             destroy(id);
+        }
+    }
+
+    // ---- Terrain collider interest (Task 8) ------------------------------
+
+    // Each dynamic (not Anchored) PhysicsObject or PlayerController's chunks
+    // within kColliderChunks, per Terrain, in that Terrain's local chunk
+    // space -- set_collider_interest's ask -- and, every sync, the chunk
+    // under each body and its immediate neighbors built right here
+    // (build_colliders_now) unless TerrainWorld already knows their collider
+    // (no falling through). SimulationThread, under the write lock, after
+    // reconcile (so every body's Box3D position is current) and before
+    // reconcile_terrain (so a shape exists this very sync for whatever
+    // build_colliders_now just built).
+    void update_terrain_collider_interest(DataModel& game) {
+        if (terrains == nullptr) {
+            return;
+        }
+        for (const TerrainView& view : terrains->views()) {
+            std::vector<terrain::ChunkCoord> interest;
+            std::unordered_set<terrain::ChunkCoord, terrain::ChunkCoordHash> interest_set;
+            if (view.can_collide) {
+                const terrain::LodTree* tree = terrains->lod_tree(view.terrain);
+                const float voxel_size = tree != nullptr ? tree->voxel_size() : 1.f;
+                const float span = terrain::kChunkSize * voxel_size;
+                const Matrix4 inverse = matrix4_inverse(view.transform);
+                // Distinct body-centre chunks first: thousands of bodies (a
+                // debris pile) mostly share a few chunks, and each distinct
+                // one's box is expanded only once.
+                std::unordered_set<terrain::ChunkCoord, terrain::ChunkCoordHash> centers;
+                for (const auto& [id, body] : bodies) {
+                    if (!b3Body_IsValid(body.body)) {
+                        continue;
+                    }
+                    const auto* base = dynamic_cast<const PhysicsBase*>(game.instance(id));
+                    if (base == nullptr || base->anchored()) {
+                        continue;   // anchored bodies need no colliders around them
+                    }
+                    const Vec3 local = matrix4_point(inverse, from_b3(b3Body_GetPosition(body.body)));
+                    centers.insert(terrain::ChunkCoord{static_cast<int>(std::floor(local.x / span)),
+                                                       static_cast<int>(std::floor(local.y / span)),
+                                                       static_cast<int>(std::floor(local.z / span))});
+                }
+                std::vector<terrain::ChunkCoord> under_body;
+                for (const terrain::ChunkCoord& center : centers) {
+                    under_body.clear();
+                    for (int dz = -kColliderChunks; dz <= kColliderChunks; ++dz) {
+                        for (int dy = -kColliderChunks; dy <= kColliderChunks; ++dy) {
+                            for (int dx = -kColliderChunks; dx <= kColliderChunks; ++dx) {
+                                const terrain::ChunkCoord c{center.x + dx, center.y + dy, center.z + dz};
+                                if (interest_set.insert(c).second) {
+                                    interest.push_back(c);
+                                }
+                                if (dx >= -1 && dx <= 1 && dy >= -1 && dy <= 1 && dz >= -1 && dz <= 1) {
+                                    under_body.push_back(c);
+                                }
+                            }
+                        }
+                    }
+                    // No fall-through: the chunk under a body and its immediate
+                    // neighbors (a surface at a chunk border can belong to
+                    // either side) must hold their colliders before Box3D
+                    // steps. Each one TerrainWorld already knows (built, or
+                    // meshed empty) is skipped, so this costs lookups only,
+                    // unless the job queue has not caught up with the body --
+                    // and then a collider elsewhere around it is no cover:
+                    // checked per chunk, every sync, never "some neighbor has
+                    // one".
+                    terrains->build_colliders_now(game, view.terrain, under_body);
+                }
+            }
+            terrains->set_collider_interest(view.terrain, std::move(interest));
         }
     }
 
@@ -1902,7 +2208,7 @@ std::optional<Vec3> PhysicsWorld::body_position(InstanceId id) const {
     return from_b3(b3Body_GetPosition(found->second.body));
 }
 
-void PhysicsWorld::set_terrain_world(const TerrainWorld* terrains) {
+void PhysicsWorld::set_terrain_world(TerrainWorld* terrains) {
     if (terrains == impl_->terrains) {
         return;
     }

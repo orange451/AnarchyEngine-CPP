@@ -70,6 +70,18 @@ struct MeshDraw {
     // Id's color and surface from this table, ignoring the Material values and
     // tint above. Such a draw is always opaque and drawn alone, and casts shadows.
     std::uint32_t terrainLook = 0;
+    // A terrain LOD node cross-fading with another level (TerrainDraws):
+    // 1 draws it whole; less dithers it away in terrain.frag, fading in
+    // (terrainFadeIn) or out, so the two levels together cover each pixel
+    // once. Shadows draw only the fading-in node, whole.
+    float terrainFade = 1.f;
+    bool terrainFadeIn = true;
+    // The terrain LOD node's level (0 for a chunk): the color it is tinted
+    // while SetTerrainLodColors is on.
+    int terrainLevel = 0;
+    // Casts shadows only, never drawn in view: terrain out of the camera's
+    // view that still shadows what is in it (TerrainDraws).
+    bool shadowOnly = false;
 };
 
 // A Terrain's look table: a 256 x 2 GL_RGBA8 texture, GL_NEAREST, from
@@ -78,6 +90,22 @@ struct MeshDraw {
 // reflectivity (0 to 255) and 255. The GL context has to be current; the
 // caller deletes the texture.
 unsigned MakeTerrainLookTexture(const std::uint8_t* rgba256x2);
+
+// A debug view of terrain LOD, for every Renderer in the process: while on,
+// each terrain draw is tinted by its MeshDraw::terrainLevel, levels 0 to 7
+// in kTerrainLodColors' colors (higher levels take level 7's). Off by
+// default, when terrain draws as its look table says. The studio turns it on
+// at startup when ANARCHY_TERRAIN_LOD_COLORS=1; scene-render-check for its
+// --terrain-lod-colors shots. Any thread.
+void SetTerrainLodColors(bool on);
+bool TerrainLodColors();
+// The tint per level (sRGB, 0 to 255), as terrain.frag's kLodColors, and
+// each one's name for a legend.
+struct TerrainLodColor {
+    const char* name;
+    std::uint8_t rgb[3];
+};
+extern const TerrainLodColor kTerrainLodColors[8];
 
 // A PointLight, SpotLight, or DirectionalLight, in world space.
 struct LightDraw {
@@ -262,6 +290,10 @@ public:
     // The view setCamera last took, world to view space, and its vertical angle.
     const engine_core::Matrix4& view() const { return view_; }
     float fovYDegrees() const { return fovYDegrees_; }
+    // Framebuffer pixels per layout point, as the last draw found them (1
+    // before any draw): a pane getHeight() points tall is that many times as
+    // many pixels.
+    float pixelsPerPoint() const { return pixelsPerPoint_; }
     // How the next draws are lit, until it is set again. Needs no GL context.
     void setLighting(const SceneLighting& lighting) { lighting_ = lighting; }
     // Whether draw lays the editor's floor grid over the pane, as Blender
@@ -380,6 +412,11 @@ private:
         int normalMapEnabled = -1;
         int emissiveMapEnabled = -1;
         int transparency = -1;
+        // terrain.frag: a LOD node's cross-fade.
+        int fade = -1;
+        int fadeIn = -1;
+        // terrain.frag: SetTerrainLodColors' level, or -1 for none.
+        int lodLevel = -1;
         // G-buffer inputs.
         int depth = -1;
         int albedo = -1;

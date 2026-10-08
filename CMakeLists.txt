@@ -48,6 +48,7 @@ set(STUDIO_CORE_SOURCES
     src/runner/ShadowAtlas.cpp
     src/runner/ShadowPlanner.cpp
     src/runner/Visibility.cpp
+    src/runner/TerrainSelection.cpp
     src/runner/DrawBatches.cpp
     src/runner/GamePack.cpp
     src/ide/AssetBrowser.cpp
@@ -475,6 +476,26 @@ endif()
 set(ZSTD_SOURCE_DIR "${zstd_SOURCE_DIR}")
 add_subdirectory(cmake/zstd "${CMAKE_BINARY_DIR}/zstd")
 
+# meshoptimizer simplifies a terrain LOD node's merged children by quadric
+# error metrics: MIT-licensed C++ by Zeux, pinned by tag. Only fetched here;
+# cmake/meshoptimizer builds its library sources, since its own CMakeLists
+# also builds demos and tools the engine does not need. Only LodBuilder
+# includes it.
+FetchContent_Declare(
+    meshoptimizer
+    GIT_REPOSITORY https://github.com/zeux/meshoptimizer.git
+    GIT_TAG v0.22
+)
+FetchContent_GetProperties(meshoptimizer)
+if(NOT meshoptimizer_POPULATED)
+    if(POLICY CMP0169)
+        cmake_policy(SET CMP0169 OLD)
+    endif()
+    FetchContent_Populate(meshoptimizer)
+endif()
+set(MESHOPTIMIZER_SOURCE_DIR "${meshoptimizer_SOURCE_DIR}")
+add_subdirectory(cmake/meshoptimizer "${CMAKE_BINARY_DIR}/meshoptimizer")
+
 # V-HACD splits a Custom PhysicsObject's Mesh into convex pieces: one
 # BSD-3-Clause header by Khaled Mamou, pinned by tag. Only fetched here;
 # ConvexDecomposition.cpp compiles it.
@@ -610,6 +631,10 @@ add_library(engine_core STATIC
     src/engine_core/terrain/AvoxFile.cpp
     src/engine_core/terrain/SurfaceNets.cpp
     src/engine_core/terrain/TerrainMesher.cpp
+    src/engine_core/terrain/LodNode.cpp
+    src/engine_core/terrain/VoxelSampler.cpp
+    src/engine_core/terrain/LodBuilder.cpp
+    src/engine_core/terrain/LodTree.cpp
     src/engine_core/TerrainWorld.cpp
     src/engine_core/terrain/TerrainStash.cpp
     src/engine_core/ConvexDecomposition.cpp
@@ -635,6 +660,8 @@ target_link_libraries(engine_instances PRIVATE flecs)
 target_link_libraries(engine_core PRIVATE box3d)
 # zstd too: only AvoxFile.cpp includes it.
 target_link_libraries(engine_core PRIVATE zstd)
+# meshoptimizer too: only LodBuilder.cpp includes it.
+target_link_libraries(engine_core PRIVATE meshoptimizer)
 # V-HACD too: only ConvexDecomposition.cpp includes it. SYSTEM, so -Wextra does not report on it.
 target_include_directories(engine_core SYSTEM PRIVATE "${vhacd_SOURCE_DIR}/include")
 # So does miniaudio: only AudioWorld.cpp and SoundPreview.cpp include it.
@@ -956,6 +983,9 @@ add_executable(sandbox
     sandbox/terrain_instance_tests.cpp
     sandbox/terrain_surface_tests.cpp
     sandbox/terrain_lua_tests.cpp
+    sandbox/terrain_lod_tests.cpp
+    sandbox/terrain_lod_tree_tests.cpp
+    sandbox/terrain_lod_draw_tests.cpp
 )
 target_link_libraries(sandbox PRIVATE studio_core Catch2::Catch2WithMain)
 # The dense views tests check flecs state the engine keeps private.

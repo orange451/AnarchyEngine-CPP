@@ -82,13 +82,19 @@ struct RayHit {
 //      GameObject's scale kept. These writes fire no Changed and record no
 //      history, as a GameObject's own velocity integration does.
 //
-// Terrain, at the end of each sync, once set_terrain_world gave it a
-// TerrainWorld: each TerrainView gets a static body at its transform, which
-// jumps there when the transform changes, and one mesh shape per chunk
-// collider, made again when that chunk's collider revision changes (the old
-// shape goes first), with none at all while CanCollide is false. A shape's
-// triangles carry the Terrain's material Ids as Box3D surface materials, so a
-// ray reports which Id it hit. A Terrain gone from the views loses its body.
+// Terrain, once set_terrain_world gave it a TerrainWorld: early in sync,
+// before reconcile_terrain, each dynamic (not Anchored) PhysicsObject or
+// PlayerController's body asks that TerrainWorld (set_collider_interest) for
+// colliders within kColliderChunks of it, per Terrain, in that Terrain's
+// local chunk space, and the chunk under each body and its immediate
+// neighbors, any whose collider TerrainWorld does not know yet, are built
+// right there, synchronously (build_colliders_now) -- no falling through. Then, at the end of sync: each TerrainView gets a static body at
+// its transform, which jumps there when the transform changes, and one mesh
+// shape per chunk collider TerrainWorld now holds for it, made again when
+// that chunk's collider revision changes (the old shape goes first), with
+// none at all while CanCollide is false. A shape's triangles carry the
+// Terrain's material Ids as Box3D surface materials, so a ray reports which
+// Id it hit. A Terrain gone from the views loses its body.
 //
 // Gravity is (0, -Workspace.Gravity, 0), read again at each sync.
 class PhysicsWorld {
@@ -133,8 +139,11 @@ public:
 
     // Where Terrain bodies come from; null for none. SimulationThread, under
     // the write lock. The TerrainWorld must outlive this world or be unset
-    // first.
-    void set_terrain_world(const TerrainWorld* terrains);
+    // first. Non-const: sync() also drives it, asking for colliders around
+    // each dynamic body or PlayerController (set_collider_interest) and, for
+    // one with none around it, building them synchronously
+    // (build_colliders_now), both before Box3D steps.
+    void set_terrain_world(TerrainWorld* terrains);
     // A chunk mesh as a collider for its Terrain's body: its triangles,
     // welded, each carrying its material Id. Null for a mesh with no
     // triangles, or one Box3D builds nothing from. Any thread, no lock:

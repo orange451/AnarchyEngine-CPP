@@ -10,6 +10,7 @@
 #include "gl.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstdio>
 #include <string>
@@ -192,6 +193,9 @@ bool Renderer::buildProgram(Program& program, const char* name, const char* vert
     program.normalMapEnabled = at("uNormalMapEnabled");
     program.emissiveMapEnabled = at("uEmissiveMapEnabled");
     program.transparency = at("uTransparency");
+    program.fade = at("uFade");
+    program.fadeIn = at("uFadeIn");
+    program.lodLevel = at("uLodLevel");
     program.depth = at("uDepth");
     program.albedo = at("uAlbedo");
     program.normal = at("uNormal");
@@ -1390,6 +1394,20 @@ void FillTerrainLookTexture(unsigned texture, const std::uint8_t* rgba256x2) {
 
 }  // namespace
 
+namespace {
+std::atomic<bool> gTerrainLodColors{false};
+}  // namespace
+
+void SetTerrainLodColors(bool on) { gTerrainLodColors.store(on, std::memory_order_relaxed); }
+
+bool TerrainLodColors() { return gTerrainLodColors.load(std::memory_order_relaxed); }
+
+// terrain.frag's kLodColors, in the same order.
+const TerrainLodColor kTerrainLodColors[8] = {
+    {"red", {230, 40, 40}},   {"orange", {245, 145, 30}}, {"yellow", {235, 225, 40}}, {"green", {50, 190, 60}},
+    {"cyan", {40, 200, 220}}, {"blue", {50, 80, 230}},    {"purple", {140, 60, 200}}, {"magenta", {235, 60, 200}},
+};
+
 unsigned MakeTerrainLookTexture(const std::uint8_t* rgba256x2) {
     unsigned texture = 0;
     glGenTextures(1, &texture);
@@ -1603,6 +1621,7 @@ void Renderer::findVisible(const MeshDraw* meshes, int count, const CameraView& 
             // A terrain chunk is opaque, drawn alone, and sorted after every
             // other opaque draw so the geometry pass switches program once.
             item.terrain = draw.terrainLook != 0;
+            item.shadowOnly = draw.shadowOnly;
             if (item.terrain) {
                 item.transparency = 0.f;
                 item.slot = 0;
@@ -1683,6 +1702,7 @@ bool Renderer::geometryPass(const MeshDraw* meshes, const float* projection) {
     // program switches to terrain_ once, at the first of them.
     bool terrain = false;
     bool askedTerrain = false;
+    const bool lodColors = TerrainLodColors();
     for (int index = 0; index < batches_.opaqueRuns; ++index) {
         const DrawRun& run = batches_.runs[static_cast<std::size_t>(index)];
         const MeshDraw& draw = meshes[run.draw];
@@ -1694,6 +1714,9 @@ bool Renderer::geometryPass(const MeshDraw* meshes, const float* projection) {
                 glUniformMatrix4fv(terrain_.projection, 1, GL_FALSE, projection);
             }
             BindTexture(kUnitTerrainLook, draw.terrainLook);
+            glUniform1f(terrain_.fade, draw.terrainFade);
+            glUniform1i(terrain_.fadeIn, draw.terrainFadeIn ? 1 : 0);
+            glUniform1i(terrain_.lodLevel, lodColors ? std::min(std::max(draw.terrainLevel, 0), 7) : -1);
         } else {
             if (terrain) {
                 // Not reached while BuildBatches sorts terrain last; kept so

@@ -399,8 +399,27 @@ void GameView::collectMeshes() {
             draw.transparency = 1.f - (1.f - std::clamp(draw.transparency, 0.f, 1.f)) * opacity;
         }
     }
-    // Each Terrain's meshed chunks, with its look; uploads no Terrain shows now are deleted.
-    AppendTerrainDraws(snapshot.terrains, meshes_, renderer_, meshDraws_);
+    // Each Terrain's LOD nodes chosen for this camera and pane (spec decision 2:
+    // here, before Renderer::draw, which learns its target size only inside),
+    // with its look; uploads not drawn for some seconds are deleted.
+    TerrainCamera terrainCamera;
+    if (viewFov_ > 0.f) {
+        terrainCamera.world = viewCamera_;
+        terrainCamera.fov_y_degrees = viewFov_;
+    } else {
+        // No Camera followed yet: the renderer's own.
+        terrainCamera.world = engine_core::matrix4_inverse(renderer_.view());
+        terrainCamera.fov_y_degrees = renderer_.fovYDegrees();
+    }
+    // In framebuffer pixels, as the error formula wants: getWidth() and
+    // getHeight() are layout points, the renderer's last draw found how many
+    // pixels each is (on a HiDPI display, more than 1).
+    const float pixelsPerPoint = std::max(renderer_.pixelsPerPoint(), 0.01f);
+    terrainCamera.pane_width = static_cast<int>(std::lround(getWidth() * pixelsPerPoint));
+    terrainCamera.pane_height = static_cast<int>(std::lround(getHeight() * pixelsPerPoint));
+    const double terrainNow =
+        std::chrono::duration<double>(std::chrono::steady_clock::now() - terrainClockStart_).count();
+    AppendTerrainDraws(snapshot.terrains, terrainCamera, terrainNow, terrainFades_, meshes_, renderer_, meshDraws_);
     SceneLighting lighting;
     lighting.ambient[0] = snapshot.lighting.ambient.r;
     lighting.ambient[1] = snapshot.lighting.ambient.g;

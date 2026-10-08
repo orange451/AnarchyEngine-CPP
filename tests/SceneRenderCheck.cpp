@@ -1,6 +1,7 @@
 #include "AssetInstances.hpp"
 #include "Camera.hpp"
 #include "Game.hpp"
+#include "SceneService.hpp"
 #include "SnapshotPump.hpp"
 #include "Terrain.hpp"
 #include "TerrainMaterial.hpp"
@@ -17,6 +18,7 @@
 #include "profiler/Profiler.hpp"
 #include "runner/gl.hpp"
 #include "runner/ViewCapture.hpp"
+#include "terrain/LodNode.hpp"
 #include "terrain/SurfaceNets.hpp"
 #include "terrain/VoxelVolume.hpp"
 
@@ -26,6 +28,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
@@ -35,10 +38,12 @@
 #include <fstream>
 #include <initializer_list>
 #include <iterator>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <string>
 #include <thread>
+#include <tuple>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -54,8 +59,13 @@
 // --terrain-shots dir, also island, hills, cliff and chunk-seam scenes at 1280
 // by 720 offscreen under a DynamicSky, and scenes taken through the snapshot
 // path (a Game's Terrain, a TerrainWorld, a SnapshotPump), each written to dir
-// as a PNG and its path printed; they take some seconds, so a plain run skips
-// them. The flags combine.
+// as a PNG and its path printed; and terrain LOD on a large island (lod-*.png):
+// a grazing and a far shot, a 30-frame descent, and a shot from 1300 units
+// off (terrain past 1000 units), each frame checked
+// against full detail for cracks, geometry outside the true silhouette and
+// wrong materials (TerrainLodShots), plus, with --terrain-lod-colors, the
+// still shots tinted by level. They take some seconds (about 15 in Release),
+// so a plain run skips them. The flags combine.
 namespace {
 
 using namespace anarchy::amesh;
@@ -350,6 +360,44 @@ std::shared_ptr<const std::vector<engine_core::TerrainChunkView>> MeshChunks(con
     return chunks;
 }
 
+// chunks as level-0 LOD nodes, as TerrainWorld publishes them before any
+// coarser level is built: each its own root, its bounds its chunk's box and
+// its mesh's, sorted by key.
+std::shared_ptr<const std::vector<engine_core::TerrainNodeView>> ChunkNodes(
+    const std::vector<engine_core::TerrainChunkView>& chunks, float voxelSize) {
+    auto nodes = std::make_shared<std::vector<engine_core::TerrainNodeView>>();
+    for (const engine_core::TerrainChunkView& chunk : chunks) {
+        engine_core::TerrainNodeView node;
+        node.key = terrain::node_of(chunk.coord, 0);
+        node.revision = chunk.revision;
+        node.mesh = chunk.mesh;
+        terrain::node_bounds(node.key, voxelSize, node.bounds_min, node.bounds_max);
+        for (const anarchy::amesh::Vertex& vertex : chunk.mesh->vertices) {
+            node.bounds_min = {std::min(node.bounds_min.x, vertex.p[0]),
+                               std::min(node.bounds_min.y, vertex.p[1]),
+                               std::min(node.bounds_min.z, vertex.p[2])};
+            node.bounds_max = {std::max(node.bounds_max.x, vertex.p[0]),
+                               std::max(node.bounds_max.y, vertex.p[1]),
+                               std::max(node.bounds_max.z, vertex.p[2])};
+        }
+        nodes->push_back(node);
+    }
+    std::sort(nodes->begin(), nodes->end(), [](const engine_core::TerrainNodeView& a, const engine_core::TerrainNodeView& b) {
+        return std::tie(a.key.level, a.key.x, a.key.y, a.key.z) < std::tie(b.key.level, b.key.x, b.key.y, b.key.z);
+    });
+    return nodes;
+}
+
+// The camera renderer draws from, for selecting terrain nodes on a pane size by size.
+runner::TerrainCamera RendererCamera(const runner::Renderer& renderer, int width, int height) {
+    runner::TerrainCamera camera;
+    camera.world = engine_core::matrix4_inverse(renderer.view());
+    camera.fov_y_degrees = renderer.fovYDegrees();
+    camera.pane_width = width;
+    camera.pane_height = height;
+    return camera;
+}
+
 // A published look from look-table bytes (LookBytes'), with revision.
 std::shared_ptr<const engine_core::TerrainLook> MakeLook(const std::vector<std::uint8_t>& bytes,
                                                         std::uint64_t revision) {
@@ -475,6 +523,11 @@ public:
     // back top row first. The window's framebuffer and viewport are put back.
     bool shoot(runner::Renderer& renderer, const std::vector<runner::MeshDraw>& draws, const runner::LightDraw& sun,
                runner::ViewPixels& out) {
+        return shoot(renderer, draws, &sun, 1, 4, out);
+    }
+    // The same with lights (lightCount of them, or none), drawn frames times.
+    bool shoot(runner::Renderer& renderer, const std::vector<runner::MeshDraw>& draws, const runner::LightDraw* lights,
+               int lightCount, int frames, runner::ViewPixels& out) {
         runner::GLint viewport[4] = {};
         glGetIntegerv(runner::GL_VIEWPORT, viewport);
         glBindFramebuffer(runner::RT_GL_FRAMEBUFFER, framebuffer_);
@@ -482,9 +535,9 @@ public:
         const double w = width_;
         const double h = height_;
         bool drawn = false;
-        for (int frame = 0; frame < 4; ++frame) {
+        for (int frame = 0; frame < frames; ++frame) {
             drawn = renderer.draw(0, 0, w, h, w, h, draws.empty() ? nullptr : draws.data(),
-                                  static_cast<int>(draws.size()), &sun, 1);
+                                  static_cast<int>(draws.size()), lights, lightCount);
         }
         const bool read = drawn && renderer.read(0, 0, w, h, w, h, out);
         glBindFramebuffer(runner::RT_GL_FRAMEBUFFER, 0);
@@ -554,6 +607,876 @@ void ExpectTerrainShown(const std::string& name, const runner::ViewPixels& shot,
     Expect(mean > 90, name + ": the terrain is lit, not black (mean channel sum " + std::to_string(mean) + ")");
 }
 
+// Terrain LOD seen whole (--terrain-shots): a large rolling island through
+// TerrainWorld and AppendTerrainDraws, each frame checked against the
+// island's full detail (every level-0 chunk mesh, no selection) from the
+// same camera, in a flat pass: no sky, no lights, ambient only, no
+// antialiasing, each material Id in a color of its own. A pixel the full
+// detail covers that LOD leaves empty, with no empty full-detail pixel within
+// kLodEdgeBand, is a crack; one LOD covers with no full-detail pixel within
+// the band is outside the true silhouette (a fin); one both cover in
+// materials that differ, the LOD's found nowhere within kLodMaterialBand in
+// the full detail, is a wrong material.
+
+constexpr int kLodEdgeBand = 2;
+constexpr int kLodMaterialBand = 6;
+
+// The island: 32 x 2 x 32 chunks (1,024 x 64 x 1,024 cells, a unit each),
+// a round island of rolling hills about (512, 512), solid from y = 2 up to its height.
+constexpr int kIslandCells = 1024;
+constexpr int kIslandRows = 64;
+constexpr float kIslandMiddle = 512.f;
+
+float Smooth(float edge0, float edge1, float x) {
+    const float t = std::min(std::max((x - edge0) / (edge1 - edge0), 0.f), 1.f);
+    return t * t * (3.f - 2.f * t);
+}
+
+float IslandHeight(float x, float z) {
+    const float dx = x - kIslandMiddle;
+    const float dz = z - kIslandMiddle;
+    const float r = std::sqrt(dx * dx + dz * dz);
+    const float rolling = 20.f + 8.f * std::sin(x / 61.f) * std::cos(z / 47.f) + 6.f * std::sin((x + z) / 33.f) +
+                          4.f * std::cos((x - 2.f * z) / 83.f) + 3.f * std::sin(z / 19.f + std::cos(x / 27.f));
+    // A ridge across the middle, steep enough for rock.
+    const float ridge = 14.f * std::max(0.f, 1.f - std::abs(dx * 0.8f + dz * 0.6f - 60.f) / 22.f) * Smooth(330.f, 120.f, r);
+    const float hill = 12.f * Smooth(300.f, 0.f, r);
+    return -2.f + Smooth(500.f, 380.f, r) * (rolling + hill + ridge + 2.f);
+}
+
+// Material Ids: 1 grass, 2 rock (steep), 3 sand (low), 4 snow (high).
+std::uint8_t IslandMaterial(float height, float slope) {
+    if (height < 7.f) {
+        return 3;
+    }
+    if (slope > 0.45f) {
+        return 2;
+    }
+    return height > 44.f ? 4 : 1;
+}
+
+// Writes the island into volume, a 256 x 64 x 256 block at a time (each within the edit limit).
+void WriteIsland(terrain::VoxelVolume& volume) {
+    std::vector<float> heights(static_cast<std::size_t>(kIslandCells + 2) * (kIslandCells + 2));
+    const auto at = [&](int x, int z) -> float& {
+        return heights[static_cast<std::size_t>(z + 1) * (kIslandCells + 2) + static_cast<std::size_t>(x + 1)];
+    };
+    for (int z = -1; z <= kIslandCells; ++z) {
+        for (int x = -1; x <= kIslandCells; ++x) {
+            at(x, z) = IslandHeight(static_cast<float>(x), static_cast<float>(z));
+        }
+    }
+    constexpr int kBlock = 256;
+    std::vector<float> distances;
+    std::vector<std::uint8_t> materials;
+    for (int bz = 0; bz < kIslandCells; bz += kBlock) {
+        for (int bx = 0; bx < kIslandCells; bx += kBlock) {
+            const std::size_t count = static_cast<std::size_t>(kBlock) * kIslandRows * kBlock;
+            distances.assign(count, 0.f);
+            materials.assign(count, 1);
+            for (int z = 0; z < kBlock; ++z) {
+                for (int x = 0; x < kBlock; ++x) {
+                    const int cx = bx + x;
+                    const int cz = bz + z;
+                    const float h = at(cx, cz);
+                    const float gx = 0.5f * (at(cx + 1, cz) - at(cx - 1, cz));
+                    const float gz = 0.5f * (at(cx, cz + 1) - at(cx, cz - 1));
+                    const float slope = std::sqrt(gx * gx + gz * gz);
+                    // The distance to the surface, not just the height above it.
+                    const float scale = 1.f / std::sqrt(1.f + slope * slope);
+                    const std::uint8_t id = IslandMaterial(h, slope);
+                    for (int y = 0; y < kIslandRows; ++y) {
+                        const std::size_t i = static_cast<std::size_t>(x) +
+                                              static_cast<std::size_t>(kBlock) *
+                                                  (static_cast<std::size_t>(y) + kIslandRows * static_cast<std::size_t>(z));
+                        const float top = (static_cast<float>(y) - h) * scale;
+                        const float bottom = 2.f - static_cast<float>(y);
+                        distances[i] = std::max(top, bottom);
+                        materials[i] = id;
+                    }
+                }
+            }
+            Edit(volume.write(terrain::CellCoord{bx, 0, bz}, terrain::CellCoord{bx + kBlock - 1, kIslandRows - 1, bz + kBlock - 1},
+                              distances, materials),
+                 "an island block");
+        }
+    }
+}
+
+// The flat pass's colors per material Id 1 to 4, and every other Id's.
+constexpr int kFlatClasses = 5;
+constexpr int kFlatColors[kFlatClasses][3] = {
+    {240, 40, 40}, {40, 240, 40}, {40, 40, 240}, {240, 240, 40}, {240, 40, 240}};
+
+std::vector<std::uint8_t> FlatLookBytes() {
+    std::vector<std::uint8_t> bytes(256 * 2 * 4);
+    for (int id = 0; id < 256; ++id) {
+        const int* color = kFlatColors[id >= 1 && id <= 4 ? id - 1 : 4];
+        std::uint8_t* out = bytes.data() + id * 4;
+        for (int channel = 0; channel < 3; ++channel) {
+            out[channel] = static_cast<std::uint8_t>(color[channel]);
+        }
+        out[3] = 255;
+        std::uint8_t* surface = bytes.data() + (256 + id) * 4;
+        surface[0] = 0;
+        surface[1] = 255;
+        surface[2] = 0;
+        surface[3] = 255;
+    }
+    return bytes;
+}
+
+// A flat pass read back: per pixel -1 where it matches the empty pass (no
+// terrain), else the material class (kFlatColors' index) whose color, scaled
+// to its largest channel, is nearest.
+struct FlatFrame {
+    int width = 0;
+    int height = 0;
+    std::vector<std::int8_t> cls;
+    int at(int x, int y) const { return cls[static_cast<std::size_t>(y) * width + x]; }
+};
+
+FlatFrame Classify(const runner::ViewPixels& pixels, const runner::ViewPixels& empty) {
+    FlatFrame out;
+    out.width = pixels.width;
+    out.height = pixels.height;
+    out.cls.assign(static_cast<std::size_t>(pixels.width) * pixels.height, -1);
+    if (pixels.rgba.size() != empty.rgba.size()) {
+        return out;
+    }
+    float palette[kFlatClasses][3];
+    for (int c = 0; c < kFlatClasses; ++c) {
+        for (int channel = 0; channel < 3; ++channel) {
+            palette[c][channel] = kFlatColors[c][channel] / 240.f;
+        }
+    }
+    for (std::size_t i = 0; i < out.cls.size(); ++i) {
+        const unsigned char* p = pixels.rgba.data() + i * 4;
+        const unsigned char* e = empty.rgba.data() + i * 4;
+        int difference = 0;
+        for (int channel = 0; channel < 3; ++channel) {
+            difference = std::max(difference, std::abs(static_cast<int>(p[channel]) - static_cast<int>(e[channel])));
+        }
+        if (difference <= 3) {
+            continue;
+        }
+        const float top = static_cast<float>(std::max({p[0], p[1], p[2], static_cast<unsigned char>(1)}));
+        int best = 0;
+        float bestDistance = std::numeric_limits<float>::max();
+        for (int c = 0; c < kFlatClasses; ++c) {
+            float d = 0.f;
+            for (int channel = 0; channel < 3; ++channel) {
+                const float v = p[channel] / top - palette[c][channel];
+                d += v * v;
+            }
+            if (d < bestDistance) {
+                bestDistance = d;
+                best = c;
+            }
+        }
+        out.cls[i] = static_cast<std::int8_t>(best);
+    }
+    return out;
+}
+
+// How a LOD flat frame differs from the full detail's.
+struct LodDiff {
+    std::int64_t referenceCovered = 0;
+    std::int64_t lodCovered = 0;
+    std::vector<std::pair<int, int>> crackAt;   // the first few cracks, x then y from the top
+    std::int64_t cracks = 0;            // full detail covers, LOD does not, away from its silhouette
+    std::int64_t outside = 0;           // LOD covers, away from the full detail's silhouette
+    std::int64_t edgeDifferences = 0;   // coverage differs within kLodEdgeBand of the silhouette
+    std::int64_t materialDiffers = 0;   // both cover, in different materials
+    std::int64_t materialFar = 0;       // of those, the LOD's material nowhere within kLodMaterialBand
+};
+
+LodDiff CompareFlat(const FlatFrame& lod, const FlatFrame& reference, runner::ViewPixels* picture) {
+    LodDiff diff;
+    const int w = reference.width;
+    const int h = reference.height;
+    if (lod.width != w || lod.height != h || reference.cls.empty()) {
+        return diff;
+    }
+    // Whether reference has, within band of (x, y), a pixel for which test holds.
+    const auto near = [&](int x, int y, int band, const auto& test) {
+        for (int yy = std::max(0, y - band); yy <= std::min(h - 1, y + band); ++yy) {
+            for (int xx = std::max(0, x - band); xx <= std::min(w - 1, x + band); ++xx) {
+                if (test(reference.at(xx, yy))) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    };
+    if (picture != nullptr) {
+        picture->width = w;
+        picture->height = h;
+        picture->rgba.assign(static_cast<std::size_t>(w) * h * 4, 0);
+    }
+    for (int y = 0; y < h; ++y) {
+        for (int x = 0; x < w; ++x) {
+            const int r = reference.at(x, y);
+            const int l = lod.at(x, y);
+            diff.referenceCovered += r >= 0 ? 1 : 0;
+            diff.lodCovered += l >= 0 ? 1 : 0;
+            // Black empty, gray agreeing, blue a near silhouette or material difference,
+            // red a crack, yellow outside, magenta a wrong material.
+            std::array<unsigned char, 3> color = {0, 0, 0};
+            if (r >= 0 && l >= 0) {
+                color = {90, 90, 90};
+            }
+            if (r >= 0 && l < 0) {
+                if (near(x, y, kLodEdgeBand, [](int c) { return c < 0; })) {
+                    ++diff.edgeDifferences;
+                    color = {40, 60, 200};
+                } else {
+                    ++diff.cracks;
+                    if (diff.crackAt.size() < 4) {
+                        diff.crackAt.emplace_back(x, y);
+                    }
+                    color = {255, 0, 0};
+                }
+            } else if (l >= 0 && r < 0) {
+                if (near(x, y, kLodEdgeBand, [](int c) { return c >= 0; })) {
+                    ++diff.edgeDifferences;
+                    color = {40, 60, 200};
+                } else {
+                    ++diff.outside;
+                    color = {255, 230, 0};
+                }
+            } else if (l >= 0 && r >= 0 && l != r) {
+                ++diff.materialDiffers;
+                if (near(x, y, kLodMaterialBand, [l](int c) { return c == l; })) {
+                    color = {40, 60, 200};
+                } else {
+                    ++diff.materialFar;
+                    color = {255, 0, 255};
+                }
+            }
+            if (picture != nullptr) {
+                unsigned char* p = picture->rgba.data() + (static_cast<std::size_t>(y) * w + x) * 4;
+                p[0] = color[0];
+                p[1] = color[1];
+                p[2] = color[2];
+                p[3] = 255;
+            }
+        }
+    }
+    return diff;
+}
+
+// What LOD drew: draws (not shadow-only) per level, how many fade, and how many cast shadows only.
+std::string LodSummary(const std::vector<runner::MeshDraw>& draws, int* fadingOut = nullptr) {
+    int levels[8] = {};
+    int fading = 0;
+    int shadowOnly = 0;
+    for (const runner::MeshDraw& draw : draws) {
+        if (draw.shadowOnly) {
+            ++shadowOnly;
+            continue;
+        }
+        ++levels[std::min(std::max(draw.terrainLevel, 0), 7)];
+        fading += draw.terrainFade < 1.f ? 1 : 0;
+    }
+    std::string text = std::to_string(static_cast<int>(draws.size()) - shadowOnly) + " nodes:";
+    for (int level = 0; level < 8; ++level) {
+        if (levels[level] > 0) {
+            text += " L" + std::to_string(level) + "x" + std::to_string(levels[level]);
+        }
+    }
+    text += ", " + std::to_string(fading) + " fading, " + std::to_string(shadowOnly) + " shadow-only";
+    if (fadingOut != nullptr) {
+        *fadingOut = fading;
+    }
+    return text;
+}
+
+// The island shots and sequence. lighting and sky are the terrain shots'
+// own; dir gets the PNGs; colors adds the level-tinted shots.
+void TerrainLodShots(runner::Renderer& renderer, OffscreenTarget& target, int width, int height,
+                     const runner::SceneLighting& lighting, const runner::SkyState& sky,
+                     const std::filesystem::path& dir, bool colors) {
+    using Clock = std::chrono::steady_clock;
+    const auto seconds = [](Clock::time_point since) {
+        return std::chrono::duration<double>(Clock::now() - since).count();
+    };
+    const auto write = [&](const runner::ViewPixels& pixels, const std::string& file) {
+        std::filesystem::create_directories(dir);
+        std::ofstream(dir / file, std::ios::binary) << runner::EncodePng(pixels);
+        std::printf("wrote %s\n", (dir / file).string().c_str());
+    };
+    runner::SceneLighting flat;
+    flat.ambient[0] = flat.ambient[1] = flat.ambient[2] = 1.f;
+    flat.antialiasing = runner::SceneAntialiasing::None;
+    const std::vector<std::uint8_t> flatBytes = FlatLookBytes();
+    const unsigned flatLook = runner::MakeTerrainLookTexture(flatBytes.data());
+
+    engine_core::set_thread_role(engine_core::ThreadRole::Simulation);
+    {
+        const Clock::time_point built = Clock::now();
+        engine_core::Game game;
+        engine_core::Terrain& placed = game.create<engine_core::Terrain>();
+        game.set_parent(placed.id(), game.scene_service("Workspace"));
+        const auto material = [&game](const char* name, float r, float g, float b) {
+            engine_core::Material& made = game.create<engine_core::Material>();
+            game.set_name(made.id(), name);
+            game.set_parent(made.id(), game.service("Materials"));
+            engine_core::ColorRgb color;
+            color.r = r;
+            color.g = g;
+            color.b = b;
+            color.a = 1.f;
+            Expect(!made.set_color(color).has_value(), std::string(name) + " takes its color");
+            return made.id();
+        };
+        engine_core::TerrainMaterial* entry = nullptr;
+        Expect(!placed.add_material(material("IslandGrass", 0.33f, 0.55f, 0.22f), entry).has_value() &&
+                   !placed.add_material(material("IslandRock", 0.47f, 0.43f, 0.39f), entry).has_value() &&
+                   !placed.add_material(material("IslandSand", 0.85f, 0.77f, 0.56f), entry).has_value() &&
+                   !placed.add_material(material("IslandSnow", 0.95f, 0.96f, 0.98f), entry).has_value() &&
+                   entry != nullptr && entry->material_id() == 4,
+               "the island's four TerrainMaterials take Ids 1 to 4");
+        WriteIsland(placed.volume());
+        const double wroteSeconds = seconds(built);
+
+        // The camera TerrainWorld keeps levels 0-1 resident around.
+        engine_core::Camera& eye = game.create<engine_core::Camera>();
+        game.set_parent(eye.id(), game.scene_service("Workspace"));
+        auto* workspace = dynamic_cast<engine_core::Workspace*>(game.instance(game.scene_service("Workspace")));
+        Expect(workspace != nullptr && workspace->set_current_camera(eye.id()), "the island's camera is current");
+
+        // A normal pool; the edit at the end makes its own, which can hold jobs.
+        engine_core::TerrainWorld world;
+        // Until an update after the pool is idle publishes no new node set.
+        const auto settleWorld = [&](engine_core::TerrainWorld& pool, int passes) {
+            std::uint64_t settled = ~std::uint64_t{0};
+            for (int pass = 0; pass < passes; ++pass) {
+                pool.update(game);
+                pool.wait_idle();
+                pool.update(game);
+                const std::uint64_t revision = pool.views().empty() ? 0 : pool.views()[0].nodes_revision;
+                if (revision == settled) {
+                    return pass;
+                }
+                settled = revision;
+            }
+            return passes;
+        };
+        const auto settle = [&](int passes) { return settleWorld(world, passes); };
+        const auto lookFrom = [&](const engine_core::Vec3& from, const engine_core::Vec3& to) {
+            const engine_core::Matrix4 placedAt = engine_core::matrix4_look_at(from, to, {0.f, 1.f, 0.f});
+            (void)eye.set_transform(placedAt);
+            return placedAt;
+        };
+        const auto ground = [](float x, float z) { return std::max(IslandHeight(x, z), 2.f); };
+
+        // The shots: a low grazing look across the island, a high far one, and one from far off.
+        const engine_core::Vec3 grazingEye{150.f, ground(150.f, 380.f) + 9.f, 380.f};
+        const engine_core::Vec3 grazingAt{760.f, 26.f, 610.f};
+        const engine_core::Vec3 farEye{250.f, 450.f, 250.f};
+        const engine_core::Vec3 farAt{512.f, 20.f, 512.f};
+
+        lookFrom(grazingEye, grazingAt);
+        const int passes = settle(400);
+        const engine_core::TerrainView* view = world.views().empty() ? nullptr : &world.views()[0];
+        Expect(view != nullptr && view->nodes != nullptr && view->look != nullptr, "the island publishes LOD nodes");
+        if (view == nullptr || view->nodes == nullptr || view->look == nullptr) {
+            engine_core::set_thread_role(engine_core::ThreadRole::Unknown);
+            return;
+        }
+        int publishedLevels[16] = {};
+        for (const engine_core::TerrainNodeView& node : *view->nodes) {
+            ++publishedLevels[std::min(node.key.level, 15)];
+        }
+        std::string published;
+        for (int level = 0; level < 16; ++level) {
+            if (publishedLevels[level] > 0) {
+                published += " L" + std::to_string(level) + "x" + std::to_string(publishedLevels[level]);
+            }
+        }
+        std::printf("lod island: %d published nodes (top level %d):%s; voxels %.2f s, settled in %d passes, %.2f s\n",
+                    static_cast<int>(view->nodes->size()), view->top_level, published.c_str(), wroteSeconds, passes,
+                    seconds(built));
+
+        // The full detail: every level-0 chunk mesh, meshed here from the voxels, in the flat look.
+        const Clock::time_point meshing = Clock::now();
+        const auto chunks = UploadTerrain(placed.volume());
+        std::vector<runner::MeshDraw> reference = TerrainDraws(chunks, flatLook);
+        std::printf("lod island full detail: %d chunk meshes, %.2f s\n", static_cast<int>(chunks.size()),
+                    seconds(meshing));
+
+        runner::MeshCache meshes;
+        runner::ViewPixels empty;
+        // A flat pass of draws (their looks swapped for the flat one), classified.
+        const auto flatPass = [&](std::vector<runner::MeshDraw> draws, const engine_core::Matrix4& camera) {
+            for (runner::MeshDraw& draw : draws) {
+                draw.terrainLook = flatLook;
+            }
+            renderer.setLighting(flat);
+            renderer.setCamera(camera, 50.f);
+            runner::ViewPixels pixels;
+            if (empty.rgba.empty()) {
+                Expect(target.shoot(renderer, {}, nullptr, 0, 2, empty), "the empty flat pass draws");
+            }
+            Expect(target.shoot(renderer, draws, nullptr, 0, 2, pixels), "a flat pass draws");
+            renderer.setLighting(lighting);
+            return Classify(pixels, empty);
+        };
+        // The lit shot of draws, checked against the sky alone.
+        const auto litShot = [&](const std::vector<runner::MeshDraw>& draws, const engine_core::Matrix4& camera,
+                                 const std::string& file) {
+            renderer.setLighting(lighting);
+            renderer.setCamera(camera, 50.f);
+            runner::LightDraw sun = runner::SkyLightDraw(sky, true);
+            sun.shadowDistance = 1000.f;
+            runner::ViewPixels skyOnly;
+            runner::ViewPixels pixels;
+            const bool drawn = target.shoot(renderer, {}, sun, skyOnly) && target.shoot(renderer, draws, sun, pixels);
+            Expect(drawn, file + " draws and reads back");
+            if (drawn) {
+                ExpectTerrainShown(file, pixels, skyOnly);
+                write(pixels, file);
+            }
+        };
+        const auto camera = [&](const engine_core::Matrix4& cameraWorld) {
+            runner::TerrainCamera out;
+            out.world = cameraWorld;
+            out.fov_y_degrees = 50.f;
+            out.pane_width = width;
+            out.pane_height = height;
+            return out;
+        };
+        // Checks one LOD frame against the full detail; picture names a diff PNG to write.
+        std::int64_t worstCracks = 0;
+        std::int64_t worstOutside = 0;
+        double worstMaterialFar = 0.0;
+        // Each drawn node of the next check (in draw order), and the largest
+        // pixel error of those fading in (or steady) and fading out, with the
+        // node and how many of its children are published (fewer than its
+        // child_mask asks: selection had to draw it), from describe:
+        // selection again on a copy of the frame's fade state.
+        double now = 0.0;
+        std::vector<std::string> described;
+        float worstIncoming = 0.f;
+        float worstOutgoing = 0.f;
+        std::string worstIncomingNode;
+        std::string worstOutgoingNode;
+        const auto describe = [&](const engine_core::Matrix4& cameraWorld, runner::TerrainFadeState copy) {
+            described.clear();
+            worstIncoming = worstOutgoing = 0.f;
+            worstIncomingNode = worstOutgoingNode = "none";
+            const engine_core::TerrainView& current = world.views()[0];
+            const auto keyLess = [](const engine_core::TerrainNodeView& a, const engine_core::TerrainNodeView& b) {
+                return std::tie(a.key.level, a.key.x, a.key.y, a.key.z) < std::tie(b.key.level, b.key.x, b.key.y, b.key.z);
+            };
+            std::vector<runner::NodeChoice> choices;
+            runner::SelectTerrainNodes(current, camera(cameraWorld), now, copy, choices);
+            const engine_core::Vec3 eyeAt = engine_core::matrix4_position(cameraWorld);
+            for (const runner::NodeChoice& choice : choices) {
+                const engine_core::TerrainNodeView& node = (*current.nodes)[choice.index];
+                const float dx = std::max({node.bounds_min.x - eyeAt.x, 0.f, eyeAt.x - node.bounds_max.x});
+                const float dy = std::max({node.bounds_min.y - eyeAt.y, 0.f, eyeAt.y - node.bounds_max.y});
+                const float dz = std::max({node.bounds_min.z - eyeAt.z, 0.f, eyeAt.z - node.bounds_max.z});
+                const float pixels = runner::NodePixelError(node.error, std::sqrt(dx * dx + dy * dy + dz * dz), 50.f, height);
+                int asked = 0;
+                int published = 0;
+                const std::array<terrain::NodeKey, 8> children = terrain::children_of(node.key);
+                for (int c = 0; c < 8; ++c) {
+                    if ((node.child_mask & (1u << c)) != 0) {
+                        ++asked;
+                        engine_core::TerrainNodeView probe;
+                        probe.key = children[static_cast<std::size_t>(c)];
+                        published += std::binary_search(current.nodes->begin(), current.nodes->end(), probe, keyLess) ? 1 : 0;
+                    }
+                }
+                char text[128];
+                std::snprintf(text, sizeof(text), "L%d(%d,%d,%d) %s %.2f, %.2f px, children %d of %d published",
+                              node.key.level, node.key.x, node.key.y, node.key.z, choice.incoming ? "in" : "out",
+                              choice.fade, pixels, published, asked);
+                described.emplace_back(text);
+                float& worst = choice.incoming ? worstIncoming : worstOutgoing;
+                if (pixels > worst) {
+                    worst = pixels;
+                    (choice.incoming ? worstIncomingNode : worstOutgoingNode) = text;
+                }
+            }
+        };
+        const auto check = [&](const std::vector<runner::MeshDraw>& draws, const engine_core::Matrix4& cameraWorld,
+                               const std::string& name, const std::string& picture) {
+            const FlatFrame lod = flatPass(draws, cameraWorld);
+            const FlatFrame full = flatPass(reference, cameraWorld);
+            runner::ViewPixels diffPicture;
+            const LodDiff diff = CompareFlat(lod, full, &diffPicture);
+            std::printf("%s: largest pixel error drawn: fading in or steady %.2f (%s); fading out %.2f (%s)\n",
+                        name.c_str(), worstIncoming, worstIncomingNode.c_str(), worstOutgoing, worstOutgoingNode.c_str());
+            // Which drawn nodes, each alone and whole, cover each crack or the pixels next to it.
+            if (!diff.crackAt.empty()) {
+                for (std::size_t i = 0; i < draws.size(); ++i) {
+                    if (draws[i].shadowOnly) {
+                        continue;
+                    }
+                    runner::MeshDraw whole = draws[i];
+                    whole.terrainFade = 1.f;
+                    whole.terrainFadeIn = true;
+                    const FlatFrame alone = flatPass({whole}, cameraWorld);
+                    for (const auto& at : diff.crackAt) {
+                        std::string around;
+                        for (int oy = -1; oy <= 1; ++oy) {
+                            for (int ox = -1; ox <= 1; ++ox) {
+                                const int px = std::min(std::max(at.first + ox, 0), width - 1);
+                                const int py = std::min(std::max(at.second + oy, 0), height - 1);
+                                around += alone.at(px, py) >= 0 ? '#' : '.';
+                            }
+                        }
+                        if (around != ".........") {
+                            std::printf("  crack (%d, %d): draw %zu %s covers 3x3 %s\n", at.first, at.second, i,
+                                        i < described.size() ? described[i].c_str() : "?", around.c_str());
+                        }
+                    }
+                }
+            }
+            const double materialFar =
+                diff.referenceCovered > 0 ? 100.0 * static_cast<double>(diff.materialFar) / diff.referenceCovered : 0.0;
+            std::printf("%s: %s | covered: full %lld, LOD %lld | cracks %lld, outside %lld, edge %lld | material "
+                        "differs %lld, far %lld (%.3f%%)\n",
+                        name.c_str(), LodSummary(draws).c_str(), static_cast<long long>(diff.referenceCovered),
+                        static_cast<long long>(diff.lodCovered), static_cast<long long>(diff.cracks),
+                        static_cast<long long>(diff.outside), static_cast<long long>(diff.edgeDifferences),
+                        static_cast<long long>(diff.materialDiffers), static_cast<long long>(diff.materialFar),
+                        materialFar);
+            worstCracks = std::max(worstCracks, diff.cracks);
+            worstOutside = std::max(worstOutside, diff.outside);
+            worstMaterialFar = std::max(worstMaterialFar, materialFar);
+            Expect(diff.referenceCovered * 20 > static_cast<std::int64_t>(width) * height,
+                   name + ": the full detail covers over 5% of the frame");
+            Expect(diff.cracks == 0, name + ": no cracks (" + std::to_string(diff.cracks) + " pixels)");
+            Expect(diff.outside == 0, name + ": nothing outside the true silhouette (" + std::to_string(diff.outside) +
+                                          " pixels)");
+            Expect(materialFar < 0.05, name + ": no wrong-material triangles (" + std::to_string(diff.materialFar) +
+                                           " pixels)");
+            if (!picture.empty() || diff.cracks > 0 || diff.outside > 0 || materialFar >= 0.05) {
+                write(diffPicture, picture.empty() ? "lod-diff-" + name + ".png" : picture);
+            }
+        };
+        // Selection from a fresh fade state, repeated at the same moment until
+        // every out-of-view shadow caster is uploaded (16 a frame).
+        const auto still = [&](const engine_core::Matrix4& cameraWorld) {
+            runner::TerrainFadeState fresh;
+            std::vector<runner::MeshDraw> out;
+            std::size_t last = 0;
+            for (int warm = 0; warm < 400; ++warm) {
+                out.clear();
+                runner::AppendTerrainDraws(world.views(), camera(cameraWorld), now, fresh, meshes, renderer, out);
+                if (warm > 0 && out.size() == last) {
+                    break;
+                }
+                last = out.size();
+            }
+            describe(cameraWorld, fresh);
+            return out;
+        };
+        // One still shot: lit, the full detail lit, checked, and level-tinted.
+        const auto stillShot = [&](const engine_core::Matrix4& cameraWorld, const std::string& name) {
+            const std::vector<runner::MeshDraw> shot = still(cameraWorld);
+            const engine_core::TerrainView& current = world.views()[0];
+            litShot(shot, cameraWorld, "lod-" + name + ".png");
+            litShot(TerrainDraws(chunks, renderer.terrainLookTexture(current.terrain, *current.look)), cameraWorld,
+                    "lod-" + name + "-full-detail.png");
+            check(shot, cameraWorld, name, "lod-diff-" + name + ".png");
+            if (colors) {
+                runner::SetTerrainLodColors(true);
+                litShot(shot, cameraWorld, "lod-colors-" + name + ".png");
+                runner::SetTerrainLodColors(false);
+            }
+            now += 10.0;
+        };
+        stillShot(lookFrom(grazingEye, grazingAt), "grazing");
+        const engine_core::Matrix4 far = lookFrom(farEye, farAt);
+        settle(400);
+        stillShot(far, "far");
+        std::vector<runner::MeshDraw> draws;
+
+        // 30 frames 0.1 s apart from the far camera down to 4 units over the
+        // ground at (endX, endZ), looking at endAt by the end, every one
+        // checked, every 10th (and the last) written, and the one with the
+        // most nodes cross-fading. label names the frames; returns that most.
+        constexpr int kFrames = 30;
+        constexpr double kFrameSeconds = 0.1;
+        const auto descend = [&](const char* label, float endX, float endZ, const engine_core::Vec3& endAt) {
+            runner::TerrainFadeState fades;
+            worstCracks = worstOutside = 0;
+            worstMaterialFar = 0.0;
+            int mostFading = 0;
+            int mostFadingFrame = -1;
+            std::vector<runner::MeshDraw> mostFadingDraws;
+            engine_core::Matrix4 mostFadingCamera = engine_core::matrix4_identity();
+            const Clock::time_point sequence = Clock::now();
+            for (int frame = 0; frame < kFrames; ++frame) {
+                const float s = static_cast<float>(frame) / static_cast<float>(kFrames - 1);
+                const float x = farEye.x + (endX - farEye.x) * s;
+                const float z = farEye.z + (endZ - farEye.z) * s;
+                const float startAbove = farEye.y - ground(farEye.x, farEye.z);
+                const float above = startAbove * std::pow(4.f / startAbove, s);
+                const engine_core::Vec3 from{x, ground(x, z) + above, z};
+                const engine_core::Vec3 to{farAt.x + (endAt.x - farAt.x) * s, farAt.y + (endAt.y - farAt.y) * s,
+                                           farAt.z + (endAt.z - farAt.z) * s};
+                const engine_core::Matrix4 cameraWorld = lookFrom(from, to);
+                // The pool keeps up: what this frame's camera queued is built and published.
+                world.update(game);
+                world.wait_idle();
+                world.update(game);
+                draws.clear();
+                describe(cameraWorld, fades);
+                runner::AppendTerrainDraws(world.views(), camera(cameraWorld), now, fades, meshes, renderer, draws);
+                char name[32];
+                std::snprintf(name, sizeof(name), "%s-%02d", label, frame);
+                int fading = 0;
+                LodSummary(draws, &fading);
+                const bool written = frame % 10 == 0 || frame == kFrames - 1;
+                check(draws, cameraWorld, name, "");
+                if (written) {
+                    litShot(draws, cameraWorld, std::string("lod-") + name + ".png");
+                } else if (fading > mostFading) {
+                    mostFading = fading;
+                    mostFadingFrame = frame;
+                    mostFadingDraws = draws;
+                    mostFadingCamera = cameraWorld;
+                }
+                now += kFrameSeconds;
+            }
+            std::printf("lod %s: %d frames in %.2f s; worst cracks %lld, outside %lld, wrong material %.3f%%\n", label,
+                        kFrames, seconds(sequence), static_cast<long long>(worstCracks),
+                        static_cast<long long>(worstOutside), worstMaterialFar);
+            if (mostFadingFrame >= 0) {
+                char name[48];
+                std::snprintf(name, sizeof(name), "lod-%s-fade-%02d.png", label, mostFadingFrame);
+                std::printf("the %s descent's most cross-fading frame: %d (%d nodes fading)\n", label, mostFadingFrame,
+                            mostFading);
+                litShot(mostFadingDraws, mostFadingCamera, name);
+            }
+            return mostFading;
+        };
+        // Down onto the rolling grass west of the ridge, looking on west across it.
+        const int mostFading = descend("seq", 400.f, 560.f,
+                                       engine_core::Vec3{220.f, ground(220.f, 680.f), 680.f});
+        Expect(mostFading > 0, "the sequence cross-fades between levels");
+        // Down onto the ridge's west flank, 12 units below its crest at (560,
+        // 512), looking up into the rock face: where a coarse level-1 node once
+        // dithered out near the camera with the wrong material (0.72%).
+        lookFrom(farEye, farAt);
+        settle(400);
+        descend("ridge", 550.4f, 504.8f, engine_core::Vec3{560.f, ground(560.f, 512.f) + 2.f, 512.f});
+
+        // From off the island's corner, 1300 units from its middle: its far
+        // half lies past 1000 units, which the far plane (kSceneFar) once cut off.
+        const engine_core::Vec3 outerEye{-350.f, 500.f, -350.f};
+        const engine_core::Matrix4 outer = lookFrom(outerEye, farAt);
+        settle(400);
+        stillShot(outer, "far-4000");
+
+        // A bomb by a close camera (rulings R24, R26): a ball of radius 8 out
+        // of the ground where its top is in chunk y 1 (so the air chunks
+        // queued above it sit in level-1 nodes with no surface), seen from 40
+        // units off and 6 above the ground. Frames at 60 fps while the pool
+        // works unwaited: none may fade, or draw the edit's 3 x 3 x 3 chunks
+        // with a coarser node than before it, and each is checked against the
+        // full detail after the edit: no see-through crack in any frame. Its
+        // own TerrainWorld, with 64 workers and a hook that can hold air
+        // chunk jobs (the rest of the shots use a normal pool); its own mesh
+        // cache, since its revisions start again from 1.
+        {
+            std::atomic<bool> holdAir{false};
+            engine_core::TerrainWorld editWorld(
+                [&holdAir](const terrain::ChunkMesh& mesh) -> std::shared_ptr<void> {
+                    while (mesh.triangles.empty() && holdAir.load()) {
+                        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                    }
+                    return nullptr;
+                },
+                64);
+            struct Release {
+                std::atomic<bool>& hold;
+                ~Release() { hold = false; }
+            } release{holdAir};
+            runner::MeshCache editMeshes;
+            runner::TerrainFadeState editFades;
+            // The first spot from the middle outwards whose ground is 38 to 56 units high.
+            engine_core::Vec3 bomb{kIslandMiddle, ground(kIslandMiddle, kIslandMiddle), kIslandMiddle};
+            for (float r = 0.f; r < 300.f && !(bomb.y >= 38.f && bomb.y <= 56.f); r += 8.f) {
+                for (float a = 0.f; a < 6.2832f; a += 0.1f) {
+                    const float x = kIslandMiddle + r * std::cos(a);
+                    const float z = kIslandMiddle + r * std::sin(a);
+                    if (ground(x, z) >= 38.f && ground(x, z) <= 56.f) {
+                        bomb = engine_core::Vec3{x, ground(x, z), z};
+                        break;
+                    }
+                }
+            }
+            const engine_core::Vec3 editEye{bomb.x - 40.f, std::max(ground(bomb.x - 40.f, bomb.z), bomb.y) + 6.f,
+                                            bomb.z};
+            const engine_core::Matrix4 editCamera = lookFrom(editEye, bomb);
+            const Clock::time_point editSettle = Clock::now();
+            settleWorld(editWorld, 400);
+            std::printf("lod edit: its own pool settled in %.2f s\n", seconds(editSettle));
+            constexpr float kChunkUnits = static_cast<float>(terrain::kChunkSize);
+            const int bombChunk[3] = {static_cast<int>(std::floor(bomb.x / kChunkUnits)),
+                                      static_cast<int>(std::floor(bomb.y / kChunkUnits)),
+                                      static_cast<int>(std::floor(bomb.z / kChunkUnits))};
+            std::printf("lod edit: a bomb at (%.0f, %.0f, %.0f), chunk (%d, %d, %d)\n", bomb.x, bomb.y, bomb.z,
+                        bombChunk[0], bombChunk[1], bombChunk[2]);
+            Expect(bombChunk[1] == 1, "lod edit: the bomb's ground is in chunk y 1");
+            // The coarsest level drawn over the edit's chunks, and how many draws fade.
+            const auto editFrame = [&](int& coarsest, int& fadingDraws) {
+                runner::TerrainFadeState copy = editFades;
+                std::vector<runner::NodeChoice> choices;
+                const engine_core::TerrainView& current = editWorld.views()[0];
+                runner::SelectTerrainNodes(current, camera(editCamera), now, copy, choices);
+                coarsest = -1;
+                fadingDraws = 0;
+                for (const runner::NodeChoice& choice : choices) {
+                    const terrain::NodeKey& key = (*current.nodes)[choice.index].key;
+                    fadingDraws += (choice.fade < 1.f || !choice.incoming) ? 1 : 0;
+                    const int side = 1 << key.level;
+                    bool over = true;
+                    const int at[3] = {key.x, key.y, key.z};
+                    for (int a = 0; a < 3; ++a) {
+                        over = over && at[a] * side <= bombChunk[a] + 1 && (at[a] + 1) * side - 1 >= bombChunk[a] - 1;
+                    }
+                    if (over) {
+                        coarsest = std::max(coarsest, key.level);
+                    }
+                }
+                draws.clear();
+                runner::AppendTerrainDraws(editWorld.views(), camera(editCamera), now, editFades, editMeshes, renderer,
+                                           draws);
+            };
+            int before = -1;
+            int fadingBefore = 0;
+            for (int frame = 0; frame < 8; ++frame) {   // any fade from the camera's move is done
+                editWorld.update(game);
+                editFrame(before, fadingBefore);
+                now += 0.1;
+            }
+            Expect(fadingBefore == 0 && before >= 0, "lod edit: settled before the bomb (" +
+                                                         std::to_string(fadingBefore) + " fading, coarsest L" +
+                                                         std::to_string(before) + ")");
+            terrain::Shape ball;
+            ball.center = bomb;
+            ball.radius = 8.f;
+            // The air chunk jobs (no triangles) are held until the others have
+            // landed (no more for 50 frames): an order the pool may finish them
+            // in, made certain. R26: the edit's batch waits for all of them.
+            holdAir = true;
+            const std::uint64_t meshedBefore = editWorld.meshed_count();
+            Expect(!placed.edit_volume([&](terrain::VoxelVolume& v) { return v.subtract(ball); }).has_value(),
+                   "lod edit: the bomb subtracts");
+            // The full detail after the edit, from the voxels (the pool has not seen the edit yet).
+            const Clock::time_point remeshing = Clock::now();
+            const auto chunksAfter = UploadTerrain(placed.volume());
+            const FlatFrame fullAfter = flatPass(TerrainDraws(chunksAfter, flatLook), editCamera);
+            std::printf("lod edit: the full detail after it, %d chunk meshes, %.2f s\n",
+                        static_cast<int>(chunksAfter.size()), seconds(remeshing));
+            int coarsestDuring = -1;
+            int fadingDuring = 0;
+            int framesNodesChanged = 0;
+            int framesNodesChangedHeld = 0;
+            int frames = 0;
+            int framesCracked = 0;
+            std::int64_t worstEditCracks = 0;
+            std::int64_t worstEditOutside = 0;
+            int worstEditFrame = -1;
+            runner::ViewPixels worstEditDiff;
+            std::uint64_t lastRevision = editWorld.views()[0].nodes_revision;
+            const auto oneFrame = [&](const char* shot, bool held) {
+                editWorld.update(game);
+                if (editWorld.views()[0].nodes_revision != lastRevision) {
+                    lastRevision = editWorld.views()[0].nodes_revision;
+                    ++framesNodesChanged;
+                    framesNodesChangedHeld += held && frames > 0 ? 1 : 0;
+                }
+                int coarsest = -1;
+                int fading = 0;
+                editFrame(coarsest, fading);
+                coarsestDuring = std::max(coarsestDuring, coarsest);
+                fadingDuring += fading;
+                // See-through: the full detail after the edit covers a pixel this frame leaves empty.
+                runner::ViewPixels diffPicture;
+                const LodDiff diff = CompareFlat(flatPass(draws, editCamera), fullAfter, &diffPicture);
+                framesCracked += diff.cracks > 0 ? 1 : 0;
+                worstEditOutside = std::max(worstEditOutside, diff.outside);
+                if (diff.cracks > worstEditCracks) {
+                    worstEditCracks = diff.cracks;
+                    worstEditFrame = frames;
+                    worstEditDiff = std::move(diffPicture);
+                }
+                if (shot != nullptr) {
+                    litShot(draws, editCamera, shot);
+                }
+                now += 1.0 / 60.0;
+                ++frames;
+            };
+            std::uint64_t landed = meshedBefore;
+            int heldFrames = 0;
+            for (int wait = 0, quiet = 0; wait < 3000 && (landed == meshedBefore || quiet < 50); ++wait) {
+                oneFrame(nullptr, true);
+                ++heldFrames;
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                quiet = editWorld.meshed_count() == landed ? quiet + 1 : 0;
+                landed = editWorld.meshed_count();
+            }
+            std::printf("lod edit: %d chunk jobs with triangles landed while the air ones were held\n",
+                        static_cast<int>(landed - meshedBefore));
+            Expect(landed > meshedBefore, "lod edit: the bomb's surface chunks landed");
+            for (int frame = 0; frame < 10; ++frame) {
+                oneFrame(frame == 9 ? "lod-edit-during.png" : nullptr, true);
+                ++heldFrames;
+            }
+            holdAir = false;
+            for (int frame = 0; frame < 50; ++frame) {
+                if (frame == 40) {
+                    editWorld.wait_idle();   // the rest lands; the last frames see the rebuilt nodes
+                }
+                oneFrame(frame == 49 ? "lod-edit-after.png" : nullptr, false);
+                std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            }
+            std::printf("lod edit: coarsest over the edit L%d before, L%d during; %d draws faded over %d frames; the "
+                        "node set changed in %d of them (%d while the air was held, after the edit's own frame)\n",
+                        before, coarsestDuring, fadingDuring, frames, framesNodesChanged, framesNodesChangedHeld);
+            std::printf("lod edit: against the full detail after it, %d of %d frames see through (worst %lld pixels, "
+                        "frame %d); outside %lld at most (the old surface over the crater, while held)\n",
+                        framesCracked, frames, static_cast<long long>(worstEditCracks), worstEditFrame,
+                        static_cast<long long>(worstEditOutside));
+            if (worstEditFrame >= 0) {
+                write(worstEditDiff, "lod-diff-edit-worst.png");
+            }
+            Expect(framesNodesChanged > 0, "lod edit: the bomb re-meshed nodes");
+            Expect(framesNodesChangedHeld == 0, "lod edit: nothing of the batch shows while part of it is held (" +
+                                                    std::to_string(framesNodesChangedHeld) + " frames changed)");
+            Expect(fadingDuring == 0, "lod edit: nothing fades (" + std::to_string(fadingDuring) + " draws)");
+            Expect(coarsestDuring <= before, "lod edit: nothing over it drawn coarser (L" +
+                                                 std::to_string(coarsestDuring) + " against L" +
+                                                 std::to_string(before) + ")");
+            Expect(framesCracked == 0, "lod edit: no frame sees through the edit (" + std::to_string(framesCracked) +
+                                           " frames, worst " + std::to_string(worstEditCracks) + " pixels)");
+            draws.clear();
+            runner::TerrainFadeState none;
+            runner::AppendTerrainDraws({}, runner::TerrainCamera{}, now, none, editMeshes, renderer, draws);
+            editMeshes.clear();
+        }
+
+        draws.clear();
+        runner::TerrainFadeState none;
+        runner::AppendTerrainDraws({}, runner::TerrainCamera{}, now, none, meshes, renderer, draws);
+        meshes.clear();
+    }
+    engine_core::set_thread_role(engine_core::ThreadRole::Unknown);
+    runner::GLuint texture = flatLook;
+    glDeleteTextures(1, &texture);
+    renderer.setLighting(lighting);
+    Expect(runner::rt_glGetError() == runner::GL_NO_ERROR, "the terrain LOD shots leave no GL error");
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -561,8 +1484,14 @@ int main(int argc, char** argv) {
     std::string regressionMode;
     std::filesystem::path regressionDir;
     std::filesystem::path terrainShots;
+    // --terrain-lod-colors (with --terrain-shots): the LOD shots again, tinted by level.
+    bool lodColors = false;
     for (int i = 1; i < argc; ++i) {
         const std::string flag = argv[i];
+        if (flag == "--terrain-lod-colors") {
+            lodColors = true;
+            continue;
+        }
         if ((flag == "--save" || flag == "--compare" || flag == "--terrain-shots") && i + 1 < argc) {
             if (flag == "--terrain-shots") {
                 terrainShots = argv[++i];
@@ -572,7 +1501,7 @@ int main(int argc, char** argv) {
             }
             continue;
         }
-        std::fprintf(stderr, "usage: scene-render-check [--save dir | --compare dir] [--terrain-shots dir]\n");
+        std::fprintf(stderr, "usage: scene-render-check [--save dir | --compare dir] [--terrain-shots dir [--terrain-lod-colors]]\n");
         return 2;
     }
 
@@ -2196,18 +3125,22 @@ int main(int argc, char** argv) {
 
         // A ball of Id 1, with Id 1 pure red: the middle of the view is red.
         // Through AppendTerrainDraws, as the Scene View draws a snapshot's
-        // Terrains: MeshCache::getTerrainChunk and Renderer::terrainLookTexture.
+        // Terrains: SelectTerrainNodes, MeshCache::getTerrainNode and
+        // Renderer::terrainLookTexture. The chunks are level-0 nodes, each a root.
         {
             terrain::VoxelVolume volume(0.25f);
             Edit(volume.fill(Ball(0.f, 0.f, 0.f, 1.5f), 1), "the red ball");
             engine_core::TerrainView view;
             view.terrain = 77;
             view.chunks = MeshChunks(volume, 1);
+            view.nodes = ChunkNodes(*view.chunks, 0.25f);
             view.look = MakeLook(LookBytes({{1, 255, 0, 0}}), 1);
             Expect(!view.chunks->empty(), "the red ball meshes (" + std::to_string(view.chunks->size()) + " chunks)");
             runner::MeshCache chunkMeshes;
+            runner::TerrainFadeState fades;
+            const runner::TerrainCamera camera = RendererCamera(renderer, kSize, kSize);
             std::vector<runner::MeshDraw> draws;
-            runner::AppendTerrainDraws({view}, chunkMeshes, renderer, draws);
+            runner::AppendTerrainDraws({view}, camera, 0.0, fades, chunkMeshes, renderer, draws);
             Expect(draws.size() == view.chunks->size() && draws.front().terrainLook != 0 &&
                        draws.front().owner == 77 && draws.front().slot == 0,
                    "each chunk is a MeshDraw with the Terrain's look, owned by it, drawn alone");
@@ -2219,13 +3152,43 @@ int main(int argc, char** argv) {
             Expect(renderer.stats().runs == static_cast<int>(draws.size()),
                    "each terrain chunk is a run of its own (" + std::to_string(renderer.stats().runs) + " runs, " +
                        std::to_string(draws.size()) + " chunks)");
+            // R7: SetTerrainLodColors tints each draw by its level: level 5's
+            // blue over the red ball while on, and the red again once off.
+            {
+                Expect(!runner::TerrainLodColors(), "terrain LOD colors are off by default");
+                Expect(draws.front().terrainLevel == 0, "a chunk's node draws as level 0");
+                std::vector<runner::MeshDraw> tinted = draws;
+                for (runner::MeshDraw& draw : tinted) {
+                    draw.terrainLevel = 5;
+                }
+                runner::SetTerrainLodColors(true);
+                renderer.draw(0, 0, kSize, kSize, kSize, kSize, tinted.data(), static_cast<int>(tinted.size()));
+                const Pixel blue = ReadPixel(fbWidth / 2, fbHeight / 2);
+                runner::SetTerrainLodColors(false);
+                Expect(blue.b > blue.r + 40 && blue.b > blue.g + 40,
+                       "with LOD colors on, a level-5 node draws in level 5's blue (" + Text(blue) + ")");
+                renderer.draw(0, 0, kSize, kSize, kSize, kSize, tinted.data(), static_cast<int>(tinted.size()));
+                const Pixel red = ReadPixel(fbWidth / 2, fbHeight / 2);
+                Expect(red.r > red.g + 40 && red.r > red.b + 40,
+                       "and in its look's red once they are off (" + Text(red) + ")");
+            }
+            // The same draws as shadow casters only (terrain out of view, R15): nothing shows.
+            {
+                std::vector<runner::MeshDraw> casting = draws;
+                for (runner::MeshDraw& draw : casting) {
+                    draw.shadowOnly = true;
+                }
+                renderer.draw(0, 0, kSize, kSize, kSize, kSize, casting.data(), static_cast<int>(casting.size()));
+                const Pixel hidden = ReadPixel(fbWidth / 2, fbHeight / 2);
+                Expect(IsClear(hidden), "the ball's draws as shadow casters only are not seen (" + Text(hidden) + ")");
+            }
 
             // A new look (Id 1 green) on the same chunks: the same uploads and
             // texture name, the new texels.
             engine_core::TerrainView green = view;
             green.look = MakeLook(LookBytes({{1, 0, 255, 0}}), 2);
             std::vector<runner::MeshDraw> greenDraws;
-            runner::AppendTerrainDraws({green}, chunkMeshes, renderer, greenDraws);
+            runner::AppendTerrainDraws({green}, camera, 0.0, fades, chunkMeshes, renderer, greenDraws);
             Expect(greenDraws.size() == draws.size() && greenDraws.front().mesh == draws.front().mesh &&
                        greenDraws.front().terrainLook == draws.front().terrainLook,
                    "a new look revision keeps the chunk uploads and the texture");
@@ -2235,7 +3198,7 @@ int main(int argc, char** argv) {
                    "and draws in the new look's green (" + Text(turned) + ")");
             // Back to red (another revision change), for the frame with a cube.
             draws.clear();
-            runner::AppendTerrainDraws({view}, chunkMeshes, renderer, draws);
+            runner::AppendTerrainDraws({view}, camera, 0.0, fades, chunkMeshes, renderer, draws);
 
             // Behind a cube: the cube's material program and the terrain's in one frame.
             GpuMesh mixCube;
@@ -2254,10 +3217,81 @@ int main(int argc, char** argv) {
                    "with a cube beside it, the ball stays red and the cube blue (" + Text(stillRed) + " and " +
                        Text(cubeBlue) + ")");
             mixCube.destroy();
-            // No Terrains: the sweeps delete the uploads and the look.
+
+            // A cross-fade halfway: the red ball fading in and the same meshes
+            // in green fading out cover the ball's pixels between them, each
+            // about half, and nothing shows the clear color through.
+            {
+                const std::vector<std::uint8_t> greenBytes = LookBytes({{1, 0, 255, 0}});
+                const unsigned greenLook = runner::MakeTerrainLookTexture(greenBytes.data());
+                std::vector<runner::MeshDraw> fading;
+                for (const runner::MeshDraw& draw : draws) {
+                    runner::MeshDraw in = draw;
+                    in.terrainFade = 0.5f;
+                    in.terrainFadeIn = true;
+                    runner::MeshDraw out = draw;
+                    out.terrainLook = greenLook;
+                    out.terrainFade = 0.5f;
+                    out.terrainFadeIn = false;
+                    fading.push_back(in);
+                    fading.push_back(out);
+                }
+                renderer.draw(0, 0, kSize, kSize, kSize, kSize, fading.data(), static_cast<int>(fading.size()));
+                int reds = 0;
+                int greens = 0;
+                int clear = 0;
+                for (int dy = -4; dy < 4; ++dy) {
+                    for (int dx = -4; dx < 4; ++dx) {
+                        const Pixel p = ReadPixel(fbWidth / 2 + dx, fbHeight / 2 + dy);
+                        if (p.r > p.g + 10) {
+                            ++reds;
+                        } else if (p.g > p.r + 10) {
+                            ++greens;
+                        } else if (IsClear(p)) {
+                            ++clear;
+                        }
+                    }
+                }
+                // The pattern is 4 x 4, so 8 x 8 holds it four times; antialiasing
+                // blends neighbors toward each other (a pixel leans red or green
+                // rather than being pure), but none is left empty.
+                Expect(reds >= 8 && greens >= 8 && clear == 0,
+                       "a half cross-fade dithers the two levels over every pixel (" + std::to_string(reds) +
+                           " red, " + std::to_string(greens) + " green, " + std::to_string(clear) +
+                           " clear of 64; the middle " + Text(ReadPixel(fbWidth / 2, fbHeight / 2)) + ", beside it " +
+                           Text(ReadPixel(fbWidth / 2 + 1, fbHeight / 2)) + ")");
+                // The one fading in alone, at half: the dither leaves holes.
+                std::vector<runner::MeshDraw> half;
+                for (std::size_t i = 0; i < fading.size(); i += 2) {
+                    half.push_back(fading[i]);
+                }
+                renderer.draw(0, 0, kSize, kSize, kSize, kSize, half.data(), static_cast<int>(half.size()));
+                int holes = 0;
+                for (int dy = -4; dy < 4; ++dy) {
+                    for (int dx = -4; dx < 4; ++dx) {
+                        const Pixel p = ReadPixel(fbWidth / 2 + dx, fbHeight / 2 + dy);
+                        holes += p.r > p.g + 10 ? 0 : 1;
+                    }
+                }
+                Expect(holes >= 8, "one level alone at half a fade dithers away part of it (" + std::to_string(holes) +
+                                       " of 64 not red)");
+                runner::GLuint texture = greenLook;
+                glDeleteTextures(1, &texture);
+            }
+
+            // No Terrains: the looks go at once; the uploads stay for the
+            // grace period, then go.
             draws.clear();
-            runner::AppendTerrainDraws({}, chunkMeshes, renderer, draws);
+            runner::AppendTerrainDraws({}, camera, 1.0, fades, chunkMeshes, renderer, draws);
             Expect(draws.empty(), "no Terrains draw nothing");
+            Expect(chunkMeshes.terrainNodeCount() == view.chunks->size(),
+                   "the node uploads stay a while after they stop drawing (" +
+                       std::to_string(chunkMeshes.terrainNodeCount()) + ")");
+            runner::AppendTerrainDraws({}, camera, 1.0 + runner::MeshCache::kTerrainNodeGraceSeconds, fades, chunkMeshes,
+                                       renderer, draws);
+            Expect(chunkMeshes.terrainNodeCount() == 0,
+                   "and are deleted once not drawn for the grace period (" +
+                       std::to_string(chunkMeshes.terrainNodeCount()) + " left)");
             chunkMeshes.clear();
             Expect(runner::rt_glGetError() == runner::GL_NO_ERROR, "the red terrain ball leaves no GL error");
         }
@@ -2431,12 +3465,19 @@ int main(int argc, char** argv) {
                     game.set_parent(placed.id(), game.scene_service("Workspace"));
                     build(game, placed);
                     engine_core::TerrainWorld world;
-                    // As TS1's settle: until every queued chunk is meshed and collected.
-                    for (int pass = 0; pass < 4; ++pass) {
+                    // As TS1's settle, and on until every LOD level is built: until
+                    // an update after the pool is idle publishes no new node set.
+                    std::uint64_t settled = ~std::uint64_t{0};
+                    for (int pass = 0; pass < 64; ++pass) {
                         world.update(game);
                         world.wait_idle();
+                        world.update(game);
+                        const std::uint64_t revision = world.views().empty() ? 0 : world.views()[0].nodes_revision;
+                        if (revision == settled) {
+                            break;
+                        }
+                        settled = revision;
                     }
-                    world.update(game);
                     engine_core::SnapshotPump pump;
                     pump.reserve(engine_core::DataModel::kMaxInstances);
                     pump.set_terrain_world(&world);
@@ -2446,14 +3487,90 @@ int main(int argc, char** argv) {
                     Expect(snapshot.terrains.size() == 1 && snapshot.terrains[0].chunks != nullptr &&
                                !snapshot.terrains[0].chunks->empty() && snapshot.terrains[0].look != nullptr,
                            "the snapshot carries the Terrain's chunks and look");
+                    Expect(snapshot.terrains.size() == 1 && snapshot.terrains[0].nodes != nullptr &&
+                               !snapshot.terrains[0].nodes->empty(),
+                           "and its LOD nodes (top level " +
+                               std::to_string(snapshot.terrains.empty() ? -1 : snapshot.terrains[0].top_level) + ")");
                     runner::MeshCache chunkMeshes;
                     std::vector<runner::MeshDraw> draws;
-                    runner::AppendTerrainDraws(snapshot.terrains, chunkMeshes, renderer, draws);
                     for (const TerrainShot& shot : shots) {
+                        // Selected for this shot's camera on the 1280 x 720 target, with no fade from another.
+                        runner::TerrainCamera camera;
+                        camera.world = ShotCamera(shot);
+                        camera.fov_y_degrees = shot.fov;
+                        camera.pane_width = kShotWidth;
+                        camera.pane_height = kShotHeight;
+                        runner::TerrainFadeState fades;
+                        draws.clear();
+                        runner::AppendTerrainDraws(snapshot.terrains, camera, 0.0, fades, chunkMeshes, renderer, draws);
+                        // Which levels it drew, for the log.
+                        int levels[16] = {};
+                        std::vector<runner::NodeChoice> choices;
+                        runner::TerrainFadeState counting;
+                        runner::SelectTerrainNodes(snapshot.terrains[0], camera, 0.0, counting, choices);
+                        std::string histogram;
+                        for (const runner::NodeChoice& choice : choices) {
+                            ++levels[std::min((*snapshot.terrains[0].nodes)[choice.index].key.level, 15)];
+                        }
+                        for (int level = 0; level < 16; ++level) {
+                            if (levels[level] > 0) {
+                                histogram += " L" + std::to_string(level) + "x" + std::to_string(levels[level]);
+                            }
+                        }
+                        const int shadowOnly = static_cast<int>(
+                            std::count_if(draws.begin(), draws.end(),
+                                          [](const runner::MeshDraw& draw) { return draw.shadowOnly; }));
+                        std::printf("%s: %d nodes drawn (and %d casting shadows only) of %d published:%s\n",
+                                    shot.file.c_str(), static_cast<int>(draws.size()) - shadowOnly, shadowOnly,
+                                    static_cast<int>(snapshot.terrains[0].nodes->size()), histogram.c_str());
                         shootDraws(draws, shot);
                     }
+                    // What a prefetch (or a switch) costs a node: its unpack and
+                    // upload, timed to the GPU having it (a pixel read waits), each node
+                    // into a cache that has none.
+                    {
+                        runner::MeshCache timing;
+                        double compactMs = 0.0;
+                        double meshMs = 0.0;
+                        int compactCount = 0;
+                        int meshCount = 0;
+                        std::size_t compactTriangles = 0;
+                        std::size_t meshTriangles = 0;
+                        (void)ReadPixel(0, 0);
+                        for (const engine_core::TerrainNodeView& node : *snapshot.terrains[0].nodes) {
+                            const auto start = std::chrono::steady_clock::now();
+                            if (node.compact != nullptr) {
+                                timing.getTerrainNode(1, node.key, *node.compact, node.revision);
+                            } else if (node.mesh != nullptr) {
+                                timing.getTerrainNode(1, node.key, *node.mesh, node.revision);
+                            }
+                            (void)ReadPixel(0, 0);
+                            const double took =
+                                std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start)
+                                    .count();
+                            if (node.compact != nullptr) {
+                                compactMs += took;
+                                ++compactCount;
+                                compactTriangles += (node.compact->indices.size() + node.compact->indices32.size()) / 3;
+                            } else if (node.mesh != nullptr) {
+                                meshMs += took;
+                                ++meshCount;
+                                meshTriangles += node.mesh->indices.size() / 3;
+                            }
+                        }
+                        std::printf("node upload: %d compact nodes (levels >= 1) unpack + upload %.3f ms each, "
+                                    "%zu triangles each; %d level-0 nodes upload %.3f ms each, %zu triangles each\n",
+                                    compactCount, compactCount > 0 ? compactMs / compactCount : 0.0,
+                                    compactCount > 0 ? compactTriangles / static_cast<std::size_t>(compactCount) : 0,
+                                    meshCount, meshCount > 0 ? meshMs / meshCount : 0.0,
+                                    meshCount > 0 ? meshTriangles / static_cast<std::size_t>(meshCount) : 0);
+                        timing.clear();
+                    }
                     draws.clear();
-                    runner::AppendTerrainDraws({}, chunkMeshes, renderer, draws);
+                    // No Terrains: the look goes, so the next Game's Terrain (the same
+                    // id, a fresh TerrainWorld's look revisions) makes its own.
+                    runner::TerrainFadeState none;
+                    runner::AppendTerrainDraws({}, runner::TerrainCamera{}, 0.0, none, chunkMeshes, renderer, draws);
                     chunkMeshes.clear();
                     pump.set_terrain_world(nullptr);
                 }
@@ -2506,6 +3623,19 @@ int main(int argc, char** argv) {
                     Edit(placed.volume().fill(Ball(-14.f, 2.f, 10.f, 5.f), 2), "a clay mound in the grass");
                 },
                 {TerrainShot{"terrain-snapshot-two-materials.png", {40.f, 6.f, 0.f}, 70.f, 28.f, 60.f, 50.f}});
+
+            // Terrain LOD: the large island, its still shots and its sequence
+            // checked against full detail, and with --terrain-lod-colors the
+            // same shots tinted by level.
+            if (lodColors) {
+                std::string legend;
+                for (int level = 0; level < 8; ++level) {
+                    legend += std::string(level > 0 ? ", L" : "L") + std::to_string(level) + " " +
+                              runner::kTerrainLodColors[level].name;
+                }
+                std::printf("terrain LOD level colors: %s\n", legend.c_str());
+            }
+            TerrainLodShots(renderer, target, kShotWidth, kShotHeight, lighting, state, terrainShots, lodColors);
 
             runner::GLuint texture = look;
             glDeleteTextures(1, &texture);

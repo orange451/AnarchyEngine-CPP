@@ -2,20 +2,29 @@
 
 #include "MeshCache.hpp"
 #include "Renderer.hpp"
+#include "TerrainSelection.hpp"
 #include "TerrainWorld.hpp"
 
 #include <vector>
 
 namespace runner {
 
-// Appends a MeshDraw to out for each meshed chunk of each Terrain in
-// terrains (a VisualSnapshot's): the chunk's upload from meshes, at the
-// Terrain's Transform, drawn with its look table from renderer. Then sweeps
-// both caches, so chunks and looks no Terrain shows any more are deleted.
-// Once a frame, on RenderThread with the GL context current. The views are
-// the snapshot's immutable copies, so it takes no DataModel lock. GameView's
-// collectMeshes calls it, and scene-render-check, to draw what the Scene View draws.
-void AppendTerrainDraws(const std::vector<engine_core::TerrainView>& terrains, MeshCache& meshes, Renderer& renderer,
+// Appends a MeshDraw for each LOD node SelectTerrainNodes chooses of each
+// Terrain in terrains (a VisualSnapshot's), seen from camera at now_seconds
+// (any origin, never decreasing): the node's upload from meshes, at the
+// Terrain's Transform, drawn with its look table from renderer, with its fade
+// (MeshDraw::terrainFade, terrainFadeIn); then a shadow-only MeshDraw
+// (MeshDraw::shadowOnly) for each node SelectTerrainCasters adds out of view,
+// and uploads (at most kTerrainPrefetchUploads a frame) and keeps the finer
+// nodes SelectTerrainPrefetch picks. fades carries the cross-fades from
+// frame to frame. Then sweeps: node uploads not asked for in
+// MeshCache::kTerrainNodeGraceSeconds, looks no Terrain shows, and fades of
+// Terrains gone. Once a frame, on RenderThread with the GL context current.
+// The views are the snapshot's immutable copies, so it takes no DataModel
+// lock. GameView's collectMeshes calls it, and scene-render-check, to draw
+// what the Scene View draws.
+void AppendTerrainDraws(const std::vector<engine_core::TerrainView>& terrains, const TerrainCamera& camera,
+                        double now_seconds, TerrainFadeState& fades, MeshCache& meshes, Renderer& renderer,
                         std::vector<MeshDraw>& out);
 
 }  // namespace runner

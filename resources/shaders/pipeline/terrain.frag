@@ -90,22 +90,38 @@ vec3 unpackNormalRG(vec2 rg) {
 // anti-tiling offset from a low-frequency noise texture), and each
 // projection's tangent-space normal reoriented ("whiteout") onto its own
 // world axis before the projections are summed.
-void sampleMaterialTriplanar(float layer, float scale, vec3 n, vec3 localPos, vec3 aw, float mipBias,
-                              bool antiTiling, bool normalsOn, out vec3 color, out float height,
+//
+// ddxLocal/ddyLocal (dFdx/dFdy of vLocalPosition) are computed once in
+// main(), outside any data-dependent branch, and passed in: GLSL's implicit
+// per-pixel texture() LOD needs screen-space derivatives of the texture
+// coordinate, computed across a 2x2 pixel quad, and is undefined when the
+// branch that calls it (aw.x > 0.0, or the per-material loop above) is not
+// taken uniformly by every pixel in that quad -- exactly what happens right
+// at a triplanar axis's weight threshold, where a neighboring pixel can
+// cross from "projection active" to "not," and the undefined LOD often came
+// out far too coarse (a flat, blurred patch with the triangle's own hard
+// edges, not a smooth transition). Each axis instead builds its own
+// derivative from the one taken outside any branch, so textureGrad's LOD
+// stays correct however the blend or the quality cap varies pixel to pixel.
+void sampleMaterialTriplanar(float layer, float scale, vec3 n, vec3 localPos, vec3 ddxLocal, vec3 ddyLocal, vec3 aw,
+                              float mipBias, bool antiTiling, bool normalsOn, out vec3 color, out float height,
                               out vec3 normalLocal, out float rough, out float metal) {
     color = vec3(0.0);
     height = 0.0;
     normalLocal = vec3(0.0);
     rough = 0.0;
     metal = 0.0;
+    float mipScale = exp2(mipBias);
     if (aw.x > 0.0) {
         vec2 uv = localPos.zy / scale;
+        vec2 ddxUv = ddxLocal.zy / scale * mipScale;
+        vec2 ddyUv = ddyLocal.zy / scale * mipScale;
         if (antiTiling) {
-            vec3 noiseSample = texture(uNoise, localPos.zy / (scale * 40.0)).rgb;
+            vec3 noiseSample = textureLod(uNoise, localPos.zy / (scale * 40.0), 0.0).rgb;
             uv += (noiseSample.rg - 0.5) * 0.5;
         }
-        vec4 a = texture(uSurfaceA, vec3(uv, layer), mipBias);
-        vec4 b = texture(uSurfaceB, vec3(uv, layer), mipBias);
+        vec4 a = textureGrad(uSurfaceA, vec3(uv, layer), ddxUv, ddyUv);
+        vec4 b = textureGrad(uSurfaceB, vec3(uv, layer), ddxUv, ddyUv);
         color += aw.x * a.rgb;
         height += aw.x * a.a;
         rough += aw.x * b.b;
@@ -115,12 +131,14 @@ void sampleMaterialTriplanar(float layer, float scale, vec3 n, vec3 localPos, ve
     }
     if (aw.y > 0.0) {
         vec2 uv = localPos.xz / scale;
+        vec2 ddxUv = ddxLocal.xz / scale * mipScale;
+        vec2 ddyUv = ddyLocal.xz / scale * mipScale;
         if (antiTiling) {
-            vec3 noiseSample = texture(uNoise, localPos.xz / (scale * 40.0)).rgb;
+            vec3 noiseSample = textureLod(uNoise, localPos.xz / (scale * 40.0), 0.0).rgb;
             uv += (noiseSample.rg - 0.5) * 0.5;
         }
-        vec4 a = texture(uSurfaceA, vec3(uv, layer), mipBias);
-        vec4 b = texture(uSurfaceB, vec3(uv, layer), mipBias);
+        vec4 a = textureGrad(uSurfaceA, vec3(uv, layer), ddxUv, ddyUv);
+        vec4 b = textureGrad(uSurfaceB, vec3(uv, layer), ddxUv, ddyUv);
         color += aw.y * a.rgb;
         height += aw.y * a.a;
         rough += aw.y * b.b;
@@ -130,12 +148,14 @@ void sampleMaterialTriplanar(float layer, float scale, vec3 n, vec3 localPos, ve
     }
     if (aw.z > 0.0) {
         vec2 uv = localPos.xy / scale;
+        vec2 ddxUv = ddxLocal.xy / scale * mipScale;
+        vec2 ddyUv = ddyLocal.xy / scale * mipScale;
         if (antiTiling) {
-            vec3 noiseSample = texture(uNoise, localPos.xy / (scale * 40.0)).rgb;
+            vec3 noiseSample = textureLod(uNoise, localPos.xy / (scale * 40.0), 0.0).rgb;
             uv += (noiseSample.rg - 0.5) * 0.5;
         }
-        vec4 a = texture(uSurfaceA, vec3(uv, layer), mipBias);
-        vec4 b = texture(uSurfaceB, vec3(uv, layer), mipBias);
+        vec4 a = textureGrad(uSurfaceA, vec3(uv, layer), ddxUv, ddyUv);
+        vec4 b = textureGrad(uSurfaceB, vec3(uv, layer), ddxUv, ddyUv);
         color += aw.z * a.rgb;
         height += aw.z * a.a;
         rough += aw.z * b.b;
@@ -199,6 +219,13 @@ void main() {
     bool normalsOn = uTerrainQuality == 2 || uNodeLevel < 2;
     float mipBias = uNodeLevel >= 2 ? 1.0 : 0.0;
 
+    // Computed once, unconditionally (every pixel in a quad executes this
+    // the same way), so sampleMaterialTriplanar's textureGrad calls -- made
+    // from inside per-pixel data-dependent branches below -- always get a
+    // correct LOD. See sampleMaterialTriplanar's own comment.
+    vec3 ddxLocal = dFdx(vLocalPosition);
+    vec3 ddyLocal = dFdy(vLocalPosition);
+
     vec3 colors[4];
     vec3 normals[4];
     float roughs[4];
@@ -221,8 +248,8 @@ void main() {
         vec3 sNormal;
         float sRough;
         float sMetal;
-        sampleMaterialTriplanar(look.layer, look.scale, n, vLocalPosition, aw, mipBias, antiTiling, normalsOn, sColor,
-                                sHeight, sNormal, sRough, sMetal);
+        sampleMaterialTriplanar(look.layer, look.scale, n, vLocalPosition, ddxLocal, ddyLocal, aw, mipBias, antiTiling,
+                                normalsOn, sColor, sHeight, sNormal, sRough, sMetal);
         colors[c] = sColor * look.color;
         roughs[c] = clamp(sRough * look.roughness, 0.03, 1.0);
         metals[c] = clamp(sMetal * look.metalness, 0.0, 1.0);

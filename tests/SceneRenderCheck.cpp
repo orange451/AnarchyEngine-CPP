@@ -484,34 +484,51 @@ void FillProceduralLevel(int size, int kind, std::vector<std::uint8_t>& a, std::
         const float fy = static_cast<float>(y) / static_cast<float>(size);
         for (int x = 0; x < size; ++x) {
             const float fx = static_cast<float>(x) / static_cast<float>(size);
+            // Three octaves of a sin*cos product, each a different
+            // (integer, so the sum stays exactly periodic over one tile --
+            // seamless under the array's GL_REPEAT) frequency pair, summed
+            // with falling weight. A single sin*cos term has broad, nearly
+            // flat plateaus near its extrema (its own two factors' peaks
+            // overlapping) wide enough to fully cover one of TX-R3's coarse
+            // triangles -- exactly the flat, pattern-less patch TX-R3 is
+            // supposed to catch (a real one, not a shader bug: found by
+          // reading back an actual render, not by inspection). Three
+            // unrelated frequencies essentially never plateau together, and
+            // the finest octave's own cycle is smaller than one triangle at
+            // this scene's TextureScale, so there is always visible
+            // variation inside any single triangle, however coarse the mesh.
+            const auto octaves = [&](float f1u, float f1v, float f2u, float f2v, float f3u, float f3v, float seed) {
+                const float o1 = std::sin(fx * 6.28318531f * f1u + seed) * std::cos(fy * 6.28318531f * f1v + seed * 1.6f);
+                const float o2 = std::sin(fx * 6.28318531f * f2u + seed * 2.1f) * std::cos(fy * 6.28318531f * f2v + seed * 0.7f);
+                const float o3 = std::sin(fx * 6.28318531f * f3u + seed * 3.3f) * std::cos(fy * 6.28318531f * f3v + seed * 1.1f);
+                return std::clamp(0.5f + 0.5f * (0.45f * o1 + 0.3f * o2 + 0.25f * o3), 0.f, 1.f);
+            };
             float r, g, bl, height, roughness, metalness;
             switch (kind) {
-                case 0: {  // stone: gray blotches
-                    const float n = 0.5f + 0.5f * std::sin(fx * 12.56637f * 3.f) * std::cos(fy * 12.56637f * 2.f);
-                    r = g = bl = 110.f + 50.f * n;
-                    height = 0.35f + 0.3f * n;
+                case 0: {  // stone: gray blotches, cracked at a fine scale
+                    const float n = octaves(3.f, 2.f, 7.f, 5.f, 17.f, 13.f, 0.f);
+                    r = g = bl = 60.f + 150.f * n;
+                    height = 0.2f + 0.6f * n;
                     roughness = 0.82f;
                     metalness = 0.02f;
                     break;
                 }
-                case 1: {  // grass: green with fine noise
-                    const float n = 0.5f + 0.5f * std::sin(fx * 12.56637f * 5.f + 1.f) *
-                                               std::cos(fy * 12.56637f * 4.f + 2.f);
-                    r = 55.f + 25.f * n;
-                    g = 130.f + 45.f * n;
-                    bl = 45.f + 20.f * n;
-                    height = 0.5f + 0.2f * n;
+                case 1: {  // grass: mottled bright/dark green tufts
+                    const float n = octaves(5.f, 4.f, 11.f, 9.f, 23.f, 19.f, 1.f);
+                    r = 25.f + 60.f * n;
+                    g = 60.f + 145.f * n;
+                    bl = 20.f + 50.f * n;
+                    height = 0.25f + 0.55f * n;
                     roughness = 0.9f;
                     metalness = 0.0f;
                     break;
                 }
-                default: {  // sand: tan noise
-                    const float n = 0.5f + 0.5f * std::sin(fx * 12.56637f * 7.f + 3.f) *
-                                               std::cos(fy * 12.56637f * 6.f + 4.f);
-                    r = 205.f + 25.f * n;
-                    g = 182.f + 22.f * n;
-                    bl = 140.f + 18.f * n;
-                    height = 0.4f + 0.18f * n;
+                default: {  // sand: dune-like ripples at a fine scale
+                    const float n = octaves(9.f, 2.f, 17.f, 15.f, 31.f, 29.f, 2.f);
+                    r = 155.f + 85.f * n;
+                    g = 130.f + 80.f * n;
+                    bl = 85.f + 65.f * n;
+                    height = 0.25f + 0.45f * n;
                     roughness = 0.75f;
                     metalness = 0.0f;
                     break;
@@ -1272,15 +1289,25 @@ void TerrainLodShots(runner::Renderer& renderer, OffscreenTarget& target, int wi
                 const float dy = std::max({node.bounds_min.y - eyeAt.y, 0.f, eyeAt.y - node.bounds_max.y});
                 const float dz = std::max({node.bounds_min.z - eyeAt.z, 0.f, eyeAt.z - node.bounds_max.z});
                 const float pixels = runner::NodePixelError(node.error, std::sqrt(dx * dx + dy * dy + dz * dz), 50.f, height);
+                // Fix round 1 (point 4): a level-0 node (a chunk) is always a
+                // leaf -- nodes_for_view never gives it a child_mask -- so
+                // children_of(node.key), which asserts level >= 1, must not
+                // run for one; this is where the TerrainLodShots crash came
+                // from, a pre-existing bug in this diagnostic lambda alone
+                // (every children_of() call in src/ already guards level ==
+                // 0), not in anything Task 6 touched.
                 int asked = 0;
                 int published = 0;
-                const std::array<terrain::NodeKey, 8> children = terrain::children_of(node.key);
-                for (int c = 0; c < 8; ++c) {
-                    if ((node.child_mask & (1u << c)) != 0) {
-                        ++asked;
-                        engine_core::TerrainNodeView probe;
-                        probe.key = children[static_cast<std::size_t>(c)];
-                        published += std::binary_search(current.nodes->begin(), current.nodes->end(), probe, keyLess) ? 1 : 0;
+                if (node.key.level >= 1) {
+                    const std::array<terrain::NodeKey, 8> children = terrain::children_of(node.key);
+                    for (int c = 0; c < 8; ++c) {
+                        if ((node.child_mask & (1u << c)) != 0) {
+                            ++asked;
+                            engine_core::TerrainNodeView probe;
+                            probe.key = children[static_cast<std::size_t>(c)];
+                            published +=
+                                std::binary_search(current.nodes->begin(), current.nodes->end(), probe, keyLess) ? 1 : 0;
+                        }
                     }
                 }
                 char text[128];
@@ -3696,6 +3723,65 @@ int main(int argc, char** argv) {
                 }
                 return widest;
             };
+            // The smallest luma range (max - min) found in any window x
+            // window block that lies inside the terrain silhouette (differs
+            // from sky at its center by PixelSum): a real texture never
+            // shows a window this flat, so a small result catches a locally
+            // flat, pattern-less patch -- the "flat-shaded triangle" TX-R3
+            // guards against -- wherever it falls, not just at a border.
+            // Relative (range / mean), not absolute, contrast: a window in
+            // shadow legitimately has a smaller absolute luma range than the
+            // same texture lit -- shading multiplies albedo, so it scales
+            // every value in the window by about the same factor, leaving
+            // the *ratio* close to what full light would show. A window
+            // near black (mean < 12) is skipped: too close to zero for a
+            // ratio to mean anything, and a real texture does go briefly
+            // dark at a true shadow edge or crevice.
+            const auto SmallestLocalRange = [&](const runner::ViewPixels& pixels, const runner::ViewPixels& sky,
+                                                int window) {
+                double worst = 1.0e9;
+                for (int y = 0; y + window <= pixels.height; y += window) {
+                    for (int x = 0; x + window <= pixels.width; x += window) {
+                        // Every corner (not just the center) differs from sky:
+                        // keeps a window straddling the silhouette's own edge
+                        // (part terrain, part background -- legitimately
+                        // low-contrast where antialiasing blends the two) out
+                        // of consideration, so only windows solidly inside the
+                        // textured surface are checked.
+                        const int corners[4][2] = {{x, y},
+                                                   {x + window - 1, y},
+                                                   {x, y + window - 1},
+                                                   {x + window - 1, y + window - 1}};
+                        bool allTerrain = true;
+                        for (const auto& corner : corners) {
+                            if (std::abs(PixelSum(pixels, corner[0], corner[1]) - PixelSum(sky, corner[0], corner[1])) <=
+                                12) {
+                                allTerrain = false;
+                                break;
+                            }
+                        }
+                        if (!allTerrain) {
+                            continue;   // not solidly terrain here (sky, background, or the silhouette's own edge)
+                        }
+                        int lo = 255, hi = 0;
+                        long sum = 0;
+                        for (int wy = 0; wy < window; ++wy) {
+                            for (int wx = 0; wx < window; ++wx) {
+                                const int l = Luma(pixels, x + wx, y + wy);
+                                lo = std::min(lo, l);
+                                hi = std::max(hi, l);
+                                sum += l;
+                            }
+                        }
+                        const double mean = static_cast<double>(sum) / (window * window);
+                        if (mean < 12.0) {
+                            continue;   // too close to black for a ratio to mean anything
+                        }
+                        worst = std::min(worst, static_cast<double>(hi - lo) / mean);
+                    }
+                }
+                return worst;
+            };
 
             // TX-R1/TX-R2: three equal thirds of one floor -- untextured
             // (Id 3, layer 0), grass (Id 1, layer 1) and sand (Id 2, layer
@@ -3759,6 +3845,19 @@ int main(int argc, char** argv) {
                 Expect(span >= 6,
                        "TX-R3: three materials meeting in one triangle blend smoothly, not a flat-shaded step (" +
                            std::to_string(span) + " px)");
+                // No locally flat, pattern-less patch anywhere on the ball
+                // (fix round 1): catches it wherever the camera finds it,
+                // not only at the border WidestTransition samples.
+                renderer.setCamera(ShotCamera(shot), shot.fov);
+                runner::LightDraw sun3 = runner::SkyLightDraw(state, true);
+                sun3.shadowDistance = shot.distance * 2.f + 60.f;
+                runner::ViewPixels sky3;
+                target.shoot(renderer, {}, sun3, sky3);
+                const double flatness = SmallestLocalRange(pixels, sky3, 28);
+                Expect(flatness >= 0.07,
+                       "TX-R3: no locally flat, pattern-less patch anywhere on the textured ball (worst 28x28 "
+                       "relative contrast " +
+                           std::to_string(flatness) + ")");
                 runner::DeleteTexture(texLook);
             }
 

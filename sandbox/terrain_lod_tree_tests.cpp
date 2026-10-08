@@ -1222,6 +1222,109 @@ TEST_CASE("LT15 an edit repeated every update over the same chunks shows within 
     REQUIRE(shown_at - start <= 200.0);
 }
 
+TEST_CASE("LT16 collider interest in empty space far from the island queues nothing and adds no tree nodes",
+          "[terrain][lod]") {
+    SimRole role;
+    Game game;
+    Terrain& t = island_terrain(game, 4);
+    TerrainWorld world([](const ChunkMesh&) -> std::shared_ptr<void> { return std::make_shared<int>(1); });
+    double now = 0.0;
+    settle_lod(world, game, now);
+    const LodTree* tree = world.lod_tree(t.id());
+    REQUIRE(tree != nullptr);
+    const int top = world.views()[0].top_level;
+    const std::size_t nodes = tree->nodes().size();
+    const std::uint64_t meshed = world.meshed_count();
+    const std::uint64_t nodes_revision = world.views()[0].nodes_revision;
+
+    // What PhysicsWorld asks for a body falling far below the island and one
+    // far beside it: the 7 x 7 x 7 chunk box around each.
+    std::vector<ChunkCoord> interest = box_chunks(ChunkCoord{-1, -23, -1}, ChunkCoord{5, -17, 5});
+    for (const ChunkCoord& c : box_chunks(ChunkCoord{37, -3, -1}, ChunkCoord{43, 3, 5})) interest.push_back(c);
+    world.set_collider_interest(t.id(), interest);
+    world.update(game, now);
+    for (const auto& [key, node] : tree->nodes()) {
+        (void)node;
+        INFO("level " << key.level << " (" << key.x << ", " << key.y << ", " << key.z << ")");
+        if (key.level == 0) {
+            REQUIRE(key.y >= -1);
+            REQUIRE(key.x <= 5);
+        }
+    }
+    REQUIRE(world.views()[0].top_level == top);
+    REQUIRE(tree->nodes().size() == nodes);
+    world.wait_idle();
+    now += 2.0 * kRebuildIntervalMs;
+    world.update(game, now);
+    world.wait_idle();
+    world.update(game, now);
+    REQUIRE(world.meshed_count() == meshed);   // no mesh jobs at all
+    REQUIRE(world.views()[0].nodes_revision == nodes_revision);   // nothing republished
+    REQUIRE(tree->nodes().size() == nodes);
+
+    // The body's own 3 x 3 x 3 (build_colliders_now, every sync): known at
+    // once, nothing meshed, nothing republished.
+    REQUIRE(world.build_colliders_now(game, t.id(), box_chunks(ChunkCoord{1, -21, 1}, ChunkCoord{3, -19, 3})));
+    REQUIRE(world.sync_meshed_count() == 0u);
+    REQUIRE(tree->nodes().size() == nodes);
+    world.update(game, now);
+    REQUIRE(world.views()[0].nodes_revision == nodes_revision);
+    REQUIRE(world.views()[0].top_level == top);
+}
+
+TEST_CASE("LT17 an empty chunk under a body with an edit in flight is meshed for its collider once, not every sync",
+          "[terrain][lod]") {
+    SimRole role;
+    Game game;
+    Terrain& t = island_terrain(game, 4);
+    TerrainWorld world([](const ChunkMesh&) -> std::shared_ptr<void> { return std::make_shared<int>(1); });
+    double now = 0.0;
+    settle_lod(world, game, now);
+
+    const auto dig = [&] {
+        Shape ball;
+        ball.center = Vec3{2.5f * kChunkSize, 16.f, 2.5f * kChunkSize};
+        ball.radius = 3.f;
+        REQUIRE_FALSE(t.edit_volume([&](VoxelVolume& v) { return v.subtract(ball); }));
+        world.update(game, now);   // the edit's jobs are queued, not landed
+    };
+    // (2, 1, 2): air above the dig, so meshed with nothing to collide with.
+    const std::vector<ChunkCoord> under_body{ChunkCoord{2, 1, 2}};
+    dig();
+    const std::uint64_t before = world.sync_meshed_count();
+    for (int sync = 0; sync < 5; ++sync) REQUIRE(world.build_colliders_now(game, t.id(), under_body));
+    REQUIRE(world.sync_meshed_count() == before + 1);
+
+    // Once the edit lands its own result decides; a newer edit in flight
+    // gets one sync build of its own again.
+    world.wait_idle();
+    now += 16.0;
+    world.update(game, now);
+    Shape bigger;
+    bigger.center = Vec3{2.5f * kChunkSize, 16.f, 2.5f * kChunkSize};
+    bigger.radius = 5.f;
+    REQUIRE_FALSE(t.edit_volume([&](VoxelVolume& v) { return v.subtract(bigger); }));
+    world.update(game, now);
+    for (int sync = 0; sync < 5; ++sync) REQUIRE(world.build_colliders_now(game, t.id(), under_body));
+    REQUIRE(world.sync_meshed_count() == before + 2);
+    world.wait_idle();
+}
+
+TEST_CASE("LT19 build_colliders_now refuses a Terrain destroyed since the last update", "[terrain][lod]") {
+    SimRole role;
+    Game game;
+    Terrain& t = island_terrain(game, 4);
+    TerrainWorld world([](const ChunkMesh&) -> std::shared_ptr<void> { return std::make_shared<int>(1); });
+    double now = 0.0;
+    settle_lod(world, game, now);
+    const InstanceId id = t.id();
+    REQUIRE(world.build_colliders_now(game, id, {ChunkCoord{2, 0, 2}}));
+    game.destroy(id);
+    const std::uint64_t before = world.sync_meshed_count();
+    REQUIRE_FALSE(world.build_colliders_now(game, id, {ChunkCoord{1, 0, 1}}));
+    REQUIRE(world.sync_meshed_count() == before);
+}
+
 TEST_CASE("LT20 VoxelVolume's chunk extent follows its stored chunks through edits, clear, set_chunks and moves",
           "[terrain][lod]") {
     const auto scanned = [](const VoxelVolume& v, ChunkCoord& lo, ChunkCoord& hi) {

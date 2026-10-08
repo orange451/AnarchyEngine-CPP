@@ -86,7 +86,9 @@ public:
     // chunks (terrain-local) within kColliderChunks of each dynamic
     // PhysicsObject or PlayerController. Takes effect from the next update():
     // a chunk newly asked for whose collider is not known yet gets a re-mesh
-    // flagged to build one (unless build_colliders_now already did), once:
+    // flagged to build one (unless build_colliders_now already did, or no
+    // chunk is stored in its 3x3x3 neighborhood: then it is known to have
+    // nothing to collide with, with no job and no LOD tree node), once:
     // a chunk meshed with nothing to collide with is known too, and is not
     // meshed again until an edit changes it; one no longer asked for keeps
     // its collider for kColliderReleaseMs after it was last asked for, then
@@ -97,13 +99,19 @@ public:
     // builds colliders for chunks right here, off the job queue -- the
     // no-fall-through rule for the chunks under a body. Skips a chunk whose
     // collider is already known (built, or meshed empty), so calling it
-    // every sync costs lookups only. False when terrain is not one this
-    // TerrainWorld has published a view for (nothing built), or a build threw.
-    bool build_colliders_now(InstanceId terrain, const std::vector<terrain::ChunkCoord>& chunks);
+    // every sync costs lookups only; a chunk with no stored chunk anywhere
+    // in its 3x3x3 neighborhood (empty space, e.g. far below the island) is
+    // known at once, with no meshing and no LOD tree node. The Terrain is
+    // looked up in game afresh (never a pointer kept from the last update).
+    // False when terrain is not one this TerrainWorld has published a view
+    // for, is no longer a live Terrain in game (nothing built), or a build threw.
+    bool build_colliders_now(DataModel& game, InstanceId terrain, const std::vector<terrain::ChunkCoord>& chunks);
 
     // For tests.
     void wait_idle() { mesher_.wait_idle(); }
     std::uint64_t meshed_count() const { return meshed_count_; }
+    // How many chunks build_colliders_now has meshed itself (off the queue).
+    std::uint64_t sync_meshed_count() const { return sync_meshed_count_; }
     const terrain::LodTree* lod_tree(InstanceId terrain) const {
         const auto found = terrains_.find(terrain);
         return found != terrains_.end() ? found->second.tree.get() : nullptr;
@@ -220,12 +228,11 @@ private:
         // these; an edit landing without a collider, or the release, takes
         // a chunk out again.
         std::unordered_set<terrain::ChunkCoord, terrain::ChunkCoordHash> collider_ready;
-        // The Terrain this record was last built from (every update()):
-        // build_colliders_now, called from PhysicsWorld's own sync, has no
-        // DataModel to look it up again and reuses this pointer. Tolerates
-        // the same one-tick lag views()/colliders() already do when a
-        // Terrain leaves Workspace between one update() and the next.
-        Terrain* instance = nullptr;
+        // Chunks build_colliders_now already built a collider for (or found
+        // nothing to collide with in) from the voxels of an edit still in
+        // flight: not built again every sync until that edit lands
+        // (apply_result) or a newer edit queues them again (queue_dirty).
+        std::unordered_set<terrain::ChunkCoord, terrain::ChunkCoordHash> sync_built;
     };
 
     // A result off the pool: dropped if stale, held if its edit batch still
@@ -261,6 +268,7 @@ private:
     std::unordered_map<InstanceId, TerrainRecord> terrains_;
     std::vector<TerrainView> views_;
     std::uint64_t meshed_count_ = 0;
+    std::uint64_t sync_meshed_count_ = 0;
     std::uint64_t next_chunk_revision_ = 1;   // unique across every TerrainChunkView this world publishes
     std::uint64_t next_look_revision_ = 1;    // unique across every TerrainLook this world publishes
     // World-wide, never reused for the life of this TerrainWorld -- unlike a

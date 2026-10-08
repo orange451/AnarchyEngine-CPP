@@ -1042,7 +1042,10 @@ struct PhysicsWorld::Impl {
                 const float voxel_size = tree != nullptr ? tree->voxel_size() : 1.f;
                 const float span = terrain::kChunkSize * voxel_size;
                 const Matrix4 inverse = matrix4_inverse(view.transform);
-                std::vector<terrain::ChunkCoord> under_body;
+                // Distinct body-centre chunks first: thousands of bodies (a
+                // debris pile) mostly share a few chunks, and each distinct
+                // one's box is expanded only once.
+                std::unordered_set<terrain::ChunkCoord, terrain::ChunkCoordHash> centers;
                 for (const auto& [id, body] : bodies) {
                     if (!b3Body_IsValid(body.body)) {
                         continue;
@@ -1052,9 +1055,12 @@ struct PhysicsWorld::Impl {
                         continue;   // anchored bodies need no colliders around them
                     }
                     const Vec3 local = matrix4_point(inverse, from_b3(b3Body_GetPosition(body.body)));
-                    const terrain::ChunkCoord center{static_cast<int>(std::floor(local.x / span)),
-                                                     static_cast<int>(std::floor(local.y / span)),
-                                                     static_cast<int>(std::floor(local.z / span))};
+                    centers.insert(terrain::ChunkCoord{static_cast<int>(std::floor(local.x / span)),
+                                                       static_cast<int>(std::floor(local.y / span)),
+                                                       static_cast<int>(std::floor(local.z / span))});
+                }
+                std::vector<terrain::ChunkCoord> under_body;
+                for (const terrain::ChunkCoord& center : centers) {
                     under_body.clear();
                     for (int dz = -kColliderChunks; dz <= kColliderChunks; ++dz) {
                         for (int dy = -kColliderChunks; dy <= kColliderChunks; ++dy) {
@@ -1069,7 +1075,7 @@ struct PhysicsWorld::Impl {
                             }
                         }
                     }
-                    // No fall-through: the body's own chunk and its immediate
+                    // No fall-through: the chunk under a body and its immediate
                     // neighbors (a surface at a chunk border can belong to
                     // either side) must hold their colliders before Box3D
                     // steps. Each one TerrainWorld already knows (built, or
@@ -1078,7 +1084,7 @@ struct PhysicsWorld::Impl {
                     // and then a collider elsewhere around it is no cover:
                     // checked per chunk, every sync, never "some neighbor has
                     // one".
-                    terrains->build_colliders_now(view.terrain, under_body);
+                    terrains->build_colliders_now(game, view.terrain, under_body);
                 }
             }
             terrains->set_collider_interest(view.terrain, std::move(interest));

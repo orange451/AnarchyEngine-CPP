@@ -7,11 +7,17 @@
 
 // Private to this file, so it cannot clash with the copies TextureCache.cpp
 // (studio) and the JadeFX library each compile and define on their own.
+// pragma-silenced like engine_core's other vendored single-header
+// implementations (ConvexDecomposition.cpp's VHACD.h, PhysicsWorld.cpp's
+// box3d.h): SYSTEM on its include dir does not fully suppress the
+// warnings this header's unused-function paths trigger under /W4.
 #define STB_IMAGE_STATIC
 #define STB_IMAGE_IMPLEMENTATION
 #define STBI_NO_STDIO
 #define STBI_FAILURE_USERMSG
+#pragma warning(push, 0)
 #include "stb_image.h"
+#pragma warning(pop)
 
 #include <algorithm>
 #include <cmath>

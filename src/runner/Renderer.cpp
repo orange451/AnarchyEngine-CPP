@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -69,6 +70,21 @@ constexpr int kUnitIrradiance = 13;
 constexpr int kUnitPrefiltered = 14;
 constexpr int kUnitBrdf = 15;
 constexpr int kUnitCount = 16;
+// terrain.frag's uDetailFade0/uDetailFade1: the view-space distance band
+// (units) its far falloffs -- mip bias, normal strength, the third
+// triplanar projection -- ramp smoothly across, in place of the old "this
+// draw's LOD node level >= 2" step that could seam two adjacent nodes at
+// the same camera distance. engine_core::terrain::kChunkSize (32 units, a
+// level-0 node's own width) is the natural yardstick: a level-2 node is 4x
+// that wide (32 << 2), so the ramp starts a little inside one level-1
+// node's width and finishes a little beyond one level-2 node's, the rough
+// neighborhood real LOD selection puts those nodes in, without this pass
+// depending on any one Terrain's voxel_size or its LodTree's own
+// pixel-error math (both vary per Terrain and per screen; the ramp being
+// continuous is what actually removes the seam, not landing on the exact
+// distance a real selection would have switched at).
+constexpr float kTerrainDetailFadeNear = 64.f;   // 2x kChunkSize
+constexpr float kTerrainDetailFadeFar = 192.f;   // 6x kChunkSize
 // The surface passes write the G-buffer's albedo, never read it, so a
 // Material's EmissiveTexture takes its unit. bindGBuffer binds it back.
 constexpr int kUnitEmissiveMap = kUnitAlbedo;
@@ -243,8 +259,11 @@ bool Renderer::buildProgram(Program& program, const char* name, const char* vert
     program.hasSurface = at("uHasSurface");
     program.nodeLevel = at("uNodeLevel");
     program.terrainQuality = at("uTerrainQuality");
+    program.detailFade0 = at("uDetailFade0");
+    program.detailFade1 = at("uDetailFade1");
     program.antiTilingOverride = at("uAntiTilingOverride");
     program.projectionDebug = at("uProjectionDebug");
+    program.detailFadeOverride = at("uDetailFadeOverride");
     program.depth = at("uDepth");
     program.albedo = at("uAlbedo");
     program.normal = at("uNormal");
@@ -1530,6 +1549,11 @@ namespace {
 std::atomic<bool> gTerrainLodColors{false};
 std::atomic<int> gTerrainAntiTilingOverride{-1};
 std::atomic<bool> gTerrainProjectionDebug{false};
+// Stored as bit patterns (atomic<float> has no relaxed-everywhere guarantee
+// on every platform this targets): -1 off, else terrain.frag's distT pinned
+// directly. See SetTerrainDetailFadeOverride's declaration comment.
+// 0xBF800000 is -1.0f's IEEE-754 bits (off, the default).
+std::atomic<std::uint32_t> gTerrainDetailFadeOverrideBits{0xBF800000u};
 }  // namespace
 
 void SetTerrainLodColors(bool on) { gTerrainLodColors.store(on, std::memory_order_relaxed); }
@@ -1543,6 +1567,19 @@ int TerrainAntiTilingOverride() { return gTerrainAntiTilingOverride.load(std::me
 void SetTerrainProjectionDebug(bool on) { gTerrainProjectionDebug.store(on, std::memory_order_relaxed); }
 
 bool TerrainProjectionDebug() { return gTerrainProjectionDebug.load(std::memory_order_relaxed); }
+
+void SetTerrainDetailFadeOverride(float value) {
+    std::uint32_t bits;
+    std::memcpy(&bits, &value, sizeof(bits));
+    gTerrainDetailFadeOverrideBits.store(bits, std::memory_order_relaxed);
+}
+
+float TerrainDetailFadeOverride() {
+    const std::uint32_t bits = gTerrainDetailFadeOverrideBits.load(std::memory_order_relaxed);
+    float value;
+    std::memcpy(&value, &bits, sizeof(value));
+    return value;
+}
 
 // terrain.frag's kLodColors, in the same order.
 const TerrainLodColor kTerrainLodColors[8] = {
@@ -1947,6 +1984,19 @@ bool Renderer::geometryPass(const MeshDraw* meshes, const float* projection) {
         glUniform1i(terrain_.terrainQuality, static_cast<int>(lighting_.terrainQuality));
         glUniform1i(terrain_.antiTilingOverride, TerrainAntiTilingOverride());
         glUniform1i(terrain_.projectionDebug, TerrainProjectionDebug() ? 1 : 0);
+        // terrain.frag's continuous detail-fade band (units, view-space
+        // distance), replacing the old per-node "level >= 2" step that
+        // seamed adjacent LOD nodes at the same distance (see
+        // uDetailFade0/uDetailFade1's shader comment). Sized off one
+        // level-2 node's own footprint (kChunkSize units at level 0, so 4x
+        // that at level 2) rather than any one Terrain's actual voxel_size
+        // or its LodTree's pixel-error distances -- those vary per Terrain
+        // and per screen, while this only has to put the ramp in the same
+        // rough neighborhood real level-2 nodes appear at, continuously, so
+        // nothing can ever again switch on a hard per-node boundary.
+        glUniform1f(terrain_.detailFade0, kTerrainDetailFadeNear);
+        glUniform1f(terrain_.detailFade1, kTerrainDetailFadeFar);
+        glUniform1f(terrain_.detailFadeOverride, TerrainDetailFadeOverride());
         const bool lodColors = TerrainLodColors();
         // Task 9's GPU budget, fix round 1: on a gently rolling island most
         // pixels already settle on one dominant triplanar projection before

@@ -27,9 +27,32 @@ uniform sampler2D uNoise;
 uniform int uHasSurface;
 // Lighting.TerrainQuality: 0 Low, 1 Medium, 2 High.
 uniform int uTerrainQuality;
-// This draw's LOD node level (0 for a chunk): gates quality falloffs at
-// level >= 2, independent of uLodLevel's debug tint below.
+// This draw's LOD node level (0 for a chunk): used only by uLodLevel's
+// debug tint below. The quality falloffs that used to gate on "level >= 2"
+// (mip bias, normal strength, the third triplanar projection) no longer
+// read this: a node's level is a property of the mesh LOD picked for a
+// whole node, so two adjacent nodes at different levels (a just-split
+// parent next to a child, or two nodes a different pixel error put at
+// different levels) could sit at nearly the same camera distance and still
+// shade on opposite sides of a hard step -- a visible straight seam across
+// otherwise-flat ground. uDetailFade0/uDetailFade1 below replace it with a
+// per-pixel ramp over the fragment's own view-space distance, which is
+// continuous by construction: no two neighboring pixels, whatever node
+// either belongs to, can be on opposite sides of a discontinuity.
 uniform int uNodeLevel;
+// The view-space distance band (units) the far falloffs ramp smoothly
+// across: at or inside uDetailFade0 every falloff is fully off (as a near,
+// level-0 node always drew); at or beyond uDetailFade1 each is fully on
+// (as a level >= 2 node always drew, before this fix). Renderer.cpp sets
+// these from the terrain's own chunk size, independent of which node a
+// pixel happens to be inside.
+uniform float uDetailFade0;
+uniform float uDetailFade1;
+// Test-only (TX-R8): -1 leaves distT (below) on the usual per-pixel
+// uDetailFade0/uDetailFade1 ramp; 0 to 1 pins it directly, so a test built
+// at one fixed, close camera distance can still force and check the fully
+// far falloffs.
+uniform float uDetailFadeOverride;
 // A LOD node cross-fading with another level: a 4 x 4 ordered dither, the
 // one fading in and the one fading out testing the same threshold the
 // opposite ways, so together they cover every pixel once.
@@ -113,8 +136,12 @@ vec3 unpackNormalRG(vec2 rg) {
 // edges, not a smooth transition). Each axis instead builds its own
 // derivative from the one taken outside any branch, so textureGrad's LOD
 // stays correct however the blend or the quality cap varies pixel to pixel.
+// normalStrength: 0 draws every projection's normal flat (vec3(0,0,1), as
+// the old uNodeLevel >= 2 && quality != High path did), 1 draws the sampled
+// normal at full strength (as every other path did); continuous in between
+// so the fade has no step. See uDetailFade0/uDetailFade1's comment.
 void sampleMaterialTriplanar(float layer, float scale, vec3 n, vec3 localPos, vec3 ddxLocal, vec3 ddyLocal, vec3 aw,
-                              float mipBias, bool antiTiling, bool normalsOn, out vec3 color, out float height,
+                              float mipBias, bool antiTiling, float normalStrength, out vec3 color, out float height,
                               out vec3 normalLocal, out float rough, out float metal) {
     color = vec3(0.0);
     height = 0.0;
@@ -136,7 +163,7 @@ void sampleMaterialTriplanar(float layer, float scale, vec3 n, vec3 localPos, ve
         height += aw.x * a.a;
         rough += aw.x * b.b;
         metal += aw.x * b.a;
-        vec3 axisNormal = normalsOn ? unpackNormalRG(b.rg) : vec3(0.0, 0.0, 1.0);
+        vec3 axisNormal = mix(vec3(0.0, 0.0, 1.0), unpackNormalRG(b.rg), normalStrength);
         normalLocal += aw.x * vec3(axisNormal.z * sign(n.x), axisNormal.y, axisNormal.x);
     }
     if (aw.y > 0.0) {
@@ -153,7 +180,7 @@ void sampleMaterialTriplanar(float layer, float scale, vec3 n, vec3 localPos, ve
         height += aw.y * a.a;
         rough += aw.y * b.b;
         metal += aw.y * b.a;
-        vec3 axisNormal = normalsOn ? unpackNormalRG(b.rg) : vec3(0.0, 0.0, 1.0);
+        vec3 axisNormal = mix(vec3(0.0, 0.0, 1.0), unpackNormalRG(b.rg), normalStrength);
         normalLocal += aw.y * vec3(axisNormal.x, axisNormal.z * sign(n.y), axisNormal.y);
     }
     if (aw.z > 0.0) {
@@ -170,7 +197,7 @@ void sampleMaterialTriplanar(float layer, float scale, vec3 n, vec3 localPos, ve
         height += aw.z * a.a;
         rough += aw.z * b.b;
         metal += aw.z * b.a;
-        vec3 axisNormal = normalsOn ? unpackNormalRG(b.rg) : vec3(0.0, 0.0, 1.0);
+        vec3 axisNormal = mix(vec3(0.0, 0.0, 1.0), unpackNormalRG(b.rg), normalStrength);
         normalLocal += aw.z * vec3(axisNormal.x, axisNormal.y, axisNormal.z * sign(n.z));
     }
 }
@@ -199,21 +226,43 @@ void main() {
 
     // Triplanar axis weights, shared by every material (they depend only on
     // the surface normal): sharpened (fixed power 4) so most surfaces settle
-    // on one or two projections, capped by quality and by far LOD nodes.
+    // on one or two projections, capped by quality and faded down further
+    // at distance (High only -- see distT below).
     vec3 n = normalize(vLocalNormal);
     if (!gl_FrontFacing) n = -n;
     vec3 aw = pow(abs(n), vec3(4.0));
     float awSum = aw.x + aw.y + aw.z;
     aw = awSum > 1e-6 ? aw / awSum : vec3(1.0, 0.0, 0.0);
 
+    // 0 within uDetailFade0, 1 at or beyond uDetailFade1, ramping linearly
+    // between: the single per-pixel distance signal every far falloff below
+    // reads instead of this draw's uNodeLevel, so two pixels at the same
+    // camera distance always shade the same whichever LOD node drew them --
+    // see uDetailFade0/uDetailFade1's declaration comment.
+    float viewDist = length(vViewPosition);
+    float distT = uDetailFadeOverride >= 0.0
+                      ? clamp(uDetailFadeOverride, 0.0, 1.0)
+                      : clamp((viewDist - uDetailFade0) / max(uDetailFade1 - uDetailFade0, 1e-4), 0.0, 1.0);
+
     int qualityCap = uTerrainQuality <= 0 ? 1 : (uTerrainQuality == 1 ? 2 : 3);
-    int cap = uNodeLevel >= 2 ? min(qualityCap, 2) : qualityCap;
-    if (cap <= 2) {
+    if (qualityCap <= 2) {
+        // Low/Medium: always at most 2 projections. A quality setting, not
+        // a per-pixel falloff -- it never varies with camera distance, so
+        // it can never seam between nodes on its own.
         if (aw.x <= aw.y && aw.x <= aw.z) aw.x = 0.0;
         else if (aw.y <= aw.x && aw.y <= aw.z) aw.y = 0.0;
         else aw.z = 0.0;
+    } else {
+        // High: the third (smallest) projection's weight fades to 0 evenly
+        // across the detail band -- replaces the old "uNodeLevel >= 2 caps
+        // at 2" step, which could put two adjacent, same-distance nodes on
+        // opposite sides of a hard 3-vs-2-projection edge.
+        float keep = 1.0 - distT;
+        if (aw.x <= aw.y && aw.x <= aw.z) aw.x *= keep;
+        else if (aw.y <= aw.x && aw.y <= aw.z) aw.y *= keep;
+        else aw.z *= keep;
     }
-    if (cap <= 1) {
+    if (qualityCap <= 1) {
         if (aw.x >= aw.y && aw.x >= aw.z) { aw.y = 0.0; aw.z = 0.0; }
         else if (aw.y >= aw.x && aw.y >= aw.z) { aw.x = 0.0; aw.z = 0.0; }
         else { aw.x = 0.0; aw.y = 0.0; }
@@ -240,8 +289,14 @@ void main() {
 
     bool heightBlendOn = uTerrainQuality != 0;
     bool antiTiling = uAntiTilingOverride >= 0 ? (uAntiTilingOverride == 1) : (uTerrainQuality != 0);
-    bool normalsOn = uTerrainQuality == 2 || uNodeLevel < 2;
-    float mipBias = uNodeLevel >= 2 ? 1.0 : 0.0;
+    // High keeps full normal-map strength at every distance (its extra
+    // projection already carries the distance falloff above); Low/Medium
+    // fade normal strength to 0 across the same band distT measures, in
+    // place of the old "off beyond uNodeLevel 2" step.
+    float normalStrength = uTerrainQuality == 2 ? 1.0 : (1.0 - distT);
+    // 0 at or inside uDetailFade0 (no bias, as a near level-0 node always
+    // sampled), ramping to 1 (the old nodeLevel >= 2 bias) by uDetailFade1.
+    float mipBias = distT;
 
     // Computed once, unconditionally (every pixel in a quad executes this
     // the same way), so sampleMaterialTriplanar's textureGrad calls -- made
@@ -273,7 +328,7 @@ void main() {
         float sRough;
         float sMetal;
         sampleMaterialTriplanar(look.layer, look.scale, n, vLocalPosition, ddxLocal, ddyLocal, aw, mipBias, antiTiling,
-                                normalsOn, sColor, sHeight, sNormal, sRough, sMetal);
+                                normalStrength, sColor, sHeight, sNormal, sRough, sMetal);
         colors[c] = sColor * look.color;
         roughs[c] = clamp(sRough * look.roughness, 0.03, 1.0);
         metals[c] = clamp(sMetal * look.metalness, 0.0, 1.0);

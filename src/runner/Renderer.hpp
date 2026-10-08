@@ -132,6 +132,17 @@ int TerrainAntiTilingOverride();
 // tonemapping.
 void SetTerrainProjectionDebug(bool on);
 bool TerrainProjectionDebug();
+// SetTerrainDetailFadeOverride: -1 leaves the far falloffs (mip bias,
+// normal strength, the third triplanar projection) on terrain.frag's usual
+// per-pixel view-distance ramp (uDetailFade0/uDetailFade1); 0 to 1 pins
+// that ramp's fraction directly (0 as if every pixel were within
+// uDetailFade0, "near"; 1 as if every pixel were beyond uDetailFade1,
+// "far"), independent of the draw's actual camera distance -- so a test
+// scene built at one fixed, close camera distance (TX-R8) can still force
+// and check the fully-far falloffs, the way forcing a draw's terrainLevel
+// did before the fix replaced that per-node step with this per-pixel ramp.
+void SetTerrainDetailFadeOverride(float value);
+float TerrainDetailFadeOverride();
 // The tint per level (sRGB, 0 to 255), as terrain.frag's kLodColors, and
 // each one's name for a legend.
 struct TerrainLodColor {
@@ -474,6 +485,12 @@ private:
         int hasSurface = -1;
         int nodeLevel = -1;
         int terrainQuality = -1;
+        // terrain.frag: the view-space distance band the far falloffs (mip
+        // bias, normal strength, the third triplanar projection) ramp
+        // across, replacing the old per-node-level step -- see terrain.frag's
+        // uDetailFade0/uDetailFade1 comment.
+        int detailFade0 = -1;
+        int detailFade1 = -1;
         // terrain.frag, test-only (Task 7): SetTerrainAntiTilingOverride's
         // value (-1 follows quality as usual; 0/1 forces anti-tiling off/on,
         // isolating it from quality's other falloffs for TX-R7), and
@@ -481,6 +498,7 @@ private:
         // with the active triplanar projection count, for TX-R6/TX-R8).
         int antiTilingOverride = -1;
         int projectionDebug = -1;
+        int detailFadeOverride = -1;
         // G-buffer inputs.
         int depth = -1;
         int albedo = -1;

@@ -72,6 +72,29 @@ std::vector<std::uint8_t> checker_rgb(int w, int h) {
     return out;
 }
 
+// A checkerboard of two caller-given colors, one per cell of a 1-pixel
+// grid (LBR7: two opposed normal-map tilts, so every 2x2 mip box mixes
+// diverging normals).
+std::vector<std::uint8_t> checker2_rgb(int w, int h, std::uint8_t r0, std::uint8_t g0, std::uint8_t b0,
+                                         std::uint8_t r1, std::uint8_t g1, std::uint8_t b1) {
+    std::vector<std::uint8_t> out(size_t(w) * size_t(h) * 3);
+    for (int y = 0; y < h; ++y) {
+        for (int x = 0; x < w; ++x) {
+            const size_t i = size_t(y) * size_t(w) + size_t(x);
+            if ((x + y) % 2 == 0) {
+                out[i * 3 + 0] = r0;
+                out[i * 3 + 1] = g0;
+                out[i * 3 + 2] = b0;
+            } else {
+                out[i * 3 + 0] = r1;
+                out[i * 3 + 1] = g1;
+                out[i * 3 + 2] = b1;
+            }
+        }
+    }
+    return out;
+}
+
 // Levels a mip chain should have for a power-of-two size: size, size/2, ...
 // down to and including 1 (so log2(size)+1 levels).
 int expected_mip_count(int size) {
@@ -240,4 +263,57 @@ TEST_CASE("LBR6 build_layer at 1024 stays fast enough to run off the render/simu
 
     REQUIRE(layer.size == 1024);
     REQUIRE(layer.a_mips.front().size() == 1024u * 1024u * 4u);
+}
+
+TEST_CASE("LBR7 Toksvig: a mip box of diverging normals gets rougher; one of coherent normals does not",
+          "[terrain][textures]") {
+    ImageDir dir;
+    const int size = 2;  // exactly one 2x2 box -> one 1x1 mip, so the fold is hand-checkable.
+
+    // Two normals tilted +/-0.8 along X (encoded bytes 230/128 and 25/128:
+    // X = round((nx*0.5+0.5)*255), Y flat at 128), alternating in a
+    // checkerboard so the single 2x2 mip box averages opposed directions --
+    // their X components cancel (vx ~ 0) while Z stays positive, so the
+    // averaged vector's own length ns = len/count is well under 1: a
+    // textbook case for Toksvig's variance-to-roughness fold.
+    {
+        LayerSources sources;
+        sources.diffuse = write_ppm(dir.path, "diffuse_divergent.ppm", size, size, flat_rgb(size, size, 128, 128, 128));
+        sources.normal = write_ppm(dir.path, "normal_divergent.ppm", size, size,
+                                    checker2_rgb(size, size, 230, 128, 0, 25, 128, 0));
+        sources.roughness = write_ppm(dir.path, "roughness_divergent.ppm", size, size, flat_rgb(size, size, 128, 128, 128));
+
+        const LayerBytes layer = build_layer(sources, size);
+        REQUIRE(layer.warning.empty());
+        REQUIRE(layer.b_mips.size() == 2);  // 2x2, then 1x1
+        const std::vector<std::uint8_t>& mip1 = layer.b_mips.back();
+        REQUIRE(mip1.size() == 4);
+
+        const int baseRoughByte = 128;
+        const int toksvigRoughByte = mip1[2];
+        INFO("base roughness byte = " << baseRoughByte << ", mip roughness byte = " << toksvigRoughByte);
+        // Hand-computed: ns = 0.6, variance = 1 - ns^2 = 0.64, alpha =
+        // (128/255)^2 + 0.64 ~= 0.892, roughness' = sqrt(alpha) ~= 0.944 ->
+        // ~241/255. A plain average (the pre-fix behavior) would leave this
+        // at 128, unchanged: assert it moved well past that.
+        REQUIRE(toksvigRoughByte > 200);
+    }
+
+    // The same roughness and size, but every texel's normal points the
+    // same way: ns = 1, variance = 0, so the fold leaves roughness
+    // unchanged -- proving LBR7's first case is about variance, not merely
+    // "roughness always goes up after a mip."
+    {
+        LayerSources sources;
+        sources.diffuse = write_ppm(dir.path, "diffuse_coherent.ppm", size, size, flat_rgb(size, size, 128, 128, 128));
+        sources.normal = write_ppm(dir.path, "normal_coherent.ppm", size, size, flat_rgb(size, size, 230, 128, 0));
+        sources.roughness = write_ppm(dir.path, "roughness_coherent.ppm", size, size, flat_rgb(size, size, 128, 128, 128));
+
+        const LayerBytes layer = build_layer(sources, size);
+        REQUIRE(layer.warning.empty());
+        const std::vector<std::uint8_t>& mip1 = layer.b_mips.back();
+        REQUIRE(mip1.size() == 4);
+        INFO("coherent mip roughness byte = " << int(mip1[2]));
+        REQUIRE(std::abs(int(mip1[2]) - 128) <= 2);
+    }
 }

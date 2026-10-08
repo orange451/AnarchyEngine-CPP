@@ -211,7 +211,9 @@ std::vector<std::vector<std::uint8_t>> build_color_height_mips(std::vector<std::
 
 // Builds the full mip chain for the B array (RG = tangent-space normal
 // XY, renormalized as a 3D vector with Z reconstructed, re-encoded as XY
-// only; B = roughness, A = metalness, both plain averages).
+// only; B = roughness, A = metalness, both plain averages, except
+// roughness is widened by Toksvig's normal-variance-to-roughness fold --
+// see this function's body).
 std::vector<std::vector<std::uint8_t>> build_normal_rough_metal_mips(std::vector<std::uint8_t> level0, int w, int h) {
     std::vector<std::vector<std::uint8_t>> mips;
     mips.push_back(std::move(level0));
@@ -242,6 +244,36 @@ std::vector<std::vector<std::uint8_t>> build_normal_rough_metal_mips(std::vector
                     }
                 }
                 const float len = std::sqrt(vx * vx + vy * vy + vz * vz);
+                // The averaged normal's own length before it is thrown away
+                // by renormalizing below: 1.0 when every sample in this 2x2
+                // box points the same way (a flat or low-frequency patch),
+                // shrinking toward 0 as the box mixes diverging normals (a
+                // bump field, a crease). That shrinkage is exactly the
+                // information Toksvig's normal-mapping antialiasing turns
+                // into roughness: a mip that has blurred away fine normal
+                // detail must get rougher, or the lost microfacet spread
+                // reappears as unearned, too-sharp specular highlights (the
+                // "glossier mips" bug terrain.frag's far falloffs exposed --
+                // normals went flatter-looking at distance while staying as
+                // shiny as the base texture).
+                //
+                // ns = |average unit normal| (len/count, in [0, 1]) is the
+                // same quantity Toksvig's paper and later "specular
+                // antialiasing" writeups (e.g. Valve's "normal mapping
+                // without tangent space", the common `roughness =
+                // sqrt(roughness^2 + (1 - ns^2))` games use for normal-map
+                // mip chains) use as the variance estimate: 1 - ns^2 grows
+                // from 0 (coherent) toward 1 (fully incoherent) as the box's
+                // normals disagree, and is folded into the roughness in
+                // GGX-alpha space (roughness^2) so it combines additively
+                // with the texture's own alpha, matching how normal-map and
+                // material variance compose physically.
+                const float ns = count > 0 ? std::min(1.f, len / float(count)) : 1.f;
+                const float variance = std::max(0.f, 1.f - ns * ns);
+                const float baseRough = rough_sum / (255.f * float(count));
+                const float alpha = baseRough * baseRough + variance;
+                const float toksvigRough = std::sqrt(std::min(1.f, alpha));
+
                 float ex = 0.f, ey = 0.f;
                 if (len > 1e-6f) {
                     ex = vx / len;
@@ -250,7 +282,8 @@ std::vector<std::vector<std::uint8_t>> build_normal_rough_metal_mips(std::vector
                 const size_t di = (size_t(y) * size_t(nw) + size_t(x)) * 4;
                 next[di + 0] = std::uint8_t(std::lround(std::max(0.f, std::min(255.f, (ex * 0.5f + 0.5f) * 255.f))));
                 next[di + 1] = std::uint8_t(std::lround(std::max(0.f, std::min(255.f, (ey * 0.5f + 0.5f) * 255.f))));
-                next[di + 2] = average_u8(rough_sum, count);
+                next[di + 2] =
+                    std::uint8_t(std::lround(std::max(0.f, std::min(255.f, toksvigRough * 255.f))));
                 next[di + 3] = average_u8(metal_sum, count);
             }
         }

@@ -514,9 +514,10 @@ void weld_vertices(const std::vector<anarchy::amesh::Vertex>& vertices, const st
 // (v1, v2, c), ..., (vk, b, c), winding unchanged. Done on both sides, the
 // two polylines become the same one and the seam's edges pair up. children
 // holds a bit per child for each vertex; a vertex is only inserted into a
-// triangle of a child it does not belong to. The search grid's cells are at
-// least voxel_size, so an edge costs (length / cell + 1) look-ups of a few
-// cells however small tolerance is.
+// triangle of a child it does not belong to, and only when its normal is on
+// the edge's side (not the far face of a wall or cave thinner than
+// tolerance). The search grid's cells are at least voxel_size, so an edge
+// costs (length / cell + 1) look-ups of a few cells however small tolerance is.
 void stitch_seams(const std::vector<anarchy::amesh::Vertex>& vertices, std::vector<unsigned int>& indices,
                   const std::vector<std::uint32_t>& children, float tolerance, float voxel_size) {
     struct BorderEdge {
@@ -606,8 +607,19 @@ void stitch_seams(const std::vector<anarchy::amesh::Vertex>& vertices, std::vect
         }
         std::sort(candidates.begin(), candidates.end());
         candidates.erase(std::unique(candidates.begin(), candidates.end()), candidates.end());
+        // The side of the surface the edge is on: a vertex whose normal
+        // points against it is the far side of a feature thinner than the
+        // tolerance (a wall, a cave), and inserting it would fold a triangle
+        // across that feature.
+        const anarchy::amesh::Vertex& va = vertices[edge.a];
+        const anarchy::amesh::Vertex& vb = vertices[edge.b];
+        const Vec3 edge_normal{va.n[0] + vb.n[0], va.n[1] + vb.n[1], va.n[2] + vb.n[2]};
         for (unsigned int v : candidates) {
             if (v == edge.a || v == edge.b || v == edge.c || (children[v] & own) != 0) {
+                continue;
+            }
+            const anarchy::amesh::Vertex& vv = vertices[v];
+            if (dot3(edge_normal, Vec3{vv.n[0], vv.n[1], vv.n[2]}) <= 0.f) {
                 continue;
             }
             const Vec3 p = vertex_position_of(vertices[v]);

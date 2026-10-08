@@ -1565,3 +1565,129 @@ TEST_CASE("LB6 a level-2 node of a planar 45-degree slope or a turned block buil
         WARN("LB6 open seam edges inside the node: " << interior_border_edges(result, key, volume.voxel_size(), 2.f * volume.voxel_size()));
     }
 }
+
+// Fix round 1 (finding 5): the seam stitch never folds a thin feature.
+
+namespace {
+
+// key's node built bottom-up the way LodTree builds it (each level >= 1
+// child packed to its covering box and unpacked for its parent, R2/R12),
+// skipping children whose box misses lo..hi (where the field has surface).
+// max_child_error gets the largest error among key's own children.
+LodResult build_compact_tree(VoxelVolume& volume, const NodeKey& key, const std::shared_ptr<const ChunkMap>& voxels,
+                             Vec3 lo, Vec3 hi, float* max_child_error = nullptr) {
+    if (key.level == 0) {
+        LodResult result;
+        result.key = key;
+        result.mesh = surface_nets(mesh_input(volume, ChunkCoord{key.x, key.y, key.z})).render;
+        if (result.mesh) result.surface_index_count = static_cast<std::uint32_t>(result.mesh->indices.size());
+        return result;
+    }
+    LodInput input;
+    input.key = key;
+    input.voxel_size = volume.voxel_size();
+    input.voxels = voxels;
+    for (const NodeKey& child_key : children_of(key)) {
+        Vec3 box_min, box_max;
+        node_bounds(child_key, volume.voxel_size(), box_min, box_max);
+        if (box_max.x < lo.x || box_min.x > hi.x || box_max.y < lo.y || box_min.y > hi.y || box_max.z < lo.z ||
+            box_min.z > hi.z) {
+            continue;
+        }
+        const LodResult child = build_compact_tree(volume, child_key, voxels, lo, hi);
+        if (!child.mesh) continue;
+        if (child_key.level == 0) {
+            input.children.push_back(child.mesh);
+            input.child_errors.push_back(0.f);
+            input.child_surface_index_counts.push_back(child.surface_index_count);
+        } else {
+            input.children.push_back(
+                std::make_shared<const anarchy::amesh::Data>(compact_round_trip(child, child_key, volume.voxel_size())));
+            input.child_errors.push_back(child.error);
+            input.child_surface_index_counts.push_back(child.surface_index_count);
+        }
+        if (max_child_error != nullptr) *max_child_error = std::max(*max_child_error, child.error);
+    }
+    return build_node(input);
+}
+
+// The surface triangles of result (before its skirts) whose face normal
+// opposes the field's gradient at the triangle's centroid: their cosine is
+// under -0.5. A triangle folded across a feature is turned over (cosines of
+// -0.93 to -0.98 were seen); one lying along a narrow tube's curve can be
+// near perpendicular to the gradient at its centroid, cosine about 0 either way.
+int faces_against_gradient(const LodResult& result, const VoxelSampler& sampler, int& total) {
+    const anarchy::amesh::Data& mesh = *result.mesh;
+    int against = 0;
+    total = 0;
+    for (std::size_t t = 0; t + 2 < result.surface_index_count; t += 3) {
+        const Vec3 a = mesh_vertex_position(mesh, mesh.indices[t]);
+        const Vec3 b = mesh_vertex_position(mesh, mesh.indices[t + 1]);
+        const Vec3 c = mesh_vertex_position(mesh, mesh.indices[t + 2]);
+        const Vec3 ab{b.x - a.x, b.y - a.y, b.z - a.z}, ac{c.x - a.x, c.y - a.y, c.z - a.z};
+        const Vec3 n{ab.y * ac.z - ab.z * ac.y, ab.z * ac.x - ab.x * ac.z, ab.x * ac.y - ab.y * ac.x};
+        const float length = std::sqrt(n.x * n.x + n.y * n.y + n.z * n.z);
+        if (!(length > 1e-6f)) continue;
+        ++total;
+        const Vec3 g = sampler.gradient(Vec3{(a.x + b.x + c.x) / 3.f, (a.y + b.y + c.y) / 3.f, (a.z + b.z + c.z) / 3.f});
+        const float cosine = (n.x * g.x + n.y * g.y + n.z * g.z) / length;
+        if (cosine < -0.5f) {
+            if (against < 5) {
+                WARN("face against the gradient (cosine " << cosine << "): (" << a.x << ", " << a.y << ", " << a.z
+                                                          << ") (" << b.x << ", " << b.y << ", " << b.z << ") (" << c.x
+                                                          << ", " << c.y << ", " << c.z << ")");
+            }
+            ++against;
+        }
+    }
+    return against;
+}
+
+}  // namespace
+
+TEST_CASE("LB7 a thin wall and a cave crossing level-3 and level-4 seams stitch without folds", "[terrain][lod]") {
+    // The stitch inserts another child's border vertex into an edge when it
+    // lies within 2 x the children's error of it. A wall or cave thinner
+    // than that has its other side's border vertices within reach: inserted,
+    // one would fold a triangle across the feature. Every face of the built
+    // node must still point the way the field's gradient does.
+    VoxelVolume volume;
+    SECTION("a bumpy wall 2.5 units thick, across x = 256 (between level-3 nodes) inside level-4 (0, 0, 0)") {
+        fill_field(volume, CellCoord{150, 8, 80}, CellCoord{362, 90, 124}, [](float x, float y, float z) {
+            const float middle = 100.f + 3.f * std::sin(x / 11.f);
+            const float half = 1.25f + 0.6f * std::sin(x / 5.f) * std::cos(y / 4.f);
+            const float side = std::fabs(z - middle) - half;
+            const float ends = std::max({158.f - x, x - 354.f, 16.f - y, y - 82.f});
+            return std::max(side, ends);
+        });
+        const auto voxels = std::make_shared<const ChunkMap>(volume.chunks());
+        float child_error = 0.f;
+        const LodResult result =
+            build_compact_tree(volume, NodeKey{4, 0, 0, 0}, voxels, Vec3{150, 8, 80}, Vec3{362, 90, 124}, &child_error);
+        REQUIRE(result.mesh != nullptr);
+        int total = 0;
+        const int against = faces_against_gradient(result, VoxelSampler(*voxels, volume.voxel_size()), total);
+        WARN("LB7 wall: level-4 error " << result.error << ", children's largest " << child_error << ", " << against
+                                        << " of " << total << " faces against the gradient");
+        REQUIRE(against == 0);
+    }
+    SECTION("a closed cave of radius 2 inside a block, across x = 256 inside level-4 (0, 0, 0)") {
+        fill_field(volume, CellCoord{150, 8, 150}, CellCoord{362, 70, 230}, [](float x, float y, float z) {
+            const float block = std::max({158.f - x, x - 354.f, 16.f - y, y - 62.f, 158.f - z, z - 222.f});
+            const float cy = 40.f + 4.f * std::sin(x / 13.f), cz = 190.f + 3.f * std::cos(x / 9.f);
+            const float past = std::max({0.f, 180.f - x, x - 332.f});   // closed ends, inside the block
+            const float tunnel = 2.f - std::sqrt((y - cy) * (y - cy) + (z - cz) * (z - cz) + past * past);
+            return std::max(block, tunnel);
+        });
+        const auto voxels = std::make_shared<const ChunkMap>(volume.chunks());
+        float child_error = 0.f;
+        const LodResult result = build_compact_tree(volume, NodeKey{4, 0, 0, 0}, voxels, Vec3{150, 8, 150},
+                                                    Vec3{362, 70, 230}, &child_error);
+        REQUIRE(result.mesh != nullptr);
+        int total = 0;
+        const int against = faces_against_gradient(result, VoxelSampler(*voxels, volume.voxel_size()), total);
+        WARN("LB7 cave: level-4 error " << result.error << ", children's largest " << child_error << ", " << against
+                                        << " of " << total << " faces against the gradient");
+        REQUIRE(against == 0);
+    }
+}

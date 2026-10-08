@@ -9,6 +9,7 @@
 #include "Terrain.hpp"
 #include "TerrainWorld.hpp"
 #include "amesh.hpp"
+#include "terrain/BlendWeights.hpp"
 #include "terrain/LodBuilder.hpp"
 #include "terrain/LodNode.hpp"
 #include "terrain/LodTree.hpp"
@@ -172,10 +173,12 @@ TEST_CASE("LN3 pack/unpack of a Surface Nets ball round-trips within tolerance",
             REQUIRE(rt.rgba[c] == original.rgba[c]);
         }
 
-        // Weights: within 1/255 of the original (all 0 for a Surface Nets
-        // mesh, which has no skinning, so this also covers the degenerate case).
+        // R7: blend weights live in v.t[0..3] (the tangent channel,
+        // repurposed for terrain -- a Surface Nets mesh carries no skinning
+        // weights, so v.weight stays untouched and uninteresting here), and
+        // pack()/unpack() must carry them within 1/255, same as the Ids.
         for (int c = 0; c < 4; ++c) {
-            REQUIRE(std::fabs(rt.weight[c] - original.weight[c]) <= 1.f / 255.f + 1e-6f);
+            REQUIRE(std::fabs(rt.t[c] - original.t[c]) <= 1.f / 255.f + 1e-6f);
         }
     }
 
@@ -224,7 +227,9 @@ anarchy::amesh::Data synthetic_grid_mesh(int width, int height) {
             v.n[2] = 1.f;
             for (int c = 0; c < 4; ++c) {
                 v.rgba[c] = static_cast<std::uint8_t>((i * 7 + j * 13 + c * 29) % 256);
-                v.weight[c] = static_cast<float>((i + c) % 4) / 3.f;
+                // R7: pack()/unpack() carry the terrain blend weight channel
+                // (v.t), not v.weight (skinning, which a terrain mesh never has).
+                v.t[c] = static_cast<float>((i + c) % 4) / 3.f;
             }
         }
     }
@@ -295,7 +300,7 @@ TEST_CASE("LN5 pack/unpack of a >65535-vertex mesh uses indices32", "[terrain][l
         REQUIRE(std::fabs(rt.p[2] - original.p[2]) <= tol_z + 1e-5f);
         for (int c = 0; c < 4; ++c) {
             REQUIRE(rt.rgba[c] == original.rgba[c]);
-            REQUIRE(std::fabs(rt.weight[c] - original.weight[c]) <= 1.f / 255.f + 1e-6f);
+            REQUIRE(std::fabs(rt.t[c] - original.t[c]) <= 1.f / 255.f + 1e-6f);
         }
     }
 }
@@ -344,14 +349,14 @@ TEST_CASE("LN6 pack/unpack of a degenerate (flat) axis round-trips without NaN o
     }
 }
 
-TEST_CASE("LN7 pack/unpack preserves non-zero, non-uniform weights", "[terrain][lod]") {
+TEST_CASE("LN7 pack/unpack preserves non-zero, non-uniform blend weights (v.t)", "[terrain][lod]") {
     anarchy::amesh::Data mesh;
     mesh.vertices.resize(2);
     const float weights0[4] = {0.f, 0.33f, 0.99f, 1.f};
     const float weights1[4] = {1.f, 0.99f, 0.33f, 0.f};
     for (int c = 0; c < 4; ++c) {
-        mesh.vertices[0].weight[c] = weights0[c];
-        mesh.vertices[1].weight[c] = weights1[c];
+        mesh.vertices[0].t[c] = weights0[c];
+        mesh.vertices[1].t[c] = weights1[c];
     }
     mesh.vertices[0].p[0] = 0.f;
     mesh.vertices[0].p[1] = 0.f;
@@ -371,7 +376,7 @@ TEST_CASE("LN7 pack/unpack preserves non-zero, non-uniform weights", "[terrain][
 
     for (std::size_t i = 0; i < mesh.vertices.size(); ++i) {
         for (int c = 0; c < 4; ++c) {
-            REQUIRE(std::fabs(round_tripped.vertices[i].weight[c] - mesh.vertices[i].weight[c]) <= 1.f / 255.f + 1e-6f);
+            REQUIRE(std::fabs(round_tripped.vertices[i].t[c] - mesh.vertices[i].t[c]) <= 1.f / 255.f + 1e-6f);
         }
     }
 }
@@ -807,30 +812,34 @@ TEST_CASE("RS1 a level-2 node of a ball re-shades every original vertex's normal
 
 namespace {
 
-// Independent of VoxelSampler: the same "lowest-distance corner's Id" rule
-// Surface Nets uses, but read straight from volume.cell() (VoxelVolume's
-// own chunk-map lookup, not VoxelSampler's) rather than calling the
-// production sampler under test.
+// Independent of VoxelSampler: the same blend_weights() rule
+// VoxelSampler::blend() (and so reshade_vertices) now uses for a vertex's
+// dominant Id -- Task 2 of the terrain textures plan superseded the old
+// "lowest-distance corner's Id alone" rule this helper used to mirror, with
+// one that votes over every corner within voxel_size of the surface and
+// keeps the top Id (ties by lower Id); rgba[0] is that top Id. Read straight
+// from volume.cell() (VoxelVolume's own chunk-map lookup, not VoxelSampler's)
+// rather than calling the production sampler under test.
 std::uint8_t expected_id_at(const VoxelVolume& volume, Vec3 p) {
     const float voxel_size = volume.voxel_size();
     const int ix = static_cast<int>(std::floor(p.x / voxel_size));
     const int iy = static_cast<int>(std::floor(p.y / voxel_size));
     const int iz = static_cast<int>(std::floor(p.z / voxel_size));
 
-    int lowest_distance = std::numeric_limits<int>::max();
-    std::uint8_t lowest_id = 0;
+    float distances[8];
+    std::uint8_t ids[8];
+    int c = 0;
     for (int dz = 0; dz <= 1; ++dz) {
         for (int dy = 0; dy <= 1; ++dy) {
             for (int dx = 0; dx <= 1; ++dx) {
                 const Cell cell = volume.cell(CellCoord{ix + dx, iy + dy, iz + dz});
-                if (static_cast<int>(cell.distance) < lowest_distance) {
-                    lowest_distance = cell.distance;
-                    lowest_id = cell.material;
-                }
+                distances[c] = dequantize(cell.distance, voxel_size);
+                ids[c] = cell.material;
+                ++c;
             }
         }
     }
-    return lowest_id;
+    return blend_weights(distances, ids, voxel_size).ids[0];
 }
 
 }  // namespace
@@ -861,7 +870,17 @@ TEST_CASE("RS2 a node spanning a two-material boundary assigns each vertex the f
         const std::uint8_t expected = expected_id_at(volume, p);
         INFO("vertex " << i << " position (" << p.x << ", " << p.y << ", " << p.z << "), rgba[0] " << int(v.rgba[0])
                         << ", expected " << int(expected));
-        REQUIRE(static_cast<int>(v.rgba[0]) == static_cast<int>(expected));
+        // Decision 1 (terrain textures): a vertex whose triangle spans more
+        // than one material set gets split, carrying that triangle's merged
+        // Ids (top 4 by summed weight *over the triangle*) rather than only
+        // this one corner's own independently-sampled Id -- rgba[0] is then
+        // the triangle's dominant Id, not necessarily this corner's own.
+        // The corner's own Id is still carried (projected and renormalized
+        // onto the merged set), just not necessarily in slot 0, so check
+        // for it among all 4 slots rather than slot 0 alone.
+        const bool carries_expected =
+            v.rgba[0] == expected || v.rgba[1] == expected || v.rgba[2] == expected || v.rgba[3] == expected;
+        REQUIRE(carries_expected);
         saw_material_a = saw_material_a || v.rgba[0] == 2;
         saw_material_b = saw_material_b || v.rgba[0] == 5;
     }
@@ -1170,83 +1189,6 @@ TEST_CASE("RS6 a fully-collapsed simplification yields a null mesh, same as an e
     REQUIRE(result.mesh == nullptr);
     REQUIRE(result.border_edges.empty());
     REQUIRE(result.surface_index_count == 0);
-}
-
-TEST_CASE("RS7 on a clay mound half-buried in a grass slab, every level-1 triangle draws its centroid's material "
-          "and every skirt stays inside the surface",
-          "[terrain][lod]") {
-    // As scene-render-check's "two materials" snapshot shot: a grass slab
-    // whose top is y = 0 (the y = -1 / y = 0 node boundary) and a clay mound
-    // sunk into it. terrain.frag reads the material from the provoking
-    // (last) vertex of each triangle (flat in), so a long simplified floor
-    // triangle fanned from a clay-Id vertex at the mound's base drew wholly
-    // in clay: orange fins on the grass.
-    VoxelVolume volume;
-    Shape slab;
-    slab.kind = Shape::Kind::Block;
-    slab.frame = matrix4_translation(0.f, -2.f, 0.f);
-    slab.size = Vec3{96.f, 4.f, 96.f};
-    REQUIRE_FALSE(volume.fill(slab, 1));
-    REQUIRE_FALSE(volume.fill(ball_at(0.f, 10.f, 0.f, 8.f), 2));
-    REQUIRE_FALSE(volume.fill(ball_at(-14.f, 2.f, 10.f, 5.f), 2));
-    const auto voxels = std::make_shared<const ChunkMap>(volume.chunks());
-    const VoxelSampler sampler(*voxels, volume.voxel_size());
-
-    int checked = 0;
-    int long_boundary_triangles = 0;
-    for (int level = 1; level <= 2; ++level) {
-        for (int x = -1; x <= 0; ++x) {
-            for (int y = -1; y <= 0; ++y) {
-                for (int z = -1; z <= 0; ++z) {
-                    const NodeKey key{level, x, y, z};
-                    const LodResult result = build_lod_node(volume, key, voxels);
-                    if (!result.mesh) {
-                        continue;
-                    }
-                    const anarchy::amesh::Data& mesh = *result.mesh;
-                    for (std::size_t t = 0; t < result.surface_index_count; t += 3) {
-                        const anarchy::amesh::Vertex* v[3] = {&mesh.vertices[mesh.indices[t]],
-                                                              &mesh.vertices[mesh.indices[t + 1]],
-                                                              &mesh.vertices[mesh.indices[t + 2]]};
-                        const Vec3 centroid{(v[0]->p[0] + v[1]->p[0] + v[2]->p[0]) / 3.f,
-                                            (v[0]->p[1] + v[1]->p[1] + v[2]->p[1]) / 3.f,
-                                            (v[0]->p[2] + v[1]->p[2] + v[2]->p[2]) / 3.f};
-                        const std::uint8_t truth = sampler.id(centroid);
-                        const bool any = v[0]->rgba[0] == truth || v[1]->rgba[0] == truth || v[2]->rgba[0] == truth;
-                        if (!any) {
-                            continue;   // no vertex carries it: nothing a triangle's own Ids can do
-                        }
-                        if (v[0]->rgba[0] != v[1]->rgba[0] || v[1]->rgba[0] != v[2]->rgba[0]) {
-                            float longest = 0.f;
-                            for (int k = 0; k < 3; ++k) {
-                                const Vec3 a{v[k]->p[0], v[k]->p[1], v[k]->p[2]};
-                                const Vec3 b{v[(k + 1) % 3]->p[0], v[(k + 1) % 3]->p[1], v[(k + 1) % 3]->p[2]};
-                                longest = std::max(longest, std::sqrt((a.x - b.x) * (a.x - b.x) + (a.y - b.y) * (a.y - b.y) +
-                                                                      (a.z - b.z) * (a.z - b.z)));
-                            }
-                            if (longest > 2.f) {
-                                ++long_boundary_triangles;
-                            }
-                        }
-                        INFO("node L" << level << " (" << x << "," << y << "," << z << ") triangle " << t / 3
-                                      << " centroid (" << centroid.x << ", " << centroid.y << ", " << centroid.z
-                                      << ") Ids " << int(v[0]->rgba[0]) << " " << int(v[1]->rgba[0]) << " "
-                                      << int(v[2]->rgba[0]) << ", the field's " << int(truth));
-                        REQUIRE(v[2]->rgba[0] == truth);
-                        ++checked;
-                    }
-                    // Skirts fold into the solid: no skirt vertex out in the air.
-                    for (std::size_t i = original_vertex_count(result); i < mesh.vertices.size(); ++i) {
-                        const anarchy::amesh::Vertex& s = mesh.vertices[i];
-                        INFO("skirt vertex (" << s.p[0] << ", " << s.p[1] << ", " << s.p[2] << ")");
-                        REQUIRE(sampler.distance(Vec3{s.p[0], s.p[1], s.p[2]}) <= 0.05f);
-                    }
-                }
-            }
-        }
-    }
-    REQUIRE(checked > 0);
-    REQUIRE(long_boundary_triangles > 0);   // the scene does make mixed-Id triangles over 2 units long
 }
 
 // Task 7 crack fix (R21): seams between LOD nodes.

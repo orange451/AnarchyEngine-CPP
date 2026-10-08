@@ -72,6 +72,10 @@ void (*rt_glFramebufferTexture2D)(GLenum, GLenum, GLenum, GLuint, GLint) = nullp
 GLenum (*rt_glCheckFramebufferStatus)(GLenum) = nullptr;
 void (*rt_glDrawBuffers)(GLsizei, const GLenum*) = nullptr;
 void (*rt_glTexImage3D)(GLenum, GLint, GLint, GLsizei, GLsizei, GLsizei, GLint, GLenum, GLenum, const void*) = nullptr;
+void (*rt_glTexSubImage3D)(GLenum, GLint, GLint, GLint, GLint, GLsizei, GLsizei, GLsizei, GLenum, GLenum,
+                           const void*) = nullptr;
+void (*rt_glTexParameterf)(GLenum, GLenum, GLfloat) = nullptr;
+const GLubyte* (*rt_glGetStringi)(GLenum, GLuint) = nullptr;
 void (*rt_glFramebufferTextureLayer)(GLenum, GLenum, GLuint, GLint, GLint) = nullptr;
 void (*rt_glPolygonOffset)(GLfloat, GLfloat) = nullptr;
 void (*rt_glReadBuffer)(GLenum) = nullptr;
@@ -210,6 +214,9 @@ bool LoadGl(GlGetProcAddress get_proc) {
     LOAD(CheckFramebufferStatus);
     LOAD(DrawBuffers);
     LOAD(TexImage3D);
+    LOAD(TexSubImage3D);
+    LOAD(TexParameterf);
+    LOAD(GetStringi);
     LOAD(FramebufferTextureLayer);
     LOAD(PolygonOffset);
     LOAD(ReadBuffer);

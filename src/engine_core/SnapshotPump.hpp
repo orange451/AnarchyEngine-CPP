@@ -167,6 +167,8 @@ struct VisualLighting {
     float gamma = 2.2f;
     // Enum.AntialiasingMode's value: None 0, FXAA 1.
     int antialiasing = 1;
+    // Enum.EffectQuality's value: Low 0, Medium 1, High 2.
+    int terrain_quality = 2;
 };
 
 // One Model's Mesh, as the renderer loads it: a file, or the geometry this

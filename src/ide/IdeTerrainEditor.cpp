@@ -569,15 +569,23 @@ std::uint64_t IdeTerrainEditor::voxel_revision() const {
     return terrain != nullptr ? terrain->volume().revision() : 0;
 }
 
+std::uint64_t IdeTerrainEditor::texture_revision() const {
+    return host_.texture_revision ? host_.texture_revision(terrain_) : 0;
+}
+
 void IdeTerrainEditor::refresh() {
     const std::uint64_t tree = world_.tree_revision();
     // Taken before the read, so a change made while reading reads again next frame.
     const bool edited = edited_.take();
-    // Sculpting moves no tree or property, only the voxels' revision.
-    if (tree == seen_tree_ && !edited && voxel_revision() == view_.voxel_revision) {
+    const std::uint64_t textures = texture_revision();
+    // Sculpting moves no tree or property, only the voxels' revision. A
+    // background texture build landing moves none of those either, only
+    // textures (Task 5: the header's "· N MB textures" figure).
+    if (tree == seen_tree_ && !edited && voxel_revision() == view_.voxel_revision && textures == seen_texture_revision_) {
         return;
     }
     seen_tree_ = tree;
+    seen_texture_revision_ = textures;
     TerrainMaterialsView view = read_terrain_materials(world_, terrain_);
     if (view.alive) {
         setTitle(view.terrain_name);
@@ -611,8 +619,15 @@ void IdeTerrainEditor::refresh() {
 void IdeTerrainEditor::show_header() {
     title_->setText(view_.alive ? view_.terrain_name : std::string("Terrain"));
     const std::size_t count = view_.materials.size();
-    subtitle_->setText(view_.alive ? std::to_string(count) + " / " + std::to_string(kMaxMaterials) + " materials"
-                                   : std::string("Deleted"));
+    std::string subtitle = view_.alive ? std::to_string(count) + " / " + std::to_string(kMaxMaterials) + " materials"
+                                       : std::string("Deleted");
+    // Task 5: "N MB textures", from TerrainTextures::memory_bytes. No host
+    // callback (a test that does not wire an Engine in) shows no figure.
+    if (view_.alive && host_.texture_memory_bytes) {
+        const std::size_t megabytes = host_.texture_memory_bytes(terrain_) / (1024 * 1024);
+        subtitle += " · " + std::to_string(megabytes) + " MB textures";
+    }
+    subtitle_->setText(subtitle);
     const bool at_cap = !view_.alive || count >= static_cast<std::size_t>(kMaxMaterials);
     add_button_->setDisable(at_cap);
     // The New Material tile is another way to the same add, so it is

@@ -647,7 +647,7 @@ TEST_CASE("TW4 a TerrainMaterial's Material changes the look, not the meshes", "
     settle(world, game);
     REQUIRE(world.views()[0].chunks == chunks);           // same vector: nothing re-meshed
     REQUIRE(world.views()[0].look->revision != look);
-    REQUIRE(world.views()[0].look->texels[1 * 4 + 0] == 255);   // Id 1, red
+    REQUIRE(world.views()[0].look->texels[1 * 4 + 0] == 1.f);   // Id 1, red
 }
 
 TEST_CASE("TW5 Stop re-meshes only what play changed", "[terrain]") {

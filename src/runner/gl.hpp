@@ -140,6 +140,9 @@ using GLuint64 = unsigned long long;
 #ifdef GL_RGBA8
 #undef GL_RGBA8
 #endif
+#ifdef GL_RGBA32F
+#undef GL_RGBA32F
+#endif
 #ifdef GL_UNPACK_ALIGNMENT
 #undef GL_UNPACK_ALIGNMENT
 #endif
@@ -195,6 +198,10 @@ constexpr GLenum GL_LINEAR = 0x2601;
 constexpr GLenum GL_LINEAR_MIPMAP_LINEAR = 0x2703;
 constexpr GLenum GL_REPEAT = 0x2901;
 constexpr GLenum GL_RGBA8 = 0x8058;
+// The terrain look table (Task 5, decision R1): 256 x 4 floats, one row per
+// (color, metalness/roughness/reflectivity, layer/scale/sharpness/height,
+// reserved).
+constexpr GLenum GL_RGBA32F = 0x8814;
 constexpr GLenum GL_UNPACK_ALIGNMENT = 0x0CF5;
 
 // The Scene View's offscreen passes. Prefixed RT_ so no platform header's
@@ -250,6 +257,18 @@ constexpr GLenum RT_GL_TEXTURE_COMPARE_FUNC = 0x884D;
 constexpr GLenum RT_GL_COMPARE_REF_TO_TEXTURE = 0x884E;
 constexpr GLenum RT_GL_LEQUAL = 0x0203;
 constexpr GLenum RT_GL_POLYGON_OFFSET_FILL = 0x8037;
+
+// Terrain texture arrays (Task 6): per-Material layers, full mip chains, and
+// anisotropic filtering when the driver's extension list (glGetStringi) has
+// it. GL_TEXTURE_MAX_ANISOTROPY and GL_MAX_TEXTURE_MAX_ANISOTROPY share the
+// same enum value under both the EXT and the (GL 4.6 core) ARB names.
+constexpr GLenum RT_GL_MAX_ARRAY_TEXTURE_LAYERS = 0x88FF;
+constexpr GLenum RT_GL_TEXTURE_MAX_ANISOTROPY = 0x84FE;
+constexpr GLenum RT_GL_MAX_TEXTURE_MAX_ANISOTROPY = 0x84FF;
+constexpr GLenum RT_GL_NUM_EXTENSIONS = 0x821D;
+// glGetStringi's own target for one indexed extension name (core profiles
+// drop the legacy glGetString(GL_EXTENSIONS) single-string form).
+constexpr GLenum RT_GL_EXTENSIONS = 0x1F03;
 
 // Names are prefixed so they do not collide with libGL's exported functions.
 extern const GLubyte* (*rt_glGetString)(GLenum name);
@@ -321,6 +340,11 @@ extern GLenum (*rt_glCheckFramebufferStatus)(GLenum target);
 extern void (*rt_glDrawBuffers)(GLsizei n, const GLenum* bufs);
 extern void (*rt_glTexImage3D)(GLenum target, GLint level, GLint internalformat, GLsizei width, GLsizei height,
                                GLsizei depth, GLint border, GLenum format, GLenum type, const void* pixels);
+extern void (*rt_glTexSubImage3D)(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLint zoffset,
+                                  GLsizei width, GLsizei height, GLsizei depth, GLenum format, GLenum type,
+                                  const void* pixels);
+extern void (*rt_glTexParameterf)(GLenum target, GLenum pname, GLfloat param);
+extern const GLubyte* (*rt_glGetStringi)(GLenum name, GLuint index);
 extern void (*rt_glFramebufferTextureLayer)(GLenum target, GLenum attachment, GLuint texture, GLint level,
                                             GLint layer);
 extern void (*rt_glPolygonOffset)(GLfloat factor, GLfloat units);
@@ -444,6 +468,9 @@ bool LoadGl(GlGetProcAddress get_proc);
 #define glCheckFramebufferStatus ::runner::rt_glCheckFramebufferStatus
 #define glDrawBuffers ::runner::rt_glDrawBuffers
 #define glTexImage3D ::runner::rt_glTexImage3D
+#define glTexSubImage3D ::runner::rt_glTexSubImage3D
+#define glTexParameterf ::runner::rt_glTexParameterf
+#define glGetStringi ::runner::rt_glGetStringi
 #define glFramebufferTextureLayer ::runner::rt_glFramebufferTextureLayer
 #define glPolygonOffset ::runner::rt_glPolygonOffset
 #define glReadBuffer ::runner::rt_glReadBuffer

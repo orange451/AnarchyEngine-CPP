@@ -8,6 +8,7 @@
 #include "ScriptRuntime.hpp"
 #include "Terrain.hpp"
 #include "TerrainMaterial.hpp"
+#include "TerrainTextures.hpp"
 #include "terrain/VoxelVolume.hpp"
 #include "jadefx/jadefx.hpp"
 
@@ -240,6 +241,53 @@ struct PaneRig : Rig {
             }
         }
         return nullptr;
+    }
+
+    std::string counter() const { return editor->counter() != nullptr ? editor->counter()->getText() : std::string(); }
+};
+
+// The Rig with the tab open on its Terrain, wired to a real TerrainTextures
+// instead of PaneRig's unwired (no-op) texture callbacks -- so TL-T3 can
+// prove the header genuinely reflects a background build landing, not just
+// that a callback exists. Kept separate from PaneRig: wiring these two
+// callbacks there would add a "N MB textures" suffix to every other TE*
+// test's exact rig.counter() text (TE1, TE2, TE4, TE5, TE11).
+struct TexturePaneRig : Rig {
+    engine_core::TerrainTextures textures;
+    std::shared_ptr<ide::IdeTerrainEditor> editor;
+    std::shared_ptr<jadefx::Scene> scene;
+    double time = 0;
+
+    TexturePaneRig() {
+        ide::TerrainEditorHost host;
+        host.texture_memory_bytes = [this](InstanceId terrain) { return textures.memory_bytes(terrain); };
+        host.texture_revision = [this](InstanceId terrain) -> std::uint64_t {
+            const std::shared_ptr<const engine_core::TerrainTextureSet> set = textures.published(terrain);
+            return set ? set->revision : 0;
+        };
+        editor = jadefx::make<ide::IdeTerrainEditor>(game, terrain_id, std::move(host));
+        editor->setPrefWidthRatio(1);
+        editor->setPrefHeightRatio(1);
+        scene = jadefx::make<jadefx::Scene>(editor, kWidth, kHeight);
+        frames(2);
+    }
+
+    void frames(int count = 1) {
+        for (int i = 0; i < count; ++i) {
+            scene->layout(kWidth, kHeight, time);
+            time += 0.05;
+        }
+    }
+
+    // As sandbox/terrain_textures_tests.cpp's settle(): runs update()+
+    // wait_idle() a few times so every build this update() queued has landed
+    // and been drained by a following update().
+    void settle() {
+        for (int i = 0; i < 6; ++i) {
+            textures.update(game);
+            textures.wait_idle();
+        }
+        textures.update(game);
     }
 
     std::string counter() const { return editor->counter() != nullptr ? editor->counter()->getText() : std::string(); }
@@ -553,6 +601,31 @@ void TE11_add_tile_disabled_at_cap() {
            "TE11 a click on the tile at the cap does nothing");
 }
 
+// TL-T3: the tab's header includes "MB textures" once a host wires
+// texture_memory_bytes/texture_revision in (TE1..TE11's PaneRig never does,
+// and keep showing their plain "N / M materials" counter), and the figure
+// updates once a background build actually lands -- not merely once the
+// callback exists.
+void TL_T3_header_shows_and_updates_texture_memory() {
+    TexturePaneRig rig;
+    rig.frames();
+    const std::string before = rig.counter();
+    Expect(before.find("MB textures") != std::string::npos, "TL-T3 the header includes \"MB textures\"");
+    // " 0 MB textures" (the leading space before the digit), not plain "0 MB
+    // textures": the latter is also a substring of "10 MB textures", "20 MB
+    // textures", and so on.
+    Expect(before.find(" 0 MB textures") != std::string::npos,
+           ("TL-T3 starts at 0 MB, nothing built yet (" + before + ")").c_str());
+
+    rig.settle();   // the untextured default layer (layer 0) lands
+    rig.frames();   // IdeTerrainEditor::refresh() picks up the new texture_revision
+
+    const std::string after = rig.counter();
+    Expect(after != before, ("TL-T3 the header's text changes once a build lands (" + after + ")").c_str());
+    Expect(after.find("MB textures") != std::string::npos && after.find(" 0 MB textures") == std::string::npos,
+           ("TL-T3 the figure is no longer 0 MB after the build (" + after + ")").c_str());
+}
+
 }  // namespace
 
 int main() {
@@ -568,6 +641,7 @@ int main() {
     TE9_unassigned_row();
     TE10_click_selects();
     TE11_add_tile_disabled_at_cap();
+    TL_T3_header_shows_and_updates_texture_memory();
     if (gFailures != 0) {
         std::fprintf(stderr, "%d failed\n", gFailures);
         return 1;

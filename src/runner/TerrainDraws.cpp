@@ -33,6 +33,15 @@ void AppendTerrainDraws(const std::vector<engine_core::TerrainView>& terrains, c
             // nodes here rather than push draws it would render wrong.
             continue;
         }
+        // Task 6: this Terrain's current texture array pair, built
+        // incrementally (a few layers a frame) from view.textures. Layer
+        // count 0 (no set published yet, or still building its first pair)
+        // selects terrain.frag's flat-color path -- terrain never draws
+        // black or vanishes while this is under way.
+        unsigned surfaceA = 0;
+        unsigned surfaceB = 0;
+        int layerCount = 0;
+        renderer.terrainArrays(view.terrain, view.textures, surfaceA, surfaceB, layerCount);
         const std::vector<engine_core::TerrainNodeView>& nodes = *view.nodes;
         // Drawn alone (slot 0) and untinted; the Terrain is the instance that draws it.
         const auto push = [&](const engine_core::TerrainNodeView& node, float fade, bool incoming, bool shadowOnly) {
@@ -50,6 +59,9 @@ void AppendTerrainDraws(const std::vector<engine_core::TerrainView>& terrains, c
             draw.shadowOnly = shadowOnly;
             draw.owner = view.terrain;
             draw.slot = 0;
+            draw.terrainSurfaceA = surfaceA;
+            draw.terrainSurfaceB = surfaceB;
+            draw.terrainLayerCount = layerCount;
             out.push_back(draw);
         };
         SelectTerrainNodes(view, camera, now_seconds, fades, fades.choices);
@@ -85,6 +97,7 @@ void AppendTerrainDraws(const std::vector<engine_core::TerrainView>& terrains, c
     }
     meshes.sweepTerrainNodes(now_seconds);
     renderer.sweepTerrainLooks();
+    renderer.sweepTerrainArrays();
     fades.sweep();
 }
 

@@ -25,12 +25,17 @@
 namespace engine_core {
 
 class Terrain;
+class TerrainTextures;
+struct TerrainTextureSet;
 
 // A Terrain's look: what each material Id draws as. Immutable once published.
 struct TerrainLook {
-    // 256 x 2 RGBA8, row-major: row 0 sRGB color, row 1 (metalness, roughness,
-    // reflectivity, 255). Index 0 and unassigned Ids use the Material defaults.
-    std::array<std::uint8_t, 256 * 2 * 4> texels{};
+    // 256 x 4 RGBA32F, row-major: row 0 color (sRGB values), row 1
+    // (metalness, roughness, reflectivity, 1), row 2 (layer index,
+    // TextureScale, BlendSharpness, HeightStrength), row 3 reserved (0).
+    // Index 0 and unassigned Ids use the Material defaults, and layer 0 (no
+    // texturing yet -- Task 6 uploads TerrainTextures' arrays).
+    std::array<float, 256 * 4 * 4> texels{};
     std::uint64_t revision = 0;   // unique across all looks
 };
 
@@ -54,6 +59,11 @@ struct TerrainView {
     std::shared_ptr<const std::vector<TerrainNodeView>> nodes;   // replaced, never changed
     std::uint64_t nodes_revision = 0;
     int top_level = 0;   // the level of the octree's roots
+    // Task 5: this Terrain's latest published texture arrays, from
+    // TerrainTextures::published(). Filled by attach_textures() after the
+    // Engine's textures_.update(); the renderer does not consume it yet
+    // (Task 6 uploads it).
+    std::shared_ptr<const TerrainTextureSet> textures;
 };
 
 // Keeps every Terrain in Workspace meshed. SimulationThread, under the write
@@ -63,6 +73,16 @@ public:
     // build_node: TerrainMesher's node-build override (tests inject a failing one); empty builds normally.
     explicit TerrainWorld(terrain::TerrainMesher::BuildCollider build = {}, unsigned threads = 0,
                           terrain::TerrainMesher::BuildNode build_node = {});
+
+    // Task 5: rebuild_look's source for each Id's layer index (row 2),
+    // through textures->layer_of(). Null (the default; every test that does
+    // not call this) keeps every Id's layer at 0, the pre-Task-5 look. The
+    // Engine calls this once, wiring its sibling TerrainTextures in.
+    void set_terrain_textures(const TerrainTextures* textures) { textures_ = textures; }
+    // The Engine, right after textures.update(game): fills every view's
+    // textures field from textures.published(). A no-op for a Terrain this
+    // TerrainWorld has not published a view for.
+    void attach_textures(const TerrainTextures& textures);
 
     // Finds Terrains, queues their dirty chunks (all of them the first time a
     // Terrain is seen), collects finished meshes, rebuilds changed looks.
@@ -138,9 +158,19 @@ private:
         double metalness = 0.0;
         double roughness = 0.0;
         double reflectivity = 0.0;
+        // Task 5: the Material's texture numbers, and which texture layer it
+        // draws as (TerrainTextures::layer_of, read fresh each update since
+        // it can change there without this Id's Material or its PBR values
+        // changing at all -- a newly seen Material appended to the layer
+        // list on this very tick).
+        double texture_scale = 0.0;
+        double blend_sharpness = 0.0;
+        double height_strength = 0.0;
+        int layer = 0;
         bool operator==(const LookInput& o) const {
             return material == o.material && same_color(color, o.color) && metalness == o.metalness &&
-                   roughness == o.roughness && reflectivity == o.reflectivity;
+                   roughness == o.roughness && reflectivity == o.reflectivity && texture_scale == o.texture_scale &&
+                   blend_sharpness == o.blend_sharpness && height_strength == o.height_strength && layer == o.layer;
         }
     };
 
@@ -258,13 +288,16 @@ private:
     // and nothing else already in flight for them get a re-mesh flagged to
     // build one; a collider not asked for in kColliderReleaseMs goes.
     void update_collider_interest(InstanceId terrain_id, Terrain& terrain, TerrainRecord& record, double now_ms);
-    void rebuild_look(Terrain& terrain, TerrainRecord& record, bool force);
+    void rebuild_look(InstanceId terrain_id, Terrain& terrain, TerrainRecord& record, bool force);
     void publish_chunks(TerrainRecord& record);
 
     terrain::TerrainMesher mesher_;
     // A copy of the constructor's BuildCollider, for build_colliders_now,
     // which runs on SimulationThread itself rather than a mesher worker.
     terrain::TerrainMesher::BuildCollider build_collider_;
+    // Task 5: set_terrain_textures. Null in every test that does not wire
+    // one in, so layer_of is never called and every Id's layer stays 0.
+    const TerrainTextures* textures_ = nullptr;
     std::unordered_map<InstanceId, TerrainRecord> terrains_;
     std::vector<TerrainView> views_;
     std::uint64_t meshed_count_ = 0;

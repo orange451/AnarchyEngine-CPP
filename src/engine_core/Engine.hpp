@@ -9,6 +9,7 @@
 #include "PhysicsWorld.hpp"
 #include "SnapshotPump.hpp"
 #include "TaskScheduler.hpp"
+#include "TerrainTextures.hpp"
 #include "TerrainWorld.hpp"
 
 #include <memory>
@@ -85,6 +86,9 @@ public:
     // For PhysicsWorld's terrain bodies (set_terrain_world) and the snapshot
     // pump's resolve_terrains.
     TerrainWorld& terrain_world() { return terrain_; }
+    // Task 5: the Configure Terrain tab's "N MB textures" figure
+    // (TerrainTextures::memory_bytes) and its revision.
+    TerrainTextures& terrain_textures() { return textures_; }
     ScriptRuntime& scripts();
     ScriptAnalysis& analysis();
     const ScriptAnalysis& analysis() const;
@@ -142,6 +146,12 @@ private:
     // Meshes every Terrain in Workspace, playing or stopped, building each
     // chunk's collider on its workers for physics_'s Terrain bodies.
     TerrainWorld terrain_{PhysicsWorld::build_terrain_collider};
+    // Task 5: builds and publishes each Terrain's texture arrays, off
+    // SimulationThread on its own worker. Wired into terrain_ once
+    // (set_terrain_textures) so TerrainWorld::rebuild_look can query
+    // layer_of; updated just before terrain_ each tick so a Material newly
+    // seen already has its layer index by the time rebuild_look runs.
+    TerrainTextures textures_;
     std::uint64_t terrain_failures_seen_ = 0;   // report_terrain_failures' high-water mark
     // SoundEmitter voices, stepped after the scripts each frame while the place plays.
     AudioWorld audio_;

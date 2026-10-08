@@ -44,6 +44,14 @@ LuaSlot matrix_slot(const Matrix4& value) {
     return slot;
 }
 
+LuaSlot texture_size_slot(TextureSize value) {
+    LuaSlot slot;
+    slot.kind = LuaSlot::Kind::Enum;
+    slot.enum_type = &texture_size_enum();
+    slot.number = static_cast<int>(value);
+    return slot;
+}
+
 void require_thread(const DataModel& object) {
     if (!object.on_gameplay_thread()) {
         contract_fail("Terrain setters run on SimulationThread");
@@ -164,6 +172,21 @@ std::optional<std::string> Terrain::set_can_collide(bool value) {
     }
     can_collide_ = value;
     note_property_change("CanCollide", bool_slot(!value), bool_slot(value));
+    return std::nullopt;
+}
+
+std::optional<std::string> Terrain::set_texture_size(int value) {
+    require_thread(*this);
+    if (enum_item_name(texture_size_enum(), value) == nullptr) {
+        return std::string("TextureSize must be an Enum.TextureSize");
+    }
+    const TextureSize next = static_cast<TextureSize>(value);
+    if (next == texture_size_) {
+        return std::nullopt;
+    }
+    const TextureSize previous = texture_size_;
+    texture_size_ = next;
+    note_property_change("TextureSize", texture_size_slot(previous), texture_size_slot(next));
     return std::nullopt;
 }
 
@@ -474,6 +497,7 @@ void Terrain::read_place(const std::byte* data, std::size_t size) {
 void Terrain::on_reuse() {
     transform_ = matrix4_identity();
     can_collide_ = true;
+    texture_size_ = TextureSize::Large;
     data_path_.clear();
     volume_ = terrain::VoxelVolume{};
     restoring_ = false;
@@ -533,6 +557,27 @@ bool write_can_collide(DataModel&, DataModel& object, LuaSlot& in) {
     return terrain != nullptr && refuse(in, terrain->set_can_collide(in.flag));
 }
 
+bool read_texture_size(DataModel&, DataModel& object, LuaSlot& out) {
+    const Terrain* terrain = terrain_of(object);
+    if (terrain == nullptr) {
+        return false;
+    }
+    out = texture_size_slot(terrain->texture_size());
+    return true;
+}
+
+bool write_texture_size(DataModel&, DataModel& object, LuaSlot& in) {
+    Terrain* terrain = terrain_of(object);
+    if (terrain == nullptr) {
+        return false;
+    }
+    if (in.kind != LuaSlot::Kind::Enum || in.enum_type != &texture_size_enum()) {
+        in.error = "TextureSize must be an Enum.TextureSize";
+        return false;
+    }
+    return refuse(in, terrain->set_texture_size(static_cast<int>(in.number)));
+}
+
 bool read_data_path(DataModel&, DataModel& object, LuaSlot& out) {
     const Terrain* terrain = terrain_of(object);
     if (terrain == nullptr) {
@@ -563,6 +608,7 @@ ANARCHY_LUA_REGISTER(register_terrain_lua) {
         lua_saved_property("Transform", "Matrix4", read_transform, write_transform, identity.c_str()),
         lua_property("VoxelSize", "number", false, read_voxel_size, nullptr),
         lua_saved_property("CanCollide", "boolean", read_can_collide, write_can_collide, "true"),
+        lua_saved_enum("TextureSize", texture_size_enum(), read_texture_size, write_texture_size, "\"Large\""),
         data_path,
     };
     register_lua_class("Terrain", "PVInstance", fields, static_cast<int>(std::size(fields)));

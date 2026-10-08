@@ -58,6 +58,11 @@ enum class AntialiasingMode { None = 0, FXAA = 1 };
 const EnumType& effect_quality_enum();
 // effect_quality_enum's items, by value.
 enum class EffectQuality { Low = 0, Medium = 1, High = 2 };
+// How large a Terrain's packed textures are: Small 0, Medium 1, Large 2, Max
+// 3, naming a layer size of 256, 512, 1024, or 2048 pixels. Terrain.TextureSize.
+const EnumType& texture_size_enum();
+// texture_size_enum's items, by value.
+enum class TextureSize { Small = 0, Medium = 1, Large = 2, Max = 3 };
 
 // Every type the Enum global holds, for script analysis to declare.
 int enum_type_count();

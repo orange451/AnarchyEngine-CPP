@@ -68,6 +68,8 @@ Engine::Engine() {
     });
     // Each Terrain terrain_ meshes gets a body, made in physics_.sync.
     physics_.set_terrain_world(&terrain_);
+    // Task 5: rebuild_look's layer_of source.
+    terrain_.set_terrain_textures(&textures_);
     // RenderThread's snapshot carries each Terrain's chunks and look, read
     // from terrain_ by SnapshotPump::resolve_terrains.
     pump_.set_terrain_world(&terrain_);
@@ -324,13 +326,18 @@ void Engine::simulation_loop() {
                             DataModelLock lock(game_, DataModelLock::Write);
                             if (!game_.simulation_running()) {
                                 decomposer_.update(game_);
+                                // Textures before terrain_: a Material newly seen this tick
+                                // already has its layer index (TerrainTextures::layer_of) by
+                                // the time rebuild_look runs inside terrain_.update().
                                 // Terrain meshes before physics syncs, as the running tick
                                 // also orders it (see below): a Terrain's shape and collider
                                 // need to exist before physics_.sync looks for them, or a
                                 // Terrain created this tick still shows up in TerrainWorld's
                                 // views with no collider built yet, for one tick.
+                                textures_.update(game_);
                                 terrain_.update(game_);
                                 report_terrain_failures();
+                                terrain_.attach_textures(textures_);
                                 physics_.sync(game_);
                             }
                         },
@@ -421,9 +428,12 @@ void Engine::simulation_loop() {
                     // Once per frame, not per substep: the camera for job
                     // ordering only needs to move once a frame, and meshing
                     // is already off this thread (TerrainMesher's workers).
+                    // textures_ first: see the stopped tick's own comment above.
                     PROFILE_SCOPE("Terrain", profiler::Group::Engine);
+                    textures_.update(game_);
                     terrain_.update(game_);
                     report_terrain_failures();
+                    terrain_.attach_textures(textures_);
                 }
                 accumulator += wall;
                 constexpr int kMaxSubsteps = 32;

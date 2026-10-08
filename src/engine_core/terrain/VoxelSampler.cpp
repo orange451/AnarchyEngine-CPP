@@ -102,4 +102,26 @@ std::uint8_t VoxelSampler::id(Vec3 p) const {
     return corners[lowest].material;
 }
 
+BlendIds VoxelSampler::blend(Vec3 p) const {
+    int ix = 0, iy = 0, iz = 0;
+    float fx = 0.f, fy = 0.f, fz = 0.f;
+    cell_space(p, voxel_size_, ix, iy, iz, fx, fy, fz);
+    (void)fx;
+    (void)fy;
+    (void)fz;
+
+    const Cell corners[8] = {
+        cell_at(ix, iy, iz),         cell_at(ix + 1, iy, iz),         cell_at(ix, iy + 1, iz),
+        cell_at(ix + 1, iy + 1, iz), cell_at(ix, iy, iz + 1),         cell_at(ix + 1, iy, iz + 1),
+        cell_at(ix, iy + 1, iz + 1), cell_at(ix + 1, iy + 1, iz + 1),
+    };
+    float distances[8];
+    std::uint8_t ids[8];
+    for (int c = 0; c < 8; ++c) {
+        distances[c] = dequantize(corners[c].distance, voxel_size_);
+        ids[c] = corners[c].material;
+    }
+    return blend_weights(distances, ids, voxel_size_);
+}
+
 }  // namespace engine_core::terrain

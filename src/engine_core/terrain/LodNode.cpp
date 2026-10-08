@@ -155,7 +155,10 @@ CompactMesh pack(const anarchy::amesh::Data& mesh, Vec3 bounds_min, Vec3 bounds_
 
         for (int c = 0; c < 4; ++c) {
             out.ids[i * 4 + static_cast<std::size_t>(c)] = v.rgba[c];
-            out.weights[i * 4 + static_cast<std::size_t>(c)] = quantize_unit(v.weight[c]);
+            // R7: the terrain blend weight lives in v.t[c] (the tangent
+            // channel, repurposed for terrain), not v.weight[c] (skinning
+            // weights, which a terrain mesh never carries).
+            out.weights[i * 4 + static_cast<std::size_t>(c)] = quantize_unit(v.t[c]);
         }
     }
 
@@ -185,7 +188,8 @@ anarchy::amesh::Data unpack(const CompactMesh& mesh) {
 
         for (int c = 0; c < 4; ++c) {
             v.rgba[c] = mesh.ids[i * 4 + static_cast<std::size_t>(c)];
-            v.weight[c] = static_cast<float>(mesh.weights[i * 4 + static_cast<std::size_t>(c)]) / 255.f;
+            // R7: unpacked back into v.t[c], mirroring pack()'s v.t[c] source.
+            v.t[c] = static_cast<float>(mesh.weights[i * 4 + static_cast<std::size_t>(c)]) / 255.f;
         }
     }
 

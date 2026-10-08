@@ -25,6 +25,12 @@ struct MeshInput {
     ChunkCoord coord;
     float voxel_size = 1.f;
     std::array<ChunkPtr, 27> neighbors;
+    // Task 8: whether the mesher should run its collider builder for this
+    // job. True by default so a caller that never sets it (every existing
+    // caller, and anything but TerrainWorld) keeps today's "always build
+    // one" behavior; TerrainWorld sets this per job from its collider
+    // interest set.
+    bool build_collider = true;
 };
 
 // Gathers a MeshInput from volume. SimulationThread (it reads the chunk map).

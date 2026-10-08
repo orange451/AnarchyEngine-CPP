@@ -36,11 +36,15 @@ std::uint8_t to_u8(float value) {
 
 std::uint8_t to_u8(double value) { return to_u8(static_cast<float>(value)); }
 
+// Task 8: a collider not asked for by set_collider_interest in this long
+// goes (spec: "a few seconds", R8 fixes it at 5 s).
+constexpr double kColliderReleaseMs = 5000.0;
+
 }  // namespace
 
 TerrainWorld::TerrainWorld(terrain::TerrainMesher::BuildCollider build, unsigned threads,
                            terrain::TerrainMesher::BuildNode build_node)
-    : mesher_(std::move(build), threads, std::move(build_node)) {}
+    : mesher_(build, threads, std::move(build_node)), build_collider_(std::move(build)) {}
 
 void TerrainWorld::accept_result(const terrain::MeshResult& result) {
     // SimulationThread (called from update(), which owns terrains_).
@@ -104,26 +108,37 @@ void TerrainWorld::leave_batch(TerrainRecord& record, const terrain::ChunkCoord&
 }
 
 void TerrainWorld::apply_result(TerrainRecord& record, const terrain::MeshResult& result) {
+    // Task 8: what this job was asked to do, decided when it was queued
+    // (queue_dirty, update_lod's residency needs, or update_collider_interest).
+    // Gone (should not happen: every live job has an entry) defaults to
+    // neither an edit nor wanting a collider, so it changes nothing it is
+    // not sure of.
+    const auto pending = record.pending_jobs.find(result.coord);
+    const bool edited = pending != record.pending_jobs.end() && pending->second.edited;
+    const bool want_collider = pending != record.pending_jobs.end() && pending->second.want_collider;
+    if (pending != record.pending_jobs.end()) {
+        record.pending_jobs.erase(pending);
+    }
     if (result.failed) {
         // The job threw: the chunk keeps its mesh and collider, and its
         // LOD ancestors stop waiting on it.
-        record.residency_jobs.erase(result.coord);
         if (record.tree != nullptr) {
             record.tree->chunk_failed(result.coord);
         }
         return;
     }
-    // A job queued only to bring a dropped mesh back: the voxels are as
-    // they were, so the collider PhysicsWorld already holds stays (R5:
-    // residency never touches colliders) and no LOD ancestor goes stale.
-    const bool residency_only = record.residency_jobs.erase(result.coord) != 0;
     const std::uint64_t view_revision = next_chunk_revision_++;
     if (result.mesh.render != nullptr) {
         record.meshes[result.coord] = TerrainChunkView{result.coord, view_revision, result.mesh.render};
     } else {
         record.meshes.erase(result.coord);
     }
-    if (!residency_only) {
+    // The collider write follows want_collider, not edited: an edit outside
+    // collider_interest builds no collider (and must not touch whatever is
+    // already there, kept for kColliderReleaseMs), and a residency or
+    // collider-refresh job inside collider_interest still writes one even
+    // though the voxels did not change.
+    if (want_collider) {
         if (result.collider != nullptr) {
             record.collider_map[result.coord] = ChunkCollider{result.coord, view_revision, result.collider};
         } else {
@@ -133,7 +148,7 @@ void TerrainWorld::apply_result(TerrainRecord& record, const terrain::MeshResult
     record.chunks_dirty = true;
     if (record.tree != nullptr) {
         if (result.mesh.render != nullptr) {
-            record.tree->chunk_meshed(result.coord, result.mesh.render, !residency_only);
+            record.tree->chunk_meshed(result.coord, result.mesh.render, edited);
         } else {
             record.tree->chunk_removed(result.coord);
         }
@@ -188,14 +203,20 @@ void TerrainWorld::queue_dirty(InstanceId terrain_id, Terrain& terrain, TerrainR
         // comment on TerrainRecord::chunk_revisions.
         const std::uint64_t revision = ++next_job_revision_;
         record.chunk_revisions[coord] = revision;
-        record.residency_jobs.erase(coord);   // an edit supersedes a residency re-mesh
+        // An edit always wins any other job already in flight for coord
+        // (queue_dirty is the only queuer that replaces one), and its
+        // collider decision follows interest, same as every other job's.
+        const bool want_collider = record.collider_interest.count(coord) != 0;
+        record.pending_jobs[coord] = TerrainRecord::PendingJob{true, want_collider};
         record.tree->chunk_queued(coord, true);
         float job_distance = 0.f;
         if (has_camera) {
             const Vec3 world_center = matrix4_point(terrain.transform(), chunk_center_local(coord, voxel_size));
             job_distance = distance(world_center, camera_pos);
         }
-        mesher_.queue(terrain_id, revision, terrain::mesh_input(volume, coord), job_distance);
+        terrain::MeshInput input = terrain::mesh_input(volume, coord);
+        input.build_collider = want_collider;
+        mesher_.queue(terrain_id, revision, std::move(input), job_distance);
     }
 }
 
@@ -225,13 +246,25 @@ void TerrainWorld::update_lod(InstanceId terrain_id, Terrain& terrain, TerrainRe
     }
     terrain::VoxelVolume& volume = terrain.volume();
     for (const terrain::ChunkCoord& coord : needs) {
+        if (record.pending_jobs.count(coord) != 0) {
+            // Must also fix (Task 7 review): an edit (or a collider refresh)
+            // already has this coord in flight -- it wins. LodTree already
+            // marked the node in_flight before returning coord here, so
+            // skipping the queue leaves nothing unaccounted: whatever is
+            // actually in flight will land and settle the tree's residency
+            // state regardless of which job asked for it.
+            continue;
+        }
         const std::uint64_t revision = ++next_job_revision_;
         record.chunk_revisions[coord] = revision;
-        record.residency_jobs.insert(coord);
+        const bool want_collider = record.collider_interest.count(coord) != 0;
+        record.pending_jobs[coord] = TerrainRecord::PendingJob{false, want_collider};
         tree.chunk_queued(coord, false);
         const float job_distance =
             has_camera ? distance(matrix4_point(transform, chunk_center_local(coord, voxel_size)), camera_pos) : 0.f;
-        mesher_.queue(terrain_id, revision, terrain::mesh_input(volume, coord), job_distance);
+        terrain::MeshInput input = terrain::mesh_input(volume, coord);
+        input.build_collider = want_collider;
+        mesher_.queue(terrain_id, revision, std::move(input), job_distance);
     }
 
     std::vector<terrain::NodeBuildRequest> builds;
@@ -252,6 +285,37 @@ void TerrainWorld::update_lod(InstanceId terrain_id, Terrain& terrain, TerrainRe
         }
         build.input.voxels = voxels;
         mesher_.queue_node(terrain_id, build.revision, std::move(build.input), job_distance);
+    }
+}
+
+void TerrainWorld::update_collider_interest(InstanceId terrain_id, Terrain& terrain, TerrainRecord& record,
+                                            double now_ms) {
+    for (const terrain::ChunkCoord& coord : record.collider_interest) {
+        record.collider_last_interest_ms[coord] = now_ms;
+        if (record.collider_map.count(coord) != 0 || record.pending_jobs.count(coord) != 0) {
+            // Already has one, or an edit/residency/earlier refresh job
+            // already in flight for it will decide this once it lands --
+            // that job's own want_collider already follows interest.
+            continue;
+        }
+        const std::uint64_t revision = ++next_job_revision_;
+        record.chunk_revisions[coord] = revision;
+        record.pending_jobs[coord] = TerrainRecord::PendingJob{false, true};
+        record.tree->chunk_queued(coord, false);
+        terrain::MeshInput input = terrain::mesh_input(terrain.volume(), coord);
+        input.build_collider = true;
+        mesher_.queue(terrain_id, revision, std::move(input), 0.f);
+    }
+    // A collider not asked for in kColliderReleaseMs goes.
+    for (auto it = record.collider_last_interest_ms.begin(); it != record.collider_last_interest_ms.end();) {
+        if (now_ms - it->second > kColliderReleaseMs) {
+            if (record.collider_map.erase(it->first) != 0) {
+                record.chunks_dirty = true;
+            }
+            it = record.collider_last_interest_ms.erase(it);
+        } else {
+            ++it;
+        }
     }
 }
 
@@ -379,7 +443,7 @@ void TerrainWorld::update(DataModel& game, double now_ms) {
         bool fresh = first_seen;
         if (record.tree == nullptr || record.tree->voxel_size() != voxel_size) {
             record.tree = std::make_unique<terrain::LodTree>(voxel_size, &next_node_revision_);
-            record.residency_jobs.clear();
+            record.pending_jobs.clear();
             record.batches.clear();   // their jobs' results no longer match (every chunk is queued again)
             record.chunk_batch.clear();
             if (!record.meshes.empty()) {
@@ -388,9 +452,18 @@ void TerrainWorld::update(DataModel& game, double now_ms) {
             }
             fresh = true;
         }
+        record.instance = terrain;   // for build_colliders_now, called from PhysicsWorld's own sync
 
         queue_dirty(id, *terrain, record, fresh, has_camera, camera_pos);
         update_lod(id, *terrain, record, now_ms, has_camera, camera_pos);
+        if (!terrain->can_collide()) {
+            // Nothing to show through it: let any collider interest lapse
+            // (set_collider_interest while CanCollide is false would only
+            // build colliders no one can touch) and release what exists
+            // once its kColliderReleaseMs is up, same as leaving interest.
+            record.collider_interest.clear();
+        }
+        update_collider_interest(id, *terrain, record, now_ms);
         rebuild_look(*terrain, record, first_seen);
         if (record.chunks_dirty || first_seen) {
             publish_chunks(record);
@@ -417,6 +490,102 @@ void TerrainWorld::update(DataModel& game, double now_ms) {
 const std::vector<TerrainWorld::ChunkCollider>* TerrainWorld::colliders(InstanceId terrain) const {
     const auto found = terrains_.find(terrain);
     return found != terrains_.end() ? &found->second.colliders_vec : nullptr;
+}
+
+void TerrainWorld::set_collider_interest(InstanceId terrain, std::vector<terrain::ChunkCoord> chunks) {
+    // PhysicsWorld, at the start of its own sync. Replaces whatever the
+    // previous call (this frame's or an earlier one) asked for; takes effect
+    // at the next update() (update_collider_interest).
+    const auto found = terrains_.find(terrain);
+    if (found == terrains_.end()) {
+        return;   // not a Terrain this TerrainWorld currently shows
+    }
+    found->second.collider_interest.clear();
+    found->second.collider_interest.insert(chunks.begin(), chunks.end());
+}
+
+bool TerrainWorld::build_colliders_now(InstanceId terrain, const std::vector<terrain::ChunkCoord>& chunks) {
+    // PhysicsWorld's own sync, SimulationThread: no-fall-through for a body
+    // this sync found with no collider around it. Meshes and builds right
+    // here, off the job queue -- apply_result still runs, so the LOD tree,
+    // chunk_revisions, and pending_jobs all stay consistent with a job
+    // queued and landed through the normal path for the same coord.
+    const auto found = terrains_.find(terrain);
+    if (found == terrains_.end() || found->second.instance == nullptr) {
+        return false;
+    }
+    TerrainRecord& record = found->second;
+    terrain::VoxelVolume& volume = record.instance->volume();
+    bool ok = true;
+    for (const terrain::ChunkCoord& coord : chunks) {
+        if (record.collider_map.count(coord) != 0) {
+            continue;   // already has one
+        }
+        const auto pending = record.pending_jobs.find(coord);
+        if (pending != record.pending_jobs.end() && pending->second.edited) {
+            // An edit already in flight for this coord wins (its voxels may
+            // have changed): let it land naturally, rather than cancel it
+            // by bumping chunk_revisions here. A synchronous miss this one
+            // sync is rare (it needs a body and an edit to the same chunk
+            // at once) and the next sync tries again; a physics sync never
+            // overwrites an edit's voxels, only whether it sees a collider
+            // sooner. Still in collider_interest, update_collider_interest
+            // catches it once the edit lands with nothing landed yet.
+            continue;
+        }
+        // Any other job in flight for coord (residency, or an earlier
+        // collider-interest refresh that has not landed yet) carries no
+        // voxel change, so superseding it here (the revision bump below
+        // makes its eventual result stale, same as queue_dirty replacing a
+        // queued job elsewhere) is safe -- and necessary: the body needs a
+        // collider in THIS sync, not whenever that worker job happens to
+        // finish. Leaving it to land on its own was the no-fall-through gap
+        // CS4 found: a walking body can cross into new territory, find
+        // nothing covering it, but a job already queued (not yet landed)
+        // for that exact coord meant this call did nothing, and physics
+        // kept stepping underneath it in the meantime.
+        const std::uint64_t revision = ++next_job_revision_;
+        record.chunk_revisions[coord] = revision;
+        record.pending_jobs[coord] = TerrainRecord::PendingJob{false, true};
+        if (record.tree != nullptr) {
+            record.tree->chunk_queued(coord, false);
+        }
+        terrain::MeshResult result;
+        result.terrain = static_cast<std::uint64_t>(terrain);
+        result.coord = coord;
+        result.revision = revision;
+        try {
+            terrain::MeshInput input = terrain::mesh_input(volume, coord);
+            input.build_collider = true;
+            result.mesh = terrain::surface_nets(input);
+            if (build_collider_ && result.mesh.render != nullptr) {
+                result.collider = build_collider_(result.mesh);
+            }
+        } catch (...) {
+            // Same contract as a mesher worker's job: a throw never escapes;
+            // the chunk is simply not built this call (it keeps whatever it
+            // had, which is nothing new here since it had no collider).
+            result.failed = true;
+            ok = false;
+        }
+        apply_result(record, result);
+    }
+    if (record.chunks_dirty) {
+        publish_chunks(record);
+        // views() is a snapshot taken at the last update(): PhysicsWorld's
+        // own sync calls this between that update() and its own
+        // reconcile_terrain (same sync, no falling through), which reads
+        // views() for chunks_revision. Patch the live entry so it sees this
+        // call's new one, not next update()'s.
+        for (TerrainView& view : views_) {
+            if (view.terrain == terrain) {
+                view.chunks = record.chunks;
+                view.chunks_revision = record.chunks_revision;
+                break;
+            }
+        }
+    }
+    return ok;
 }
 
 }  // namespace engine_core

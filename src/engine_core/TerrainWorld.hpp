@@ -73,7 +73,8 @@ public:
     void update(DataModel& game, double now_ms);
     const std::vector<TerrainView>& views() const { return views_; }
 
-    // Colliders by chunk, for PhysicsWorld: the latest for each meshed chunk.
+    // Colliders by chunk, for PhysicsWorld: the latest for each meshed chunk
+    // within collider interest (set_collider_interest).
     struct ChunkCollider {
         terrain::ChunkCoord coord;
         std::uint64_t revision;
@@ -81,8 +82,29 @@ public:
     };
     const std::vector<ChunkCollider>* colliders(InstanceId terrain) const;
 
+    // Task 8: PhysicsWorld's ask, at the start of its own sync, for the
+    // chunks (terrain-local) within kColliderChunks of each dynamic
+    // PhysicsObject or PlayerController. Takes effect from the next update():
+    // a chunk newly asked for, with a mesh but no collider, gets one (a
+    // re-mesh flagged to build it, unless build_colliders_now already did);
+    // one no longer asked for keeps its collider for kColliderReleaseMs
+    // after it was last asked for, then loses it. No-op for a terrain this
+    // TerrainWorld has not (yet, or any longer) seen.
+    void set_collider_interest(InstanceId terrain, std::vector<terrain::ChunkCoord> chunks);
+    // SimulationThread, called from PhysicsWorld's own sync: meshes and
+    // builds colliders for chunks right here, off the job queue -- the
+    // no-fall-through rule for a body this sync found with none around it.
+    // Skips a chunk that already has a collider. False when terrain is not
+    // one this TerrainWorld has published a view for (nothing built).
+    bool build_colliders_now(InstanceId terrain, const std::vector<terrain::ChunkCoord>& chunks);
+
     // For tests.
     void wait_idle() { mesher_.wait_idle(); }
+    // For tests: holds every worker before it takes its next job (see
+    // TerrainMesher::pause_for_test). Paused before anything is queued, this
+    // makes a chunk job's "stuck in flight" deterministic without a custom
+    // BuildCollider that blocks mid-build.
+    void pause_mesher_for_test(bool paused) { mesher_.pause_for_test(paused); }
     std::uint64_t meshed_count() const { return meshed_count_; }
     const terrain::LodTree* lod_tree(InstanceId terrain) const {
         const auto found = terrains_.find(terrain);
@@ -127,11 +149,26 @@ private:
         // during a previous stay can then never again match the live value
         // for any chunk, however the two records' own lifetimes line up.
         std::unordered_map<terrain::ChunkCoord, std::uint64_t, terrain::ChunkCoordHash> chunk_revisions;
-        // Chunks whose live job was queued only to bring a dropped mesh back
-        // (residency), not because their voxels changed: the result leaves
-        // the collider alone and does not mark LOD ancestors stale. A chunk
-        // leaves the set when an edit queues it again.
-        std::unordered_set<terrain::ChunkCoord, terrain::ChunkCoordHash> residency_jobs;
+        // Task 8: what the live job for a chunk (chunk_revisions' value)
+        // should do when it lands, decided when it was queued. edited: its
+        // voxels may have changed (an edit queued it), so every ancestor is
+        // marked stale; false for a re-mesh asked for render residency or a
+        // collider refresh, neither of which touches voxels. want_collider:
+        // the job was told to build one (coord was in collider_interest when
+        // queued) -- its result's collider_map write follows this bit, not
+        // edited, so an edit outside collider_interest builds no collider
+        // and a residency or collider-refresh job inside it still writes
+        // one. A chunk leaves this map once its job lands or fails
+        // (apply_result); while present, nothing else may queue that coord
+        // again without first deciding to replace it (queue_dirty does, for
+        // a newer edit; update_lod's residency and the collider-interest
+        // refresh below both skip a coord already here -- an edit, or
+        // whatever else is already in flight for it, wins).
+        struct PendingJob {
+            bool edited = false;
+            bool want_collider = false;
+        };
+        std::unordered_map<terrain::ChunkCoord, PendingJob, terrain::ChunkCoordHash> pending_jobs;
         // The LOD octree: made on first sight, and again (re-queueing every
         // chunk) if the volume's voxel size changes.
         std::unique_ptr<terrain::LodTree> tree;
@@ -165,6 +202,20 @@ private:
         std::unordered_map<std::uint64_t, EditBatch> batches;
         // Per chunk with an edit job in flight: its batch.
         std::unordered_map<terrain::ChunkCoord, std::uint64_t, terrain::ChunkCoordHash> chunk_batch;
+        // Task 8: the chunks PhysicsWorld's latest set_collider_interest
+        // asked for (terrain-local), and, per chunk with a collider, the
+        // now_ms it was last asked for -- past kColliderReleaseMs since,
+        // update_collider_interest drops it. A coord leaves the first set
+        // only by a later set_collider_interest leaving it out; it leaves
+        // the second only when its collider goes.
+        std::unordered_set<terrain::ChunkCoord, terrain::ChunkCoordHash> collider_interest;
+        std::unordered_map<terrain::ChunkCoord, double, terrain::ChunkCoordHash> collider_last_interest_ms;
+        // The Terrain this record was last built from (every update()):
+        // build_colliders_now, called from PhysicsWorld's own sync, has no
+        // DataModel to look it up again and reuses this pointer. Tolerates
+        // the same one-tick lag views()/colliders() already do when a
+        // Terrain leaves Workspace between one update() and the next.
+        Terrain* instance = nullptr;
     };
 
     // A result off the pool: dropped if stale, held if its edit batch still
@@ -181,10 +232,17 @@ private:
     // meshes as its LodTree asks, and queues the node builds now due.
     void update_lod(InstanceId terrain_id, Terrain& terrain, TerrainRecord& record, double now_ms, bool has_camera,
                     Vec3 camera_pos);
+    // Task 8: chunks newly in collider_interest with a mesh but no collider
+    // and nothing else already in flight for them get a re-mesh flagged to
+    // build one; a collider not asked for in kColliderReleaseMs goes.
+    void update_collider_interest(InstanceId terrain_id, Terrain& terrain, TerrainRecord& record, double now_ms);
     void rebuild_look(Terrain& terrain, TerrainRecord& record, bool force);
     void publish_chunks(TerrainRecord& record);
 
     terrain::TerrainMesher mesher_;
+    // A copy of the constructor's BuildCollider, for build_colliders_now,
+    // which runs on SimulationThread itself rather than a mesher worker.
+    terrain::TerrainMesher::BuildCollider build_collider_;
     std::unordered_map<InstanceId, TerrainRecord> terrains_;
     std::vector<TerrainView> views_;
     std::uint64_t meshed_count_ = 0;

@@ -62,6 +62,9 @@ constexpr float kOverhangNormal = 0.05f;
 // not hover on it, but falls along it.
 constexpr float kWallNormal = 0.05f;
 constexpr float kPi = 3.14159265359f;
+// Task 8 (spec "Physics"): a Terrain's chunk colliders exist only within
+// this many chunks of a dynamic PhysicsObject or PlayerController.
+constexpr int kColliderChunks = 3;
 
 b3Vec3 to_b3(Vec3 v) { return b3Vec3{v.x, v.y, v.z}; }
 
@@ -600,7 +603,7 @@ struct PhysicsWorld::Impl {
         std::unordered_map<terrain::ChunkCoord, TerrainChunkShape, terrain::ChunkCoordHash> chunks;
         std::uint64_t seen = 0;
     };
-    const TerrainWorld* terrains = nullptr;
+    TerrainWorld* terrains = nullptr;
     std::unordered_map<InstanceId, TerrainBody> terrain_bodies;
     const std::array<b3SurfaceMaterial, kTerrainMaterialCount> terrain_surfaces = terrain_materials();
 
@@ -664,6 +667,7 @@ struct PhysicsWorld::Impl {
         const bool running = game.simulation_running();
         poses_from_game_objects = !running || !played;
         reconcile(game);
+        update_terrain_collider_interest(game);
         reconcile_terrain();
         played = running && (stepping || played);
     }
@@ -782,6 +786,93 @@ struct PhysicsWorld::Impl {
                 }
             }
             destroy(id);
+        }
+    }
+
+    // ---- Terrain collider interest (Task 8) ------------------------------
+
+    // Each dynamic (not Anchored) PhysicsObject or PlayerController's chunks
+    // within kColliderChunks, per Terrain, in that Terrain's local chunk
+    // space -- set_collider_interest's ask -- and, for a body with none of
+    // them already built, build_colliders_now right here (no falling
+    // through). SimulationThread, under the write lock, after reconcile (so
+    // every body's Box3D position is current) and before reconcile_terrain
+    // (so a shape exists this very sync for whatever build_colliders_now
+    // just built).
+    void update_terrain_collider_interest(DataModel& game) {
+        if (terrains == nullptr) {
+            return;
+        }
+        for (const TerrainView& view : terrains->views()) {
+            std::vector<terrain::ChunkCoord> interest;
+            std::unordered_set<terrain::ChunkCoord, terrain::ChunkCoordHash> interest_set;
+            if (view.can_collide) {
+                const terrain::LodTree* tree = terrains->lod_tree(view.terrain);
+                const float voxel_size = tree != nullptr ? tree->voxel_size() : 1.f;
+                const float span = terrain::kChunkSize * voxel_size;
+                const Matrix4 inverse = matrix4_inverse(view.transform);
+
+                // What already has a collider, to tell whether a body has
+                // none built around it yet.
+                std::unordered_set<terrain::ChunkCoord, terrain::ChunkCoordHash> have;
+                if (const auto* colliders = terrains->colliders(view.terrain)) {
+                    for (const TerrainWorld::ChunkCollider& collider : *colliders) {
+                        have.insert(collider.coord);
+                    }
+                }
+
+                for (const auto& [id, body] : bodies) {
+                    if (!b3Body_IsValid(body.body)) {
+                        continue;
+                    }
+                    const auto* base = dynamic_cast<const PhysicsBase*>(game.instance(id));
+                    if (base == nullptr || base->anchored()) {
+                        continue;   // anchored bodies need no colliders around them
+                    }
+                    const Vec3 local = matrix4_point(inverse, from_b3(b3Body_GetPosition(body.body)));
+                    const terrain::ChunkCoord center{static_cast<int>(std::floor(local.x / span)),
+                                                     static_cast<int>(std::floor(local.y / span)),
+                                                     static_cast<int>(std::floor(local.z / span))};
+                    std::vector<terrain::ChunkCoord> near_body;
+                    // "Has none around it yet" is checked tightly (its own
+                    // chunk and immediate neighbors), not over the whole
+                    // kColliderChunks box: a body moving every sync (a
+                    // PlayerController walking, a falling box) must have
+                    // this re-checked, and re-pass, every single sync, not
+                    // just once per update_collider_interest's async catch-
+                    // up -- otherwise a slow worker thread under load can
+                    // leave a walking body outrunning it into a gap it then
+                    // free-falls through, and once below its terrain, its
+                    // own interest (next sync) centers on where it now is,
+                    // never again on the surface it fell through.
+                    bool covered = false;
+                    for (int dz = -kColliderChunks; dz <= kColliderChunks; ++dz) {
+                        for (int dy = -kColliderChunks; dy <= kColliderChunks; ++dy) {
+                            for (int dx = -kColliderChunks; dx <= kColliderChunks; ++dx) {
+                                const terrain::ChunkCoord c{center.x + dx, center.y + dy, center.z + dz};
+                                near_body.push_back(c);
+                                if (interest_set.insert(c).second) {
+                                    interest.push_back(c);
+                                }
+                                if (dx >= -1 && dx <= 1 && dy >= -1 && dy <= 1 && dz >= -1 && dz <= 1 &&
+                                    have.count(c) != 0) {
+                                    covered = true;
+                                }
+                            }
+                        }
+                    }
+                    if (!covered) {
+                        // No fall-through: build them right here, before
+                        // Box3D steps. They then count as covered for a
+                        // later body in this same pass sharing this patch.
+                        terrains->build_colliders_now(view.terrain, near_body);
+                        for (const terrain::ChunkCoord& c : near_body) {
+                            have.insert(c);
+                        }
+                    }
+                }
+            }
+            terrains->set_collider_interest(view.terrain, std::move(interest));
         }
     }
 
@@ -1902,7 +1993,7 @@ std::optional<Vec3> PhysicsWorld::body_position(InstanceId id) const {
     return from_b3(b3Body_GetPosition(found->second.body));
 }
 
-void PhysicsWorld::set_terrain_world(const TerrainWorld* terrains) {
+void PhysicsWorld::set_terrain_world(TerrainWorld* terrains) {
     if (terrains == impl_->terrains) {
         return;
     }

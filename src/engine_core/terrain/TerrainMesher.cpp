@@ -194,7 +194,9 @@ void TerrainMesher::worker_loop() {
         try {
             if (job.kind == JobKind::Chunk) {
                 mesh = surface_nets(job.mesh_input);
-                if (build_collider_) collider = build_collider_(mesh);
+                // Task 8: a job not in the caller's collider interest skips
+                // the builder -- colliders stream around moving bodies only.
+                if (build_collider_ && job.mesh_input.build_collider) collider = build_collider_(mesh);
             } else {
                 node_result = build_node_fn_ ? build_node_fn_(job.node_input) : build_node(job.node_input);
             }

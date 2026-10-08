@@ -5,6 +5,7 @@
 #include "OcclusionMath.hpp"
 #include "RenderMath.hpp"
 #include "ShaderFile.hpp"
+#include "TerrainTextures.hpp"
 #include "TerrainWorld.hpp"
 #include "amesh.hpp"
 #include "gl.hpp"
@@ -13,6 +14,7 @@
 #include <atomic>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <string>
 #include <vector>
 
@@ -117,6 +119,48 @@ void DrawFullscreen(unsigned emptyVao) {
     glDrawArrays(GL_TRIANGLES, 0, 3);
 }
 
+// A small tileable value-noise texture for terrain.frag's anti-tiling
+// offset (Task 6): a handful of integer-frequency sine/cosine terms, each
+// exactly periodic over one texture, so it wraps under GL_REPEAT with no
+// seam. R and G offset a material's UV a little; B varies its brightness.
+unsigned MakeTerrainNoiseTexture() {
+    constexpr int kSize = 64;
+    constexpr float kTwoPi = 6.28318530718f;
+    std::vector<unsigned char> pixels(static_cast<std::size_t>(kSize) * kSize * 4);
+    const auto wave = [kTwoPi](float fu, float fv, float u, float v, float phase) {
+        return std::sin(kTwoPi * (fu * u + fv * v) + phase);
+    };
+    for (int y = 0; y < kSize; ++y) {
+        const float v = static_cast<float>(y) / static_cast<float>(kSize);
+        for (int x = 0; x < kSize; ++x) {
+            const float u = static_cast<float>(x) / static_cast<float>(kSize);
+            const float r = 0.5f + 0.5f * (0.5f * wave(3.f, 1.f, u, v, 0.3f) + 0.3f * wave(-2.f, 5.f, u, v, 1.7f) +
+                                           0.2f * wave(7.f, -3.f, u, v, 2.9f));
+            const float g = 0.5f + 0.5f * (0.5f * wave(1.f, -4.f, u, v, 4.1f) + 0.3f * wave(5.f, 2.f, u, v, 0.6f) +
+                                           0.2f * wave(-3.f, -6.f, u, v, 3.3f));
+            const float b = 0.5f + 0.5f * (0.5f * wave(2.f, 3.f, u, v, 5.5f) + 0.3f * wave(-5.f, -1.f, u, v, 2.2f) +
+                                           0.2f * wave(4.f, -7.f, u, v, 0.9f));
+            const std::size_t index = (static_cast<std::size_t>(y) * kSize + static_cast<std::size_t>(x)) * 4;
+            pixels[index + 0] = static_cast<unsigned char>(std::clamp(r, 0.f, 1.f) * 255.f);
+            pixels[index + 1] = static_cast<unsigned char>(std::clamp(g, 0.f, 1.f) * 255.f);
+            pixels[index + 2] = static_cast<unsigned char>(std::clamp(b, 0.f, 1.f) * 255.f);
+            pixels[index + 3] = 255;
+        }
+    }
+    unsigned texture = 0;
+    glGenTextures(1, &texture);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, texture);
+    glTexImage2D(GL_TEXTURE_2D, 0, static_cast<GLint>(GL_RGBA8), kSize, kSize, 0, GL_RGBA, GL_UNSIGNED_BYTE,
+                 pixels.data());
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, static_cast<GLint>(GL_LINEAR));
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, static_cast<GLint>(GL_LINEAR));
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, static_cast<GLint>(GL_REPEAT));
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, static_cast<GLint>(GL_REPEAT));
+    glBindTexture(GL_TEXTURE_2D, 0);
+    return texture;
+}
+
 }  // namespace
 
 void SetSkyState(SceneDynamicSky& out, const SkyState& state) {
@@ -196,6 +240,9 @@ bool Renderer::buildProgram(Program& program, const char* name, const char* vert
     program.fade = at("uFade");
     program.fadeIn = at("uFadeIn");
     program.lodLevel = at("uLodLevel");
+    program.hasSurface = at("uHasSurface");
+    program.nodeLevel = at("uNodeLevel");
+    program.terrainQuality = at("uTerrainQuality");
     program.depth = at("uDepth");
     program.albedo = at("uAlbedo");
     program.normal = at("uNormal");
@@ -305,6 +352,10 @@ bool Renderer::buildProgram(Program& program, const char* name, const char* vert
     sampler("uSunTexture", kUnitDiffuse);
     sampler("uMoonTexture", kUnitNormalMap);
     sampler("uTerrainLook", kUnitTerrainLook);
+    // Task 6: the terrain program's own two arrays and anti-tiling noise.
+    sampler("uSurfaceA", kUnitNormalMap);
+    sampler("uSurfaceB", kUnitRoughnessMap);
+    sampler("uNoise", kUnitMetalnessMap);
     if (&program == &merge_) {
         sampler("uEmissive", kUnitEmissive);
         sampler("uTransparency", kUnitTransparency);
@@ -400,6 +451,37 @@ bool Renderer::initialize() {
     glTexParameteri(RT_GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MIN_FILTER, static_cast<GLint>(GL_LINEAR));
     glTexParameteri(RT_GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MAG_FILTER, static_cast<GLint>(GL_LINEAR));
     glBindTexture(RT_GL_TEXTURE_CUBE_MAP, 0);
+
+    terrainNoiseTexture_ = MakeTerrainNoiseTexture();
+
+    // Task 6: how many layers a terrain array pair can hold, and whether
+    // anisotropic filtering is available (queried through glGetStringi, not
+    // the legacy GL_EXTENSIONS string, which core profiles drop).
+    GLint maxArrayLayers = 256;
+    glGetIntegerv(RT_GL_MAX_ARRAY_TEXTURE_LAYERS, &maxArrayLayers);
+    maxArrayLayers_ = std::max(maxArrayLayers, 1);
+    terrainAnisotropy_ = 1.f;
+    if (glGetStringi != nullptr) {
+        GLint extensionCount = 0;
+        glGetIntegerv(RT_GL_NUM_EXTENSIONS, &extensionCount);
+        bool hasAnisotropic = false;
+        for (GLint i = 0; i < extensionCount && !hasAnisotropic; ++i) {
+            const GLubyte* name = glGetStringi(RT_GL_EXTENSIONS, static_cast<GLuint>(i));
+            if (name == nullptr) {
+                continue;
+            }
+            const char* text = reinterpret_cast<const char*>(name);
+            if (std::strcmp(text, "GL_EXT_texture_filter_anisotropic") == 0 ||
+                std::strcmp(text, "GL_ARB_texture_filter_anisotropic") == 0) {
+                hasAnisotropic = true;
+            }
+        }
+        if (hasAnisotropic) {
+            GLint maxAniso = 1;
+            glGetIntegerv(RT_GL_MAX_TEXTURE_MAX_ANISOTROPY, &maxAniso);
+            terrainAnisotropy_ = std::min(8.f, static_cast<float>(std::max(maxAniso, 1)));
+        }
+    }
 
     glGenVertexArrays(1, &emptyVao_);
     createSphere();
@@ -1391,6 +1473,55 @@ void FillTerrainLookTexture(unsigned texture, const float* rgba256x4) {
     glBindTexture(GL_TEXTURE_2D, 0);
 }
 
+// An empty GL_TEXTURE_2D_ARRAY, size by size, layerCount layers, levels mip
+// levels allocated (undefined contents until UploadTerrainLayer fills them).
+unsigned CreateTerrainArray(int size, int layerCount, int levels, float anisotropy) {
+    unsigned texture = 0;
+    glGenTextures(1, &texture);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(RT_GL_TEXTURE_2D_ARRAY, texture);
+    int levelSize = size;
+    for (int level = 0; level < levels; ++level) {
+        glTexImage3D(RT_GL_TEXTURE_2D_ARRAY, level, static_cast<GLint>(GL_RGBA8), levelSize, levelSize, layerCount, 0,
+                     GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+        levelSize = std::max(levelSize / 2, 1);
+    }
+    glTexParameteri(RT_GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, static_cast<GLint>(GL_LINEAR_MIPMAP_LINEAR));
+    glTexParameteri(RT_GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, static_cast<GLint>(GL_LINEAR));
+    glTexParameteri(RT_GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_S, static_cast<GLint>(GL_REPEAT));
+    glTexParameteri(RT_GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_T, static_cast<GLint>(GL_REPEAT));
+    if (anisotropy > 1.f) {
+        glTexParameterf(RT_GL_TEXTURE_2D_ARRAY, RT_GL_TEXTURE_MAX_ANISOTROPY, anisotropy);
+    }
+    glBindTexture(RT_GL_TEXTURE_2D_ARRAY, 0);
+    return texture;
+}
+
+// One Material's layer (every mip of both arrays) into arrayA/arrayB's
+// layerIndex. RenderThread, at most kLayersPerFrame calls a frame per Terrain
+// (Renderer::terrainArrays).
+void UploadTerrainLayer(unsigned arrayA, unsigned arrayB, int layerIndex,
+                        const engine_core::terrain::LayerBytes& layer) {
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(RT_GL_TEXTURE_2D_ARRAY, arrayA);
+    int levelSize = layer.size;
+    for (std::size_t level = 0; level < layer.a_mips.size(); ++level) {
+        glTexSubImage3D(RT_GL_TEXTURE_2D_ARRAY, static_cast<GLint>(level), 0, 0, layerIndex, levelSize, levelSize, 1,
+                        GL_RGBA, GL_UNSIGNED_BYTE, layer.a_mips[level].data());
+        levelSize = std::max(levelSize / 2, 1);
+    }
+    glBindTexture(RT_GL_TEXTURE_2D_ARRAY, arrayB);
+    levelSize = layer.size;
+    for (std::size_t level = 0; level < layer.b_mips.size(); ++level) {
+        glTexSubImage3D(RT_GL_TEXTURE_2D_ARRAY, static_cast<GLint>(level), 0, 0, layerIndex, levelSize, levelSize, 1,
+                        GL_RGBA, GL_UNSIGNED_BYTE, layer.b_mips[level].data());
+        levelSize = std::max(levelSize / 2, 1);
+    }
+    glBindTexture(RT_GL_TEXTURE_2D_ARRAY, 0);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+}
+
 }  // namespace
 
 namespace {
@@ -1433,6 +1564,73 @@ void Renderer::sweepTerrainLooks() {
         if (!it->second.asked) {
             DeleteTexture(it->second.texture);
             it = terrainLooks_.erase(it);
+        } else {
+            it->second.asked = false;
+            ++it;
+        }
+    }
+}
+
+void Renderer::terrainArrays(engine_core::InstanceId terrain,
+                             const std::shared_ptr<const engine_core::TerrainTextureSet>& set, unsigned& outSurfaceA,
+                             unsigned& outSurfaceB, int& outLayerCount) {
+    TerrainArrayEntry& entry = terrainArrays_[terrain];
+    entry.asked = true;
+    if (set != nullptr && !set->layers.empty() && set->revision != entry.currentRevision &&
+        set->revision != entry.buildingRevision) {
+        // A newer revision supersedes whatever was still mid-build.
+        DeleteTexture(entry.pendingA);
+        DeleteTexture(entry.pendingB);
+        const int layerCount = std::min(static_cast<int>(set->layers.size()), maxArrayLayers_);
+        const int levels =
+            set->layers[0] != nullptr ? std::max(static_cast<int>(set->layers[0]->a_mips.size()), 1) : 1;
+        entry.pendingA = CreateTerrainArray(set->size, layerCount, levels, terrainAnisotropy_);
+        entry.pendingB = CreateTerrainArray(set->size, layerCount, levels, terrainAnisotropy_);
+        entry.pendingLayerCount = layerCount;
+        entry.uploadedLayers = 0;
+        entry.buildingRevision = set->revision;
+        entry.buildingSet = set;
+    }
+    if (entry.buildingSet != nullptr && entry.uploadedLayers < entry.pendingLayerCount) {
+        // At most 4 layers (both arrays, every mip) a frame: the old pair
+        // keeps drawing until this one finishes.
+        constexpr int kLayersPerFrame = 4;
+        int budget = kLayersPerFrame;
+        while (budget > 0 && entry.uploadedLayers < entry.pendingLayerCount) {
+            const auto& layer = entry.buildingSet->layers[static_cast<std::size_t>(entry.uploadedLayers)];
+            if (layer != nullptr) {
+                UploadTerrainLayer(entry.pendingA, entry.pendingB, entry.uploadedLayers, *layer);
+            }
+            ++entry.uploadedLayers;
+            --budget;
+        }
+        if (entry.uploadedLayers >= entry.pendingLayerCount) {
+            DeleteTexture(entry.surfaceA);
+            DeleteTexture(entry.surfaceB);
+            entry.surfaceA = entry.pendingA;
+            entry.surfaceB = entry.pendingB;
+            entry.layerCount = entry.pendingLayerCount;
+            entry.currentRevision = entry.buildingRevision;
+            entry.pendingA = 0;
+            entry.pendingB = 0;
+            entry.pendingLayerCount = 0;
+            entry.buildingSet.reset();
+        }
+    }
+    outSurfaceA = entry.surfaceA;
+    outSurfaceB = entry.surfaceB;
+    outLayerCount = entry.layerCount;
+}
+
+void Renderer::sweepTerrainArrays() {
+    for (auto it = terrainArrays_.begin(); it != terrainArrays_.end();) {
+        if (!it->second.asked) {
+            DeleteTexture(it->second.surfaceA);
+            DeleteTexture(it->second.surfaceB);
+            DeleteTexture(it->second.pendingA);
+            DeleteTexture(it->second.pendingB);
+            it->second.buildingSet.reset();
+            it = terrainArrays_.erase(it);
         } else {
             it->second.asked = false;
             ++it;
@@ -1680,7 +1878,6 @@ void Renderer::bindShadow(const Program& program, const ShadowLookup& lookup) {
 }
 
 bool Renderer::geometryPass(const MeshDraw* meshes, const float* projection) {
-    RENDER_PASS("Geometry");
     glViewport(0, 0, targetWidth_, targetHeight_);
     glBindFramebuffer(RT_GL_FRAMEBUFFER, gbufferFbo_);
     glDisable(GL_BLEND);
@@ -1691,55 +1888,81 @@ bool Renderer::geometryPass(const MeshDraw* meshes, const float* projection) {
     glClearColor(0.f, 0.f, 0.f, 0.f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-    glUseProgram(geometry_.id);
-    glUniformMatrix4fv(geometry_.view, 1, GL_FALSE, view_.m);
-    glUniformMatrix4fv(geometry_.projection, 1, GL_FALSE, projection);
     // Every instance of the frame, opaque and see-through, in one upload.
     instances_.upload(batches_.instances.data(), static_cast<int>(batches_.instances.size()));
-    bool asked = false;
-    // BuildBatches puts terrain chunks after every other opaque run, so the
-    // program switches to terrain_ once, at the first of them.
-    bool terrain = false;
-    bool askedTerrain = false;
-    const bool lodColors = TerrainLodColors();
+
+    // BuildBatches puts every terrain chunk or LOD node after the other
+    // opaque runs, so the runs split cleanly into a mesh phase and a terrain
+    // phase, each its own RENDER_PASS: budgets (Implementation notes item 5)
+    // then measure terrain alone on the GPU row, not mixed with meshes.
+    int terrainBegin = batches_.opaqueRuns;
     for (int index = 0; index < batches_.opaqueRuns; ++index) {
-        const DrawRun& run = batches_.runs[static_cast<std::size_t>(index)];
-        const MeshDraw& draw = meshes[run.draw];
-        if (draw.terrainLook != 0) {
-            if (!terrain) {
-                terrain = true;
-                glUseProgram(terrain_.id);
-                glUniformMatrix4fv(terrain_.view, 1, GL_FALSE, view_.m);
-                glUniformMatrix4fv(terrain_.projection, 1, GL_FALSE, projection);
+        if (meshes[batches_.runs[static_cast<std::size_t>(index)].draw].terrainLook != 0) {
+            terrainBegin = index;
+            break;
+        }
+    }
+
+    bool ok = true;
+    if (terrainBegin > 0) {
+        RENDER_PASS("Geometry");
+        glUseProgram(geometry_.id);
+        glUniformMatrix4fv(geometry_.view, 1, GL_FALSE, view_.m);
+        glUniformMatrix4fv(geometry_.projection, 1, GL_FALSE, projection);
+        bool asked = false;
+        for (int index = 0; index < terrainBegin; ++index) {
+            const DrawRun& run = batches_.runs[static_cast<std::size_t>(index)];
+            const MeshDraw& draw = meshes[run.draw];
+            bindMaterial(geometry_, draw);
+            glCullFace(run.mirrored ? RT_GL_FRONT : RT_GL_BACK);
+            draw.mesh->bind();
+            instances_.attach(run.first);
+            if (!asked && !CanDraw(geometry_.id)) {
+                ok = false;
+                break;
             }
+            asked = true;
+            draw.mesh->draw_instanced(run.lod, run.count);
+            ++stats_.runs;
+            ++stats_.instancedCalls;
+        }
+    }
+    if (ok && terrainBegin < batches_.opaqueRuns) {
+        RENDER_PASS("Terrain");
+        glUseProgram(terrain_.id);
+        glUniformMatrix4fv(terrain_.view, 1, GL_FALSE, view_.m);
+        glUniformMatrix4fv(terrain_.projection, 1, GL_FALSE, projection);
+        glUniform1i(terrain_.terrainQuality, static_cast<int>(lighting_.terrainQuality));
+        const bool lodColors = TerrainLodColors();
+        bool asked = false;
+        for (int index = terrainBegin; index < batches_.opaqueRuns; ++index) {
+            const DrawRun& run = batches_.runs[static_cast<std::size_t>(index)];
+            const MeshDraw& draw = meshes[run.draw];
             BindTexture(kUnitTerrainLook, draw.terrainLook);
+            BindArray(kUnitNormalMap, draw.terrainSurfaceA);
+            BindArray(kUnitRoughnessMap, draw.terrainSurfaceB);
+            BindTexture(kUnitMetalnessMap, terrainNoiseTexture_);
             glUniform1f(terrain_.fade, draw.terrainFade);
             glUniform1i(terrain_.fadeIn, draw.terrainFadeIn ? 1 : 0);
             glUniform1i(terrain_.lodLevel, lodColors ? std::min(std::max(draw.terrainLevel, 0), 7) : -1);
-        } else {
-            if (terrain) {
-                // Not reached while BuildBatches sorts terrain last; kept so
-                // a change there costs program switches, not wrong surfaces.
-                terrain = false;
-                glUseProgram(geometry_.id);
+            glUniform1i(terrain_.hasSurface, draw.terrainLayerCount > 0 ? 1 : 0);
+            glUniform1i(terrain_.nodeLevel, std::max(draw.terrainLevel, 0));
+            glCullFace(run.mirrored ? RT_GL_FRONT : RT_GL_BACK);
+            draw.mesh->bind();
+            instances_.attach(run.first);
+            if (!asked && !CanDraw(terrain_.id)) {
+                ok = false;
+                break;
             }
-            bindMaterial(geometry_, draw);
+            asked = true;
+            draw.mesh->draw_instanced(run.lod, run.count);
+            ++stats_.runs;
+            ++stats_.instancedCalls;
         }
-        glCullFace(run.mirrored ? RT_GL_FRONT : RT_GL_BACK);
-        draw.mesh->bind();
-        instances_.attach(run.first);
-        bool& programAsked = terrain ? askedTerrain : asked;
-        if (!programAsked && !CanDraw(terrain ? terrain_.id : geometry_.id)) {
-            return false;
-        }
-        programAsked = true;
-        draw.mesh->draw_instanced(run.lod, run.count);
-        ++stats_.runs;
-        ++stats_.instancedCalls;
     }
     glDisable(RT_GL_CULL_FACE);
     glCullFace(RT_GL_BACK);
-    return true;
+    return ok;
 }
 
 bool Renderer::occlusionPass(const float* projection, const float* inverseProjection) {
@@ -2296,6 +2519,15 @@ void Renderer::shutdown() {
         DeleteTexture(entry.texture);
     }
     terrainLooks_.clear();
+    for (auto& [terrain, entry] : terrainArrays_) {
+        DeleteTexture(entry.surfaceA);
+        DeleteTexture(entry.surfaceB);
+        DeleteTexture(entry.pendingA);
+        DeleteTexture(entry.pendingB);
+        entry.buildingSet.reset();
+    }
+    terrainArrays_.clear();
+    DeleteTexture(terrainNoiseTexture_);
     for (unsigned* vao : {&emptyVao_, &sphereVao_, &gridBandVao_, &outlineVao_, &handleVao_}) {
         if (*vao != 0) {
             glDeleteVertexArrays(1, vao);

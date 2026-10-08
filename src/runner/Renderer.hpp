@@ -17,12 +17,14 @@
 
 #include <cstdint>
 #include <initializer_list>
+#include <memory>
 #include <optional>
 #include <unordered_map>
 #include <vector>
 
 namespace engine_core {
 struct TerrainLook;
+struct TerrainTextureSet;
 }
 
 namespace anarchy::amesh {
@@ -77,11 +79,21 @@ struct MeshDraw {
     float terrainFade = 1.f;
     bool terrainFadeIn = true;
     // The terrain LOD node's level (0 for a chunk): the color it is tinted
-    // while SetTerrainLodColors is on.
+    // while SetTerrainLodColors is on, and (independent of that debug tint)
+    // terrain.frag's own quality falloff at level >= 2.
     int terrainLevel = 0;
     // Casts shadows only, never drawn in view: terrain out of the camera's
     // view that still shadows what is in it (TerrainDraws).
     bool shadowOnly = false;
+    // The Terrain's two texture arrays, as Renderer::terrainArrays resolves
+    // them (Task 6): Surface A (color + height) and Surface B (normal +
+    // roughness + metalness), full mip chains. terrainLayerCount 0 means no
+    // array pair is ready yet (or none was ever published for this Terrain):
+    // terrain.frag then draws flat colors from the look table alone, as it
+    // always did before this task.
+    unsigned terrainSurfaceA = 0;
+    unsigned terrainSurfaceB = 0;
+    int terrainLayerCount = 0;
 };
 
 // A Terrain's look table: a 256 x 4 GL_RGBA32F texture, GL_NEAREST, from
@@ -360,6 +372,21 @@ public:
     // sweep, as for a Terrain that left Workspace. Call once a frame, after
     // that frame's terrainLookTexture calls.
     void sweepTerrainLooks();
+    // terrain's current pair of GL_TEXTURE_2D_ARRAY textures for
+    // MeshDraw::terrainSurfaceA/B (Task 6): built incrementally from set's
+    // layers, at most 4 layers (both arrays) uploaded per call, into a new
+    // pair at set's size when set->revision is new; the previous pair (or
+    // none) is returned and keeps drawing until the new one finishes
+    // uploading, then this swaps to it and deletes the old one. set may be
+    // null (nothing published yet): the previous pair, if any, is returned
+    // unchanged. outLayerCount 0 (nothing ever finished building) selects
+    // terrain.frag's flat-color path. RenderThread, GL context current.
+    void terrainArrays(engine_core::InstanceId terrain, const std::shared_ptr<const engine_core::TerrainTextureSet>& set,
+                       unsigned& outSurfaceA, unsigned& outSurfaceB, int& outLayerCount);
+    // Deletes the array pairs no terrainArrays call asked for since the last
+    // sweep, as for a Terrain that left Workspace. Call once a frame, after
+    // that frame's terrainArrays calls.
+    void sweepTerrainArrays();
     // What draw clears the pane to, 0 to 1 per channel. The Scene View passes
     // its theme color, so the clear matches the pane around it.
     void setClearColor(float r, float g, float b);
@@ -421,6 +448,13 @@ private:
         int fadeIn = -1;
         // terrain.frag: SetTerrainLodColors' level, or -1 for none.
         int lodLevel = -1;
+        // terrain.frag: whether a per-Terrain array pair is bound (Task 6),
+        // this draw's LOD node level (quality falloffs, independent of the
+        // debug lodLevel above), and Lighting.TerrainQuality (0 Low, 1
+        // Medium, 2 High).
+        int hasSurface = -1;
+        int nodeLevel = -1;
+        int terrainQuality = -1;
         // G-buffer inputs.
         int depth = -1;
         int albedo = -1;
@@ -652,6 +686,30 @@ private:
         bool asked = false;
     };
     std::unordered_map<engine_core::InstanceId, TerrainLookEntry> terrainLooks_;
+    // terrainArrays' state per Terrain: the pair currently drawn, and (while
+    // building) the new pair being uploaded, a few layers per call.
+    struct TerrainArrayEntry {
+        unsigned surfaceA = 0, surfaceB = 0;
+        int layerCount = 0;
+        std::uint64_t currentRevision = 0;
+        unsigned pendingA = 0, pendingB = 0;
+        int pendingLayerCount = 0;
+        int uploadedLayers = 0;
+        std::uint64_t buildingRevision = 0;
+        std::shared_ptr<const engine_core::TerrainTextureSet> buildingSet;
+        bool asked = false;
+    };
+    std::unordered_map<engine_core::InstanceId, TerrainArrayEntry> terrainArrays_;
+    // A small tileable value-noise texture (MeshDraw::terrainSurfaceA/B's
+    // anti-tiling offset), made once on the first terrainArrays call.
+    unsigned terrainNoiseTexture_ = 0;
+    // GL_MAX_ARRAY_TEXTURE_LAYERS, queried once in initialize(); clamps how
+    // many of a TerrainTextureSet's layers an array pair can hold.
+    int maxArrayLayers_ = 256;
+    // 1 when GL_EXT_texture_filter_anisotropic/GL_ARB_texture_filter_anisotropic
+    // is not in the context's extension list; otherwise min(8, the driver's
+    // GL_MAX_TEXTURE_MAX_ANISOTROPY), queried once in initialize().
+    float terrainAnisotropy_ = 1.f;
     // 1 by 1 black on each face, bound for the Skybox's cubes when there is none.
     unsigned blackCube_ = 0;
     // No attributes: the full-screen triangle comes from gl_VertexID.

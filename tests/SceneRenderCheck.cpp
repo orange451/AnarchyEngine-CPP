@@ -5,6 +5,7 @@
 #include "SnapshotPump.hpp"
 #include "Terrain.hpp"
 #include "TerrainMaterial.hpp"
+#include "TerrainTextures.hpp"
 #include "TerrainWorld.hpp"
 #include "amesh.hpp"
 #include "ide/MaterialBall.hpp"
@@ -398,11 +399,10 @@ runner::TerrainCamera RendererCamera(const runner::Renderer& renderer, int width
     return camera;
 }
 
-// A published look from look-table bytes (LookBytes'), with revision.
-std::shared_ptr<const engine_core::TerrainLook> MakeLook(const std::vector<std::uint8_t>& bytes,
-                                                        std::uint64_t revision) {
+// A published look from look-table texels (LookBytes' or TexturedLookFloats'), with revision.
+std::shared_ptr<const engine_core::TerrainLook> MakeLook(const std::vector<float>& texels, std::uint64_t revision) {
     auto look = std::make_shared<engine_core::TerrainLook>();
-    std::copy(bytes.begin(), bytes.end(), look->texels.begin());
+    std::copy(texels.begin(), texels.end(), look->texels.begin());
     look->revision = revision;
     return look;
 }
@@ -435,27 +435,220 @@ std::vector<runner::MeshDraw> TerrainDraws(const std::vector<std::unique_ptr<Gpu
     return draws;
 }
 
-// A Terrain look table's bytes: every Id rough and plain, colored by colors
-// (Id, then sRGB) and a neutral gray for the rest.
-std::vector<std::uint8_t> LookBytes(std::initializer_list<std::array<int, 4>> colors) {
-    std::vector<std::uint8_t> bytes(256 * 2 * 4);
+// A Terrain look table's floats (the TerrainLook layout: 256 x 4 RGBA32F, row
+// 0 color sRGB 0-1, row 1 metalness/roughness/reflectivity, row 2 layer
+// index/TextureScale/BlendSharpness/HeightStrength, row 3 reserved): every Id
+// rough, plain and untextured (layer 0), colored by colors (Id, then sRGB
+// 0-255) and a neutral gray for the rest. These checks draw flat (no array
+// pair attached), so terrain.frag's uHasSurface 0 path reads only rows 0 and
+// 1 -- TexturedLookFloats below is TX-R1..TX-R5's real, textured look.
+std::vector<float> LookBytes(std::initializer_list<std::array<int, 4>> colors) {
+    std::vector<float> texels(256 * 4 * 4, 0.f);
     for (int id = 0; id < 256; ++id) {
-        std::uint8_t* color = bytes.data() + id * 4;
-        color[0] = color[1] = color[2] = 150;
-        color[3] = 255;
-        std::uint8_t* surface = bytes.data() + (256 + id) * 4;
-        surface[0] = 0;    // metalness
-        surface[1] = 220;  // roughness
-        surface[2] = 20;   // reflectivity
-        surface[3] = 255;
+        float* color = texels.data() + id * 4;
+        color[0] = color[1] = color[2] = 150.f / 255.f;
+        color[3] = 1.f;
+        float* surface = texels.data() + (256 + id) * 4;
+        surface[0] = 0.f;            // metalness
+        surface[1] = 220.f / 255.f;  // roughness
+        surface[2] = 20.f / 255.f;   // reflectivity
+        surface[3] = 1.f;
+        float* layer = texels.data() + (512 + id) * 4;
+        layer[0] = 0.f;   // layer index: 0, the untextured default
+        layer[1] = 8.f;   // TextureScale
+        layer[2] = 0.5f;  // BlendSharpness
+        layer[3] = 1.f;   // HeightStrength
     }
     for (const std::array<int, 4>& entry : colors) {
-        std::uint8_t* color = bytes.data() + entry[0] * 4;
+        float* color = texels.data() + entry[0] * 4;
         for (int channel = 0; channel < 3; ++channel) {
-            color[channel] = static_cast<std::uint8_t>(entry[channel + 1]);
+            color[channel] = static_cast<float>(entry[channel + 1]) / 255.f;
         }
     }
-    return bytes;
+    return texels;
+}
+
+// --- Task 6 (TX-R1..TX-R5): procedural texture layers, so --terrain-shots
+// needs no downloaded textures. Each layer's color and height follow a
+// simple periodic pattern (so it tiles without a seam), its normal stays
+// flat, and roughness/metalness are fixed; a full box-filtered mip chain is
+// built from level 0, exactly as LayerBuilder's own mips are (but without
+// going through a source file on disk).
+
+// One level's A (color + height) and B (normal + roughness + metalness)
+// bytes, size by size, for ProceduralLayer's kind.
+void FillProceduralLevel(int size, int kind, std::vector<std::uint8_t>& a, std::vector<std::uint8_t>& b) {
+    a.resize(static_cast<std::size_t>(size) * size * 4);
+    b.resize(static_cast<std::size_t>(size) * size * 4);
+    for (int y = 0; y < size; ++y) {
+        const float fy = static_cast<float>(y) / static_cast<float>(size);
+        for (int x = 0; x < size; ++x) {
+            const float fx = static_cast<float>(x) / static_cast<float>(size);
+            float r, g, bl, height, roughness, metalness;
+            switch (kind) {
+                case 0: {  // stone: gray blotches
+                    const float n = 0.5f + 0.5f * std::sin(fx * 12.56637f * 3.f) * std::cos(fy * 12.56637f * 2.f);
+                    r = g = bl = 110.f + 50.f * n;
+                    height = 0.35f + 0.3f * n;
+                    roughness = 0.82f;
+                    metalness = 0.02f;
+                    break;
+                }
+                case 1: {  // grass: green with fine noise
+                    const float n = 0.5f + 0.5f * std::sin(fx * 12.56637f * 5.f + 1.f) *
+                                               std::cos(fy * 12.56637f * 4.f + 2.f);
+                    r = 55.f + 25.f * n;
+                    g = 130.f + 45.f * n;
+                    bl = 45.f + 20.f * n;
+                    height = 0.5f + 0.2f * n;
+                    roughness = 0.9f;
+                    metalness = 0.0f;
+                    break;
+                }
+                default: {  // sand: tan noise
+                    const float n = 0.5f + 0.5f * std::sin(fx * 12.56637f * 7.f + 3.f) *
+                                               std::cos(fy * 12.56637f * 6.f + 4.f);
+                    r = 205.f + 25.f * n;
+                    g = 182.f + 22.f * n;
+                    bl = 140.f + 18.f * n;
+                    height = 0.4f + 0.18f * n;
+                    roughness = 0.75f;
+                    metalness = 0.0f;
+                    break;
+                }
+            }
+            const std::size_t index = (static_cast<std::size_t>(y) * size + static_cast<std::size_t>(x)) * 4;
+            a[index + 0] = static_cast<std::uint8_t>(std::clamp(r, 0.f, 255.f));
+            a[index + 1] = static_cast<std::uint8_t>(std::clamp(g, 0.f, 255.f));
+            a[index + 2] = static_cast<std::uint8_t>(std::clamp(bl, 0.f, 255.f));
+            a[index + 3] = static_cast<std::uint8_t>(std::clamp(height, 0.f, 1.f) * 255.f);
+            b[index + 0] = 128;  // flat tangent-space normal (x = 0)
+            b[index + 1] = 128;  // (y = 0; z reconstructed in the shader)
+            b[index + 2] = static_cast<std::uint8_t>(std::clamp(roughness, 0.f, 1.f) * 255.f);
+            b[index + 3] = static_cast<std::uint8_t>(std::clamp(metalness, 0.f, 1.f) * 255.f);
+        }
+    }
+}
+
+// level's next (half-sized, rounded up) mip, box-filtering 2 x 2 (or the
+// single remaining texel on an odd edge) RGBA8 blocks.
+std::vector<std::uint8_t> DownsampleRgba8(const std::vector<std::uint8_t>& level, int size, int nextSize) {
+    std::vector<std::uint8_t> next(static_cast<std::size_t>(nextSize) * nextSize * 4);
+    for (int y = 0; y < nextSize; ++y) {
+        for (int x = 0; x < nextSize; ++x) {
+            const int x0 = std::min(x * 2, size - 1);
+            const int x1 = std::min(x * 2 + 1, size - 1);
+            const int y0 = std::min(y * 2, size - 1);
+            const int y1 = std::min(y * 2 + 1, size - 1);
+            const std::size_t out = (static_cast<std::size_t>(y) * nextSize + static_cast<std::size_t>(x)) * 4;
+            for (int channel = 0; channel < 4; ++channel) {
+                const int sum = level[(static_cast<std::size_t>(y0) * size + static_cast<std::size_t>(x0)) * 4 +
+                                      static_cast<std::size_t>(channel)] +
+                               level[(static_cast<std::size_t>(y0) * size + static_cast<std::size_t>(x1)) * 4 +
+                                      static_cast<std::size_t>(channel)] +
+                               level[(static_cast<std::size_t>(y1) * size + static_cast<std::size_t>(x0)) * 4 +
+                                      static_cast<std::size_t>(channel)] +
+                               level[(static_cast<std::size_t>(y1) * size + static_cast<std::size_t>(x1)) * 4 +
+                                      static_cast<std::size_t>(channel)];
+                next[out + static_cast<std::size_t>(channel)] = static_cast<std::uint8_t>(sum / 4);
+            }
+        }
+    }
+    return next;
+}
+
+// kind -1 is the untextured default layer (white, 0.5 height, flat normal,
+// roughness 1, metalness 1), as layer 0 of every TerrainTextureSet.
+engine_core::terrain::LayerBytes ProceduralLayer(int size, int kind) {
+    engine_core::terrain::LayerBytes layer;
+    layer.size = size;
+    std::vector<std::uint8_t> a, b;
+    if (kind < 0) {
+        a.assign(static_cast<std::size_t>(size) * size * 4, 255);
+        b.assign(static_cast<std::size_t>(size) * size * 4, 255);
+        for (std::size_t i = 0; i < a.size(); i += 4) {
+            a[i + 3] = 128;  // height 0.5
+            b[i + 0] = 128;  // flat normal
+            b[i + 1] = 128;
+        }
+    } else {
+        FillProceduralLevel(size, kind, a, b);
+    }
+    int levelSize = size;
+    layer.a_mips.push_back(a);
+    layer.b_mips.push_back(b);
+    while (levelSize > 1) {
+        const int nextSize = std::max(levelSize / 2, 1);
+        a = DownsampleRgba8(a, levelSize, nextSize);
+        b = DownsampleRgba8(b, levelSize, nextSize);
+        layer.a_mips.push_back(a);
+        layer.b_mips.push_back(b);
+        levelSize = nextSize;
+    }
+    return layer;
+}
+
+// A published TerrainTextureSet: layer 0 the untextured default, then one
+// procedural layer per kind in kinds (stone 0, grass 1, sand 2), at size.
+std::shared_ptr<const engine_core::TerrainTextureSet> MakeTextureSet(int size, std::initializer_list<int> kinds,
+                                                                      std::uint64_t revision) {
+    auto set = std::make_shared<engine_core::TerrainTextureSet>();
+    set->size = size;
+    set->revision = revision;
+    set->layers.push_back(std::make_shared<const engine_core::terrain::LayerBytes>(ProceduralLayer(size, -1)));
+    for (int kind : kinds) {
+        set->layers.push_back(std::make_shared<const engine_core::terrain::LayerBytes>(ProceduralLayer(size, kind)));
+    }
+    return set;
+}
+
+// A textured look: entry is {Id, r, g, b (sRGB 0-255), layer index, scale}.
+// Every other field keeps LookBytes' defaults (rough, metal 0, BlendSharpness
+// 0.5, HeightStrength 1).
+struct TexturedLookEntry {
+    int id;
+    int r, g, b;
+    int layer;
+    float scale;
+};
+
+std::vector<float> TexturedLookFloats(std::initializer_list<TexturedLookEntry> entries) {
+    std::vector<float> texels = LookBytes({});
+    for (const TexturedLookEntry& entry : entries) {
+        float* color = texels.data() + entry.id * 4;
+        color[0] = static_cast<float>(entry.r) / 255.f;
+        color[1] = static_cast<float>(entry.g) / 255.f;
+        color[2] = static_cast<float>(entry.b) / 255.f;
+        float* layer = texels.data() + (512 + entry.id) * 4;
+        layer[0] = static_cast<float>(entry.layer);
+        layer[1] = entry.scale;
+    }
+    return texels;
+}
+
+// One MeshDraw per chunk, textured: the look table and the Terrain's array
+// pair (built incrementally by renderer.terrainArrays, as AppendTerrainDraws
+// does for a real Terrain). Call repeatedly (as --terrain-shots does, once
+// per frame it draws) until layerCount settles so every layer has uploaded.
+std::vector<runner::MeshDraw> TexturedTerrainDraws(const std::vector<std::unique_ptr<GpuMesh>>& chunks,
+                                                    runner::Renderer& renderer, engine_core::InstanceId terrainId,
+                                                    unsigned look,
+                                                    const std::shared_ptr<const engine_core::TerrainTextureSet>& set,
+                                                    const engine_core::Matrix4& model = engine_core::matrix4_identity()) {
+    unsigned surfaceA = 0, surfaceB = 0;
+    int layerCount = 0;
+    renderer.terrainArrays(terrainId, set, surfaceA, surfaceB, layerCount);
+    std::vector<runner::MeshDraw> draws;
+    for (const auto& chunk : chunks) {
+        runner::MeshDraw draw{chunk.get(), model};
+        draw.terrainLook = look;
+        draw.owner = terrainId;
+        draw.terrainSurfaceA = surfaceA;
+        draw.terrainSurfaceB = surfaceB;
+        draw.terrainLayerCount = layerCount;
+        draws.push_back(draw);
+    }
+    return draws;
 }
 
 terrain::Shape Ball(float x, float y, float z, float radius) {
@@ -708,22 +901,22 @@ constexpr int kFlatClasses = 5;
 constexpr int kFlatColors[kFlatClasses][3] = {
     {240, 40, 40}, {40, 240, 40}, {40, 40, 240}, {240, 240, 40}, {240, 40, 240}};
 
-std::vector<std::uint8_t> FlatLookBytes() {
-    std::vector<std::uint8_t> bytes(256 * 2 * 4);
+std::vector<float> FlatLookBytes() {
+    std::vector<float> texels(256 * 4 * 4, 0.f);
     for (int id = 0; id < 256; ++id) {
         const int* color = kFlatColors[id >= 1 && id <= 4 ? id - 1 : 4];
-        std::uint8_t* out = bytes.data() + id * 4;
+        float* out = texels.data() + id * 4;
         for (int channel = 0; channel < 3; ++channel) {
-            out[channel] = static_cast<std::uint8_t>(color[channel]);
+            out[channel] = static_cast<float>(color[channel]) / 255.f;
         }
-        out[3] = 255;
-        std::uint8_t* surface = bytes.data() + (256 + id) * 4;
-        surface[0] = 0;
-        surface[1] = 255;
-        surface[2] = 0;
-        surface[3] = 255;
+        out[3] = 1.f;
+        float* surface = texels.data() + (256 + id) * 4;
+        surface[0] = 0.f;
+        surface[1] = 1.f;
+        surface[2] = 0.f;
+        surface[3] = 1.f;
     }
-    return bytes;
+    return texels;
 }
 
 // A flat pass read back: per pixel -1 where it matches the empty pass (no
@@ -909,7 +1102,7 @@ void TerrainLodShots(runner::Renderer& renderer, OffscreenTarget& target, int wi
     runner::SceneLighting flat;
     flat.ambient[0] = flat.ambient[1] = flat.ambient[2] = 1.f;
     flat.antialiasing = runner::SceneAntialiasing::None;
-    const std::vector<std::uint8_t> flatBytes = FlatLookBytes();
+    const std::vector<float> flatBytes = FlatLookBytes();
     const unsigned flatLook = runner::MakeTerrainLookTexture(flatBytes.data());
 
     engine_core::set_thread_role(engine_core::ThreadRole::Simulation);
@@ -3222,7 +3415,7 @@ int main(int argc, char** argv) {
             // in green fading out cover the ball's pixels between them, each
             // about half, and nothing shows the clear color through.
             {
-                const std::vector<std::uint8_t> greenBytes = LookBytes({{1, 0, 255, 0}});
+                const std::vector<float> greenBytes = LookBytes({{1, 0, 255, 0}});
                 const unsigned greenLook = runner::MakeTerrainLookTexture(greenBytes.data());
                 std::vector<runner::MeshDraw> fading;
                 for (const runner::MeshDraw& draw : draws) {
@@ -3325,7 +3518,7 @@ int main(int argc, char** argv) {
             std::printf("terrain sun: toward (%.2f, %.2f, %.2f), %.0f degrees around Y from +X toward +Z\n",
                         state.sun.x, state.sun.y, state.sun.z, std::atan2(state.sun.z, state.sun.x) * 180.0 / 3.14159265);
 
-            const std::vector<std::uint8_t> lookBytes = LookBytes({
+            const std::vector<float> lookBytes = LookBytes({
                 {0, 150, 150, 150},  // a neutral default
                 {1, 122, 110, 98},   // rock, gray-brown
                 {2, 92, 142, 58},    // grass
@@ -3336,8 +3529,11 @@ int main(int argc, char** argv) {
             });
             const unsigned look = runner::MakeTerrainLookTexture(lookBytes.data());
 
-            // draws (one per chunk) from shot, checked against the sky alone and written to dir.
-            const auto shootDraws = [&](const std::vector<runner::MeshDraw>& draws, const TerrainShot& shot) {
+            // draws (one per chunk) from shot, checked against the sky alone
+            // and written to dir; returns the shot's pixels so a caller can
+            // look closer (TX-R1..TX-R5's own pixel checks, below).
+            const auto shootDraws = [&](const std::vector<runner::MeshDraw>& draws,
+                                        const TerrainShot& shot) -> runner::ViewPixels {
                 renderer.setCamera(ShotCamera(shot), shot.fov);
                 runner::LightDraw sun = runner::SkyLightDraw(state, true);
                 // The cascades reach past the subject, however far the camera stands.
@@ -3357,6 +3553,7 @@ int main(int argc, char** argv) {
                     std::ofstream(file, std::ios::binary) << runner::EncodePng(pixels);
                     std::printf("wrote %s (%d chunks)\n", file.string().c_str(), static_cast<int>(draws.size()));
                 }
+                return pixels;
             };
             const auto shoot = [&](const terrain::VoxelVolume& volume, std::initializer_list<TerrainShot> shots) {
                 const auto chunks = UploadTerrain(volume);
@@ -3446,6 +3643,208 @@ int main(int argc, char** argv) {
                 shoot(volume, {
                                    TerrainShot{"terrain-4-chunk-corner-seam.png", {32.f, 32.f, 32.f}, 100.f, 22.f, 32.f, 45.f},
                                });
+            }
+
+            // TX-R1..TX-R5 (Task 6): real triplanar, height-blended,
+            // textured terrain, drawn with procedural stone/grass/sand
+            // layers (ProceduralLayer, above) standing in for downloaded
+            // textures, through the same renderer.terrainArrays incremental
+            // upload a real Terrain uses (TerrainDraws.cpp).
+            const auto Luma = [](const runner::ViewPixels& pixels, int x, int y) -> int {
+                const unsigned char* p = pixels.rgba.data() + (static_cast<std::size_t>(y) * pixels.width + x) * 4;
+                return (p[0] * 299 + p[1] * 587 + p[2] * 114) / 1000;
+            };
+            // The average luma of a column over a band of rows centered on
+            // centerY, smoothing out the procedural texture's own per-pixel
+            // noise so only the material-level difference across a border shows.
+            const auto ColumnLuma = [&](const runner::ViewPixels& pixels, int x, int centerY, int band) -> int {
+                long sum = 0;
+                int count = 0;
+                for (int y = std::max(centerY - band, 0); y < std::min(centerY + band, pixels.height); ++y) {
+                    sum += Luma(pixels, x, y);
+                    ++count;
+                }
+                return count > 0 ? static_cast<int>(sum / count) : 0;
+            };
+            // The longest run of columns whose (smoothed) luma sits strictly
+            // between the row's low and high plateaus: a border that blends
+            // (TX-R1, TX-R3) has one spanning several pixels; a hard,
+            // unblended step has none (span 0 or 1).
+            const auto WidestTransition = [&](const runner::ViewPixels& pixels, int centerY, int band) -> int {
+                int lowLuma = 255, highLuma = 0;
+                std::vector<int> columns(static_cast<std::size_t>(pixels.width));
+                for (int x = 0; x < pixels.width; ++x) {
+                    columns[static_cast<std::size_t>(x)] = ColumnLuma(pixels, x, centerY, band);
+                    lowLuma = std::min(lowLuma, columns[static_cast<std::size_t>(x)]);
+                    highLuma = std::max(highLuma, columns[static_cast<std::size_t>(x)]);
+                }
+                const int lowThresh = lowLuma + (highLuma - lowLuma) / 10;
+                const int highThresh = highLuma - (highLuma - lowLuma) / 10;
+                int widest = 0;
+                int runStart = -1;
+                for (int x = 0; x < pixels.width; ++x) {
+                    const bool inBand = columns[static_cast<std::size_t>(x)] > lowThresh &&
+                                        columns[static_cast<std::size_t>(x)] < highThresh;
+                    if (inBand) {
+                        if (runStart < 0) {
+                            runStart = x;
+                        }
+                        widest = std::max(widest, x - runStart + 1);
+                    } else {
+                        runStart = -1;
+                    }
+                }
+                return widest;
+            };
+
+            // TX-R1/TX-R2: three equal thirds of one floor -- untextured
+            // (Id 3, layer 0), grass (Id 1, layer 1) and sand (Id 2, layer
+            // 2) -- so the grass/sand border (TX-R1) and the untextured/
+            // grass border (TX-R2) both show in one shot.
+            {
+                terrain::VoxelVolume volume;
+                Edit(volume.fill(Block(0.f, -2.f, 0.f, 192.f, 4.f, 64.f), 3), "TX-R1/R2's floor");
+                Edit(volume.paint(Block(-64.f, 1.f, 0.f, 64.f, 2.f, 64.f), 3), "its untextured third");
+                Edit(volume.paint(Block(0.f, 1.f, 0.f, 64.f, 2.f, 64.f), 1), "its grass third");
+                Edit(volume.paint(Block(64.f, 1.f, 0.f, 64.f, 2.f, 64.f), 2), "its sand third");
+                const auto set = MakeTextureSet(256, {0, 1, 2}, 9101);
+                unsigned texLook = runner::MakeTerrainLookTexture(
+                    TexturedLookFloats({{1, 85, 150, 60, 2, 8.f}, {2, 215, 190, 150, 3, 8.f}, {3, 150, 150, 150, 0, 8.f}})
+                        .data());
+                const auto chunks = UploadTerrain(volume);
+                std::vector<runner::MeshDraw> draws;
+                for (int frame = 0; frame < 4; ++frame) {
+                    draws = TexturedTerrainDraws(chunks, renderer, 9001, texLook, set);
+                }
+                const TerrainShot shot{"terrain-tx1-tx2-border.png", {0.f, 0.f, 0.f}, 90.f, 68.f, 95.f, 45.f};
+                const runner::ViewPixels pixels = shootDraws(draws, shot);
+                const int span = WidestTransition(pixels, pixels.height / 2, 60);
+                Expect(span >= 6, "TX-R1: the grass/sand border blends over at least 6 px, not a staircase (" +
+                                      std::to_string(span) + " px)");
+                int blackCount = 0;
+                for (int y = pixels.height * 3 / 10; y < pixels.height * 7 / 10; ++y) {
+                    for (int x = 0; x < pixels.width; ++x) {
+                        const unsigned char* p = pixels.rgba.data() + (static_cast<std::size_t>(y) * pixels.width + x) * 4;
+                        if (p[0] < 4 && p[1] < 4 && p[2] < 4) {
+                            ++blackCount;
+                        }
+                    }
+                }
+                Expect(blackCount == 0,
+                       "TX-R2: an untextured Material beside a textured one draws no black pixels (" +
+                           std::to_string(blackCount) + " found)");
+                runner::DeleteTexture(texLook);
+            }
+
+            // TX-R3: three materials (stone floor, a grass ball and a sand
+            // ball close enough to overlap it) meet inside one coarse
+            // triangle: a smooth blend, not a flat-shaded triangle.
+            {
+                terrain::VoxelVolume volume(1.5f);
+                Edit(volume.fill(Block(0.f, -4.f, 0.f, 48.f, 6.f, 48.f), 1), "TX-R3's stone floor");
+                Edit(volume.fill(Ball(-2.f, 1.5f, 0.f, 5.f), 2), "a grass ball");
+                Edit(volume.fill(Ball(3.f, 1.5f, 1.f, 5.f), 3), "a sand ball overlapping it");
+                const auto set = MakeTextureSet(256, {0, 1, 2}, 9201);
+                unsigned texLook = runner::MakeTerrainLookTexture(
+                    TexturedLookFloats({{1, 122, 110, 98, 1, 10.f}, {2, 85, 150, 60, 2, 10.f}, {3, 215, 190, 150, 3, 10.f}})
+                        .data());
+                const auto chunks = UploadTerrain(volume);
+                std::vector<runner::MeshDraw> draws;
+                for (int frame = 0; frame < 4; ++frame) {
+                    draws = TexturedTerrainDraws(chunks, renderer, 9002, texLook, set);
+                }
+                const TerrainShot shot{"terrain-tx3-blend.png", {0.f, 1.f, 0.f}, 60.f, 35.f, 22.f, 40.f};
+                const runner::ViewPixels pixels = shootDraws(draws, shot);
+                const int span = WidestTransition(pixels, pixels.height / 2, 30);
+                Expect(span >= 6,
+                       "TX-R3: three materials meeting in one triangle blend smoothly, not a flat-shaded step (" +
+                           std::to_string(span) + " px)");
+                runner::DeleteTexture(texLook);
+            }
+
+            // TX-R4: a vertical cliff's texture is not stretched: a patch of
+            // flat floor and a patch of the cliff face, both the same stone
+            // Material and about as far from the camera, show about the
+            // same texel density (a triplanar projection, unlike a single
+            // world-XZ UV, never stretches a vertical face).
+            {
+                terrain::VoxelVolume volume;
+                Edit(volume.fill(Block(0.f, -2.f, 20.f, 60.f, 4.f, 40.f), 1), "TX-R4's floor");
+                Edit(volume.fill(Block(0.f, 18.f, 0.f, 60.f, 40.f, 4.f), 1), "TX-R4's cliff");
+                const auto set = MakeTextureSet(256, {0}, 9301);
+                unsigned texLook =
+                    runner::MakeTerrainLookTexture(TexturedLookFloats({{1, 122, 110, 98, 1, 8.f}}).data());
+                const auto chunks = UploadTerrain(volume);
+                std::vector<runner::MeshDraw> draws;
+                for (int frame = 0; frame < 4; ++frame) {
+                    draws = TexturedTerrainDraws(chunks, renderer, 9003, texLook, set);
+                }
+                const TerrainShot shot{"terrain-tx4-cliff-density.png", {0.f, 6.f, 8.f}, 90.f, 18.f, 26.f, 45.f};
+                const runner::ViewPixels pixels = shootDraws(draws, shot);
+                // A local-contrast proxy (mean |difference| between horizontal
+                // neighbors) over a small window: higher for more texels per
+                // pixel, for the same noise amplitude and scale.
+                const auto Contrast = [&](int cx, int cy, int half) {
+                    long total = 0;
+                    int count = 0;
+                    for (int y = cy - half; y < cy + half; ++y) {
+                        for (int x = cx - half; x < cx + half - 1; ++x) {
+                            total += std::abs(Luma(pixels, x + 1, y) - Luma(pixels, x, y));
+                            ++count;
+                        }
+                    }
+                    return count > 0 ? static_cast<double>(total) / count : 0.0;
+                };
+                const double floorContrast = Contrast(pixels.width / 2, pixels.height * 4 / 5, 24);
+                const double cliffContrast = Contrast(pixels.width / 2, pixels.height / 3, 24);
+                const double largest = std::max(floorContrast, cliffContrast);
+                const double relativeDiff = largest > 1e-6 ? std::abs(floorContrast - cliffContrast) / largest : 0.0;
+                Expect(relativeDiff <= 0.25,
+                       "TX-R4: the cliff's texel density is within 25% of the floor's (floor " +
+                           std::to_string(floorContrast) + ", cliff " + std::to_string(cliffContrast) + ")");
+                runner::DeleteTexture(texLook);
+            }
+
+            // TX-R5: changing TextureSize mid-run never draws a frame
+            // without terrain: the old array pair (padded to several layers,
+            // so the new one takes a few frames to finish) keeps drawing
+            // through every frame of the swap to a different size.
+            {
+                terrain::VoxelVolume volume;
+                Edit(volume.fill(Block(0.f, -2.f, 0.f, 64.f, 4.f, 64.f), 1), "TX-R5's floor");
+                unsigned texLook =
+                    runner::MakeTerrainLookTexture(TexturedLookFloats({{1, 85, 150, 60, 1, 8.f}}).data());
+                const auto chunks = UploadTerrain(volume);
+                const auto setLarge = MakeTextureSet(256, {0, 1, 2, 0, 1, 2, 0, 1, 2}, 9401);
+                const auto setSmall = MakeTextureSet(64, {0, 1, 2, 0, 1, 2, 0, 1, 2}, 9402);
+                const TerrainShot shot{"terrain-tx5-texturesize-change.png", {0.f, 0.f, 0.f}, 90.f, 60.f, 70.f, 45.f};
+                int frameIndex = 0;
+                runner::ViewPixels lastFrame;
+                const auto drawAndCheck = [&](const std::shared_ptr<const engine_core::TerrainTextureSet>& set) {
+                    const std::vector<runner::MeshDraw> draws = TexturedTerrainDraws(chunks, renderer, 9004, texLook, set);
+                    renderer.setCamera(ShotCamera(shot), shot.fov);
+                    runner::LightDraw sun = runner::SkyLightDraw(state, true);
+                    sun.shadowDistance = shot.distance * 2.f + 60.f;
+                    runner::ViewPixels sky;
+                    const bool skyShot = target.shoot(renderer, {}, sun, sky);
+                    const bool drawn = target.shoot(renderer, draws, sun, lastFrame);
+                    Expect(skyShot && drawn, "TX-R5 frame " + std::to_string(frameIndex) + " draws and reads back");
+                    if (skyShot && drawn) {
+                        ExpectTerrainShown("TX-R5 frame " + std::to_string(frameIndex), lastFrame, sky);
+                    }
+                    ++frameIndex;
+                };
+                for (int frame = 0; frame < 4; ++frame) {
+                    drawAndCheck(setLarge);
+                }
+                for (int frame = 0; frame < 6; ++frame) {
+                    drawAndCheck(setSmall);
+                }
+                std::filesystem::create_directories(terrainShots);
+                std::ofstream(terrainShots / shot.file, std::ios::binary) << runner::EncodePng(lastFrame);
+                std::printf("wrote %s\n", (terrainShots / shot.file).string().c_str());
+                Expect(runner::rt_glGetError() == runner::GL_NO_ERROR, "TX-R5 leaves no GL error");
+                runner::DeleteTexture(texLook);
             }
 
             // Through the snapshot path, as the Scene View sees a place: a Game

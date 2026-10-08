@@ -303,41 +303,6 @@ void reshade_vertices(anarchy::amesh::Data& mesh, const VoxelSampler& sampler) {
     }
 }
 
-// terrain.frag takes a triangle's material from its provoking (last) vertex
-// (flat in). A level-0 triangle spans one voxel, so which corner's Id wins
-// hardly shows; a simplified triangle can span many, and one fanned from a
-// vertex at a material boundary (a clay-Id vertex at a mound's base, out
-// across a flat grass floor) drew wholly in that vertex's material. Rotates
-// each triangle's indices (the cyclic order, so winding and border edges
-// are unchanged) so its last vertex carries the material the full-resolution
-// field has at the triangle's centroid, when any of its vertices does.
-void orient_triangle_materials(anarchy::amesh::Data& mesh, const VoxelSampler& sampler) {
-    for (std::size_t t = 0; t + 2 < mesh.indices.size(); t += 3) {
-        const std::uint32_t i0 = mesh.indices[t], i1 = mesh.indices[t + 1], i2 = mesh.indices[t + 2];
-        const anarchy::amesh::Vertex& v0 = mesh.vertices[i0];
-        const anarchy::amesh::Vertex& v1 = mesh.vertices[i1];
-        const anarchy::amesh::Vertex& v2 = mesh.vertices[i2];
-        if (v0.rgba[0] == v1.rgba[0] && v1.rgba[0] == v2.rgba[0]) {
-            continue;   // one material: nothing to choose
-        }
-        const Vec3 centroid{(v0.p[0] + v1.p[0] + v2.p[0]) / 3.f, (v0.p[1] + v1.p[1] + v2.p[1]) / 3.f,
-                            (v0.p[2] + v1.p[2] + v2.p[2]) / 3.f};
-        const std::uint8_t id = sampler.id(centroid);
-        if (v2.rgba[0] == id) {
-            continue;
-        }
-        if (v0.rgba[0] == id) {
-            mesh.indices[t] = i1;
-            mesh.indices[t + 1] = i2;
-            mesh.indices[t + 2] = i0;
-        } else if (v1.rgba[0] == id) {
-            mesh.indices[t] = i2;
-            mesh.indices[t + 1] = i0;
-            mesh.indices[t + 2] = i1;
-        }
-    }
-}
-
 // Appends, for every border edge (a, b) in border_edges (pairs of vertex
 // indices into mesh, in the forward order collect_border_edges extracted
 // them: the same direction their one owning triangle's winding visits them
@@ -843,11 +808,15 @@ LodResult build_node(const LodInput& input) {
     // stay put, but every vertex's normal and Id are read back from voxels
     // rather than kept from whichever child contributed that welded vertex
     // (which, after simplification, may not even be one of this mesh's own
-    // positions' original sources any more).
+    // positions' original sources any more). Terrain textures (TX-R3):
+    // reshade_vertices already writes each vertex's full Ids-and-weights set
+    // (up to 4, blended), and split_border_triangles below gives every
+    // triangle a shared Id layout across its three corners, so there is no
+    // single "flat" material left to orient a provoking vertex onto --
+    // orient_triangle_materials is gone (its RS7 sandbox test retired with it).
     if (input.voxels) {
         const VoxelSampler sampler(*input.voxels, input.voxel_size);
         reshade_vertices(best_mesh, sampler);
-        orient_triangle_materials(best_mesh, sampler);
     }
 
     // Border edges, as the simplified (and possibly re-shaded) surface

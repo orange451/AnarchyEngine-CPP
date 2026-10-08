@@ -45,6 +45,7 @@ Look settings belong to **Material**, not TerrainMaterial, because a future prec
 | --- | --- |
 | Per vertex | Up to 4 material Ids (vertex color bytes) with weights (tangent channel), summing to 1. From the 8 voxel corners of the vertex's cell: each corner within one VoxelSize of the surface counts once for its Id; counts are normalized; the top 4 are kept and renormalized. A vertex deep inside one material has one Id at weight 1. |
 | LOD nodes | Re-shading from full-resolution voxels uses the same rule at each vertex's position. |
+| Border triangles | A triangle whose three vertices carry different material sets gets three vertices of its own, each carrying the triangle's merged set (top 4 Ids by summed weight) and that corner's weights for it; triangles inside one material keep shared vertices. Done at mesh-build time on the workers, for chunks and LOD nodes. No geometry shader, so the terrain shader runs on Metal, WebGL/WebGPU, and OpenGL ES 3.0 too. About 10–20% more render vertices. |
 | Physics | Unchanged: each collision triangle keeps one material Id, for raycasts and friction. |
 | Effect | Weights vary smoothly across a border; with the height blend this replaces today's sawtooth edges. |
 

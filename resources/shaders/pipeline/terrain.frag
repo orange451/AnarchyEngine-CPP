@@ -164,7 +164,8 @@ void sampleMaterialTriplanar(float layer, float scale, vec3 n, vec3 localPos, ve
         rough += aw.x * b.b;
         metal += aw.x * b.a;
         vec3 axisNormal = mix(vec3(0.0, 0.0, 1.0), unpackNormalRG(b.rg), normalStrength);
-        normalLocal += aw.x * vec3(axisNormal.z * sign(n.x), axisNormal.y, axisNormal.x);
+        vec3 tn = vec3(axisNormal.xy + n.zy, abs(axisNormal.z) * n.x);
+        normalLocal += aw.x * tn.zyx;
     }
     if (aw.y > 0.0) {
         vec2 uv = localPos.xz / scale;
@@ -181,7 +182,8 @@ void sampleMaterialTriplanar(float layer, float scale, vec3 n, vec3 localPos, ve
         rough += aw.y * b.b;
         metal += aw.y * b.a;
         vec3 axisNormal = mix(vec3(0.0, 0.0, 1.0), unpackNormalRG(b.rg), normalStrength);
-        normalLocal += aw.y * vec3(axisNormal.x, axisNormal.z * sign(n.y), axisNormal.y);
+        vec3 tn = vec3(axisNormal.xy + n.xz, abs(axisNormal.z) * n.y);
+        normalLocal += aw.y * tn.xzy;
     }
     if (aw.z > 0.0) {
         vec2 uv = localPos.xy / scale;
@@ -198,7 +200,8 @@ void sampleMaterialTriplanar(float layer, float scale, vec3 n, vec3 localPos, ve
         rough += aw.z * b.b;
         metal += aw.z * b.a;
         vec3 axisNormal = mix(vec3(0.0, 0.0, 1.0), unpackNormalRG(b.rg), normalStrength);
-        normalLocal += aw.z * vec3(axisNormal.x, axisNormal.y, axisNormal.z * sign(n.z));
+        vec3 tn = vec3(axisNormal.xy + n.xy, abs(axisNormal.z) * n.z);
+        normalLocal += aw.z * tn.xyz;
     }
 }
 

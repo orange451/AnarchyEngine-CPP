@@ -17,7 +17,7 @@ Roblox's distant terrain looks chopped and banded because it makes LODs by coars
 | Hierarchy | An octree of LOD nodes per Terrain. A level-0 node is one chunk. A level-*L* node covers 2^*L* chunks on each side. Levels go up until one node covers the island (about 7 levels for 4 km). Only nodes with surface exist. |
 | Level 0 | The chunk's Surface Nets mesh from the terrain surface plan, unchanged. |
 | Higher levels | A node's 8 children's meshes, merged and simplified with [meshoptimizer](https://github.com/zeux/meshoptimizer) (MIT, fetched with FetchContent and pinned to a tag, included only by the LOD builder's source) by quadric error metrics. The target error is 0.25 × VoxelSize × 2^*L*. Each level is about a quarter of the triangles of the one below. |
-| What a node records | Its mesh, its bounds, its measured geometric error in studs (the largest distance from its surface to the true surface, as meshoptimizer reports it, scaled to studs), and its border edges. |
+| What a node records | Its mesh, its bounds, its measured geometric error in units (the largest distance from its surface to the true surface, as meshoptimizer reports it, scaled to units), and its border edges. |
 | Borders between levels | Skirts: along each node's border edges, a strip hanging down −normal as deep as twice the node's error (at least one VoxelSize) and leaning out from the edge by half that (R21), with the border vertices' normals and materials. Where a node meets a neighbor at another level, the skirt fills the gap, which is under a pixel. Borders simplify freely, so far terrain carries no full-detail seams. |
 | Later | The octree and its node records stay as they are if a Nanite-style cluster graph ever replaces skirts as the way levels join. That change would not touch streaming, meshing, or shading. |
 
@@ -56,7 +56,7 @@ Roblox's distant terrain looks chopped and banded because it makes LODs by coars
 
 | Question | Decision |
 | --- | --- |
-| Where colliders exist | Full-detail chunk colliders (the surface plan's chunk shapes) exist only within 3 chunks (96 × VoxelSize studs) of a dynamic PhysicsObject or a PlayerController. They are built as bodies approach and dropped some seconds after the last one leaves. Anchored bodies need none. This replaces the surface plan's "a shape for every chunk". |
+| Where colliders exist | Full-detail chunk colliders (the surface plan's chunk shapes) exist only within 3 chunks (96 × VoxelSize units) of a dynamic PhysicsObject or a PlayerController. They are built as bodies approach and dropped some seconds after the last one leaves. Anchored bodies need none. This replaces the surface plan's "a shape for every chunk". |
 | No falling through | A body with no terrain colliders around it (spawned, teleported, or unanchored) has them built in that physics sync, synchronously, before Box3D steps. |
 | Raycasts at any distance | `workspace:Raycast` casts against Box3D, then, for each Terrain the ray crosses where there are no colliders, marches the voxel distance field along the ray. Each step can advance by the stored distance; the last step finds the zero crossing. It takes the nearest of all hits. A terrain hit reports the voxel's Material as a collider hit would. The answer does not depend on which colliders are loaded. |
 

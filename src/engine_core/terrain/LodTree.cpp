@@ -56,39 +56,17 @@ LodTree::Node* LodTree::find_mutable(const NodeKey& key) {
     return found != nodes_.end() ? &found->second : nullptr;
 }
 
-void LodTree::extend_extent(ChunkCoord coord) {
-    if (level0_count_ == 0) {
-        lo_ = hi_ = coord;
-        return;
-    }
-    lo_ = ChunkCoord{std::min(lo_.x, coord.x), std::min(lo_.y, coord.y), std::min(lo_.z, coord.z)};
-    hi_ = ChunkCoord{std::max(hi_.x, coord.x), std::max(hi_.y, coord.y), std::max(hi_.z, coord.z)};
-}
-
 void LodTree::refresh_top() {
-    if (extent_dirty_) {
-        extent_dirty_ = false;
-        bool first = true;
-        for (const auto& [key, node] : nodes_) {
-            (void)node;
-            if (key.level != 0) {
-                continue;
-            }
-            const ChunkCoord coord{key.x, key.y, key.z};
-            if (first) {
-                lo_ = hi_ = coord;
-                first = false;
-            } else {
-                lo_ = ChunkCoord{std::min(lo_.x, coord.x), std::min(lo_.y, coord.y), std::min(lo_.z, coord.z)};
-                hi_ = ChunkCoord{std::max(hi_.x, coord.x), std::max(hi_.y, coord.y), std::max(hi_.z, coord.z)};
-            }
-        }
-    }
+    // The extent is read off level0_ (O(log n) per level-0 change), so an
+    // edit's empty neighbor chunks landing (chunk_removed) never rescan
+    // the whole tree; only a change of top_ itself walks it.
     int top = 0;
-    if (level0_count_ > 0) {
+    if (!level0_.empty()) {
+        const ChunkCoord lo = level0_.lo();
+        const ChunkCoord hi = level0_.hi();
         for (;; ++top) {
-            const NodeKey a = node_of(lo_, top);
-            const NodeKey b = node_of(hi_, top);
+            const NodeKey a = node_of(lo, top);
+            const NodeKey b = node_of(hi, top);
             if (top >= 30 || (axis_settled(a.x, b.x) && axis_settled(a.y, b.y) && axis_settled(a.z, b.z))) {
                 break;
             }
@@ -111,7 +89,7 @@ void LodTree::refresh_top() {
     }
     top_ = top;
     std::vector<ChunkCoord> chunks;
-    chunks.reserve(level0_count_);
+    chunks.reserve(level0_.size());
     for (const auto& [key, node] : nodes_) {
         (void)node;
         if (key.level == 0) {
@@ -192,8 +170,7 @@ void LodTree::chunk_queued(ChunkCoord coord, bool edited) {
     residency_dirty_ = true;
     const auto [it, created] = nodes_.try_emplace(chunk_key(coord));
     if (created) {
-        extend_extent(coord);
-        ++level0_count_;
+        level0_.add(coord);
     }
     it->second.in_flight = true;   // the reference survives the rehashes below
     it->second.failed = false;
@@ -210,8 +187,7 @@ void LodTree::chunk_meshed(ChunkCoord coord, std::shared_ptr<const anarchy::ames
     const NodeKey key = chunk_key(coord);
     const auto [it, created] = nodes_.try_emplace(key);
     if (created) {
-        extend_extent(coord);
-        ++level0_count_;
+        level0_.add(coord);
     }
     Node& node = it->second;
     const bool was_surface = node.has_surface;
@@ -237,8 +213,7 @@ void LodTree::chunk_removed(ChunkCoord coord) {
     if (found->second.chunk_mesh != nullptr) {
         changed_ = true;
     }
-    --level0_count_;
-    extent_dirty_ = true;
+    level0_.remove(coord);
     prune_up(key, had_surface);
     refresh_top();
 }

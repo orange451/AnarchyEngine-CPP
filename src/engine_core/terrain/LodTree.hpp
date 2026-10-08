@@ -10,6 +10,7 @@
 
 #include "Vector3.hpp"
 #include "amesh.hpp"
+#include "terrain/ChunkExtent.hpp"
 #include "terrain/LodBuilder.hpp"
 #include "terrain/LodNode.hpp"
 #include "terrain/TerrainMesher.hpp"
@@ -179,10 +180,9 @@ public:
 private:
     std::uint64_t next_revision() { return ++*revisions_; }
     Node* find_mutable(const NodeKey& key);
-    // Recomputes top_ from the level-0 extent when it may have changed, and
+    // Recomputes top_ from the level-0 extent (level0_), and
     // adds or removes levels to match.
     void refresh_top();
-    void extend_extent(ChunkCoord coord);
     // Creates coord's missing ancestors up to top_ (created ones are stale);
     // with mark, also marks the existing ones stale.
     void ensure_ancestors(ChunkCoord coord, bool mark);
@@ -203,9 +203,7 @@ private:
     std::uint64_t own_revisions_ = 0;
     std::uint64_t* revisions_;
     std::unordered_map<NodeKey, Node, NodeKeyHash> nodes_;   // every level, level 0 included
-    std::size_t level0_count_ = 0;
-    ChunkCoord lo_{}, hi_{};      // level-0 extent, valid when level0_count_ > 0
-    bool extent_dirty_ = false;   // a level-0 node was removed: recompute lo_/hi_
+    ChunkExtent level0_;   // every level-0 node's coord: the extent top_ follows
     int top_ = 0;
     bool changed_ = false;
     // update_residency skips its pass while neither the tree (any public

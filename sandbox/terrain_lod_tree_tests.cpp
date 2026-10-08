@@ -1082,3 +1082,169 @@ TEST_CASE("LT13 an edit across a chunk border and a level-1 seam: each frame cov
         REQUIRE_FALSE(tree->find(key)->stale());
     }
 }
+
+// ---- Final review fixes --------------------------------------------------
+
+namespace {
+
+// The lowest level at which the level-0 nodes' extent collapses to one node
+// per axis (or the two either side of the origin): top_level's rule, worked
+// out from scratch over tree.nodes().
+int expected_top(const LodTree& tree) {
+    bool any = false;
+    ChunkCoord lo{}, hi{};
+    for (const auto& [key, node] : tree.nodes()) {
+        (void)node;
+        if (key.level != 0) continue;
+        if (!any) {
+            lo = hi = ChunkCoord{key.x, key.y, key.z};
+            any = true;
+        }
+        lo = ChunkCoord{std::min(lo.x, key.x), std::min(lo.y, key.y), std::min(lo.z, key.z)};
+        hi = ChunkCoord{std::max(hi.x, key.x), std::max(hi.y, key.y), std::max(hi.z, key.z)};
+    }
+    if (!any) return 0;
+    const auto settled = [](int a, int b) { return a == b || (a == -1 && b == 0); };
+    for (int top = 0;; ++top) {
+        const NodeKey a = node_of(lo, top), b = node_of(hi, top);
+        if (top >= 30 || (settled(a.x, b.x) && settled(a.y, b.y) && settled(a.z, b.z))) return top;
+    }
+}
+
+}  // namespace
+
+TEST_CASE("LT14 the top level follows the level-0 extent as chunks are queued and removed", "[terrain][lod]") {
+    TreeRig rig;
+    rig.edit(island_chunks(8));
+    rig.settle();
+    REQUIRE(rig.tree.top_level() == 3);
+
+    // Far chunks queued (an edit's air neighbors, say) widen the extent...
+    rig.tree.chunk_queued(ChunkCoord{20, 0, 0}, true);
+    REQUIRE(rig.tree.top_level() == 5);
+    rig.tree.chunk_queued(ChunkCoord{-5, 3, 0}, true);
+    REQUIRE(rig.tree.top_level() == expected_top(rig.tree));
+    REQUIRE(rig.tree.top_level() == 5);
+    // ...and coming back empty narrows it again, one at a time.
+    rig.tree.chunk_removed(ChunkCoord{20, 0, 0});
+    REQUIRE(rig.tree.top_level() == expected_top(rig.tree));
+    rig.tree.chunk_removed(ChunkCoord{-5, 3, 0});
+    REQUIRE(rig.tree.top_level() == 3);
+    for (const auto& [key, node] : rig.tree.nodes()) {
+        (void)node;
+        REQUIRE(key.level <= 3);
+    }
+    rig.settle();
+
+    // Removing the island down to its [0, 4) x [0, 4) corner: the top falls
+    // to 2 once the last chunk past x or z 3 is gone, and every step agrees
+    // with the extent worked out from scratch.
+    for (const ChunkCoord& c : island_chunks(8)) {
+        if (c.x < 4 && c.z < 4) continue;
+        rig.tree.chunk_queued(c, true);
+        rig.tree.chunk_removed(c);
+        REQUIRE(rig.tree.top_level() == expected_top(rig.tree));
+    }
+    REQUIRE(rig.tree.top_level() == 2);
+    rig.settle();
+    for (const auto& [key, node] : rig.tree.nodes()) {
+        INFO("level " << key.level << " (" << key.x << ", " << key.y << ", " << key.z << ")");
+        REQUIRE(key.level <= 2);
+        if (key.level > 0) REQUIRE_FALSE(node.stale());
+    }
+    REQUIRE(count_level(rig.tree.nodes_for_view(), 2) == 1);
+}
+
+TEST_CASE("LT20 VoxelVolume's chunk extent follows its stored chunks through edits, clear, set_chunks and moves",
+          "[terrain][lod]") {
+    const auto scanned = [](const VoxelVolume& v, ChunkCoord& lo, ChunkCoord& hi) {
+        bool any = false;
+        for (const auto& [c, chunk] : v.chunks()) {
+            (void)chunk;
+            if (!any) {
+                lo = hi = c;
+                any = true;
+            }
+            lo = ChunkCoord{std::min(lo.x, c.x), std::min(lo.y, c.y), std::min(lo.z, c.z)};
+            hi = ChunkCoord{std::max(hi.x, c.x), std::max(hi.y, c.y), std::max(hi.z, c.z)};
+        }
+        return any;
+    };
+    const auto check = [&](const VoxelVolume& v) {
+        ChunkCoord lo{}, hi{}, slo{}, shi{};
+        const bool kept = v.chunk_extent(lo, hi);
+        REQUIRE(kept == scanned(v, slo, shi));
+        if (kept) {
+            REQUIRE(lo == slo);
+            REQUIRE(hi == shi);
+        }
+    };
+    VoxelVolume volume;
+    check(volume);
+    Shape a;
+    a.center = Vec3{10.f, 10.f, 10.f};
+    a.radius = 6.f;
+    Shape b;
+    b.center = Vec3{-150.f, 70.f, 200.f};
+    b.radius = 8.f;
+    REQUIRE_FALSE(volume.fill(a, 1));
+    check(volume);
+    REQUIRE_FALSE(volume.fill(b, 1));
+    check(volume);
+    b.radius = 12.f;
+    REQUIRE_FALSE(volume.subtract(b));   // the far ball's chunks go again
+    check(volume);
+    ChunkCoord lo{}, hi{};
+    REQUIRE(volume.chunk_extent(lo, hi));
+    REQUIRE(hi.x <= 1);
+
+    VoxelVolume moved = std::move(volume);
+    check(moved);
+    check(volume);
+    VoxelVolume other;
+    other.set_chunks(moved.chunks());
+    check(other);
+    other.clear();
+    check(other);
+    REQUIRE_FALSE(other.chunk_extent(lo, hi));
+}
+
+TEST_CASE("LB12 one edit's chunks landing in a settled 16,384-chunk tree take well under a millisecond",
+          "[.][terrain-bench]") {
+    // Final review: each of an edit's empty neighbor chunks landing
+    // (chunk_removed) used to rescan every node for the level-0 extent.
+    // LodTree alone (fake meshes, synchronous builds): a 128 x 128-chunk
+    // (4 km) island, then digs whose 27 chunks land, 9 with surface and the
+    // 18 above and below empty.
+    TreeRig rig;
+    rig.edit(island_chunks(128));
+    rig.settle();
+    REQUIRE(rig.tree.top_level() == 7);
+    constexpr int kEdits = 20;
+    double total_ms = 0.0, worst_ms = 0.0;
+    for (int i = 0; i < kEdits; ++i) {
+        const ChunkCoord at{5 + 6 * i, 0, 7 + 5 * i};
+        const std::vector<ChunkCoord> footprint =
+            box_chunks(ChunkCoord{at.x - 1, -1, at.z - 1}, ChunkCoord{at.x + 1, 1, at.z + 1});
+        const auto start = std::chrono::steady_clock::now();
+        for (const ChunkCoord& c : footprint) rig.tree.chunk_queued(c, true);
+        for (const ChunkCoord& c : footprint) {
+            if (c.y == 0) {
+                rig.tree.chunk_meshed(c, fake_chunk_mesh(c), true);
+            } else {
+                rig.tree.chunk_removed(c);
+            }
+        }
+        (void)rig.tree.top_level();
+        const double ms =
+            std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+        total_ms += ms;
+        worst_ms = std::max(worst_ms, ms);
+        rig.settle();
+    }
+    WARN("LB12: one edit's 27 chunks landing in the " << rig.tree.nodes().size() << "-node tree: "
+                                                       << total_ms / kEdits << " ms on average, " << worst_ms
+                                                       << " ms at worst");
+    REQUIRE(rig.tree.top_level() == 7);
+    REQUIRE(total_ms / kEdits < 0.5);
+}

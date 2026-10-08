@@ -1832,7 +1832,43 @@ TEST_CASE("RM4 a 2 km ray across an island with no colliders marches fast", "[.]
     }
     const double ms =
         std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count() / kIterations;
-    INFO(ms);
+    WARN("RM4: " << ms << " ms per ray");
+    REQUIRE(ms < 0.2);
+}
+
+TEST_CASE("RM4b a 2 km ray across a 4,096-chunk island with no colliders marches fast", "[.][terrain-bench]") {
+    // Final review: the march's bounds came from a scan of every stored
+    // chunk on every raycast; on a large island that scan dominated.
+    PhysicsRig rig;
+    Terrain& t = terrain_in_workspace(rig.game);
+    // A 2,048 x 8 x 2,048 slab (64 x 64 chunks across, like LB8's island),
+    // its top at y = 0, filled in strips so no edit passes kMaxCellsPerEdit.
+    for (int strip = 0; strip < 8; ++strip) {
+        Shape s;
+        s.kind = Shape::Kind::Block;
+        s.frame = matrix4_translation(0.f, -4.f, -1024.f + 128.f + 256.f * static_cast<float>(strip));
+        s.size = Vec3{2048.f, 8.f, 256.f};
+        REQUIRE_FALSE(t.edit_volume([&](VoxelVolume& v) { return v.fill(s, 1); }));
+    }
+    TerrainWorld world(PhysicsWorld::build_terrain_collider);
+    rig.physics.set_terrain_world(&world);
+    settle(world, rig.game);
+    rig.physics.sync(rig.game);
+    REQUIRE(rig.physics.shape_count(t.id()) == 0u);   // no colliders anywhere
+    REQUIRE(t.volume().chunks().size() >= 4096u);
+
+    const Vec3 origin{-1000.f, 10.f, 0.f};
+    const Vec3 direction{2000.f, -20.f, 0.f};   // 2 km, crossing the slab's top at its middle
+    REQUIRE(rig.physics.raycast(rig.game, origin, direction, {}).has_value());   // sanity: it does hit
+
+    constexpr int kIterations = 50;
+    const auto start = std::chrono::steady_clock::now();
+    for (int i = 0; i < kIterations; ++i) {
+        (void)rig.physics.raycast(rig.game, origin, direction, {});
+    }
+    const double ms =
+        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count() / kIterations;
+    WARN("RM4b: " << t.volume().chunks().size() << " stored chunks, " << ms << " ms per ray");
     REQUIRE(ms < 0.2);
 }
 

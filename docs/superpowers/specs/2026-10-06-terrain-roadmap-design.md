@@ -30,7 +30,7 @@ Heightmaps cannot make overhangs or tunnels, so Anarchy is volumetric. It stores
 | 1 | Terrain core, in three plans: 1a data (`2026-10-06-terrain-data.md`), 1b surface (meshing, colliders, drawing), 1c Configure Terrain tab | `2026-10-06-terrain-core-design.md` | 0 |
 | 1d | Terrain LOD | `2026-10-06-terrain-lod-design.md` | 1b |
 | 2 | Sculpt tools and terrain undo | to be written | 1 |
-| 3 | Multi-material rendering | to be written | 1, 1d |
+| 3 | Textured materials | `2026-10-07-terrain-textures-design.md` | 1, 1d |
 | 4 | Extras: generators, water, resampling | to be written | 1 |
 
 ### 0. Edit-mode physics and `workspace:Raycast`

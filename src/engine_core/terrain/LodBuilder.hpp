@@ -44,7 +44,7 @@ struct LodInput {
 struct LodResult {
     NodeKey key;
     std::shared_ptr<const anarchy::amesh::Data> mesh;  // null: no triangles (includes skirts, once added)
-    float error = 0.f;                                  // studs
+    float error = 0.f;                                  // units
     // The simplified surface's border edges, pairs of vertex indices, as it
     // stood before skirts were appended to mesh (so these indices still
     // address mesh's first vertices/triangles; skirt geometry follows).
@@ -58,7 +58,7 @@ struct LodResult {
     std::uint32_t surface_index_count = 0;
 };
 
-// The level's simplification budget, in studs: 0.25 * voxel_size * 2^level.
+// The level's simplification budget, in units: 0.25 * voxel_size * 2^level.
 float target_error(int level, float voxel_size);
 
 // Concatenates input's children (offsetting indices), welds positions within

@@ -39,7 +39,7 @@ constexpr float kFov = 60.f;
 // A flat slab of n x n chunks (n a power of two) on y = 0, its surface within
 // y 0 to 8, with every level up to the one node over all of it published, as
 // TerrainWorld would once everything is built and resident. Voxel size 1: a
-// chunk is 32 studs. Level L's error is its target, 0.25 * 2^L studs (0 at
+// chunk is 32 units. Level L's error is its target, 0.25 * 2^L units (0 at
 // level 0). keep (when set) leaves out the nodes it returns false for, as
 // not built yet: their parents still count them in child_mask.
 TerrainView Slab(int n, const std::function<bool(const NodeKey&)>& keep = {}) {
@@ -171,9 +171,9 @@ std::string Coverage(const TerrainView& view, const std::vector<NodeChoice>& cho
 }  // namespace
 
 TEST_CASE("SEL1 NodePixelError projects a node's error to pixels", "[terrain][lod][render]") {
-    // 1 stud, 100 away, 90 degrees on a 200-pixel pane: 200 / (2 * tan 45) = 100 px per stud at 1 stud away.
+    // 1 unit, 100 away, 90 degrees on a 200-pixel pane: 200 / (2 * tan 45) = 100 px per unit at 1 unit away.
     CHECK(NodePixelError(1.f, 100.f, 90.f, 200) == Approx(1.f));
-    // 0.5 studs, 10 away, 60 degrees, 1080 pixels: 0.5 * 1080 / (2 * 0.57735) / 10 = 46.77.
+    // 0.5 units, 10 away, 60 degrees, 1080 pixels: 0.5 * 1080 / (2 * 0.57735) / 10 = 46.77.
     CHECK(NodePixelError(0.5f, 10.f, 60.f, 1080) == Approx(46.765f).epsilon(1e-3));
     // Twice as far, half the pixels.
     CHECK(NodePixelError(0.5f, 20.f, 60.f, 1080) == Approx(46.765f / 2.f).epsilon(1e-3));
@@ -188,7 +188,7 @@ TEST_CASE("SEL2 a far camera draws the top node; at the surface, level 0 under i
     const TerrainView view = Slab(64);   // levels 0 to 6
     REQUIRE(view.top_level == 6);
 
-    // 50,000 studs above the middle: the top node's 16 studs are under a pixel.
+    // 50,000 units above the middle: the top node's 16 units are under a pixel.
     const std::vector<NodeChoice> far = SelectFresh(view, Looking({1024.f, 50000.f, 1024.f}, {1024.f, 0.f, 1024.f}));
     REQUIRE(far.size() == 1);
     CHECK(KeyOf(view, far[0]).level == 6);
@@ -246,7 +246,7 @@ TEST_CASE("SEL2 a far camera draws the top node; at the surface, level 0 under i
         }
         finest += key.level == 0 ? 1 : 0;
     }
-    // Level 0 reaches about 470 studs (where level 1's half stud is a pixel), not the whole slab.
+    // Level 0 reaches about 470 units (where level 1's half unit is a pixel), not the whole slab.
     CHECK(finest > 100);
     CHECK(finest < 64 * 64 / 4);
 }
@@ -270,7 +270,7 @@ TEST_CASE("SEL4 a switch between levels cross-fades over a quarter second", "[te
     const TerrainView view = Slab(64);
     TerrainFadeState state;
     const TerrainCamera far = Looking({1024.f, 50000.f, 1024.f}, {1024.f, 0.f, 1024.f});
-    // 10,000 above: the top node (16 studs) is 1.5 px, its children (8 studs) 0.75 px.
+    // 10,000 above: the top node (16 units) is 1.5 px, its children (8 units) 0.75 px.
     const TerrainCamera closer = Looking({1024.f, 10000.f, 1024.f}, {1024.f, 0.f, 1024.f});
 
     std::vector<NodeChoice> out = Select(view, far, 0.0, state);
@@ -348,7 +348,7 @@ TEST_CASE("SEL5 a node with a child missing from the set is drawn instead of its
 }
 
 TEST_CASE("SEL6 selection over a 4 km island's nodes takes under half a millisecond", "[.][terrain-bench]") {
-    // 128 x 128 chunks of 32 studs (4,096 studs a side), every level of it
+    // 128 x 128 chunks of 32 units (4,096 units a side), every level of it
     // published: 21,845 nodes, more than the ~16 k a 4 km island keeps resident.
     TerrainView view = Slab(128);
     std::printf("SEL6: %zu nodes\n", view.nodes->size());
@@ -510,7 +510,7 @@ TEST_CASE("SEL8 zooming in and out, and wandering, draws every pixel once each f
         }
         return std::make_pair(finest, coarsest);
     };
-    // Down from 40,000 studs to 20 over 3 s at 60 frames a second, then back up.
+    // Down from 40,000 units to 20 over 3 s at 60 frames a second, then back up.
     const auto height = [](int frame) {
         const float t = static_cast<float>(frame) / 180.f;
         return 40000.f * std::pow(20.f / 40000.f, t);
@@ -540,9 +540,9 @@ TEST_CASE("SEL8 zooming in and out, and wandering, draws every pixel once each f
 TEST_CASE("SEL9 a child coming into view while its parent fades out takes the other half of that fade",
           "[terrain][lod][render]") {
     const TerrainView view = Slab(64);
-    // A narrow view (10 degrees, 50 x 1080 pixels) along +X from 70,000 studs
-    // off the slab's low-X side: it sees a strip of the slab ~570 studs wide.
-    // The top node (16 studs of error) is 1.4 px there, its children 0.7 px.
+    // A narrow view (10 degrees, 50 x 1080 pixels) along +X from 70,000 units
+    // off the slab's low-X side: it sees a strip of the slab ~570 units wide.
+    // The top node (16 units of error) is 1.4 px there, its children 0.7 px.
     const auto camera = [](Vec3 eye, float aimZ) {
         TerrainCamera c = Looking(eye, {0.f, 4.f, aimZ});
         c.fov_y_degrees = 10.f;
@@ -800,7 +800,7 @@ TEST_CASE("SEL13 zooming and turning at once, culled, draws every pixel in view 
         }
         return fadingFrames;
     };
-    // Looking yaw radians around, pitched down by drop (studs per stud ahead).
+    // Looking yaw radians around, pitched down by drop (units per unit ahead).
     const auto aimed = [](Vec3 eye, float yaw, float drop) {
         return Looking(eye, {eye.x + std::cos(yaw), eye.y - drop, eye.z + std::sin(yaw)});
     };
@@ -808,7 +808,7 @@ TEST_CASE("SEL13 zooming and turning at once, culled, draws every pixel in view 
         const float t = static_cast<float>(frame) / 180.f;
         return 20.f * std::pow(40000.f / 20.f, t);
     };
-    // Up from 20 studs to 40,000 over 3 s at 60 frames a second, turning a full circle a second.
+    // Up from 20 units to 40,000 over 3 s at 60 frames a second, turning a full circle a second.
     CHECK(run([&](int frame) { return aimed({500.f, height(frame), 500.f}, frame * 6.2832f / 60.f, 0.8f); }, 181,
               1.0 / 60.0) > 0);
     // And back down.

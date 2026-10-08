@@ -620,7 +620,7 @@ void ExpectTerrainShown(const std::string& name, const runner::ViewPixels& shot,
 constexpr int kLodEdgeBand = 2;
 constexpr int kLodMaterialBand = 6;
 
-// The island: 32 x 2 x 32 chunks (1,024 x 64 x 1,024 cells, a stud each),
+// The island: 32 x 2 x 32 chunks (1,024 x 64 x 1,024 cells, a unit each),
 // a round island of rolling hills about (512, 512), solid from y = 2 up to its height.
 constexpr int kIslandCells = 1024;
 constexpr int kIslandRows = 64;
@@ -1194,7 +1194,7 @@ void TerrainLodShots(runner::Renderer& renderer, OffscreenTarget& target, int wi
         stillShot(far, "far");
         std::vector<runner::MeshDraw> draws;
 
-        // 30 frames 0.1 s apart from the far camera down to 4 studs over the
+        // 30 frames 0.1 s apart from the far camera down to 4 units over the
         // ground, every one checked, every 10th (and the last) written, and
         // the one with the most nodes cross-fading.
         constexpr int kFrames = 30;

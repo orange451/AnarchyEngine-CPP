@@ -36,7 +36,7 @@ NodeKey parent_of(const NodeKey& key);
 // key's 8 children, one level down. key.level must be >= 1.
 std::array<NodeKey, 8> children_of(const NodeKey& key);
 
-// key's Terrain-local bounds, in studs: level 0 is exactly the chunk's
+// key's Terrain-local bounds, in units: level 0 is exactly the chunk's
 // 32-cell box; level L is 32 * 2^L cells on a side.
 void node_bounds(const NodeKey& key, float voxel_size, Vec3& min, Vec3& max);
 

@@ -27,7 +27,7 @@ namespace engine_core {
 struct TerrainNodeView {
     terrain::NodeKey key;
     std::uint64_t revision = 0;   // changes whenever mesh does; unique across every node a TerrainWorld publishes
-    float error = 0.f;            // studs; 0 for level 0 (the chunk mesh itself)
+    float error = 0.f;            // units; 0 for level 0 (the chunk mesh itself)
     // Terrain-local: the union of node_bounds(key) and the mesh's own AABB
     // (R2 -- Surface Nets boundary vertices and skirts lie outside the box).
     Vec3 bounds_min{}, bounds_max{};

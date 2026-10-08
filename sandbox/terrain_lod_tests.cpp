@@ -370,7 +370,7 @@ TEST_CASE("LN7 pack/unpack preserves non-zero, non-uniform weights", "[terrain][
 
 namespace {
 
-// A rolling slab over 16 x 1 x 16 chunks (512 x 32 x 512 studs): a smooth,
+// A rolling slab over 16 x 1 x 16 chunks (512 x 32 x 512 units): a smooth,
 // low-curvature height field (R9's style; see fill_rolling_wave below),
 // written directly as signed distances, with the same below-the-floor
 // margin fill_rolling_wave uses and for the same reason (no spurious,
@@ -381,7 +381,7 @@ namespace {
 // (confirmed while chasing LB1's budget failure -- locking every border
 // vertex changed nothing, and neither did halving the wave's amplitude or
 // widening the balls' own overlap: the level-1 error this test's own
-// diagnostics recorded, ~0.579 studs, stayed the same regardless, pinned to
+// diagnostics recorded, ~0.579 units, stayed the same regardless, pinned to
 // the ball-packing's own geometry rather than to the terrain's curvature).
 // A true height field has no seam between pieces for that error to hide in.
 void fill_rolling_slab(VoxelVolume& volume) {
@@ -410,7 +410,7 @@ void fill_rolling_slab(VoxelVolume& volume) {
 // z = A*sin(x/P)*cos(z/P), amplitude a few voxels, period tens of voxels --
 // written directly as signed distances. Unlike a ball union (fill_rolling_
 // slab, below), this has no seam between balls for meshoptimizer's quadric
-// error to mismeasure. Written well past the node's own 64x64-stud footprint
+// error to mismeasure. Written well past the node's own 64x64-unit footprint
 // (matching the margin the flat Block this replaced used) so the written
 // area's own lateral perimeter -- where the terrain would otherwise meet
 // untouched air and stand a tall, artificial cliff -- falls outside every
@@ -428,9 +428,9 @@ void fill_rolling_slab(VoxelVolume& volume) {
 // nearby at all. Continuing the real height field downward instead keeps
 // the solid genuinely solid at every sampled cell, so there is no second
 // surface to begin with. center_x/center_z should be the node's own center
-// in studs.
+// in units.
 void fill_rolling_wave(VoxelVolume& volume, float center_x, float center_z) {
-    const int half = 80;  // matches fill_gentle_dome's old 160-stud-wide slab
+    const int half = 80;  // matches fill_gentle_dome's old 160-unit-wide slab
     const int x0 = static_cast<int>(center_x) - half, x1 = x0 + 2 * half - 1;
     const int z0 = static_cast<int>(center_z) - half, z1 = z0 + 2 * half - 1;
     const int y0 = -8, y1 = kChunkSize - 1;  // a margin below chunk-y 0's own floor
@@ -1127,7 +1127,7 @@ TEST_CASE("RS5 a level-2 node merges skirted level-1 children the same as the sa
 TEST_CASE("RS6 a fully-collapsed simplification yields a null mesh, same as an empty input",
           "[terrain][lod]") {
     // A tiny, isolated, fully open-bordered quad (2 triangles, 4 distinct
-    // vertices a thousandth of a stud apart): meshopt_simplify (lock_border
+    // vertices a thousandth of a unit apart): meshopt_simplify (lock_border
     // == 0, as build_node always calls it -- see the comment on the
     // fill_rolling_wave helper above, found by watching exactly this happen
     // to an unwanted "floor cap" patch while chasing LB1's budget) is free
@@ -1236,7 +1236,7 @@ TEST_CASE("RS7 on a clay mound half-buried in a grass slab, every level-1 triang
         }
     }
     REQUIRE(checked > 0);
-    REQUIRE(long_boundary_triangles > 0);   // the scene does make mixed-Id triangles over 2 studs long
+    REQUIRE(long_boundary_triangles > 0);   // the scene does make mixed-Id triangles over 2 units long
 }
 
 // Task 7 crack fix (R21): seams between LOD nodes.

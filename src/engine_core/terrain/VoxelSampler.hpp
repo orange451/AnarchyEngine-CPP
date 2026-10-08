@@ -30,7 +30,7 @@ class VoxelSampler {
 public:
     VoxelSampler(const ChunkMap& chunks, float voxel_size) : chunks_(chunks), voxel_size_(voxel_size) {}
 
-    // The signed distance field at p (Terrain-local studs), trilinearly
+    // The signed distance field at p (Terrain-local units), trilinearly
     // interpolated between the 8 cells surrounding it. Negative inside.
     float distance(Vec3 p) const;
     // The normalized gradient of distance() at p, by central differences one

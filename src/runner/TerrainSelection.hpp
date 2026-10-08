@@ -105,8 +105,8 @@ struct TerrainFadeState {
     std::vector<std::size_t> casters, keep, upload;
 };
 
-// A node's error (studs) as pixels on a pane pane_height pixels tall, seen
-// with a vertical angle of fov_y_degrees from distance studs away:
+// A node's error (units) as pixels on a pane pane_height pixels tall, seen
+// with a vertical angle of fov_y_degrees from distance units away:
 // error * pane_height / (2 tan(fov / 2)) / distance. Infinite at distance 0
 // (inside the node) unless error is 0.
 float NodePixelError(float error, float distance, float fov_y_degrees, int pane_height);

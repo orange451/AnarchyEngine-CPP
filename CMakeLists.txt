@@ -636,6 +636,7 @@ add_library(engine_core STATIC
     src/engine_core/terrain/LodBuilder.cpp
     src/engine_core/terrain/LodTree.cpp
     src/engine_core/terrain/HeightDerive.cpp
+    src/engine_core/terrain/LayerBuilder.cpp
     src/engine_core/TerrainWorld.cpp
     src/engine_core/terrain/TerrainStash.cpp
     src/engine_core/ConvexDecomposition.cpp
@@ -667,6 +668,9 @@ target_link_libraries(engine_core PRIVATE meshoptimizer)
 target_include_directories(engine_core SYSTEM PRIVATE "${vhacd_SOURCE_DIR}/include")
 # So does miniaudio: only AudioWorld.cpp and SoundPreview.cpp include it.
 target_link_libraries(engine_core PRIVATE miniaudio)
+# stb_image decodes terrain layer source textures: only LayerBuilder.cpp
+# includes it (and compiles its implementation, privately to that file).
+target_include_directories(engine_core SYSTEM PRIVATE "${stb_image_SOURCE_DIR}")
 target_link_libraries(engine_core PRIVATE Luau.Compiler Luau.VM Luau.Analysis)
 # Vector3 is a Luau vector, and Enum items are Luau userdata.
 target_link_libraries(engine_datatypes PRIVATE Luau.VM)
@@ -989,6 +993,7 @@ add_executable(sandbox
     sandbox/terrain_lod_draw_tests.cpp
     sandbox/terrain_texture_tests.cpp
     sandbox/terrain_height_tests.cpp
+    sandbox/terrain_layer_tests.cpp
 )
 target_link_libraries(sandbox PRIVATE studio_core Catch2::Catch2WithMain)
 # The dense views tests check flecs state the engine keeps private.

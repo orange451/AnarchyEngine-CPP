@@ -13,6 +13,7 @@
 #include "TerrainWorld.hpp"
 #include "terrain/SurfaceNets.hpp"
 #include "terrain/VoxelSampler.hpp"
+#include "profiler/Profiler.hpp"
 
 #pragma warning(push, 0)
 #include "box3d/box3d.h"
@@ -608,6 +609,14 @@ struct PhysicsWorld::Impl {
     };
     TerrainWorld* terrains = nullptr;
     std::unordered_map<InstanceId, TerrainBody> terrain_bodies;
+    // Per Terrain, the collider interest last told to TerrainWorld: the
+    // body-centre chunks it came from, and per chunk how many of those
+    // centres ask for it (update_terrain_collider_interest).
+    struct Interest {
+        std::unordered_set<terrain::ChunkCoord, terrain::ChunkCoordHash> centers;
+        std::unordered_map<terrain::ChunkCoord, int, terrain::ChunkCoordHash> counts;
+    };
+    std::unordered_map<InstanceId, Interest> interests;
     const std::array<b3SurfaceMaterial, kTerrainMaterialCount> terrain_surfaces = terrain_materials();
 
     // Scratch, kept between steps so a step does not allocate once warm.
@@ -654,6 +663,7 @@ struct PhysicsWorld::Impl {
         world = b3CreateWorld(&def);
         generation = next_generation;
         played = false;
+        interests.clear();
     }
 
     void say(const std::string& text) const {
@@ -669,9 +679,18 @@ struct PhysicsWorld::Impl {
         pull_gravity(game);
         const bool running = game.simulation_running();
         poses_from_game_objects = !running || !played;
-        reconcile(game);
-        update_terrain_collider_interest(game);
-        reconcile_terrain();
+        {
+            PROFILE_SCOPE("Physics reconcile", profiler::Group::Physics);
+            reconcile(game);
+        }
+        {
+            PROFILE_SCOPE("Terrain collider interest", profiler::Group::Physics);
+            update_terrain_collider_interest(game);
+        }
+        {
+            PROFILE_SCOPE("Terrain collider shapes", profiler::Group::Physics);
+            reconcile_terrain();
+        }
         played = running && (stepping || played);
     }
 
@@ -679,10 +698,19 @@ struct PhysicsWorld::Impl {
         if (!game.simulation_running()) {
             return;
         }
-        control(game, dt);
-        b3World_Step(world, static_cast<float>(dt), 1);
+        {
+            PROFILE_SCOPE("Physics control", profiler::Group::Physics);
+            control(game, dt);
+        }
+        {
+            PROFILE_SCOPE("Box3D step", profiler::Group::Physics);
+            b3World_Step(world, static_cast<float>(dt), 1);
+        }
         unclimb(game);
-        pull(game);
+        {
+            PROFILE_SCOPE("Physics pull", profiler::Group::Physics);
+            pull(game);
+        }
     }
 
     void step(DataModel& game, double dt) {
@@ -1035,17 +1063,14 @@ struct PhysicsWorld::Impl {
             return;
         }
         for (const TerrainView& view : terrains->views()) {
-            std::vector<terrain::ChunkCoord> interest;
-            std::unordered_set<terrain::ChunkCoord, terrain::ChunkCoordHash> interest_set;
+            // Distinct body-centre chunks: thousands of bodies (a debris
+            // pile) mostly share a few chunks.
+            std::unordered_set<terrain::ChunkCoord, terrain::ChunkCoordHash> centers;
             if (view.can_collide) {
                 const terrain::LodTree* tree = terrains->lod_tree(view.terrain);
                 const float voxel_size = tree != nullptr ? tree->voxel_size() : 1.f;
                 const float span = terrain::kChunkSize * voxel_size;
                 const Matrix4 inverse = matrix4_inverse(view.transform);
-                // Distinct body-centre chunks first: thousands of bodies (a
-                // debris pile) mostly share a few chunks, and each distinct
-                // one's box is expanded only once.
-                std::unordered_set<terrain::ChunkCoord, terrain::ChunkCoordHash> centers;
                 for (const auto& [id, body] : bodies) {
                     if (!b3Body_IsValid(body.body)) {
                         continue;
@@ -1059,35 +1084,73 @@ struct PhysicsWorld::Impl {
                                                        static_cast<int>(std::floor(local.y / span)),
                                                        static_cast<int>(std::floor(local.z / span))});
                 }
-                std::vector<terrain::ChunkCoord> under_body;
-                for (const terrain::ChunkCoord& center : centers) {
-                    under_body.clear();
-                    for (int dz = -kColliderChunks; dz <= kColliderChunks; ++dz) {
-                        for (int dy = -kColliderChunks; dy <= kColliderChunks; ++dy) {
-                            for (int dx = -kColliderChunks; dx <= kColliderChunks; ++dx) {
-                                const terrain::ChunkCoord c{center.x + dx, center.y + dy, center.z + dz};
-                                if (interest_set.insert(c).second) {
-                                    interest.push_back(c);
-                                }
-                                if (dx >= -1 && dx <= 1 && dy >= -1 && dy <= 1 && dz >= -1 && dz <= 1) {
-                                    under_body.push_back(c);
-                                }
+            }
+            // The interest is every chunk within kColliderChunks of a centre.
+            // It changes only where a centre comes or goes, so only those
+            // centres' boxes are walked: a count per chunk of the centres
+            // that ask for it, and TerrainWorld told just the chunks whose
+            // count reached or left zero. Rebuilding the whole interest
+            // (343 chunks a centre) whenever any body crossed a chunk border
+            // cost milliseconds every substep with a few dozen bodies about.
+            Interest& interest = interests[view.terrain];
+            if (!interest.counts.empty() && !terrains->has_collider_interest(view.terrain)) {
+                interest = Interest{};   // TerrainWorld's record was made again: tell it everything
+            }
+            std::vector<terrain::ChunkCoord> added;
+            std::vector<terrain::ChunkCoord> removed;
+            auto box = [&](const terrain::ChunkCoord& center, int delta) {
+                for (int dz = -kColliderChunks; dz <= kColliderChunks; ++dz) {
+                    for (int dy = -kColliderChunks; dy <= kColliderChunks; ++dy) {
+                        for (int dx = -kColliderChunks; dx <= kColliderChunks; ++dx) {
+                            const terrain::ChunkCoord c{center.x + dx, center.y + dy, center.z + dz};
+                            int& count = interest.counts[c];
+                            count += delta;
+                            if (delta > 0 && count == 1) {
+                                added.push_back(c);
+                            } else if (count == 0) {
+                                interest.counts.erase(c);
+                                removed.push_back(c);
                             }
                         }
                     }
-                    // No fall-through: the chunk under a body and its immediate
-                    // neighbors (a surface at a chunk border can belong to
-                    // either side) must hold their colliders before Box3D
-                    // steps. Each one TerrainWorld already knows (built, or
-                    // meshed empty) is skipped, so this costs lookups only,
-                    // unless the job queue has not caught up with the body --
-                    // and then a collider elsewhere around it is no cover:
-                    // checked per chunk, every sync, never "some neighbor has
-                    // one".
-                    terrains->build_colliders_now(game, view.terrain, under_body);
+                }
+            };
+            for (auto it = interest.centers.begin(); it != interest.centers.end();) {
+                if (centers.count(*it) == 0) {
+                    box(*it, -1);
+                    it = interest.centers.erase(it);
+                } else {
+                    ++it;
                 }
             }
-            terrains->set_collider_interest(view.terrain, std::move(interest));
+            for (const terrain::ChunkCoord& center : centers) {
+                if (interest.centers.insert(center).second) {
+                    box(center, +1);
+                }
+            }
+            if (!added.empty() || !removed.empty()) {
+                terrains->change_collider_interest(view.terrain, added, removed);
+            }
+            // No fall-through: the chunk under a body and its immediate
+            // neighbors (a surface at a chunk border can belong to either
+            // side) must hold their colliders before Box3D steps. Each one
+            // TerrainWorld already knows (built, or meshed empty) is skipped,
+            // so this costs lookups only, unless the job queue has not caught
+            // up with the body -- and then a collider elsewhere around it is
+            // no cover: checked per chunk, every sync, never "some neighbor
+            // has one".
+            std::vector<terrain::ChunkCoord> under_body;
+            for (const terrain::ChunkCoord& center : centers) {
+                under_body.clear();
+                for (int dz = -1; dz <= 1; ++dz) {
+                    for (int dy = -1; dy <= 1; ++dy) {
+                        for (int dx = -1; dx <= 1; ++dx) {
+                            under_body.push_back(terrain::ChunkCoord{center.x + dx, center.y + dy, center.z + dz});
+                        }
+                    }
+                }
+                terrains->build_colliders_now(game, view.terrain, under_body);
+            }
         }
     }
 

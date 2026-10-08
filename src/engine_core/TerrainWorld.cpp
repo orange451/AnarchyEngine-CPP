@@ -7,6 +7,7 @@
 #include "TerrainMaterial.hpp"
 #include "TerrainTextures.hpp"
 #include "terrain/VoxelVolume.hpp"
+#include "profiler/Profiler.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -68,6 +69,10 @@ void TerrainWorld::accept_result(const terrain::MeshResult& result) {
         return;   // the Terrain left Workspace (or was destroyed) since this job was queued
     }
     TerrainRecord& record = found->second;
+    // A landing can leave a chunk of the interest unknown: look at it again.
+    if (record.collider_interest.count(result.coord) != 0) {
+        record.collider_to_walk.push_back(result.coord);
+    }
     const auto revision_it = record.chunk_revisions.find(result.coord);
     if (revision_it == record.chunk_revisions.end() || revision_it->second != result.revision) {
         // Stale: an older job than the chunk's current value, or one for a
@@ -372,7 +377,27 @@ void TerrainWorld::update_lod(InstanceId terrain_id, Terrain& terrain, TerrainRe
 
 void TerrainWorld::update_collider_interest(InstanceId terrain_id, Terrain& terrain, TerrainRecord& record,
                                             double now_ms) {
-    for (const terrain::ChunkCoord& coord : record.collider_interest) {
+    // Chunks that left the interest were last asked for at the previous
+    // update, the last one that saw them in it.
+    for (const terrain::ChunkCoord& coord : record.collider_interest_left) {
+        const auto stamp = record.collider_last_interest_ms.find(coord);
+        if (stamp != record.collider_last_interest_ms.end()) {
+            stamp->second = record.collider_previous_update_ms;
+        }
+    }
+    record.collider_interest_left.clear();
+    record.collider_previous_update_ms = now_ms;
+    std::vector<terrain::ChunkCoord> to_walk;
+    to_walk.swap(record.collider_to_walk);
+    // Nothing new to look at and no release due yet.
+    if (to_walk.empty() && now_ms >= record.collider_release_scan_ms && now_ms - record.collider_release_scan_ms < kColliderReleaseMs * 0.25) {
+        return;
+    }
+    PROFILE_SCOPE("Terrain interest walk", profiler::Group::Engine);
+    for (const terrain::ChunkCoord& coord : to_walk) {
+        if (record.collider_interest.count(coord) == 0) {
+            continue;   // left the interest again before this update
+        }
         record.collider_last_interest_ms[coord] = now_ms;
         if (record.collider_ready.count(coord) != 0 || record.pending_jobs.count(coord) != 0) {
             // Already known (a collider, or meshed with none to make -- most
@@ -398,8 +423,12 @@ void TerrainWorld::update_collider_interest(InstanceId terrain_id, Terrain& terr
         mesher_.queue(terrain_id, revision, std::move(input), 0.f);
     }
     // A collider not asked for in kColliderReleaseMs goes.
+    if (now_ms >= record.collider_release_scan_ms && now_ms - record.collider_release_scan_ms < kColliderReleaseMs * 0.25) {
+        return;
+    }
+    record.collider_release_scan_ms = now_ms;
     for (auto it = record.collider_last_interest_ms.begin(); it != record.collider_last_interest_ms.end();) {
-        if (now_ms - it->second > kColliderReleaseMs) {
+        if (now_ms - it->second > kColliderReleaseMs && record.collider_interest.count(it->first) == 0) {
             if (record.collider_map.erase(it->first) != 0) {
                 record.chunks_dirty = true;
             }
@@ -551,6 +580,7 @@ void TerrainWorld::update(DataModel& game, double now_ms) {
             record.tree = std::make_unique<terrain::LodTree>(voxel_size, &next_node_revision_);
             record.pending_jobs.clear();
             record.collider_ready.clear();   // every chunk is meshed again at the new size
+            record.collider_to_walk.assign(record.collider_interest.begin(), record.collider_interest.end());
             record.batches.clear();  // their jobs' results no longer match (every chunk is queued again)
             record.chunk_batch.clear();
             record.sync_built.clear();
@@ -562,9 +592,18 @@ void TerrainWorld::update(DataModel& game, double now_ms) {
         }
         // R31: after this update's results landed and before its edits
         // queue, a batch past its hold publishes what has landed.
-        expire_batches(record, now_ms);
-        queue_dirty(id, *terrain, record, fresh, has_camera, camera_pos, now_ms);
-        update_lod(id, *terrain, record, now_ms, has_camera, camera_pos);
+        {
+            PROFILE_SCOPE("Terrain batches", profiler::Group::Engine);
+            expire_batches(record, now_ms);
+        }
+        {
+            PROFILE_SCOPE("Terrain queue", profiler::Group::Engine);
+            queue_dirty(id, *terrain, record, fresh, has_camera, camera_pos, now_ms);
+        }
+        {
+            PROFILE_SCOPE("Terrain LOD", profiler::Group::Engine);
+            update_lod(id, *terrain, record, now_ms, has_camera, camera_pos);
+        }
         if (!terrain->can_collide()) {
             // Nothing to show through it: let any collider interest lapse
             // (set_collider_interest while CanCollide is false would only
@@ -572,12 +611,16 @@ void TerrainWorld::update(DataModel& game, double now_ms) {
             // once its kColliderReleaseMs is up, same as leaving interest.
             record.collider_interest.clear();
         }
-        update_collider_interest(id, *terrain, record, now_ms);
+        {
+            PROFILE_SCOPE("Terrain colliders", profiler::Group::Engine);
+            update_collider_interest(id, *terrain, record, now_ms);
+        }
         rebuild_look(id, *terrain, record, first_seen);
         if (record.chunks_dirty || first_seen) {
             publish_chunks(record);
         }
         if (record.tree->take_changed() || fresh) {
+            PROFILE_SCOPE("Terrain node list", profiler::Group::Engine);
             record.nodes = std::make_shared<const std::vector<TerrainNodeView>>(record.tree->nodes_for_view());
             record.nodes_revision = ++next_nodes_set_revision_;
         }
@@ -609,8 +652,18 @@ void TerrainWorld::set_collider_interest(InstanceId terrain, std::vector<terrain
     if (found == terrains_.end()) {
         return;   // not a Terrain this TerrainWorld currently shows
     }
-    found->second.collider_interest.clear();
-    found->second.collider_interest.insert(chunks.begin(), chunks.end());
+    TerrainRecord& record = found->second;
+    std::unordered_set<terrain::ChunkCoord, terrain::ChunkCoordHash> next(chunks.begin(), chunks.end());
+    if (next == record.collider_interest) {
+        return;   // the same ask: nothing for update_collider_interest to walk again
+    }
+    for (const terrain::ChunkCoord& coord : record.collider_interest) {
+        if (next.count(coord) == 0) {
+            record.collider_interest_left.push_back(coord);   // asked for until now
+        }
+    }
+    record.collider_interest = std::move(next);
+    record.collider_to_walk.assign(record.collider_interest.begin(), record.collider_interest.end());
 }
 
 bool TerrainWorld::build_colliders_now(DataModel& game, InstanceId terrain,
@@ -696,6 +749,7 @@ bool TerrainWorld::build_colliders_now(DataModel& game, InstanceId terrain,
         result.coord = coord;
         result.revision = revision;
         try {
+            PROFILE_SCOPE("Terrain sync collider", profiler::Group::Physics);
             ++sync_meshed_count_;
             terrain::MeshInput input = terrain::mesh_input(volume, coord);
             input.build_collider = true;
@@ -713,6 +767,7 @@ bool TerrainWorld::build_colliders_now(DataModel& game, InstanceId terrain,
         apply_result(record, result);
     }
     if (record.chunks_dirty) {
+        PROFILE_SCOPE("Terrain publish chunks", profiler::Group::Physics);
         publish_chunks(record);
         // views() is a snapshot taken at the last update(): PhysicsWorld's
         // own sync calls this between that update() and its own
@@ -737,6 +792,30 @@ void TerrainWorld::attach_textures(const TerrainTextures& textures) {
     for (TerrainView& view : views_) {
         view.textures = textures.published(view.terrain);
     }
+}
+
+void TerrainWorld::change_collider_interest(InstanceId terrain, const std::vector<terrain::ChunkCoord>& added,
+                                            const std::vector<terrain::ChunkCoord>& removed) {
+    const auto found = terrains_.find(terrain);
+    if (found == terrains_.end()) {
+        return;   // not a Terrain this TerrainWorld currently shows
+    }
+    TerrainRecord& record = found->second;
+    for (const terrain::ChunkCoord& coord : removed) {
+        if (record.collider_interest.erase(coord) != 0) {
+            record.collider_interest_left.push_back(coord);   // asked for until now
+        }
+    }
+    for (const terrain::ChunkCoord& coord : added) {
+        if (record.collider_interest.insert(coord).second) {
+            record.collider_to_walk.push_back(coord);
+        }
+    }
+}
+
+bool TerrainWorld::has_collider_interest(InstanceId terrain) const {
+    const auto found = terrains_.find(terrain);
+    return found != terrains_.end() && !found->second.collider_interest.empty();
 }
 
 }  // namespace engine_core

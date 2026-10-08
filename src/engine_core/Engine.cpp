@@ -430,7 +430,10 @@ void Engine::simulation_loop() {
                     // is already off this thread (TerrainMesher's workers).
                     // textures_ first: see the stopped tick's own comment above.
                     PROFILE_SCOPE("Terrain", profiler::Group::Engine);
-                    textures_.update(game_);
+                    {
+                        PROFILE_SCOPE("Terrain textures", profiler::Group::Engine);
+                        textures_.update(game_);
+                    }
                     terrain_.update(game_);
                     report_terrain_failures();
                     terrain_.attach_textures(textures_);

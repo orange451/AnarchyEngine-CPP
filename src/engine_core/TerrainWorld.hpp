@@ -115,6 +115,14 @@ public:
     // loses it. No-op for a terrain this TerrainWorld has not (yet, or any
     // longer) seen.
     void set_collider_interest(InstanceId terrain, std::vector<terrain::ChunkCoord> chunks);
+    // Whether terrain has any collider interest (a record made again, say
+    // after the Terrain left Workspace and came back, starts with none).
+    bool has_collider_interest(InstanceId terrain) const;
+    // PhysicsWorld, as bodies move: the chunks newly in its interest, and
+    // those no longer in it. Same effect as set_collider_interest with the
+    // whole new set, at the cost of the change alone.
+    void change_collider_interest(InstanceId terrain, const std::vector<terrain::ChunkCoord>& added,
+                                  const std::vector<terrain::ChunkCoord>& removed);
     // SimulationThread, called from PhysicsWorld's own sync: meshes and
     // builds colliders for chunks right here, off the job queue -- the
     // no-fall-through rule for the chunks under a body. Skips a chunk whose
@@ -252,6 +260,17 @@ private:
         // the second only when its collider goes.
         std::unordered_set<terrain::ChunkCoord, terrain::ChunkCoordHash> collider_interest;
         std::unordered_map<terrain::ChunkCoord, double, terrain::ChunkCoordHash> collider_last_interest_ms;
+        // The interest chunks update_collider_interest has still to look at:
+        // those newly asked for, and those a landing left unknown. With a
+        // few dozen bodies the interest holds thousands of chunks, and
+        // walking all of it every update cost milliseconds a step, so only
+        // these are walked. A chunk still in the interest is still asked for:
+        // the release skips it, and only chunks that leave it
+        // (collider_interest_left) get a fresh last-asked time.
+        std::vector<terrain::ChunkCoord> collider_to_walk;
+        std::vector<terrain::ChunkCoord> collider_interest_left;
+        double collider_release_scan_ms = 0.0;
+        double collider_previous_update_ms = 0.0;
         // Chunks whose collider_map entry reflects their voxels: a job that
         // wanted a collider landed for them (with one, or with none because
         // the chunk has no surface). Interest and build_colliders_now skip

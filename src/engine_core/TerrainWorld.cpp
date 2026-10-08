@@ -134,8 +134,7 @@ void TerrainWorld::apply_result(TerrainRecord& record, const terrain::MeshResult
         record.meshes.erase(result.coord);
     }
     // The collider write follows want_collider, not edited: an edit outside
-    // collider_interest builds no collider (and must not touch whatever is
-    // already there, kept for kColliderReleaseMs), and a residency or
+    // collider_interest builds no collider, and a residency or
     // collider-refresh job asked to build one (in collider_interest, not
     // known yet) still writes it even though the voxels did not change.
     if (want_collider) {
@@ -149,8 +148,17 @@ void TerrainWorld::apply_result(TerrainRecord& record, const terrain::MeshResult
         record.collider_ready.insert(result.coord);
     } else if (edited) {
         // Its voxels changed without a collider built from them: whatever
-        // collider it still holds is stale, so interest must build it again.
+        // collider it still holds is stale. Task 9 (carried from Task 8's
+        // review): drop it at once rather than leaving it live until
+        // kColliderReleaseMs's grace lapses -- a Raycast's march must see
+        // this chunk's new voxels (no collider: it is the march's to cover)
+        // the moment this result lands, never a shape built from the old
+        // ones.
         record.collider_ready.erase(result.coord);
+        if (record.collider_map.erase(result.coord) != 0) {
+            record.chunks_dirty = true;
+        }
+        record.collider_last_interest_ms.erase(result.coord);
     }
     record.chunks_dirty = true;
     if (record.tree != nullptr) {

@@ -9,8 +9,10 @@
 #include "PhysicsObject.hpp"
 #include "PlayerController.hpp"
 #include "SceneService.hpp"
+#include "Terrain.hpp"
 #include "TerrainWorld.hpp"
 #include "terrain/SurfaceNets.hpp"
+#include "terrain/VoxelSampler.hpp"
 
 #pragma warning(push, 0)
 #include "box3d/box3d.h"
@@ -690,6 +692,159 @@ struct PhysicsWorld::Impl {
         simulate(game, dt);
     }
 
+    // Task 9 (spec "Physics"): whether PhysicsWorld currently has a shape
+    // for coord on terrain's body -- what Box3D's own cast in raycast()
+    // above has already tested. A chunk present but with no shape (meshed
+    // with nothing to collide with, or not built yet) reads as no collider,
+    // same as one never asked for.
+    bool terrain_chunk_has_collider(InstanceId terrain_id, const terrain::ChunkCoord& coord) const {
+        const auto found = terrain_bodies.find(terrain_id);
+        if (found == terrain_bodies.end()) {
+            return false;
+        }
+        const auto chunk = found->second.chunks.find(coord);
+        return chunk != found->second.chunks.end() && b3Shape_IsValid(chunk->second.shape);
+    }
+
+    // Task 9: where view's voxel distance field crosses zero along the
+    // world ray (origin, direction, up to length), over the chunks
+    // PhysicsWorld holds no collider shape for. Updates hits in place when
+    // this is nearer than whatever it already holds.
+    void march_terrain(DataModel& game, const TerrainView& view, Vec3 origin, Vec3 direction, float length,
+                       RayHits& hits) const {
+        auto* terrain_instance = dynamic_cast<Terrain*>(game.instance(view.terrain));
+        if (terrain_instance == nullptr) {
+            return;
+        }
+        const terrain::VoxelVolume& volume = terrain_instance->volume();
+        const terrain::ChunkMap& chunks = volume.chunks();
+        if (chunks.empty()) {
+            return;   // nothing stored: no surface anywhere, nothing to march
+        }
+        const float voxel_size = static_cast<float>(volume.voxel_size());
+        const float span = terrain::kChunkSize * voxel_size;
+
+        // Terrain-local bounds of every stored chunk, padded by the
+        // distance band's width: a stored chunk holds only cells within
+        // kBandCells of a surface, so nothing closer than that to the
+        // padded box's own faces can be solid -- the march below may start
+        // right at the box without first checking what lies further out
+        // (always air). Also RM4: clips a long ray down to the island's own
+        // size rather than marching empty space all the way to its end.
+        terrain::ChunkCoord lo = chunks.begin()->first;
+        terrain::ChunkCoord hi = lo;
+        for (const auto& [coord, chunk] : chunks) {
+            (void)chunk;
+            lo.x = std::min(lo.x, coord.x);
+            lo.y = std::min(lo.y, coord.y);
+            lo.z = std::min(lo.z, coord.z);
+            hi.x = std::max(hi.x, coord.x);
+            hi.y = std::max(hi.y, coord.y);
+            hi.z = std::max(hi.z, coord.z);
+        }
+        const float margin = terrain::kBandCells * voxel_size;
+        const Vec3 bounds_min{lo.x * span - margin, lo.y * span - margin, lo.z * span - margin};
+        const Vec3 bounds_max{(hi.x + 1) * span + margin, (hi.y + 1) * span + margin, (hi.z + 1) * span + margin};
+
+        // Terrain-local ray: view.transform has no scale or shear (Terrain
+        // refuses one), so matrix4_vector keeps direction's length, and a
+        // local distance equals the same world distance.
+        const Matrix4 inverse = matrix4_inverse(view.transform);
+        const Vec3 local_origin = matrix4_point(inverse, origin);
+        const Vec3 local_direction = matrix4_vector(inverse, direction);
+        const float dir_length = std::sqrt(local_direction.x * local_direction.x +
+                                           local_direction.y * local_direction.y +
+                                           local_direction.z * local_direction.z);
+        if (!(dir_length > 0.f)) {
+            return;
+        }
+        const Vec3 dir_unit{local_direction.x / dir_length, local_direction.y / dir_length,
+                            local_direction.z / dir_length};
+        const auto at = [&](float t) {
+            return Vec3{local_origin.x + dir_unit.x * t, local_origin.y + dir_unit.y * t,
+                        local_origin.z + dir_unit.z * t};
+        };
+
+        // Clip [0, length] to the padded bounds: a slab test per axis.
+        float t0 = 0.f;
+        float t1 = length;
+        const float origin_axis[3] = {local_origin.x, local_origin.y, local_origin.z};
+        const float dir_axis[3] = {dir_unit.x, dir_unit.y, dir_unit.z};
+        const float min_axis[3] = {bounds_min.x, bounds_min.y, bounds_min.z};
+        const float max_axis[3] = {bounds_max.x, bounds_max.y, bounds_max.z};
+        for (int axis = 0; axis < 3; ++axis) {
+            if (std::fabs(dir_axis[axis]) < 1e-9f) {
+                if (origin_axis[axis] < min_axis[axis] || origin_axis[axis] > max_axis[axis]) {
+                    return;
+                }
+                continue;
+            }
+            float ta = (min_axis[axis] - origin_axis[axis]) / dir_axis[axis];
+            float tb = (max_axis[axis] - origin_axis[axis]) / dir_axis[axis];
+            if (ta > tb) {
+                std::swap(ta, tb);
+            }
+            t0 = std::max(t0, ta);
+            t1 = std::min(t1, tb);
+            if (t0 > t1) {
+                return;
+            }
+        }
+
+        terrain::VoxelSampler sampler(chunks, voxel_size);
+        const auto chunk_coord_at = [&](Vec3 p) {
+            return terrain::ChunkCoord{static_cast<int>(std::floor(p.x / span)),
+                                       static_cast<int>(std::floor(p.y / span)),
+                                       static_cast<int>(std::floor(p.z / span))};
+        };
+
+        const float min_step = 0.25f * voxel_size;
+        constexpr int kBisections = 8;
+        float t = t0;
+        float prev_t = t0;
+        if (!(sampler.distance(at(t0)) > 0.f)) {
+            return;   // already inside (or exactly on) the surface where the march begins
+        }
+        while (t < t1) {
+            if (terrain_chunk_has_collider(view.terrain, chunk_coord_at(at(t)))) {
+                // Box3D's own cast already tested this chunk's shape: skip
+                // past it rather than testing it again.
+                t += span;
+                prev_t = t;
+                continue;
+            }
+            const float d = sampler.distance(at(t));
+            if (d <= 0.f) {
+                float lo_t = prev_t;
+                float hi_t = t;
+                for (int i = 0; i < kBisections; ++i) {
+                    const float mid = (lo_t + hi_t) * 0.5f;
+                    if (sampler.distance(at(mid)) > 0.f) {
+                        lo_t = mid;
+                    } else {
+                        hi_t = mid;
+                    }
+                }
+                const float world_fraction = hi_t / length;
+                if (world_fraction < hits.closest) {
+                    const Vec3 local_point = at(hi_t);
+                    const Vec3 world_point = matrix4_point(view.transform, local_point);
+                    const Vec3 world_normal = matrix4_vector(view.transform, sampler.gradient(local_point));
+                    hits.hit = true;
+                    hits.closest = world_fraction;
+                    hits.instance = view.terrain;
+                    hits.point = to_b3(world_point);
+                    hits.normal = to_b3(world_normal);
+                    hits.material = sampler.id(local_point);
+                }
+                return;   // only the nearest crossing in this Terrain matters
+            }
+            const float step = std::max(d, min_step);
+            prev_t = t;
+            t += step;
+        }
+    }
+
     std::optional<RayHit> raycast(DataModel& game, Vec3 origin, Vec3 direction, const RayFilter& filter) {
         const float length =
             std::sqrt(direction.x * direction.x + direction.y * direction.y + direction.z * direction.z);
@@ -707,6 +862,23 @@ struct PhysicsWorld::Impl {
         hits.game = &game;
         hits.filter = &filter;
         b3World_CastRay(world, to_b3(origin), to_b3(direction), b3DefaultQueryFilter(), ray_hit, &hits);
+        // Task 9 (spec "Physics"): Box3D's cast above tested every chunk that
+        // has a collider shape; march each Terrain's own voxel distance
+        // field, in its own local space, over exactly the chunks that do
+        // not, so a chunk is tested once either way and a Raycast hits
+        // terrain at any distance, the same whether or not colliders are
+        // loaded where it hits (RM1). Keeps hits' nearest-so-far.
+        if (terrains != nullptr) {
+            for (const TerrainView& view : terrains->views()) {
+                if (!view.can_collide) {
+                    continue;   // no shapes at all (RM3): the march sees none either
+                }
+                if (under_any(game, view.terrain, filter.instances) != filter.include) {
+                    continue;   // the filter would have hidden its collider shape too
+                }
+                march_terrain(game, view, origin, direction, length, hits);
+            }
+        }
         if (!hits.hit) {
             return std::nullopt;
         }

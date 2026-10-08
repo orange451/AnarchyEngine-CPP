@@ -449,6 +449,10 @@ void SelectTerrainNodes(const engine_core::TerrainView& view, const TerrainCamer
             // Whole at once, and what it replaces stops.
             fade = Fade{1.f, now_seconds, true};
             snapped.insert(key);
+        } else if (AncestorIn(chosen, key, fadeLimit)) {
+            // R27: a root under an ancestor that draws itself (new surface
+            // its build has no part of): whole at once, the ancestor unchanged.
+            fade = Fade{1.f, now_seconds, true};
         } else {
             // New: what of its ancestors and descendants did last frame draw?
             if (!belowReady) {

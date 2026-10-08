@@ -990,6 +990,39 @@ TEST_CASE("SEL14 diving faster than a fade, no node fading out draws over 2 px, 
     CHECK(run(Slab(64, [](const NodeKey& key) { return key.level > 0 || key.x >= 32; }), "half without level 0") > 0);
 }
 
+TEST_CASE("SEL16 a new root under an ancestor that draws itself appears whole, never fading in",
+          "[terrain][lod][render]") {
+    // Ruling R27. From far off the top node draws the whole 8 x 8 slab.
+    const TerrainView slab = Slab(8);
+    const TerrainCamera far = Looking({128.f, 3000.f, 128.f}, {128.f, 0.f, 128.f}, false);
+    TerrainFadeState state;
+    Select(slab, far, 0.0, state);
+    const std::vector<NodeChoice> settled = Select(slab, far, 1.0, state);
+    REQUIRE(settled.size() == 1u);
+    REQUIRE(KeyOf(slab, settled[0]).level == 3);
+
+    // An edit made surface at chunk (0, 2, 0): its level-1 parent is not
+    // built, so the level-2 node over it leaves it out, and it is a root.
+    TerrainView grown = slab;
+    auto nodes = std::make_shared<std::vector<TerrainNodeView>>(*slab.nodes);
+    TerrainNodeView fresh;
+    fresh.key = NodeKey{0, 0, 2, 0};
+    fresh.revision = 5000;
+    engine_core::terrain::node_bounds(fresh.key, 1.f, fresh.bounds_min, fresh.bounds_max);
+    nodes->insert(nodes->begin(), fresh);
+    grown.nodes = nodes;
+    grown.nodes_revision = 2;
+    for (const double now : {1.0 + 1.0 / 60.0, 1.05, 1.1, 1.2, 1.4}) {
+        INFO("at " << now);
+        const std::vector<NodeChoice> choices = Select(grown, far, now, state);
+        REQUIRE(choices.size() == 2u);
+        for (const NodeChoice& choice : choices) {
+            INFO("L" << KeyOf(grown, choice).level);
+            CHECK(choice.incoming);
+            CHECK(choice.fade == 1.f);
+        }
+    }
+}
 
 TEST_CASE("SEL17 a stale node with every child published is descended, whole, and drawn again whole once rebuilt",
           "[terrain][lod][render]") {

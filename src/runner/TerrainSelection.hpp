@@ -132,6 +132,8 @@ float NodePixelError(float error, float distance, float fov_y_degrees, int pane_
 // An edit swaps without a fade (R24, R26): a node newly chosen under a stale
 // node descended through this frame, or related to one descended through
 // last frame (now rebuilt), draws whole at once and what it replaces stops.
+// So does a root newly chosen under an ancestor drawn this frame (R27: new
+// surface that ancestor's build has no part of).
 //
 // A node newly chosen where last frame drew an ancestor or descendant of it
 // fades in from 0 over kTerrainFadeSeconds, while those fade out; one newly

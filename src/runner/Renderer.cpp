@@ -247,6 +247,7 @@ bool Renderer::buildProgram(Program& program, const char* name, const char* vert
     program.moonDirection = at("uMoonDirection");
     program.starFrame = at("uStarFrame");
     program.starVisibility = at("uStarVisibility");
+    program.starClock = at("uStarClock");
     program.bodyLightDirection = at("uBodyLightDirection");
     program.bodyLightColor = at("uBodyLightColor");
     program.sunColor = at("uSunColor");
@@ -1448,6 +1449,8 @@ void Renderer::bindDynamicSky(const Program& program, const SceneDynamicSky& sky
     glUniform3fv(program.moonDirection, 1, sky.moonDirection);
     glUniformMatrix3fv(program.starFrame, 1, GL_FALSE, sky.starFrame);
     glUniform1f(program.starVisibility, sky.starVisibility);
+    // Wrapped so the float keeps its precision; the stars skip once in hours.
+    glUniform1f(program.starClock, static_cast<float>(std::fmod(sky.seconds, 10000.0)));
     glUniform3fv(program.bodyLightDirection, 1, sky.lightDirection);
     glUniform3fv(program.bodyLightColor, 1, sky.lightColor);
     glUniform3fv(program.sunColor, 1, sky.sunColor);

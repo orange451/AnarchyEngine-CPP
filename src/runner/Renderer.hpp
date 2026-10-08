@@ -418,6 +418,7 @@ private:
         int moonDirection = -1;
         int starFrame = -1;
         int starVisibility = -1;
+        int starClock = -1;
         int bodyLightDirection = -1;
         int bodyLightColor = -1;
         int sunColor = -1;

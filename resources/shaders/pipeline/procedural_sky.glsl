@@ -12,6 +12,8 @@ uniform vec3 uMoonDirection;
 uniform mat3 uStarFrame;
 // 0 by day, 1 at night.
 uniform float uStarVisibility;
+// Seconds, wrapped, that the stars twinkle by.
+uniform float uStarClock;
 // The sky's light: toward it, and its color times its intensity, linear.
 uniform vec3 uBodyLightDirection;
 uniform vec3 uBodyLightColor;
@@ -48,7 +50,11 @@ const int kLightSteps = 4;
 // The cloud layer's height and a cloud's size, in studs.
 const float kCloudHeight = 200.0;
 const float kCloudFeature = 120.0;
+// The bright stars' grid, and a finer one of faint stars behind them.
 const float kStarCells = 150.0;
+const float kFaintStarCells = 420.0;
+// Airglow: a faint green above the horizon on a dark night.
+const vec3 kAirglow = vec3(0.0003, 0.0009, 0.0006);
 
 // Where a ray from origin along unit dir enters (x) and leaves (y) a sphere
 // about the planet's center; x > y when it misses.
@@ -164,23 +170,53 @@ vec4 clouds(vec3 dir, vec3 skyAround) {
     float shade = clamp(1.0 - (ahead - shape) * 4.0 * mix(0.5, 1.5, uCloudDensity), 0.2, 1.0);
     // Lit as a white matte surface, plus the sky around it; denser is grayer.
     vec3 light = uBodyLightColor / kPi * shade * mix(1.0, 0.55, uCloudDensity * coverage) + skyAround * 0.6;
+    // At night, thin edges near the moon catch its light forward: a silver lining.
+    float rim = coverage * (1.0 - coverage) * 4.0 * mix(1.0, 0.4, uCloudDensity);
+    light += uBodyLightColor * (rim * uStarVisibility * 3.0 * pow(max(dot(dir, uBodyLightDirection), 0.0), 24.0));
     return vec4(light, opacity);
+}
+
+// One grid of stars: those in a fraction rarity of cells, the brightest
+// brightest more than the rest, each flickering by twinkle.
+vec3 starLayer(vec3 s, float cells, float rarity, float brightest, float twinkle) {
+    vec3 cell = floor(s * cells);
+    float pick = hash13(cell);
+    if (pick < 1.0 - rarity) {
+        return vec3(0.0);
+    }
+    vec3 jitter = vec3(hash13(cell + 1.7), hash13(cell + 3.1), hash13(cell + 5.9)) - 0.5;
+    vec3 center = normalize((cell + 0.5 + jitter * 0.5) / cells);
+    float away = length(center - s) * cells;
+    // Many faint stars, very few bright: the top one in a hundred or so is HDR, for bloom.
+    float strength = (pick - (1.0 - rarity)) / rarity;
+    float magnitude = mix(0.15, 1.0, strength) + brightest * pow(strength, 40.0);
+    // The brightest have a wider core and a soft halo of their own.
+    float bright = pow(strength, 20.0);
+    float core = 1.0 - smoothstep(0.0, mix(0.3, 0.45, bright), away);
+    float halo = exp(-away * away * 30.0) * 0.08 * bright;
+    vec3 tint = mix(vec3(1.0, 0.85, 0.7), vec3(0.75, 0.85, 1.0), hash13(cell + 9.2));
+    // Three waves at each star's own rates and phases.
+    vec3 rate = vec3(3.0, 7.0, 13.0) * (0.7 + 0.6 * vec3(hash13(cell + 2.3), hash13(cell + 4.7), hash13(cell + 8.1)));
+    vec3 phase = vec3(hash13(cell + 6.6), hash13(cell + 7.7), hash13(cell + 1.1)) * 6.2831853;
+    vec3 wave = sin(rate * uStarClock + phase);
+    float flicker = dot(wave, vec3(0.5, 0.3, 0.2));
+    // Low stars flash red and blue as the air bends their colors apart.
+    vec3 shift = vec3(1.0 + 0.4 * twinkle * wave.y, 1.0, 1.0 - 0.4 * twinkle * wave.y);
+    return tint * shift * max(1.0 + twinkle * flicker, 0.0) * magnitude * (core + halo);
 }
 
 vec3 stars(vec3 dir) {
     vec3 s = uStarFrame * dir;
-    vec3 cell = floor(s * kStarCells);
-    float pick = hash13(cell);
-    if (pick < 0.996) {
-        return vec3(0.0);
-    }
-    vec3 jitter = vec3(hash13(cell + 1.7), hash13(cell + 3.1), hash13(cell + 5.9)) - 0.5;
-    vec3 center = normalize((cell + 0.5 + jitter * 0.5) / kStarCells);
-    float away = length(center - s) * kStarCells;
-    float point = 1.0 - smoothstep(0.0, 0.35, away);
-    float strength = (pick - 0.996) / 0.004;
-    vec3 tint = mix(vec3(1.0, 0.85, 0.7), vec3(0.75, 0.85, 1.0), hash13(cell + 9.2));
-    return tint * point * mix(0.3, 3.0, strength * strength);
+    // Through more air near the horizon, the stars twinkle harder and fade and redden.
+    float twinkle = mix(0.65, 0.1, smoothstep(0.0, 0.6, dir.y));
+    vec3 extinction = mix(vec3(0.25, 0.18, 0.12), vec3(1.0), smoothstep(0.0, 0.3, dir.y)) * smoothstep(0.0, 0.03, dir.y);
+    // A bright moon washes them out, most of all around it.
+    float moonLight = clamp(dot(uMoonColor, vec3(0.2126, 0.7152, 0.0722)) / 1.2, 0.0, 1.0);
+    float nearMoon = pow(max(dot(dir, uMoonDirection), 0.0), 6.0);
+    float washed = 1.0 - moonLight * (0.3 + 0.65 * nearMoon);
+    vec3 light = starLayer(s, kStarCells, 0.004, 14.0, twinkle) +
+                 starLayer(s, kFaintStarCells, 0.012, 0.0, twinkle) * 0.25;
+    return light * extinction * washed;
 }
 
 // A sun or moon of half-angle tangent size toward toward, seen along dir: its
@@ -230,7 +266,9 @@ vec3 proceduralSky(vec3 dir, bool detail) {
     if (uStarVisibility > 0.0) {
         air += atmosphere(up, uMoonDirection, kMoonSkyRadiance);
     }
-    air += kNightSky;
+    // Darker overhead, paler toward the horizon, with airglow low down on a dark night.
+    air += kNightSky * mix(1.4, 0.7, up.y);
+    air += kAirglow * uStarVisibility * exp(-up.y * 14.0);
     // The stars, the discs, and the moon's glow only above the horizon: below
     // it every direction down a column is the same horizon, which would smear
     // them down the ground.
@@ -245,6 +283,9 @@ vec3 proceduralSky(vec3 dir, bool detail) {
     }
     vec4 cloud = clouds(up, air);
     color = mix(color, cloud.rgb, cloud.a);
+    // A wide halo round the moon, stronger through haze and cloud.
+    float moonward = max(dot(up, uMoonDirection), 0.0);
+    color += uMoonColor * ((0.002 + 0.006 * uCloudCover) * pow(moonward, 40.0) + 0.0008 * pow(moonward, 6.0)) * above;
     float ground = 1.0 - smoothstep(-0.25, 0.0, dir.y);
     color *= mix(1.0, 0.25, ground);
     return min(color, vec3(kMaxHalf));

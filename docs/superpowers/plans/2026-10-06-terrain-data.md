@@ -87,7 +87,7 @@ struct Cell {
     bool operator==(const Cell& o) const { return distance == o.distance && material == o.material; }
 };
 
-std::int8_t quantize(float studs, float voxel_size);
+std::int8_t quantize(float units, float voxel_size);
 float dequantize(std::int8_t stored, float voxel_size);
 // The chunk holding cell c, and c's index inside it (x fastest).
 ChunkCoord chunk_of(int cx, int cy, int cz);
@@ -130,7 +130,7 @@ struct Shape {
     Matrix4 frame = matrix4_identity();
     Vec3 size{};       // Block and Wedge: full size; Cylinder: (2r, height, 2r)
 };
-// Signed distance from local point p to the shape's surface, in studs; negative inside.
+// Signed distance from local point p to the shape's surface, in units; negative inside.
 float shape_distance(const Shape& shape, Vec3 p);
 // The shape's local-space bounds, grown by margin on every side.
 void shape_bounds(const Shape& shape, float margin, Vec3& min, Vec3& max);
@@ -165,7 +165,7 @@ TEST_CASE("VC1 distances quantize to the band and back", "[terrain]") {
     REQUIRE(quantize(-4.f, 1.f) == -127);
     REQUIRE(quantize(-100.f, 1.f) == -127);
     REQUIRE(near(dequantize(quantize(1.5f, 1.f), 1.f), 1.5f, 4.f / 127.f));
-    // Studs, not cells: a bigger VoxelSize widens the band.
+    // Units, not cells: a bigger VoxelSize widens the band.
     REQUIRE(quantize(4.f, 2.f) == 64);
 }
 
@@ -293,8 +293,8 @@ std::size_t ChunkCoordHash::operator()(const ChunkCoord& c) const {
     return h;
 }
 
-std::int8_t quantize(float studs, float voxel_size) {
-    const float scaled = studs / (kBandCells * voxel_size) * 127.f;
+std::int8_t quantize(float units, float voxel_size) {
+    const float scaled = units / (kBandCells * voxel_size) * 127.f;
     const float clamped = std::clamp(scaled, -127.f, 127.f);
     return static_cast<std::int8_t>(std::lround(clamped));
 }
@@ -514,7 +514,7 @@ public:
     std::optional<std::string> subtract(Shape shape);
     std::optional<std::string> paint(Shape shape, std::uint8_t material);
     std::optional<std::string> replace(CellCoord min, CellCoord max, std::uint8_t from, std::uint8_t to);
-    // Cells min..max inclusive, x fastest: distances in studs, Ids.
+    // Cells min..max inclusive, x fastest: distances in units, Ids.
     std::optional<std::string> read(CellCoord min, CellCoord max, std::vector<float>& distances,
                                     std::vector<std::uint8_t>& materials) const;
     std::optional<std::string> write(CellCoord min, CellCoord max, const std::vector<float>& distances,
@@ -778,7 +778,7 @@ std::optional<std::string> VoxelVolume::fill(Shape shape, std::uint8_t material)
 - `set_chunks(next)`: for every coord in either map whose pointer differs (missing counts as air), `mark_dirty(coord)`; then `chunks_ = std::move(next)`.
 - `ids_used`: OR of every chunk's `ids_used()`.
 - `take_dirty`: move `dirty_` into `out` (clearing `out` first), clear `dirty_`.
-- A zero-radius ball: `shape_bounds` still gives a small box; every cell's `s >= 0`, so `min(old, s)` with old = +4 studs becomes `s`, which would create band cells. Guard: in `fill`, return `std::nullopt` without editing when the shape has no volume (ball radius ≤ 0, or any size component ≤ 0).
+- A zero-radius ball: `shape_bounds` still gives a small box; every cell's `s >= 0`, so `min(old, s)` with old = +4 units becomes `s`, which would create band cells. Guard: in `fill`, return `std::nullopt` without editing when the shape has no volume (ball radius ≤ 0, or any size component ≤ 0).
 
 - [ ] **Step 4: Run tests**
 
@@ -1485,7 +1485,7 @@ Registration:
     }
 ```
 
-- `LuaApi.cpp` docs, e.g. `add("Terrain", "VoxelSize", "The size of one cell, in studs. Read-only; always 1.", "number", false, {});`, plus `Transform`, `CanCollide`, `TerrainMaterial.Id`, `TerrainMaterial.Material`.
+- `LuaApi.cpp` docs, e.g. `add("Terrain", "VoxelSize", "The size of one cell, in units. Read-only; always 1.", "number", false, {});`, plus `Transform`, `CanCollide`, `TerrainMaterial.Id`, `TerrainMaterial.Material`.
 - `src/engine_instances/README.md`: add both names to line 3's list and one paragraph each, in the file's style.
 
 - [ ] **Step 6: Run tests** (`[terrain]`, then the full suite — the docs and analysis tests check every registered member is documented). **Step 7: Commit** (`Add the Terrain and TerrainMaterial instances`).

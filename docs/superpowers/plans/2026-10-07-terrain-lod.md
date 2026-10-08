@@ -20,7 +20,7 @@
 ## Global Constraints
 
 - Node key: `(level, x, y, z)`; a level-L node holds chunks whose coordinates floor-divide by 2^L to `(x, y, z)`. Level 0 is one chunk. Levels rise until one node covers every chunk of the Terrain.
-- A level-L node's target error is `0.25 × VoxelSize × 2^L` studs; its recorded error is meshoptimizer's measured error converted to studs (`result_error × meshopt_simplifyScale`), never more than the target unless simplification cannot reach it (then the measured one).
+- A level-L node's target error is `0.25 × VoxelSize × 2^L` units; its recorded error is meshoptimizer's measured error converted to units (`result_error × meshopt_simplifyScale`), never more than the target unless simplification cannot reach it (then the measured one).
 - Each node is merged from its existing children (level 0: Surface Nets chunk meshes) and simplified with `meshopt_simplify` (borders not locked). Triangle count falls about 4× per level.
 - Re-shading: each LOD vertex's normal is the full-resolution distance field's gradient at its position; its Ids and weights are the full-resolution cells' around it (the same rule Surface Nets uses: the lowest-distance corner's Id, weight 1).
 - Skirts: for every border edge of a node's mesh (an edge used by one triangle), a quad folded inward along −normal by `max(2 × error, VoxelSize)`, with the edge's vertices' normals and Ids.
@@ -60,7 +60,7 @@ struct NodeKeyHash { std::size_t operator()(const NodeKey&) const; };
 NodeKey node_of(ChunkCoord chunk, int level);          // floor division by 2^level
 NodeKey parent_of(const NodeKey&);                     // level + 1
 std::array<NodeKey, 8> children_of(const NodeKey&);    // level - 1 (level >= 1)
-// Terrain-local bounds of a node, in studs.
+// Terrain-local bounds of a node, in units.
 void node_bounds(const NodeKey&, float voxel_size, Vec3& min, Vec3& max);
 
 // A node's mesh as RAM keeps it. Positions quantized to the node's bounds.
@@ -102,7 +102,7 @@ struct LodInput {
 struct LodResult {
     NodeKey key;
     std::shared_ptr<const anarchy::amesh::Data> mesh;   // null: no triangles
-    float error = 0.f;                                   // studs
+    float error = 0.f;                                   // units
     std::vector<std::uint32_t> border_edges;             // pairs of vertex indices
 };
 float target_error(int level, float voxel_size);         // 0.25 * voxel_size * 2^level

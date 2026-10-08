@@ -34,10 +34,10 @@ This sub-project draws each material as its flat Color. Textured, blended materi
 | Question | Decision |
 | --- | --- |
 | What a cell stores | 2 bytes: a signed distance (int8) and a material Id (uint8). |
-| Distance | The distance from the cell's sample point to the surface, in studs; negative inside. Stored as `round(d / (4 × VoxelSize) × 127)`, clamped to ±127, so the band is ±4 cells at a step of about 0.03 cells. Never stored in cell units, so a future resample needs no format change. |
+| Distance | The distance from the cell's sample point to the surface, in units; negative inside. Stored as `round(d / (4 × VoxelSize) × 127)`, clamped to ±127, so the band is ±4 cells at a step of about 0.03 cells. Never stored in cell units, so a future resample needs no format change. |
 | Sample points | Lattice points: cell `(i, j, k)` samples Terrain-local position `(i, j, k) × VoxelSize`. |
 | Material Id | 0 is the default material (engine default gray). 1–255 name the TerrainMaterial with that Id, if there is one. Air cells store 0. |
-| Chunk | 32³ cells, 32 × VoxelSize studs on a side, keyed by integer chunk coordinates. Missing chunks are air. |
+| Chunk | 32³ cells, 32 × VoxelSize units on a side, keyed by integer chunk coordinates. Missing chunks are air. |
 | Chunk forms | **Uniform:** one distance and one Id (all air, or all solid of one material); tens of bytes. **Dense:** 32,768 distances and 32,768 Ids, 64 KB. A dense chunk that becomes uniform after an edit collapses back. |
 | Id usage mask | Each chunk keeps a 256-bit mask of the Ids its solid cells use, rebuilt when the chunk is edited. ORing them answers "is this Id in use?" for the Configure Terrain tab without scanning cells. |
 | Copy-on-write | A chunk's data is a `std::shared_ptr<const ChunkData>`, never changed once shared. An edit clones only the chunks it touches and swaps the pointer. Each swap bumps the chunk's revision. |
@@ -150,7 +150,7 @@ Only chunks that are not all air are written. Later, the same per-chunk frames l
 | `SubtractBall(center, radius, space?)`, `SubtractBlock(transform, size, space?)`, `SubtractCylinder(transform, height, radius, space?)`, `SubtractWedge(transform, size, space?)` | Carve the shape out |
 | `PaintBall(center, radius, material, space?)`, `PaintBlock(transform, size, material, space?)` | Set the material of solid cells inside, shape unchanged |
 | `ReplaceMaterial(min: Vector3, max: Vector3, from, to, space?)` | Swap one material for another inside a box |
-| `ReadVoxels(min: Vector3, max: Vector3) -> {Distances: {{{number}}}, Materials: {{{number}}}}` | Raw cells in integer cell coordinates, inclusive. Distances in studs; Materials as Ids, 0 for air and the default. Plain numbers keep large reads fast; `GetMaterialById` turns an Id into its TerrainMaterial, and a TerrainMaterial's `Id` goes the other way. |
+| `ReadVoxels(min: Vector3, max: Vector3) -> {Distances: {{{number}}}, Materials: {{{number}}}}` | Raw cells in integer cell coordinates, inclusive. Distances in units; Materials as Ids, 0 for air and the default. Plain numbers keep large reads fast; `GetMaterialById` turns an Id into its TerrainMaterial, and a TerrainMaterial's `Id` goes the other way. |
 | `WriteVoxels(min: Vector3, distances: {{{number}}}, materials: {{{number}}})` | Writes the arrays back; sizes must match, and Ids must be whole numbers 0–255. An Id with no TerrainMaterial is allowed and draws as the default, so a read then write keeps every cell as it was. |
 | `WorldToCell(position: Vector3) -> Vector3`, `CellToWorld(cell: Vector3) -> Vector3` | Convert between world positions and cell coordinates |
 | `Clear()` | Remove every voxel. TerrainMaterials stay. |

@@ -14,7 +14,7 @@ Look settings belong to **Material**, not TerrainMaterial, because a future prec
 
 | Question | Decision |
 | --- | --- |
-| New Material properties | `HeightTexture: Texture?` (none); `TextureScale: number` (8, studs per texture repeat when applied in world space, > 0); `BlendSharpness: number` (0.5, 0–1); `HeightStrength: number` (1, ≥ 0). Saved, undoable, range-checked like Material's other properties. Meshes ignore the last three for now. |
+| New Material properties | `HeightTexture: Texture?` (none); `TextureScale: number` (8, units per texture repeat when applied in world space, > 0); `BlendSharpness: number` (0.5, 0–1); `HeightStrength: number` (1, ≥ 0). Saved, undoable, range-checked like Material's other properties. Meshes ignore the last three for now. |
 | New Terrain property | `TextureSize: Enum.TextureSize`, default Large. |
 | New enum | `Enum.TextureSize { Small = 0, Medium = 1, Large = 2, Max = 3 }`: layer sizes 256², 512², 1024², 2048². Named for what it controls, so other texture systems can reuse it. |
 | Global shading quality | `Lighting.TerrainQuality: Enum.EffectQuality` (existing enum: Low, Medium, High), default High, settable by scripts at runtime, as the other effect qualities are. |

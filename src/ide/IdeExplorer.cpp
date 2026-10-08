@@ -799,6 +799,8 @@ void IdeExplorer::layoutChildren() {
     place_clear();
     place_reveal();
     place_rename();
+    // The place and the selection change on their own, so the explorer checks them again next frame.
+    markLayoutDirty(LayoutDirt::Arrange);
 }
 
 void IdeExplorer::poll_filter() {

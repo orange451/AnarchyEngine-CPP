@@ -203,6 +203,8 @@ void AssetPicker::layoutChildren() {
         rebuild();
     }
     jadefx::VBox::layoutChildren();
+    // The search field changes as the user types, so the picker checks it again next frame.
+    markLayoutDirty(LayoutDirt::Arrange);
 }
 
 void AssetPicker::rebuild() {

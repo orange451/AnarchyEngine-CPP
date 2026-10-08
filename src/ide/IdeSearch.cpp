@@ -604,6 +604,8 @@ void IdeSearch::layoutChildren() {
         }
     }
     IdePane::layoutChildren();
+    // A search waits for typing to pause and refreshes now and then, so the pane checks again next frame.
+    markLayoutDirty(LayoutDirt::Arrange);
 }
 
 void IdeSearch::handleKey(jadefx::KeyEvent& event) {

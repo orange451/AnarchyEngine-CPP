@@ -564,6 +564,8 @@ void PreferencesPanel::layoutChildren() {
         rebuild_rows();
     }
     jadefx::BorderPane::layoutChildren();
+    // The filter field changes as the user types, so the panel checks it again next frame.
+    markLayoutDirty(LayoutDirt::Arrange);
 }
 
 bool PreferencesPanel::select_theme(const std::string& id) {

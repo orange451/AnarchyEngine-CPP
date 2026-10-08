@@ -540,6 +540,8 @@ protected:
             check_->setVisible(open_ && open_());
         }
         HBox::layoutChildren();
+        // Whether the item is open is asked, not told, so this asks again next frame.
+        markLayoutDirty(LayoutDirt::Arrange);
     }
 
 private:

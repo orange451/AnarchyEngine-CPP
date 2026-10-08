@@ -552,6 +552,8 @@ void IdePrefabEditor::layoutChildren() {
             }
         }
     }
+    // The prefab and the selection change on their own, so the editor checks them again next frame.
+    markLayoutDirty(LayoutDirt::Arrange);
 }
 
 void IdePrefabEditor::refresh() {

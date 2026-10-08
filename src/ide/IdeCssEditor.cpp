@@ -149,6 +149,8 @@ void IdeCssEditor::layoutChildren() {
         reapply();
     }
     StackPane::layoutChildren();
+    // The stylesheet saves after a pause and can change in the place, so the editor checks again next frame.
+    markLayoutDirty(LayoutDirt::Arrange);
 }
 
 bool IdeCssEditor::readSource(std::string& text, std::string& name, bool& alive, std::uint32_t* world) const {

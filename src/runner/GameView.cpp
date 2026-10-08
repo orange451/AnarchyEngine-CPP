@@ -546,6 +546,8 @@ void GameView::layoutChildren() {
     constexpr double kGap = 4.0;
     const double eyeWidth = guiToggle_->measuredWidth(height);
     guiToggle_->performLayout(listLeft - kGap - eyeWidth, contentTop() + kMargin, eyeWidth, height);
+    // Each frame brings a new snapshot of the game, so the view lays out again next frame.
+    markLayoutDirty(LayoutDirt::Arrange);
 }
 
 void GameView::refreshWorkspace() {

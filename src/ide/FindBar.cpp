@@ -246,6 +246,8 @@ void SearchInput::layoutChildren() {
     }
     // The clear button comes first, left of the toggles.
     clear_->performLayout(x - kToggle, y, kToggle, kToggle);
+    // The field's text decides whether the clear button shows, so this checks it again next frame.
+    markLayoutDirty(LayoutDirt::Arrange);
 }
 
 void SearchToggles::attach(SearchInput& input, const std::function<void()>& changed) {

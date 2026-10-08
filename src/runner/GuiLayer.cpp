@@ -232,6 +232,8 @@ void GuiLayer::syncTree() {
     placements_ = std::move(placements);
     screens_ = std::move(screens);
     restack();
+    // The screens and billboards it places may have changed.
+    markLayoutDirty(LayoutDirt::Arrange);
     // What is no longer drawn lets go of its children and goes.
     for (auto it = entries_.begin(); it != entries_.end();) {
         if (it->second->pass == pass_) {
@@ -271,6 +273,8 @@ void GuiLayer::collectBillboards(std::vector<engine_core::InstanceId>& ids,
 }
 
 void GuiLayer::placeBillboards(const std::vector<engine_core::VisualBillboard>& rows, const BillboardView& view) {
+    // Billboards move with the camera, so they are placed again.
+    markLayoutDirty(LayoutDirt::Arrange);
     for (Placement& placement : placements_) {
         placement.placed = false;
         const engine_core::VisualBillboard* row = nullptr;

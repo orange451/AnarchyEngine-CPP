@@ -14,6 +14,9 @@ VoxelVolume& VoxelVolume::operator=(VoxelVolume&& other) noexcept {
     if (this != &other) {
         voxel_size_ = other.voxel_size_;
         chunks_ = std::move(other.chunks_);
+        extent_ = std::move(other.extent_);
+        other.chunks_.clear();
+        other.extent_.clear();
         dirty_ = std::move(other.dirty_);
         // Revisions must only move forward: the pane polls revision() to
         // notice a change, so copying other.revision_ verbatim could repeat
@@ -195,9 +198,15 @@ void VoxelVolume::edit(CellCoord min, CellCoord max, Change change) {
                     copy->finish_with_mask(mask);
                 }
                 if (copy->is_air()) {
-                    chunks_.erase(coord);
+                    if (chunks_.erase(coord) != 0) {
+                        extent_.remove(coord);
+                    }
                 } else {
-                    chunks_[coord] = std::move(copy);
+                    const auto [slot, inserted] = chunks_.try_emplace(coord);
+                    slot->second = std::move(copy);
+                    if (inserted) {
+                        extent_.add(coord);
+                    }
                 }
                 mark_dirty(coord);
                 changed = true;
@@ -373,6 +382,7 @@ void VoxelVolume::clear() {
         mark_dirty(coord);
     }
     chunks_.clear();
+    extent_.clear();
     ++revision_;
 }
 
@@ -393,6 +403,11 @@ void VoxelVolume::set_chunks(ChunkMap chunks) {
         }
     }
     chunks_ = std::move(chunks);
+    extent_.clear();
+    for (const auto& [coord, chunk] : chunks_) {
+        (void)chunk;
+        extent_.add(coord);
+    }
     if (changed) {
         ++revision_;
     }

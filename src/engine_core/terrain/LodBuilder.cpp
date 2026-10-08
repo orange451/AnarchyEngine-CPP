@@ -686,6 +686,20 @@ void stitch_seams(const std::vector<anarchy::amesh::Vertex>& vertices, std::vect
 float target_error(int level, float voxel_size) { return 0.25f * voxel_size * static_cast<float>(1 << level); }
 
 LodResult build_node(const LodInput& input) {
+    if (!input.compact_children.empty()) {
+        // Final review: unpacked here, on the worker, not by LodTree on
+        // SimulationThread under the write lock (R12: the job owns the
+        // unpacked copies and they go when the build is done).
+        LodInput unpacked = input;
+        unpacked.compact_children.clear();
+        unpacked.children.reserve(input.children.size() + input.compact_children.size());
+        for (const auto& compact : input.compact_children) {
+            unpacked.children.push_back(compact != nullptr
+                                            ? std::make_shared<const anarchy::amesh::Data>(unpack(*compact))
+                                            : nullptr);
+        }
+        return build_node(unpacked);
+    }
     LodResult result;
     result.key = input.key;
 

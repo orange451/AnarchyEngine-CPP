@@ -87,7 +87,7 @@ std::shared_ptr<const anarchy::amesh::Data> fake_chunk_mesh(ChunkCoord coord) {
 LodResult fake_build(const LodInput& input) {
     LodResult result;
     result.key = input.key;
-    if (input.children.empty()) {
+    if (input.children.empty() && input.compact_children.empty()) {
         return result;
     }
     Vec3 min, max;
@@ -1081,4 +1081,388 @@ TEST_CASE("LT13 an edit across a chunk border and a level-1 seam: each frame cov
         INFO("level " << key.level);
         REQUIRE_FALSE(tree->find(key)->stale());
     }
+}
+
+// ---- Final review fixes --------------------------------------------------
+
+namespace {
+
+// The lowest level at which the level-0 nodes' extent collapses to one node
+// per axis (or the two either side of the origin): top_level's rule, worked
+// out from scratch over tree.nodes().
+int expected_top(const LodTree& tree) {
+    bool any = false;
+    ChunkCoord lo{}, hi{};
+    for (const auto& [key, node] : tree.nodes()) {
+        (void)node;
+        if (key.level != 0) continue;
+        if (!any) {
+            lo = hi = ChunkCoord{key.x, key.y, key.z};
+            any = true;
+        }
+        lo = ChunkCoord{std::min(lo.x, key.x), std::min(lo.y, key.y), std::min(lo.z, key.z)};
+        hi = ChunkCoord{std::max(hi.x, key.x), std::max(hi.y, key.y), std::max(hi.z, key.z)};
+    }
+    if (!any) return 0;
+    const auto settled = [](int a, int b) { return a == b || (a == -1 && b == 0); };
+    for (int top = 0;; ++top) {
+        const NodeKey a = node_of(lo, top), b = node_of(hi, top);
+        if (top >= 30 || (settled(a.x, b.x) && settled(a.y, b.y) && settled(a.z, b.z))) return top;
+    }
+}
+
+// The published level-0 revision of coord in world's one Terrain, or 0.
+std::uint64_t published_chunk_revision(const TerrainWorld& world, ChunkCoord coord) {
+    for (const TerrainChunkView& chunk : *world.views()[0].chunks) {
+        if (chunk.coord == coord) return chunk.revision;
+    }
+    return 0;
+}
+
+}  // namespace
+
+TEST_CASE("LT14 the top level follows the level-0 extent as chunks are queued and removed", "[terrain][lod]") {
+    TreeRig rig;
+    rig.edit(island_chunks(8));
+    rig.settle();
+    REQUIRE(rig.tree.top_level() == 3);
+
+    // Far chunks queued (an edit's air neighbors, say) widen the extent...
+    rig.tree.chunk_queued(ChunkCoord{20, 0, 0}, true);
+    REQUIRE(rig.tree.top_level() == 5);
+    rig.tree.chunk_queued(ChunkCoord{-5, 3, 0}, true);
+    REQUIRE(rig.tree.top_level() == expected_top(rig.tree));
+    REQUIRE(rig.tree.top_level() == 5);
+    // ...and coming back empty narrows it again, one at a time.
+    rig.tree.chunk_removed(ChunkCoord{20, 0, 0});
+    REQUIRE(rig.tree.top_level() == expected_top(rig.tree));
+    rig.tree.chunk_removed(ChunkCoord{-5, 3, 0});
+    REQUIRE(rig.tree.top_level() == 3);
+    for (const auto& [key, node] : rig.tree.nodes()) {
+        (void)node;
+        REQUIRE(key.level <= 3);
+    }
+    rig.settle();
+
+    // Removing the island down to its [0, 4) x [0, 4) corner: the top falls
+    // to 2 once the last chunk past x or z 3 is gone, and every step agrees
+    // with the extent worked out from scratch.
+    for (const ChunkCoord& c : island_chunks(8)) {
+        if (c.x < 4 && c.z < 4) continue;
+        rig.tree.chunk_queued(c, true);
+        rig.tree.chunk_removed(c);
+        REQUIRE(rig.tree.top_level() == expected_top(rig.tree));
+    }
+    REQUIRE(rig.tree.top_level() == 2);
+    rig.settle();
+    for (const auto& [key, node] : rig.tree.nodes()) {
+        INFO("level " << key.level << " (" << key.x << ", " << key.y << ", " << key.z << ")");
+        REQUIRE(key.level <= 2);
+        if (key.level > 0) REQUIRE_FALSE(node.stale());
+    }
+    REQUIRE(count_level(rig.tree.nodes_for_view(), 2) == 1);
+}
+
+TEST_CASE("LT15 an edit repeated every update over the same chunks shows within 200 ms", "[terrain][lod]") {
+    // R31: one chunk of the stroke's footprint never finishes meshing while
+    // the stroke lasts (its jobs are held on their workers), so a batch never
+    // has every job in; the other chunks' results must still publish, at
+    // most kEditBatchHoldMs after the stroke's first edit.
+    SimRole role;
+    Game game;
+    Terrain& t = island_terrain(game, 4);   // surface at about y 16, chunk y 0
+    const float span = kChunkSize * t.volume().voxel_size();
+    const ChunkCoord held_chunk{1, 0, 1};
+    std::atomic<bool> hold{false};
+    TerrainWorld world(
+        [&](const ChunkMesh& mesh) -> std::shared_ptr<void> {
+            if (!mesh.positions.empty()) {
+                Vec3 sum{};
+                for (const Vec3& p : mesh.positions) sum = Vec3{sum.x + p.x, sum.y + p.y, sum.z + p.z};
+                const float n = static_cast<float>(mesh.positions.size());
+                const ChunkCoord at{static_cast<int>(std::floor(sum.x / n / span)),
+                                    static_cast<int>(std::floor(sum.y / n / span)),
+                                    static_cast<int>(std::floor(sum.z / n / span))};
+                while (at == held_chunk && hold.load()) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+            return std::make_shared<int>(1);
+        },
+        16);
+    struct Release {
+        std::atomic<bool>& hold;
+        ~Release() { hold = false; }   // before world joins its workers
+    } release{hold};
+    double now = 0.0;
+    ask_island_colliders(world, game, t, 4, now);   // so every job runs the collider hook
+    settle_lod(world, game, now);
+
+    const ChunkCoord painted{2, 0, 2};
+    const std::uint64_t before = published_chunk_revision(world, painted);
+    REQUIRE(before != 0);
+    hold = true;
+    const double start = now;
+    double shown_at = -1.0;
+    // One edit per 16 ms update (at most one held worker each, of 16), with
+    // ample real time between updates for the other chunks' jobs to land.
+    for (int i = 0; i < 13 && shown_at < 0.0; ++i) {
+        Shape ball;
+        ball.center = Vec3{2.5f * span, 16.f, 2.5f * span};
+        ball.radius = 3.f;
+        const std::uint8_t material = static_cast<std::uint8_t>(i % 2 == 0 ? 2 : 1);
+        REQUIRE_FALSE(t.edit_volume([&](VoxelVolume& v) { return v.paint(ball, material); }));
+        world.update(game, now);
+        if (published_chunk_revision(world, painted) != before) shown_at = now;
+        std::this_thread::sleep_for(std::chrono::milliseconds(150));
+        now += 16.0;
+    }
+    hold = false;
+    world.wait_idle();
+    INFO("the painted chunk showed " << (shown_at - start) << " ms into the stroke (-1: never)");
+    REQUIRE(shown_at >= 0.0);
+    REQUIRE(shown_at - start <= 200.0);
+}
+
+TEST_CASE("LT16 collider interest in empty space far from the island queues nothing and adds no tree nodes",
+          "[terrain][lod]") {
+    SimRole role;
+    Game game;
+    Terrain& t = island_terrain(game, 4);
+    TerrainWorld world([](const ChunkMesh&) -> std::shared_ptr<void> { return std::make_shared<int>(1); });
+    double now = 0.0;
+    settle_lod(world, game, now);
+    const LodTree* tree = world.lod_tree(t.id());
+    REQUIRE(tree != nullptr);
+    const int top = world.views()[0].top_level;
+    const std::size_t nodes = tree->nodes().size();
+    const std::uint64_t meshed = world.meshed_count();
+    const std::uint64_t nodes_revision = world.views()[0].nodes_revision;
+
+    // What PhysicsWorld asks for a body falling far below the island and one
+    // far beside it: the 7 x 7 x 7 chunk box around each.
+    std::vector<ChunkCoord> interest = box_chunks(ChunkCoord{-1, -23, -1}, ChunkCoord{5, -17, 5});
+    for (const ChunkCoord& c : box_chunks(ChunkCoord{37, -3, -1}, ChunkCoord{43, 3, 5})) interest.push_back(c);
+    world.set_collider_interest(t.id(), interest);
+    world.update(game, now);
+    for (const auto& [key, node] : tree->nodes()) {
+        (void)node;
+        INFO("level " << key.level << " (" << key.x << ", " << key.y << ", " << key.z << ")");
+        if (key.level == 0) {
+            REQUIRE(key.y >= -1);
+            REQUIRE(key.x <= 5);
+        }
+    }
+    REQUIRE(world.views()[0].top_level == top);
+    REQUIRE(tree->nodes().size() == nodes);
+    world.wait_idle();
+    now += 2.0 * kRebuildIntervalMs;
+    world.update(game, now);
+    world.wait_idle();
+    world.update(game, now);
+    REQUIRE(world.meshed_count() == meshed);   // no mesh jobs at all
+    REQUIRE(world.views()[0].nodes_revision == nodes_revision);   // nothing republished
+    REQUIRE(tree->nodes().size() == nodes);
+
+    // The body's own 3 x 3 x 3 (build_colliders_now, every sync): known at
+    // once, nothing meshed, nothing republished.
+    REQUIRE(world.build_colliders_now(game, t.id(), box_chunks(ChunkCoord{1, -21, 1}, ChunkCoord{3, -19, 3})));
+    REQUIRE(world.sync_meshed_count() == 0u);
+    REQUIRE(tree->nodes().size() == nodes);
+    world.update(game, now);
+    REQUIRE(world.views()[0].nodes_revision == nodes_revision);
+    REQUIRE(world.views()[0].top_level == top);
+}
+
+TEST_CASE("LT17 an empty chunk under a body with an edit in flight is meshed for its collider once, not every sync",
+          "[terrain][lod]") {
+    SimRole role;
+    Game game;
+    Terrain& t = island_terrain(game, 4);
+    TerrainWorld world([](const ChunkMesh&) -> std::shared_ptr<void> { return std::make_shared<int>(1); });
+    double now = 0.0;
+    settle_lod(world, game, now);
+
+    const auto dig = [&] {
+        Shape ball;
+        ball.center = Vec3{2.5f * kChunkSize, 16.f, 2.5f * kChunkSize};
+        ball.radius = 3.f;
+        REQUIRE_FALSE(t.edit_volume([&](VoxelVolume& v) { return v.subtract(ball); }));
+        world.update(game, now);   // the edit's jobs are queued, not landed
+    };
+    // (2, 1, 2): air above the dig, so meshed with nothing to collide with.
+    const std::vector<ChunkCoord> under_body{ChunkCoord{2, 1, 2}};
+    dig();
+    const std::uint64_t before = world.sync_meshed_count();
+    for (int sync = 0; sync < 5; ++sync) REQUIRE(world.build_colliders_now(game, t.id(), under_body));
+    REQUIRE(world.sync_meshed_count() == before + 1);
+
+    // Once the edit lands its own result decides; a newer edit in flight
+    // gets one sync build of its own again.
+    world.wait_idle();
+    now += 16.0;
+    world.update(game, now);
+    Shape bigger;
+    bigger.center = Vec3{2.5f * kChunkSize, 16.f, 2.5f * kChunkSize};
+    bigger.radius = 5.f;
+    REQUIRE_FALSE(t.edit_volume([&](VoxelVolume& v) { return v.subtract(bigger); }));
+    world.update(game, now);
+    for (int sync = 0; sync < 5; ++sync) REQUIRE(world.build_colliders_now(game, t.id(), under_body));
+    REQUIRE(world.sync_meshed_count() == before + 2);
+    world.wait_idle();
+}
+
+TEST_CASE("LT18 a level >= 2 node build carries its children compact, for the worker to unpack", "[terrain][lod]") {
+    int level1 = 0, level2 = 0;
+    TreeRig rig(1.f, fake_chunk_mesh, [&](const LodInput& input) {
+        if (input.key.level == 1) {
+            ++level1;
+            REQUIRE(input.compact_children.empty());
+            REQUIRE_FALSE(input.children.empty());
+        } else {
+            ++level2;
+            REQUIRE(input.children.empty());   // nothing unpacked on the simulation thread
+            REQUIRE_FALSE(input.compact_children.empty());
+            REQUIRE(input.child_errors.size() == input.compact_children.size());
+            REQUIRE(input.child_surface_index_counts.size() == input.compact_children.size());
+        }
+        return fake_build(input);
+    });
+    rig.edit(island_chunks(8));
+    rig.settle();
+    REQUIRE(level1 > 0);
+    REQUIRE(level2 > 0);
+
+    // build_node unpacks them itself: the same result as children handed
+    // over unpacked.
+    std::vector<std::shared_ptr<const CompactMesh>> compact;
+    LodInput unpacked;
+    unpacked.key = NodeKey{2, 0, 0, 0};
+    for (const NodeKey& child : children_of(unpacked.key)) {
+        const LodTree::Node* node = rig.tree.find(child);
+        if (node == nullptr || node->compact == nullptr) continue;
+        compact.push_back(node->compact);
+        unpacked.children.push_back(std::make_shared<const anarchy::amesh::Data>(unpack(*node->compact)));
+        unpacked.child_errors.push_back(node->error);
+        unpacked.child_surface_index_counts.push_back(node->compact->surface_index_count);
+    }
+    REQUIRE(compact.size() == 4u);
+    LodInput packed = unpacked;
+    packed.children.clear();
+    packed.compact_children = compact;
+    const LodResult a = build_node(unpacked);
+    const LodResult b = build_node(packed);
+    REQUIRE((a.mesh == nullptr) == (b.mesh == nullptr));
+    if (a.mesh != nullptr) {
+        REQUIRE(a.mesh->vertices.size() == b.mesh->vertices.size());
+        REQUIRE(a.mesh->indices == b.mesh->indices);
+    }
+    REQUIRE(a.error == b.error);
+}
+
+TEST_CASE("LT19 build_colliders_now refuses a Terrain destroyed since the last update", "[terrain][lod]") {
+    SimRole role;
+    Game game;
+    Terrain& t = island_terrain(game, 4);
+    TerrainWorld world([](const ChunkMesh&) -> std::shared_ptr<void> { return std::make_shared<int>(1); });
+    double now = 0.0;
+    settle_lod(world, game, now);
+    const InstanceId id = t.id();
+    REQUIRE(world.build_colliders_now(game, id, {ChunkCoord{2, 0, 2}}));
+    game.destroy(id);
+    const std::uint64_t before = world.sync_meshed_count();
+    REQUIRE_FALSE(world.build_colliders_now(game, id, {ChunkCoord{1, 0, 1}}));
+    REQUIRE(world.sync_meshed_count() == before);
+}
+
+TEST_CASE("LT20 VoxelVolume's chunk extent follows its stored chunks through edits, clear, set_chunks and moves",
+          "[terrain][lod]") {
+    const auto scanned = [](const VoxelVolume& v, ChunkCoord& lo, ChunkCoord& hi) {
+        bool any = false;
+        for (const auto& [c, chunk] : v.chunks()) {
+            (void)chunk;
+            if (!any) {
+                lo = hi = c;
+                any = true;
+            }
+            lo = ChunkCoord{std::min(lo.x, c.x), std::min(lo.y, c.y), std::min(lo.z, c.z)};
+            hi = ChunkCoord{std::max(hi.x, c.x), std::max(hi.y, c.y), std::max(hi.z, c.z)};
+        }
+        return any;
+    };
+    const auto check = [&](const VoxelVolume& v) {
+        ChunkCoord lo{}, hi{}, slo{}, shi{};
+        const bool kept = v.chunk_extent(lo, hi);
+        REQUIRE(kept == scanned(v, slo, shi));
+        if (kept) {
+            REQUIRE(lo == slo);
+            REQUIRE(hi == shi);
+        }
+    };
+    VoxelVolume volume;
+    check(volume);
+    Shape a;
+    a.center = Vec3{10.f, 10.f, 10.f};
+    a.radius = 6.f;
+    Shape b;
+    b.center = Vec3{-150.f, 70.f, 200.f};
+    b.radius = 8.f;
+    REQUIRE_FALSE(volume.fill(a, 1));
+    check(volume);
+    REQUIRE_FALSE(volume.fill(b, 1));
+    check(volume);
+    b.radius = 12.f;
+    REQUIRE_FALSE(volume.subtract(b));   // the far ball's chunks go again
+    check(volume);
+    ChunkCoord lo{}, hi{};
+    REQUIRE(volume.chunk_extent(lo, hi));
+    REQUIRE(hi.x <= 1);
+
+    VoxelVolume moved = std::move(volume);
+    check(moved);
+    check(volume);
+    VoxelVolume other;
+    other.set_chunks(moved.chunks());
+    check(other);
+    other.clear();
+    check(other);
+    REQUIRE_FALSE(other.chunk_extent(lo, hi));
+}
+
+TEST_CASE("LB12 one edit's chunks landing in a settled 16,384-chunk tree take well under a millisecond",
+          "[.][terrain-bench]") {
+    // Final review: each of an edit's empty neighbor chunks landing
+    // (chunk_removed) used to rescan every node for the level-0 extent.
+    // LodTree alone (fake meshes, synchronous builds): a 128 x 128-chunk
+    // (4 km) island, then digs whose 27 chunks land, 9 with surface and the
+    // 18 above and below empty.
+    TreeRig rig;
+    rig.edit(island_chunks(128));
+    rig.settle();
+    REQUIRE(rig.tree.top_level() == 7);
+    constexpr int kEdits = 20;
+    double total_ms = 0.0, worst_ms = 0.0;
+    for (int i = 0; i < kEdits; ++i) {
+        const ChunkCoord at{5 + 6 * i, 0, 7 + 5 * i};
+        const std::vector<ChunkCoord> footprint =
+            box_chunks(ChunkCoord{at.x - 1, -1, at.z - 1}, ChunkCoord{at.x + 1, 1, at.z + 1});
+        const auto start = std::chrono::steady_clock::now();
+        for (const ChunkCoord& c : footprint) rig.tree.chunk_queued(c, true);
+        for (const ChunkCoord& c : footprint) {
+            if (c.y == 0) {
+                rig.tree.chunk_meshed(c, fake_chunk_mesh(c), true);
+            } else {
+                rig.tree.chunk_removed(c);
+            }
+        }
+        (void)rig.tree.top_level();
+        const double ms =
+            std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+        total_ms += ms;
+        worst_ms = std::max(worst_ms, ms);
+        rig.settle();
+    }
+    WARN("LB12: one edit's 27 chunks landing in the " << rig.tree.nodes().size() << "-node tree: "
+                                                       << total_ms / kEdits << " ms on average, " << worst_ms
+                                                       << " ms at worst");
+    REQUIRE(rig.tree.top_level() == 7);
+    REQUIRE(total_ms / kEdits < 0.5);
 }

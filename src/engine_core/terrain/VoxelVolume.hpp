@@ -5,6 +5,7 @@
 // chunks()/cell() are shared and immutable (copy-on-write: an edit clones
 // only the chunks it touches).
 
+#include "terrain/ChunkExtent.hpp"
 #include "terrain/ShapeDistance.hpp"
 #include "terrain/VoxelChunk.hpp"
 
@@ -41,6 +42,17 @@ public:
     float voxel_size() const { return voxel_size_; }
 
     const ChunkMap& chunks() const { return chunks_; }
+    // The box of chunk coordinates holding every stored chunk, kept up to
+    // date as chunks are stored and dropped (no scan): false, leaving lo and
+    // hi alone, when nothing is stored.
+    bool chunk_extent(ChunkCoord& lo, ChunkCoord& hi) const {
+        if (extent_.empty()) {
+            return false;
+        }
+        lo = extent_.lo();
+        hi = extent_.hi();
+        return true;
+    }
     // Replaces every chunk; chunks whose pointer changed, and their neighbors, become dirty.
     void set_chunks(ChunkMap chunks);
     Cell cell(CellCoord c) const;
@@ -82,6 +94,7 @@ private:
 
     float voxel_size_;
     ChunkMap chunks_;
+    ChunkExtent extent_;   // chunks_' keys, for chunk_extent()
     std::unordered_set<ChunkCoord, ChunkCoordHash> dirty_;
     std::uint64_t revision_ = 0;
     // ids_used()'s cache: valid when ids_cache_valid_ and ids_cache_revision_

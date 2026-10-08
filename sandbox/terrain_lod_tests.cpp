@@ -1926,3 +1926,63 @@ TEST_CASE("LB10 a 16,384-chunk (2 km) island's first view appears progressively:
     REQUIRE(all_near_published);
     REQUIRE(seconds < 1.0);
 }
+
+TEST_CASE("LB11 one edit's updates on a settled 4,096-chunk island's tree stay cheap", "[.][terrain-bench]") {
+    // Final review: every empty neighbor chunk an edit queues lands with no
+    // surface (chunk_removed), and each removal used to rescan every node for
+    // the level-0 extent -- a hitch per edit that grows with the island.
+    SimRole role;
+    Game game;
+    constexpr int n = 64;   // LB8's island
+    Terrain& t = big_island_terrain(game, n);
+    TerrainWorld world({}, 4);
+    const std::size_t expected_nodes = expected_node_total(n);
+    const auto start = std::chrono::steady_clock::now();
+    const terrain::LodTree* tree = nullptr;
+    while (std::chrono::steady_clock::now() - start < std::chrono::seconds(20)) {
+        world.update(game);
+        tree = world.lod_tree(t.id());
+        if (tree != nullptr && lod_tree_settled(*tree, expected_nodes)) break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    REQUIRE(tree != nullptr);
+    REQUIRE(lod_tree_settled(*tree, expected_nodes));
+
+    // Ten small digs at the surface, spread over the island. Timed: the
+    // update that queues the edit's chunks plus the one that applies their
+    // results (workers waited on in between, not timed).
+    constexpr int kEdits = 10;
+    double total_ms = 0.0, worst_ms = 0.0;
+    for (int i = 0; i < kEdits; ++i) {
+        Shape ball;
+        ball.center = Vec3{(5.5f + 5.f * static_cast<float>(i)) * kChunkSize, 16.f,
+                           (7.5f + 5.f * static_cast<float>(i)) * kChunkSize};
+        ball.radius = 3.f;
+        REQUIRE_FALSE(t.edit_volume([&](VoxelVolume& v) { return v.subtract(ball); }));
+        const auto queue_start = std::chrono::steady_clock::now();
+        world.update(game);
+        const double queue_ms =
+            std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - queue_start).count();
+        world.wait_idle();
+        const auto apply_start = std::chrono::steady_clock::now();
+        world.update(game);
+        const double apply_ms =
+            std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - apply_start).count();
+        const double ms = queue_ms + apply_ms;
+        total_ms += ms;
+        worst_ms = std::max(worst_ms, ms);
+        // Let the edit's node rebuilds land before the next one.
+        for (int j = 0; j < 4; ++j) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(30));
+            world.update(game);
+            world.wait_idle();
+        }
+    }
+    WARN("LB11: one edit's queue + apply updates on the " << n * n << "-chunk island's settled tree: "
+                                                           << total_ms / kEdits << " ms on average, " << worst_ms
+                                                           << " ms at worst");
+    // Most of what is left is republishing the whole node set (nodes_for_view,
+    // 5,461 nodes) once per update the tree changed in; LB12 times the
+    // tree's own share.
+    REQUIRE(total_ms / kEdits < 12.0);
+}

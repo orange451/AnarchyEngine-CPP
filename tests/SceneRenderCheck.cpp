@@ -1261,6 +1261,12 @@ void TerrainLodShots(runner::Renderer& renderer, OffscreenTarget& target, int wi
         const int mostFading = descend("seq", 400.f, 560.f,
                                        engine_core::Vec3{220.f, ground(220.f, 680.f), 680.f});
         Expect(mostFading > 0, "the sequence cross-fades between levels");
+        // Down onto the ridge's west flank, 12 units below its crest at (560,
+        // 512), looking up into the rock face: where a coarse level-1 node once
+        // dithered out near the camera with the wrong material (0.72%).
+        lookFrom(farEye, farAt);
+        settle(400);
+        descend("ridge", 550.4f, 504.8f, engine_core::Vec3{560.f, ground(560.f, 512.f) + 2.f, 512.f});
 
         // From off the island's corner, 1300 units from its middle: its far
         // half lies past 1000 units, which the far plane (kSceneFar) once cut off.

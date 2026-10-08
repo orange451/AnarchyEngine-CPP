@@ -402,9 +402,9 @@ void LodTree::next_builds(double now_ms, const ChunkCoord* camera_chunk, std::ve
                 if (child->compact == nullptr) {
                     continue;
                 }
-                // Unpacked for this job only (R12): the job owns it and it
-                // goes when the build is done.
-                request.input.children.push_back(std::make_shared<const anarchy::amesh::Data>(unpack(*child->compact)));
+                // Shared, not unpacked here: build_node unpacks it on the
+                // worker for this job only (R12), off SimulationThread.
+                request.input.compact_children.push_back(child->compact);
                 request.input.child_errors.push_back(child->error);
                 request.input.child_surface_index_counts.push_back(child->compact->surface_index_count);
             }

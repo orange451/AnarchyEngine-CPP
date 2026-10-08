@@ -25,6 +25,11 @@ struct LodInput {
     NodeKey key;
     float voxel_size = 1.f;
     std::vector<std::shared_ptr<const anarchy::amesh::Data>> children;  // existing children's meshes
+    // Compact (level >= 1) children, unpacked by build_node itself (on the
+    // worker) and appended after children: the parallel vectors below index
+    // children followed by these. LodTree fills this, not children, for a
+    // level >= 2 node.
+    std::vector<std::shared_ptr<const CompactMesh>> compact_children;
     // children's own recorded error (R8), parallel to children; an entry
     // missing (vector shorter than children, or empty altogether) counts as
     // 0, which is always correct for a level-0 child (an exact chunk mesh).

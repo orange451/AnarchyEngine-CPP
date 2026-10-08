@@ -87,7 +87,7 @@ std::shared_ptr<const anarchy::amesh::Data> fake_chunk_mesh(ChunkCoord coord) {
 LodResult fake_build(const LodInput& input) {
     LodResult result;
     result.key = input.key;
-    if (input.children.empty()) {
+    if (input.children.empty() && input.compact_children.empty()) {
         return result;
     }
     Vec3 min, max;
@@ -1308,6 +1308,54 @@ TEST_CASE("LT17 an empty chunk under a body with an edit in flight is meshed for
     for (int sync = 0; sync < 5; ++sync) REQUIRE(world.build_colliders_now(game, t.id(), under_body));
     REQUIRE(world.sync_meshed_count() == before + 2);
     world.wait_idle();
+}
+
+TEST_CASE("LT18 a level >= 2 node build carries its children compact, for the worker to unpack", "[terrain][lod]") {
+    int level1 = 0, level2 = 0;
+    TreeRig rig(1.f, fake_chunk_mesh, [&](const LodInput& input) {
+        if (input.key.level == 1) {
+            ++level1;
+            REQUIRE(input.compact_children.empty());
+            REQUIRE_FALSE(input.children.empty());
+        } else {
+            ++level2;
+            REQUIRE(input.children.empty());   // nothing unpacked on the simulation thread
+            REQUIRE_FALSE(input.compact_children.empty());
+            REQUIRE(input.child_errors.size() == input.compact_children.size());
+            REQUIRE(input.child_surface_index_counts.size() == input.compact_children.size());
+        }
+        return fake_build(input);
+    });
+    rig.edit(island_chunks(8));
+    rig.settle();
+    REQUIRE(level1 > 0);
+    REQUIRE(level2 > 0);
+
+    // build_node unpacks them itself: the same result as children handed
+    // over unpacked.
+    std::vector<std::shared_ptr<const CompactMesh>> compact;
+    LodInput unpacked;
+    unpacked.key = NodeKey{2, 0, 0, 0};
+    for (const NodeKey& child : children_of(unpacked.key)) {
+        const LodTree::Node* node = rig.tree.find(child);
+        if (node == nullptr || node->compact == nullptr) continue;
+        compact.push_back(node->compact);
+        unpacked.children.push_back(std::make_shared<const anarchy::amesh::Data>(unpack(*node->compact)));
+        unpacked.child_errors.push_back(node->error);
+        unpacked.child_surface_index_counts.push_back(node->compact->surface_index_count);
+    }
+    REQUIRE(compact.size() == 4u);
+    LodInput packed = unpacked;
+    packed.children.clear();
+    packed.compact_children = compact;
+    const LodResult a = build_node(unpacked);
+    const LodResult b = build_node(packed);
+    REQUIRE((a.mesh == nullptr) == (b.mesh == nullptr));
+    if (a.mesh != nullptr) {
+        REQUIRE(a.mesh->vertices.size() == b.mesh->vertices.size());
+        REQUIRE(a.mesh->indices == b.mesh->indices);
+    }
+    REQUIRE(a.error == b.error);
 }
 
 TEST_CASE("LT19 build_colliders_now refuses a Terrain destroyed since the last update", "[terrain][lod]") {

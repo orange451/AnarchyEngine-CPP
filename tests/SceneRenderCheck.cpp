@@ -1697,6 +1697,140 @@ void TerrainLodShots(runner::Renderer& renderer, OffscreenTarget& target, int wi
     Expect(runner::rt_glGetError() == runner::GL_NO_ERROR, "the terrain LOD shots leave no GL error");
 }
 
+// Task 9's GPU budget (--terrain-budget): the same large island WriteIsland
+// builds for TerrainLodShots, meshed once at full detail (no LOD selection --
+// a budget measurement wants a steady, repeatable draw, not a background
+// selection/fade system settling), textured with four procedural layers
+// (grass, rock, sand, and the untextured default layer standing in for
+// snow), seen from a wide overview. Each of Low, Medium, High (textured) and
+// a flat, untextured look (same geometry, uHasSurface == 0's old path) is
+// drawn for a short untimed warm-up, then 60 frames with the profiler's
+// per-pass GPU detail on; the "Terrain" RENDER_PASS's GPU-timed scopes
+// (GpuTimer, read a frame or more late, so a few extra frames beyond the 60
+// help flush the last ones) are averaged into one ms figure. Printed, then
+// checked against the brief's budget: High <= 2.0x flat, Low <= 1.2x flat.
+void TerrainBudget(runner::Renderer& renderer) {
+    constexpr int kWidth = 1920;
+    constexpr int kHeight = 1080;
+    OffscreenTarget target(kWidth, kHeight);
+    Expect(target.complete(), "the 1920 by 1080 terrain budget target is complete");
+
+    terrain::VoxelVolume volume;
+    WriteIsland(volume);
+    const auto chunks = UploadTerrain(volume);
+    std::printf("terrain budget: %d chunk meshes (full detail, no LOD)\n", static_cast<int>(chunks.size()));
+
+    // Layer 0 is the texture set's own untextured default (white, 0.5
+    // height, flat normal, rough/metal 1) -- reused here as a cheap stand-in
+    // for snow instead of a fourth procedural kind, since the budget only
+    // needs four distinct layers under load, not a fourth accurate look.
+    const auto set = MakeTextureSet(1024, {1, 0, 2}, 9701);
+    const unsigned texLook = runner::MakeTerrainLookTexture(TexturedLookFloats({
+                                                                 {1, 92, 142, 58, 1, 8.f},    // grass
+                                                                 {2, 122, 110, 98, 2, 8.f},   // rock
+                                                                 {3, 218, 196, 142, 3, 8.f},  // sand
+                                                                 {4, 242, 245, 250, 0, 8.f},  // snow (layer 0)
+                                                             })
+                                                                 .data());
+    std::vector<runner::MeshDraw> texturedDraws;
+    for (int frame = 0; frame < 6; ++frame) {
+        // Repeated until terrainArrays finishes uploading every layer (at
+        // most 4 per frame) and swaps to the new array pair.
+        texturedDraws = TexturedTerrainDraws(chunks, renderer, 9701, texLook, set);
+    }
+    const unsigned flatLook = runner::MakeTerrainLookTexture(LookBytes({
+                                                                  {0, 150, 150, 150},
+                                                                  {1, 92, 142, 58},
+                                                                  {2, 122, 110, 98},
+                                                                  {3, 218, 196, 142},
+                                                                  {4, 242, 245, 250},
+                                                              })
+                                                                  .data());
+    const std::vector<runner::MeshDraw> flatDraws = TerrainDraws(chunks, flatLook);
+
+    runner::SceneLighting lighting;
+    lighting.ambient[0] = lighting.ambient[1] = lighting.ambient[2] = 1.f;
+    lighting.antialiasing = runner::SceneAntialiasing::None;
+    renderer.setLighting(lighting);
+    renderer.setCamera(
+        engine_core::matrix4_look_at({250.f, 450.f, 250.f}, {512.f, 20.f, 512.f}, {0.f, 1.f, 0.f}), 50.f);
+
+    // A sanity check that something real is drawn, before trusting the GPU
+    // timer's numbers: the textured island must actually cover the view.
+    runner::ViewPixels sky;
+    runner::ViewPixels check;
+    Expect(target.shoot(renderer, {}, nullptr, 0, 2, sky), "the terrain budget sky alone draws");
+    Expect(target.shoot(renderer, texturedDraws, nullptr, 0, 2, check), "the terrain budget island draws");
+    ExpectTerrainShown("terrain budget", check, sky);
+
+    profiler::register_thread("UI");
+    const auto measure = [&](const std::vector<runner::MeshDraw>& draws, const char* name) -> double {
+        // Untimed warm-up: the shadow cascades and any remaining array
+        // uploads settle before anything is measured.
+        for (int frame = 0; frame < 10; ++frame) {
+            target.shoot(renderer, draws, nullptr, 0, 1, check);
+        }
+        profiler::reset_for_testing();
+        profiler::set_gpu_detail(true);
+        profiler::acquire();
+        constexpr int kMeasuredFrames = 60;
+        constexpr int kFlushFrames = 4;  // lets the last few GPU queries land
+        for (int frame = 0; frame < kMeasuredFrames + kFlushFrames; ++frame) {
+            profiler::frame_boundary();
+            target.shoot(renderer, draws, nullptr, 0, 1, check);
+        }
+        profiler::frame_boundary();
+        profiler::collect();
+        double totalNs = 0.0;
+        int samples = 0;
+        profiler::with_live([&](const profiler::History& history) {
+            for (const profiler::Frame& frame : history.frames) {
+                for (const profiler::ScopeRecord& record : frame.scopes) {
+                    if (history.rows[record.row] != "GPU") {
+                        continue;
+                    }
+                    const profiler::ScopeInfo& info = history.scopes[record.scope];
+                    if (info.name == "Terrain" && info.group == profiler::Group::Gpu) {
+                        totalNs += static_cast<double>(record.end_ns - record.start_ns);
+                        ++samples;
+                    }
+                }
+            }
+        });
+        profiler::release();
+        profiler::set_gpu_detail(false);
+        const double ms = samples > 0 ? (totalNs / samples) / 1e6 : -1.0;
+        std::printf("terrain budget %s: %.4f ms (%d GPU samples)\n", name, ms, samples);
+        return ms;
+    };
+
+    const double flatMs = measure(flatDraws, "flat");
+    lighting.terrainQuality = runner::SceneQuality::Low;
+    renderer.setLighting(lighting);
+    const double lowMs = measure(texturedDraws, "Low");
+    lighting.terrainQuality = runner::SceneQuality::Medium;
+    renderer.setLighting(lighting);
+    const double mediumMs = measure(texturedDraws, "Medium");
+    lighting.terrainQuality = runner::SceneQuality::High;
+    renderer.setLighting(lighting);
+    const double highMs = measure(texturedDraws, "High");
+
+    Expect(flatMs > 0.0 && lowMs > 0.0 && mediumMs > 0.0 && highMs > 0.0,
+           "terrain budget: every quality level and flat got at least one GPU sample");
+    if (flatMs > 0.0) {
+        std::printf("terrain budget ratios: High/flat %.3f, Medium/flat %.3f, Low/flat %.3f\n", highMs / flatMs,
+                    mediumMs / flatMs, lowMs / flatMs);
+        Expect(highMs <= 2.0 * flatMs, "terrain budget: High is at most 2.0x flat (" + std::to_string(highMs) +
+                                            " vs " + std::to_string(flatMs) + " ms)");
+        Expect(lowMs <= 1.2 * flatMs, "terrain budget: Low is at most 1.2x flat (" + std::to_string(lowMs) +
+                                           " vs " + std::to_string(flatMs) + " ms)");
+    }
+
+    runner::GLuint textures[2] = {texLook, flatLook};
+    glDeleteTextures(2, textures);
+    Expect(runner::rt_glGetError() == runner::GL_NO_ERROR, "the terrain budget leaves no GL error");
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -1706,10 +1840,16 @@ int main(int argc, char** argv) {
     std::filesystem::path terrainShots;
     // --terrain-lod-colors (with --terrain-shots): the LOD shots again, tinted by level.
     bool lodColors = false;
+    // --terrain-budget: Task 9's GPU budget measurement, independent of --terrain-shots.
+    bool budgetMode = false;
     for (int i = 1; i < argc; ++i) {
         const std::string flag = argv[i];
         if (flag == "--terrain-lod-colors") {
             lodColors = true;
+            continue;
+        }
+        if (flag == "--terrain-budget") {
+            budgetMode = true;
             continue;
         }
         if ((flag == "--save" || flag == "--compare" || flag == "--terrain-shots") && i + 1 < argc) {
@@ -1721,7 +1861,9 @@ int main(int argc, char** argv) {
             }
             continue;
         }
-        std::fprintf(stderr, "usage: scene-render-check [--save dir | --compare dir] [--terrain-shots dir [--terrain-lod-colors]]\n");
+        std::fprintf(stderr,
+                     "usage: scene-render-check [--save dir | --compare dir] "
+                     "[--terrain-shots dir [--terrain-lod-colors]] [--terrain-budget]\n");
         return 2;
     }
 
@@ -4410,6 +4552,9 @@ int main(int argc, char** argv) {
 
             runner::GLuint texture = look;
             glDeleteTextures(1, &texture);
+        }
+        if (budgetMode) {
+            TerrainBudget(renderer);
         }
         renderer.shutdown();
         Expect(runner::rt_glGetError() == runner::GL_NO_ERROR, "the terrain checks leave no GL error");

@@ -1948,13 +1948,39 @@ bool Renderer::geometryPass(const MeshDraw* meshes, const float* projection) {
         glUniform1i(terrain_.antiTilingOverride, TerrainAntiTilingOverride());
         glUniform1i(terrain_.projectionDebug, TerrainProjectionDebug() ? 1 : 0);
         const bool lodColors = TerrainLodColors();
+        // Task 9's GPU budget, fix round 1: on a gently rolling island most
+        // pixels already settle on one dominant triplanar projection before
+        // any quality cap even applies (pow(n, 4) sharpens hard), so Low and
+        // Medium's projection-count/height-blend falloffs barely moved the
+        // measured "Terrain" pass next to High -- Low came out slower than
+        // High, not under its 1.2x-of-flat budget. Anisotropic filtering is
+        // the one array-sampling cost every quality level pays alike: it is
+        // baked into the array texture once, at build time (terrainArrays /
+        // CreateTerrainArray), never read against uTerrainQuality. Since
+        // every textureGrad call still sits exactly where it did (inside its
+        // own per-pixel branch, fed explicit gradients computed outside any
+        // branch -- unchanged), cutting the anisotropy level per quality is
+        // free to do here as a texture parameter, not a shader change: High
+        // keeps the array's own (up to 8x) anisotropy, Medium caps at 4x,
+        // Low turns it off entirely.
+        const float terrainAniso = lighting_.terrainQuality == SceneQuality::Low
+                                        ? 1.f
+                                        : (lighting_.terrainQuality == SceneQuality::Medium
+                                               ? std::min(4.f, terrainAnisotropy_)
+                                               : terrainAnisotropy_);
         bool asked = false;
         for (int index = terrainBegin; index < batches_.opaqueRuns; ++index) {
             const DrawRun& run = batches_.runs[static_cast<std::size_t>(index)];
             const MeshDraw& draw = meshes[run.draw];
             BindTexture(kUnitTerrainLook, draw.terrainLook);
             BindArray(kUnitNormalMap, draw.terrainSurfaceA);
+            if (draw.terrainSurfaceA != 0 && terrainAnisotropy_ > 1.f) {
+                glTexParameterf(RT_GL_TEXTURE_2D_ARRAY, RT_GL_TEXTURE_MAX_ANISOTROPY, terrainAniso);
+            }
             BindArray(kUnitRoughnessMap, draw.terrainSurfaceB);
+            if (draw.terrainSurfaceB != 0 && terrainAnisotropy_ > 1.f) {
+                glTexParameterf(RT_GL_TEXTURE_2D_ARRAY, RT_GL_TEXTURE_MAX_ANISOTROPY, terrainAniso);
+            }
             BindTexture(kUnitMetalnessMap, terrainNoiseTexture_);
             glUniform1f(terrain_.fade, draw.terrainFade);
             glUniform1i(terrain_.fadeIn, draw.terrainFadeIn ? 1 : 0);

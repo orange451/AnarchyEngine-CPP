@@ -270,10 +270,15 @@ void TerrainTextures::update(DataModel& game) {
             }
         }
 
-        // A file's stamp is checked at most once a second (as TextureCache
-        // does): once that long has passed, every layer is resolved and
-        // re-stamped fresh; otherwise a layer already built at this size
-        // needs nothing further this tick.
+        // A file's mtime stamp is checked at most once a second (as
+        // TextureCache does) -- that is disk I/O, worth throttling. Which
+        // Texture a Material's reference points at (resolve_sources) is an
+        // in-memory read of that reference alone, so it costs nothing to
+        // check every update(): without this, reassigning a Material's
+        // NormalTexture (or any other reference) between two stamp checks
+        // less than a second apart would sit unnoticed until the throttle
+        // next let a disk check through, instead of rebuilding the one
+        // layer it touched within this very update (TL-T2).
         const bool check_stamps = !record.stamps_checked_once || now - record.stamps_checked_at >= std::chrono::seconds(1);
 
         Request request;
@@ -284,14 +289,20 @@ void TerrainTextures::update(DataModel& game) {
         for (std::size_t i = 0; i < record.layers.size(); ++i) {
             LayerSlot& slot = record.layers[i];
             LayerPlan& plan = request.layers[i];
-            if (!check_stamps && slot.bytes != nullptr && slot.size == size) {
-                plan.carry = slot.bytes;
-                continue;
-            }
             terrain::LayerSources sources = i == 0 ? terrain::LayerSources{} : resolve_sources(game, root, slot.material);
-            std::array<std::filesystem::file_time_type, 5> stamps = stamp_sources(sources);
-            const bool changed =
-                slot.bytes == nullptr || slot.size != size || !same_sources(slot.sources, sources) || slot.stamps != stamps;
+            const bool sources_changed = !same_sources(slot.sources, sources);
+            bool changed = slot.bytes == nullptr || slot.size != size || sources_changed;
+            std::array<std::filesystem::file_time_type, 5> stamps = slot.stamps;
+            if (changed) {
+                // Already rebuilding (a new/changed reference, a missing
+                // build, or a size change): fresh stamps for the cache key
+                // and for the next throttled comparison, regardless of
+                // check_stamps.
+                stamps = stamp_sources(sources);
+            } else if (check_stamps) {
+                stamps = stamp_sources(sources);
+                changed = slot.stamps != stamps;   // the same file(s), touched on disk
+            }
             if (changed) {
                 plan.needs_build = true;
                 plan.sources = sources;

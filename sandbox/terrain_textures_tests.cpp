@@ -13,6 +13,7 @@
 #include "TerrainTextures.hpp"
 #include "TerrainWorld.hpp"
 #include "terrain/LayerBuilder.hpp"
+#include "terrain/VoxelVolume.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -20,6 +21,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <string>
 #include <thread>
 #include <vector>
@@ -90,6 +92,20 @@ void set_diffuse(Material& material, InstanceId texture) {
     slot.kind = LuaSlot::Kind::Instance;
     slot.id = texture;
     REQUIRE_FALSE(material.set_reference(Material::kDiffuseTextureReference, slot));
+}
+
+void set_normal(Material& material, InstanceId texture) {
+    LuaSlot slot;
+    slot.kind = LuaSlot::Kind::Instance;
+    slot.id = texture;
+    REQUIRE_FALSE(material.set_reference(Material::kNormalTextureReference, slot));
+}
+
+engine_core::terrain::Shape ball_at(float x, float y, float z, float r) {
+    engine_core::terrain::Shape shape;
+    shape.center = engine_core::Vec3{x, y, z};
+    shape.radius = r;
+    return shape;
 }
 
 // Runs update()+wait_idle() a few times, as TerrainWorld's own settle() in
@@ -219,6 +235,71 @@ TEST_CASE("TT3 changing a Material's TextureScale changes the look only, not the
     REQUIRE(world.views()[0].look->texels[row2 + static_cast<std::size_t>(entry->material_id()) * 4 + 1] == 16.f);
 }
 
+TEST_CASE("TL-T1 a Material's Color, TextureScale, BlendSharpness, and HeightStrength each change the next look "
+          "within one update, and re-mesh nothing",
+          "[terrain][textures]") {
+    SimRole role;
+    Game game;
+    TempDir dir;
+    game.set_resources_root(dir.path);
+    write_ppm(dir.path, "diffuse.ppm", 4, 4, flat_rgb(4, 4, 80, 80, 80));
+
+    Material& mat = add_material(game, "M");
+    set_diffuse(mat, add_texture(game, "Tex", "diffuse.ppm"));
+    Terrain& t = add_terrain(game);
+    REQUIRE_FALSE(t.set_texture_size(static_cast<int>(TextureSize::Small)));
+    TerrainMaterial* entry = nullptr;
+    REQUIRE_FALSE(t.add_material(mat.id(), entry));
+    // A real chunk to mesh, so "re-meshes nothing" has something to prove
+    // against: an unrelated Terrain edit elsewhere must not re-mesh it either.
+    REQUIRE_FALSE(t.edit_volume([&](engine_core::terrain::VoxelVolume& volume) {
+        return volume.fill(ball_at(5.f, 5.f, 5.f, 4.f), static_cast<std::uint8_t>(entry->material_id()));
+    }));
+
+    TerrainTextures textures;
+    settle(textures, game);
+
+    TerrainWorld world;
+    world.set_terrain_textures(&textures);
+    world.update(game);
+    world.wait_idle();
+    world.update(game);
+    REQUIRE(world.views().size() == 1u);
+    std::uint64_t look_before = world.views()[0].look->revision;
+    const std::uint64_t chunks_revision = world.views()[0].chunks_revision;
+    const std::uint64_t meshed_count = world.meshed_count();
+    REQUIRE(chunks_revision != 0u);    // the ball actually meshed something
+    REQUIRE(meshed_count != 0u);
+
+    const std::size_t id = static_cast<std::size_t>(entry->material_id());
+    const std::size_t row0 = id * 4;
+    const std::size_t row2 = 2 * 256 * 4 + id * 4;
+
+    // Each property change lands in the very next update() (one tick), and
+    // touches neither the chunk mesh nor the mesher: rebuild_look only ever
+    // replaces TerrainRecord::look, never queues a chunk or a collider.
+    const auto change_and_check = [&](const char* what, const std::function<void()>& apply, std::size_t texel,
+                                       float expected) {
+        INFO(what);
+        apply();
+        textures.update(game);
+        world.update(game);
+        REQUIRE(world.views().size() == 1u);
+        const std::uint64_t look_after = world.views()[0].look->revision;
+        REQUIRE(look_after != look_before);
+        REQUIRE(world.views()[0].chunks_revision == chunks_revision);
+        REQUIRE(world.meshed_count() == meshed_count);
+        REQUIRE(world.views()[0].look->texels[texel] == expected);
+        look_before = look_after;
+    };
+
+    change_and_check("Color", [&] { REQUIRE_FALSE(mat.set_color(engine_core::ColorRgb{0.25f, 0.5f, 0.75f, 1.f})); },
+                      row0, 0.25f);
+    change_and_check("TextureScale", [&] { REQUIRE_FALSE(mat.set_texture_scale(12.0)); }, row2 + 1, 12.f);
+    change_and_check("BlendSharpness", [&] { REQUIRE_FALSE(mat.set_blend_sharpness(0.8)); }, row2 + 2, 0.8f);
+    change_and_check("HeightStrength", [&] { REQUIRE_FALSE(mat.set_height_strength(2.5)); }, row2 + 3, 2.5f);
+}
+
 TEST_CASE("TT4 touching one texture file rebuilds only its layer; the old set stays published until the new one "
           "lands",
           "[terrain][textures]") {
@@ -264,6 +345,59 @@ TEST_CASE("TT4 touching one texture file rebuilds only its layer; the old set st
     REQUIRE(new_set->layers[0] == old_set->layers[0]);   // untouched
     REQUIRE(new_set->layers[1] != old_set->layers[1]);   // A's layer rebuilt
     REQUIRE(new_set->layers[2] == old_set->layers[2]);   // B's layer untouched
+}
+
+TEST_CASE("TL-T2 assigning a NormalTexture rebuilds that layer only, the same update() it is assigned in",
+          "[terrain][textures]") {
+    SimRole role;
+    Game game;
+    TempDir dir;
+    game.set_resources_root(dir.path);
+    write_ppm(dir.path, "diffuseA.ppm", 4, 4, flat_rgb(4, 4, 90, 90, 90));
+    write_ppm(dir.path, "diffuseB.ppm", 4, 4, flat_rgb(4, 4, 30, 30, 30));
+    write_ppm(dir.path, "normalA.ppm", 4, 4, flat_rgb(4, 4, 128, 128, 255));
+
+    Material& matA = add_material(game, "A");
+    set_diffuse(matA, add_texture(game, "TexA", "diffuseA.ppm"));
+    Material& matB = add_material(game, "B");
+    set_diffuse(matB, add_texture(game, "TexB", "diffuseB.ppm"));
+
+    Terrain& t = add_terrain(game);
+    REQUIRE_FALSE(t.set_texture_size(static_cast<int>(TextureSize::Small)));
+    TerrainMaterial* e1 = nullptr;
+    REQUIRE_FALSE(t.add_material(matA.id(), e1));
+    TerrainMaterial* e2 = nullptr;
+    REQUIRE_FALSE(t.add_material(matB.id(), e2));
+
+    TerrainTextures textures;
+    settle(textures, game);
+    const auto old_set = textures.published(t.id());
+    REQUIRE(old_set != nullptr);
+    REQUIRE(old_set->layers.size() == 3u);
+
+    // No sleep: assigning a reference is an in-memory change, not a file
+    // touch, so it must not wait on the once-a-second disk-stamp throttle
+    // (TT4's) to be noticed -- that throttle is for last_write_time() calls,
+    // which this never needed in the first place.
+    set_normal(matA, add_texture(game, "NormA", "normalA.ppm"));
+    textures.update(game);   // queues A's rebuild this very tick
+    REQUIRE(textures.published(t.id()) == old_set);   // still the old set: the rebuild has not landed
+
+    textures.wait_idle();
+    textures.update(game);   // drains the finished rebuild
+    const auto new_set = textures.published(t.id());
+    REQUIRE(new_set != nullptr);
+    REQUIRE(new_set != old_set);
+    REQUIRE(new_set->layers.size() == 3u);
+    REQUIRE(new_set->layers[0] == old_set->layers[0]);   // untouched
+    REQUIRE(new_set->layers[1] != old_set->layers[1]);   // A's layer rebuilt (new NormalTexture)
+    REQUIRE(new_set->layers[2] == old_set->layers[2]);   // B's layer untouched
+
+    // A second update() right away (still inside the same throttle window)
+    // changes nothing further: the reference comparison it relies on sees
+    // no further change, so it costs a cheap resolve, not a rebuild.
+    textures.update(game);
+    REQUIRE(textures.published(t.id()) == new_set);
 }
 
 TEST_CASE("TT5 toggling TextureSize Small and Max ten times quickly ends with one set at the last size",

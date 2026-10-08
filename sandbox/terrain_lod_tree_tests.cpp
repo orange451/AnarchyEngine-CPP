@@ -1111,6 +1111,14 @@ int expected_top(const LodTree& tree) {
     }
 }
 
+// The published level-0 revision of coord in world's one Terrain, or 0.
+std::uint64_t published_chunk_revision(const TerrainWorld& world, ChunkCoord coord) {
+    for (const TerrainChunkView& chunk : *world.views()[0].chunks) {
+        if (chunk.coord == coord) return chunk.revision;
+    }
+    return 0;
+}
+
 }  // namespace
 
 TEST_CASE("LT14 the top level follows the level-0 extent as chunks are queued and removed", "[terrain][lod]") {
@@ -1153,6 +1161,65 @@ TEST_CASE("LT14 the top level follows the level-0 extent as chunks are queued an
         if (key.level > 0) REQUIRE_FALSE(node.stale());
     }
     REQUIRE(count_level(rig.tree.nodes_for_view(), 2) == 1);
+}
+
+TEST_CASE("LT15 an edit repeated every update over the same chunks shows within 200 ms", "[terrain][lod]") {
+    // R31: one chunk of the stroke's footprint never finishes meshing while
+    // the stroke lasts (its jobs are held on their workers), so a batch never
+    // has every job in; the other chunks' results must still publish, at
+    // most kEditBatchHoldMs after the stroke's first edit.
+    SimRole role;
+    Game game;
+    Terrain& t = island_terrain(game, 4);   // surface at about y 16, chunk y 0
+    const float span = kChunkSize * t.volume().voxel_size();
+    const ChunkCoord held_chunk{1, 0, 1};
+    std::atomic<bool> hold{false};
+    TerrainWorld world(
+        [&](const ChunkMesh& mesh) -> std::shared_ptr<void> {
+            if (!mesh.positions.empty()) {
+                Vec3 sum{};
+                for (const Vec3& p : mesh.positions) sum = Vec3{sum.x + p.x, sum.y + p.y, sum.z + p.z};
+                const float n = static_cast<float>(mesh.positions.size());
+                const ChunkCoord at{static_cast<int>(std::floor(sum.x / n / span)),
+                                    static_cast<int>(std::floor(sum.y / n / span)),
+                                    static_cast<int>(std::floor(sum.z / n / span))};
+                while (at == held_chunk && hold.load()) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+            return std::make_shared<int>(1);
+        },
+        16);
+    struct Release {
+        std::atomic<bool>& hold;
+        ~Release() { hold = false; }   // before world joins its workers
+    } release{hold};
+    double now = 0.0;
+    ask_island_colliders(world, game, t, 4, now);   // so every job runs the collider hook
+    settle_lod(world, game, now);
+
+    const ChunkCoord painted{2, 0, 2};
+    const std::uint64_t before = published_chunk_revision(world, painted);
+    REQUIRE(before != 0);
+    hold = true;
+    const double start = now;
+    double shown_at = -1.0;
+    // One edit per 16 ms update (at most one held worker each, of 16), with
+    // ample real time between updates for the other chunks' jobs to land.
+    for (int i = 0; i < 13 && shown_at < 0.0; ++i) {
+        Shape ball;
+        ball.center = Vec3{2.5f * span, 16.f, 2.5f * span};
+        ball.radius = 3.f;
+        const std::uint8_t material = static_cast<std::uint8_t>(i % 2 == 0 ? 2 : 1);
+        REQUIRE_FALSE(t.edit_volume([&](VoxelVolume& v) { return v.paint(ball, material); }));
+        world.update(game, now);
+        if (published_chunk_revision(world, painted) != before) shown_at = now;
+        std::this_thread::sleep_for(std::chrono::milliseconds(150));
+        now += 16.0;
+    }
+    hold = false;
+    world.wait_idle();
+    INFO("the painted chunk showed " << (shown_at - start) << " ms into the stroke (-1: never)");
+    REQUIRE(shown_at >= 0.0);
+    REQUIRE(shown_at - start <= 200.0);
 }
 
 TEST_CASE("LT20 VoxelVolume's chunk extent follows its stored chunks through edits, clear, set_chunks and moves",

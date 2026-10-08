@@ -189,16 +189,22 @@ private:
         std::shared_ptr<const TerrainLook> look;
         std::array<LookInput, 256> look_inputs{};
         // R26: the chunk jobs one update's edits queued (a batch) publish
-        // together, once each has landed or failed. A batch waits only on
-        // its own jobs: a chunk queued again by a later edit leaves its
-        // earlier batch (which no longer waits on it) for the later one.
+        // together, once each has landed or failed. R31: a later edit that
+        // queues a chunk of a batch still pending again folds that batch into
+        // its own (the older batch's landed results for chunks not queued
+        // again are kept, the rest wait on the newer jobs), and a batch held
+        // kEditBatchHoldMs since its oldest edit publishes what has landed
+        // (current results only) without waiting further -- so a stroke
+        // editing the same chunks every update still shows while it lasts.
         // A Terrain's first sight is not batched: its chunks show as they land.
         struct EditBatch {
-            std::size_t waiting = 0;                    // jobs not landed yet
-            std::vector<terrain::MeshResult> landed;    // held until waiting is 0
+            std::unordered_set<terrain::ChunkCoord, terrain::ChunkCoordHash> members;   // waiting or landed
+            std::unordered_set<terrain::ChunkCoord, terrain::ChunkCoordHash> waiting;   // jobs not landed yet
+            std::unordered_map<terrain::ChunkCoord, terrain::MeshResult, terrain::ChunkCoordHash> landed;   // held
+            double start_ms = 0.0;   // now_ms of the oldest edit folded in
         };
         std::unordered_map<std::uint64_t, EditBatch> batches;
-        // Per chunk with an edit job in flight: its batch.
+        // Per member chunk of a pending batch (waiting or landed): its batch.
         std::unordered_map<terrain::ChunkCoord, std::uint64_t, terrain::ChunkCoordHash> chunk_batch;
         // Task 8: the chunks PhysicsWorld's latest set_collider_interest
         // asked for (terrain-local), and, per chunk with a collider, the
@@ -227,11 +233,16 @@ private:
     void accept_result(const terrain::MeshResult& result);
     // Publishes one current result: meshes, colliders, the LOD tree.
     void apply_result(TerrainRecord& record, const terrain::MeshResult& result);
-    // coord's edit job is no longer awaited by its batch (it landed, or an
-    // edit queued it again); a batch left waiting on nothing is applied.
-    void leave_batch(TerrainRecord& record, const terrain::ChunkCoord& coord, const terrain::MeshResult* landed);
+    // Applies a batch's landed results that are still current, and forgets
+    // the batch: its members' later results apply as they land.
+    void publish_batch(TerrainRecord& record, std::uint64_t batch);
+    // R31: moves batch from's members, waiting jobs and held results into
+    // batch into (keeping the older start), and forgets from.
+    void fold_batch(TerrainRecord& record, std::uint64_t from, std::uint64_t into);
+    // R31: publishes every batch held kEditBatchHoldMs or longer.
+    void expire_batches(TerrainRecord& record, double now_ms);
     void queue_dirty(InstanceId terrain_id, Terrain& terrain, TerrainRecord& record, bool first_seen, bool has_camera,
-                      Vec3 camera_pos);
+                      Vec3 camera_pos, double now_ms);
     // One Terrain's LOD work for this update: drops and re-queues chunk
     // meshes as its LodTree asks, and queues the node builds now due.
     void update_lod(InstanceId terrain_id, Terrain& terrain, TerrainRecord& record, double now_ms, bool has_camera,

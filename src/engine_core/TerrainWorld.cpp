@@ -40,6 +40,10 @@ std::uint8_t to_u8(double value) { return to_u8(static_cast<float>(value)); }
 // goes (spec: "a few seconds", R8 fixes it at 5 s).
 constexpr double kColliderReleaseMs = 5000.0;
 
+// R31: an edit batch holds its landed results at most this long after its
+// oldest edit, then publishes what has landed without waiting further.
+constexpr double kEditBatchHoldMs = 150.0;
+
 }  // namespace
 
 TerrainWorld::TerrainWorld(terrain::TerrainMesher::BuildCollider build, unsigned threads,
@@ -69,41 +73,77 @@ void TerrainWorld::accept_result(const terrain::MeshResult& result) {
     if (!result.failed) {
         ++meshed_count_;   // counted on landing, whether or not its batch publishes yet
     }
-    if (record.chunk_batch.count(result.coord) != 0) {
-        leave_batch(record, result.coord, &result);   // an edit's job: published with its batch
-        return;
+    const auto member = record.chunk_batch.find(result.coord);
+    if (member != record.chunk_batch.end()) {
+        const std::uint64_t id = member->second;
+        const auto batch_it = record.batches.find(id);
+        if (batch_it != record.batches.end() && batch_it->second.waiting.erase(result.coord) != 0) {
+            // An edit's job: published with its batch.
+            TerrainRecord::EditBatch& batch = batch_it->second;
+            batch.landed[result.coord] = result;
+            if (batch.waiting.empty()) {
+                publish_batch(record, id);
+            }
+            return;
+        }
     }
     apply_result(record, result);
 }
 
-void TerrainWorld::leave_batch(TerrainRecord& record, const terrain::ChunkCoord& coord,
-                               const terrain::MeshResult* landed) {
-    const auto member = record.chunk_batch.find(coord);
-    if (member == record.chunk_batch.end()) {
-        return;
-    }
-    const auto batch_it = record.batches.find(member->second);
-    record.chunk_batch.erase(member);
+void TerrainWorld::publish_batch(TerrainRecord& record, std::uint64_t id) {
+    const auto batch_it = record.batches.find(id);
     if (batch_it == record.batches.end()) {
         return;
     }
-    TerrainRecord::EditBatch& batch = batch_it->second;
-    if (landed != nullptr) {
-        batch.landed.push_back(*landed);
-    }
-    if (--batch.waiting > 0) {
-        return;
-    }
-    // Every job of the batch is in: publish them together. A result whose
-    // chunk was queued again since (a later edit) is dropped; that chunk
-    // shows with the later batch.
-    std::vector<terrain::MeshResult> results = std::move(batch.landed);
+    TerrainRecord::EditBatch batch = std::move(batch_it->second);
     record.batches.erase(batch_it);
-    for (const terrain::MeshResult& result : results) {
-        const auto live = record.chunk_revisions.find(result.coord);
+    for (const terrain::ChunkCoord& coord : batch.members) {
+        const auto member = record.chunk_batch.find(coord);
+        if (member != record.chunk_batch.end() && member->second == id) {
+            record.chunk_batch.erase(member);
+        }
+    }
+    // A held result whose chunk was queued again since (a later edit not
+    // folded in) is dropped; that chunk shows with the later job.
+    for (const auto& [coord, result] : batch.landed) {
+        const auto live = record.chunk_revisions.find(coord);
         if (live != record.chunk_revisions.end() && live->second == result.revision) {
             apply_result(record, result);
         }
+    }
+}
+
+void TerrainWorld::fold_batch(TerrainRecord& record, std::uint64_t from, std::uint64_t into) {
+    if (from == into) {
+        return;
+    }
+    TerrainRecord::EditBatch& target = record.batches[into];   // first: an insert may rehash (iterators, not references)
+    const auto from_it = record.batches.find(from);
+    if (from_it == record.batches.end()) {
+        return;
+    }
+    TerrainRecord::EditBatch& source = from_it->second;
+    for (const terrain::ChunkCoord& coord : source.members) {
+        record.chunk_batch[coord] = into;
+        target.members.insert(coord);
+    }
+    target.waiting.insert(source.waiting.begin(), source.waiting.end());
+    for (auto& [coord, result] : source.landed) {
+        target.landed[coord] = std::move(result);
+    }
+    target.start_ms = std::min(target.start_ms, source.start_ms);
+    record.batches.erase(from_it);
+}
+
+void TerrainWorld::expire_batches(TerrainRecord& record, double now_ms) {
+    std::vector<std::uint64_t> expired;
+    for (const auto& [id, batch] : record.batches) {
+        if (now_ms - batch.start_ms >= kEditBatchHoldMs) {
+            expired.push_back(id);
+        }
+    }
+    for (std::uint64_t id : expired) {
+        publish_batch(record, id);
     }
 }
 
@@ -171,7 +211,7 @@ void TerrainWorld::apply_result(TerrainRecord& record, const terrain::MeshResult
 }
 
 void TerrainWorld::queue_dirty(InstanceId terrain_id, Terrain& terrain, TerrainRecord& record, bool first_seen,
-                                bool has_camera, Vec3 camera_pos) {
+                                bool has_camera, Vec3 camera_pos, double now_ms) {
     terrain::VoxelVolume& volume = terrain.volume();
     std::vector<terrain::ChunkCoord> dirty;
     if (first_seen) {
@@ -205,13 +245,21 @@ void TerrainWorld::queue_dirty(InstanceId terrain_id, Terrain& terrain, TerrainR
     std::uint64_t batch = 0;
     if (!first_seen && !dirty.empty()) {
         batch = ++next_batch_;
-        record.batches[batch].waiting = 0;
+        record.batches[batch].start_ms = now_ms;
     }
     for (const terrain::ChunkCoord& coord : dirty) {
         if (batch != 0) {
-            leave_batch(record, coord, nullptr);   // an earlier batch stops waiting on its old job
+            // R31: a chunk of a batch still pending folds that batch into
+            // this one; a result of its held there is superseded.
+            const auto member = record.chunk_batch.find(coord);
+            if (member != record.chunk_batch.end() && member->second != batch) {
+                fold_batch(record, member->second, batch);
+            }
+            TerrainRecord::EditBatch& current = record.batches[batch];
+            current.landed.erase(coord);
+            current.members.insert(coord);
+            current.waiting.insert(coord);
             record.chunk_batch[coord] = batch;
-            ++record.batches[batch].waiting;
         }
         // Drawn from a counter that lives on TerrainWorld, not this record,
         // so the value is unique for the TerrainWorld's whole life -- see the
@@ -478,7 +526,10 @@ void TerrainWorld::update(DataModel& game, double now_ms) {
         }
         record.instance = terrain;   // for build_colliders_now, called from PhysicsWorld's own sync
 
-        queue_dirty(id, *terrain, record, fresh, has_camera, camera_pos);
+        // R31: after this update's results landed and before its edits
+        // queue, a batch past its hold publishes what has landed.
+        expire_batches(record, now_ms);
+        queue_dirty(id, *terrain, record, fresh, has_camera, camera_pos, now_ms);
         update_lod(id, *terrain, record, now_ms, has_camera, camera_pos);
         if (!terrain->can_collide()) {
             // Nothing to show through it: let any collider interest lapse

@@ -1503,10 +1503,130 @@ TEST_CASE("TL2 during play, digging under a resting box drops it", "[terrain][ph
 // collider for, so a Raycast hits terrain at any distance and gives the
 // same answer whether or not colliders are loaded where it hits.
 
-TEST_CASE("RM1 a raycast at a settled island returns the same instance, material, and position whether "
-          "colliders are loaded everywhere or not loaded at all",
+namespace {
+
+// What RM1 and RM6 compare between two collider states.
+struct RayResult {
+    bool hit = false;
+    InstanceId instance = 0;
+    bool has_material = false;
+    std::uint8_t material = 0;
+    Vec3 position{};
+    Vec3 normal{};
+};
+
+constexpr float kDegreesToRadians = 3.14159265f / 180.f;
+
+std::vector<RayResult> cast_rays(PhysicsRig& rig, const std::vector<Vec3>& origins,
+                                 const std::vector<Vec3>& directions) {
+    std::vector<RayResult> results;
+    results.reserve(origins.size());
+    for (std::size_t i = 0; i < origins.size(); ++i) {
+        RayResult r;
+        if (const auto hit = rig.physics.raycast(rig.game, origins[i], directions[i], {})) {
+            r.hit = true;
+            r.instance = hit->instance;
+            r.has_material = hit->has_material;
+            r.material = hit->material;
+            r.position = hit->position;
+            r.normal = hit->normal;
+        }
+        results.push_back(r);
+    }
+    return results;
+}
+
+// The same hits: instance, material, position within 0.05 x VoxelSize (the
+// spec's own bound), and normals within kNormalParity of each other. A
+// collider's normal is its hit triangle's face normal; the march's is the
+// normalized central-difference gradient of the trilinear field. On the
+// planar surfaces RM1 and RM6 use, SurfaceNets puts every vertex on the
+// plane and the gradient of a trilinear blend of a linear field is that
+// plane's normal, so both are exact but for the stored distances' int8
+// steps (4/127 of a cell, about 0.03): half a step moves a triangle's
+// corners or the gradient's samples a degree or two over a one-cell edge or
+// a two-cell difference. 0.98 (about 11 degrees) leaves room for that
+// without letting a hit on the wrong side or the wrong surface through.
+constexpr float kNormalParity = 0.98f;
+
+// Under 10 degrees to the surface, a ray is grazing: the collider's
+// triangles and the march's trilinear zero sit a few hundredths of a cell
+// apart even on a plane (the int8 steps again), and a ray at angle a
+// meets two surfaces that far apart 1 / sin(a) times further apart along
+// itself -- about 0.15 units at 3 degrees for 0.007 units off the plane. So
+// for a grazing ray the 0.05 x VoxelSize bound applies along the normal,
+// and along the ray it is that bound over sin(a).
+const float kGrazingSine = std::sin(10.f * kDegreesToRadians);
+
+void require_same_hits(const std::vector<RayResult>& expected, const std::vector<RayResult>& actual,
+                       const std::vector<Vec3>& origins, const std::vector<Vec3>& directions, float voxel_size) {
+    REQUIRE(expected.size() == actual.size());
+    REQUIRE(origins.size() == expected.size());
+    REQUIRE(directions.size() == expected.size());
+    const float tolerance = 0.05f * voxel_size;
+    for (std::size_t i = 0; i < expected.size(); ++i) {
+        const RayResult& a = expected[i];
+        const RayResult& b = actual[i];
+        INFO("from (" << origins[i].x << ", " << origins[i].y << ", " << origins[i].z << ") along (" << directions[i].x
+                      << ", " << directions[i].y << ", " << directions[i].z << ")");
+        INFO("ray " << i << ": (" << a.position.x << ", " << a.position.y << ", " << a.position.z << ") vs ("
+                    << b.position.x << ", " << b.position.y << ", " << b.position.z << ")");
+        INFO("normals (" << a.normal.x << ", " << a.normal.y << ", " << a.normal.z << ") vs (" << b.normal.x
+                         << ", " << b.normal.y << ", " << b.normal.z << ")");
+        REQUIRE(a.hit == b.hit);
+        REQUIRE(a.instance == b.instance);
+        REQUIRE(a.has_material == b.has_material);
+        REQUIRE(a.material == b.material);
+        const Vec3 d = directions[i];
+        const float d_length = std::sqrt(d.x * d.x + d.y * d.y + d.z * d.z);
+        const float sine = std::fabs(d.x * a.normal.x + d.y * a.normal.y + d.z * a.normal.z) / d_length;
+        if (sine >= kGrazingSine) {
+            REQUIRE(std::fabs(a.position.x - b.position.x) <= tolerance);
+            REQUIRE(std::fabs(a.position.y - b.position.y) <= tolerance);
+            REQUIRE(std::fabs(a.position.z - b.position.z) <= tolerance);
+        } else {
+            // Grazing: the two surfaces within tolerance of each other
+            // along the normal, and so the hits within tolerance / sine
+            // along the ray.
+            const Vec3 apart{b.position.x - a.position.x, b.position.y - a.position.y, b.position.z - a.position.z};
+            const float off_surface = apart.x * a.normal.x + apart.y * a.normal.y + apart.z * a.normal.z;
+            const float distance = std::sqrt(apart.x * apart.x + apart.y * apart.y + apart.z * apart.z);
+            INFO("grazing, sine " << sine);
+            REQUIRE(std::fabs(off_surface) <= tolerance);
+            REQUIRE(distance <= tolerance / sine);
+        }
+        const float dot = a.normal.x * b.normal.x + a.normal.y * b.normal.y + a.normal.z * b.normal.z;
+        REQUIRE(dot >= kNormalParity);
+    }
+}
+
+// A ray from height h above a plane with unit normal up, heading along the
+// plane at a random azimuth and angle below it, reaching 4 units past
+// where it meets the plane.
+Vec3 ray_into_plane(std::mt19937_64& random, Vec3 up, float h, float angle) {
+    std::uniform_real_distribution<float> azimuth(0.f, 6.2831853f);
+    const float phi = azimuth(random);
+    Vec3 along{std::cos(phi), 0.f, std::sin(phi)};
+    const float into = along.x * up.x + along.y * up.y + along.z * up.z;
+    along = Vec3{along.x - up.x * into, along.y - up.y * into, along.z - up.z * into};
+    const float along_length = std::sqrt(along.x * along.x + along.y * along.y + along.z * along.z);
+    const float reach = h / std::sin(angle) + 4.f;
+    const float c = std::cos(angle) * reach / along_length;
+    const float s = std::sin(angle) * reach;
+    return Vec3{along.x * c - up.x * s, along.y * c - up.y * s, along.z * c - up.z * s};
+}
+
+// A grazing ray: 2 to 5 degrees below the plane.
+Vec3 grazing_ray(std::mt19937_64& random, Vec3 up, float h) {
+    std::uniform_real_distribution<float> angle(2.f, 5.f);
+    return ray_into_plane(random, up, h, angle(random) * kDegreesToRadians);
+}
+
+}  // namespace
+
+TEST_CASE("RM1 a raycast at a settled island returns the same instance, material, position, and normal "
+          "whether colliders are loaded everywhere or not loaded at all",
           "[terrain][physics]") {
-    using physics_rig::near;
     PhysicsRig rig;
     Terrain& t = terrain_in_workspace(rig.game);
     Material& rock = add_material_asset(rig.game, "Rock");
@@ -1541,38 +1661,22 @@ TEST_CASE("RM1 a raycast at a settled island returns the same instance, material
         origins.push_back(Vec3{plane(random), 10.f, plane(random)});
         directions.push_back(Vec3{tilt(random), -20.f, tilt(random)});
     }
-
-    struct Result {
-        bool hit = false;
-        InstanceId instance = 0;
-        bool has_material = false;
-        std::uint8_t material = 0;
-        Vec3 position{};
-    };
-    const auto cast_all = [&] {
-        std::vector<Result> results;
-        results.reserve(origins.size());
-        for (std::size_t i = 0; i < origins.size(); ++i) {
-            Result r;
-            if (const auto hit = rig.physics.raycast(rig.game, origins[i], directions[i], {})) {
-                r.hit = true;
-                r.instance = hit->instance;
-                r.has_material = hit->has_material;
-                r.material = hit->material;
-                r.position = hit->position;
-            }
-            results.push_back(r);
-        }
-        return results;
-    };
+    // And 20 grazing rays, 2 to 5 degrees below the slab's top, starting
+    // half a unit above it.
+    std::uniform_real_distribution<float> near_middle(-25.f, 25.f);
+    for (int i = 0; i < 20; ++i) {
+        const Vec3 origin{near_middle(random), 0.5f, near_middle(random)};
+        origins.push_back(origin);
+        directions.push_back(grazing_ray(random, Vec3{0.f, 1.f, 0.f}, 0.5f));
+    }
 
     // Colliders loaded everywhere: force interest over the whole island.
     world.set_collider_interest(t.id(), meshed_chunk_coords(world));
     settle_now();
     rig.physics.sync(rig.game);
     REQUIRE(rig.physics.shape_count(t.id()) == chunks_with_triangles(world));
-    const std::vector<Result> with_colliders = cast_all();
-    REQUIRE(std::all_of(with_colliders.begin(), with_colliders.end(), [](const Result& r) { return r.hit; }));
+    const std::vector<RayResult> with_colliders = cast_rays(rig, origins, directions);
+    REQUIRE(std::all_of(with_colliders.begin(), with_colliders.end(), [](const RayResult& r) { return r.hit; }));
 
     // No colliders loaded anywhere: drop interest, and fast-forward the
     // clock past the 5 s release grace.
@@ -1581,19 +1685,92 @@ TEST_CASE("RM1 a raycast at a settled island returns the same instance, material
     settle_now();
     rig.physics.sync(rig.game);
     REQUIRE(rig.physics.shape_count(t.id()) == 0u);
-    const std::vector<Result> without_colliders = cast_all();
+    const std::vector<RayResult> without_colliders = cast_rays(rig, origins, directions);
 
-    const float tolerance = static_cast<float>(0.05 * t.voxel_size());
-    for (std::size_t i = 0; i < with_colliders.size(); ++i) {
-        INFO("ray " << i);
-        REQUIRE(with_colliders[i].hit == without_colliders[i].hit);
-        REQUIRE(with_colliders[i].instance == without_colliders[i].instance);
-        REQUIRE(with_colliders[i].has_material == without_colliders[i].has_material);
-        REQUIRE(with_colliders[i].material == without_colliders[i].material);
-        REQUIRE(near(with_colliders[i].position.x, without_colliders[i].position.x, tolerance));
-        REQUIRE(near(with_colliders[i].position.y, without_colliders[i].position.y, tolerance));
-        REQUIRE(near(with_colliders[i].position.z, without_colliders[i].position.z, tolerance));
+    require_same_hits(with_colliders, without_colliders, origins, directions, static_cast<float>(t.voxel_size()));
+}
+
+TEST_CASE("RM6 with colliders loaded around only some chunks, oblique and grazing rays across collided and "
+          "uncollided chunks hit exactly where they would with colliders everywhere",
+          "[terrain][physics]") {
+    PhysicsRig rig;
+    Terrain& t = terrain_in_workspace(rig.game);
+    Material& rock = add_material_asset(rig.game, "Rock");
+    TerrainMaterial* entry = nullptr;
+    REQUIRE_FALSE(t.add_material(rock.id(), entry));
+    // A tilted slab, its top a plane through the origin, so the surface
+    // crosses chunk borders on every axis at an angle and its normal is
+    // no axis.
+    const Matrix4 rotation = matrix4_axis_angle(Vec3{1.f, 0.f, 0.6f}, 12.f * kDegreesToRadians);
+    const Vec3 up = matrix4_vector(rotation, Vec3{0.f, 1.f, 0.f});
+    Shape tilted;
+    tilted.kind = Shape::Kind::Block;
+    tilted.frame = rotation;
+    tilted.frame.m[12] = -4.f * up.x;
+    tilted.frame.m[13] = -4.f * up.y;
+    tilted.frame.m[14] = -4.f * up.z;
+    tilted.size = Vec3{200.f, 8.f, 200.f};
+    REQUIRE_FALSE(t.edit_volume([&](VoxelVolume& v) { return v.fill(tilted, 1); }));
+    TerrainWorld world(PhysicsWorld::build_terrain_collider);
+    rig.physics.set_terrain_world(&world);
+    double now_ms = 0.0;
+    const auto settle_now = [&] {
+        for (int i = 0; i < 4; ++i) {
+            world.update(rig.game, now_ms);
+            world.wait_idle();
+        }
+        world.update(rig.game, now_ms);
+    };
+    settle_now();
+
+    // Rays starting just above the plane over x, z in [0, 64), heading
+    // outward at every azimuth and 2 to 60 degrees below the plane: they
+    // cross out of the collided columns below through faces, edges and
+    // corners into uncollided neighbours, and back. A quarter are grazing
+    // (2 to 5 degrees).
+    std::mt19937_64 random(11);
+    std::uniform_real_distribution<float> over(0.f, 64.f);
+    std::uniform_real_distribution<float> steep(5.f, 60.f);
+    std::uniform_real_distribution<float> height(0.3f, 3.f);
+    std::vector<Vec3> origins;
+    std::vector<Vec3> directions;
+    for (int i = 0; i < 400; ++i) {
+        const float x = over(random), z = over(random);
+        const float y = -(up.x * x + up.z * z) / up.y;   // on the plane
+        const bool grazing = i % 4 == 0;
+        const float h = grazing ? 0.3f + 0.7f * height(random) / 3.f : height(random);   // grazing: under 1 unit up
+        origins.push_back(Vec3{x + up.x * h, y + up.y * h, z + up.z * h});
+        directions.push_back(grazing ? grazing_ray(random, up, h)
+                                     : ray_into_plane(random, up, h, steep(random) * kDegreesToRadians));
     }
+
+    // Colliders everywhere: the reference answers.
+    world.set_collider_interest(t.id(), meshed_chunk_coords(world));
+    settle_now();
+    rig.physics.sync(rig.game);
+    REQUIRE(rig.physics.shape_count(t.id()) == chunks_with_triangles(world));
+    const std::vector<RayResult> everywhere = cast_rays(rig, origins, directions);
+    REQUIRE(std::all_of(everywhere.begin(), everywhere.end(),
+                        [&](const RayResult& r) { return r.hit && r.instance == t.id(); }));
+
+    // Colliders only in the columns x, z = (0, 0) and (1, 1), diagonal
+    // neighbours sharing one vertical edge; every other chunk has none
+    // once the 5 s grace has passed.
+    std::vector<ChunkCoord> some;
+    for (const ChunkCoord& coord : meshed_chunk_coords(world)) {
+        if ((coord.x == 0 && coord.z == 0) || (coord.x == 1 && coord.z == 1)) {
+            some.push_back(coord);
+        }
+    }
+    REQUIRE(!some.empty());
+    world.set_collider_interest(t.id(), some);
+    now_ms += 5001.0;
+    settle_now();
+    rig.physics.sync(rig.game);
+    REQUIRE(rig.physics.shape_count(t.id()) == some.size());
+    const std::vector<RayResult> mixed = cast_rays(rig, origins, directions);
+
+    require_same_hits(everywhere, mixed, origins, directions, static_cast<float>(t.voxel_size()));
 }
 
 TEST_CASE("RM2 a ray toward terrain hits a part in front of it, not the march behind the part",

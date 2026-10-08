@@ -22,6 +22,7 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <unordered_map>
 #include <unordered_set>
@@ -765,9 +766,13 @@ struct PhysicsWorld::Impl {
                         local_origin.z + dir_unit.z * t};
         };
 
-        // Clip [0, length] to the padded bounds: a slab test per axis.
+        // Clip [0, length] to the padded bounds: a slab test per axis. The
+        // far end starts at the nearest hit found so far (Box3D's, or an
+        // earlier Terrain's march): nothing past it can win, and a march
+        // crossing inside a collided chunk (below) is then always behind
+        // Box3D's own hit on that chunk's front face.
         float t0 = 0.f;
-        float t1 = length;
+        float t1 = length * hits.closest;
         const float origin_axis[3] = {local_origin.x, local_origin.y, local_origin.z};
         const float dir_axis[3] = {dir_unit.x, dir_unit.y, dir_unit.z};
         const float min_axis[3] = {bounds_min.x, bounds_min.y, bounds_min.z};
@@ -797,24 +802,60 @@ struct PhysicsWorld::Impl {
                                        static_cast<int>(std::floor(p.y / span)),
                                        static_cast<int>(std::floor(p.z / span))};
         };
+        // Which chunk's collider holds the triangles at a point is fuzzy
+        // within a cell of a chunk face: SurfaceNets gives a chunk the
+        // quads around the lattice edges it owns (lower sample 0..31 on
+        // each axis), whose vertices sit in cells -1..31 -- so its
+        // triangles reach up to a cell below its box's min faces and stop
+        // anywhere in the last cell below its max faces. A point is surely
+        // inside a collided chunk's triangles only when the chunks at it
+        // and at it plus one cell on any mix of axes all have colliders.
+        const auto surely_collided = [&](Vec3 p) {
+            for (int corner = 0; corner < 8; ++corner) {
+                const Vec3 q{p.x + ((corner & 1) != 0 ? voxel_size : 0.f),
+                             p.y + ((corner & 2) != 0 ? voxel_size : 0.f),
+                             p.z + ((corner & 4) != 0 ? voxel_size : 0.f)};
+                if (!terrain_chunk_has_collider(view.terrain, chunk_coord_at(q))) {
+                    return false;
+                }
+            }
+            return true;
+        };
+        // The ray's exact exit parameter (a slab test, Terrain-local) from
+        // the part of coord's box its own collider surely covers: the box
+        // less its last cell below each max face (see surely_collided).
+        const auto sure_exit_of = [&](const terrain::ChunkCoord& coord) {
+            const int index[3] = {coord.x, coord.y, coord.z};
+            float exit = std::numeric_limits<float>::max();
+            for (int axis = 0; axis < 3; ++axis) {
+                if (dir_axis[axis] > 1e-9f) {
+                    exit = std::min(exit,
+                                    ((index[axis] + 1) * span - voxel_size - origin_axis[axis]) / dir_axis[axis]);
+                } else if (dir_axis[axis] < -1e-9f) {
+                    exit = std::min(exit, (index[axis] * span - origin_axis[axis]) / dir_axis[axis]);
+                }
+            }
+            return exit;
+        };
+        const auto in_sure_part = [&](const terrain::ChunkCoord& coord, Vec3 p) {
+            return p.x < (coord.x + 1) * span - voxel_size && p.y < (coord.y + 1) * span - voxel_size &&
+                   p.z < (coord.z + 1) * span - voxel_size;   // coord is p's own chunk: its min faces hold
+        };
 
         const float min_step = 0.25f * voxel_size;
+        // Past a face by this much, so the next chunk lookup lands beyond it
+        // rather than rounding back.
+        const float past_face = 1e-3f * voxel_size;
         constexpr int kBisections = 8;
         float t = t0;
-        float prev_t = t0;
+        float prev_t = t0;   // always a sample known to be outside (d > 0)
         if (!(sampler.distance(at(t0)) > 0.f)) {
             return;   // already inside (or exactly on) the surface where the march begins
         }
         while (t < t1) {
-            if (terrain_chunk_has_collider(view.terrain, chunk_coord_at(at(t)))) {
-                // Box3D's own cast already tested this chunk's shape: skip
-                // past it rather than testing it again.
-                t += span;
-                prev_t = t;
-                continue;
-            }
             const float d = sampler.distance(at(t));
             if (d <= 0.f) {
+                // A crossing between prev_t (outside) and t (inside).
                 float lo_t = prev_t;
                 float hi_t = t;
                 for (int i = 0; i < kBisections; ++i) {
@@ -825,9 +866,14 @@ struct PhysicsWorld::Impl {
                         hi_t = mid;
                     }
                 }
+                const Vec3 local_point = at(hi_t);
+                // Within a collider's triangles the crossing is Box3D's: its
+                // own hit there, nearer than t1, is in hits already.
+                if (surely_collided(local_point)) {
+                    return;
+                }
                 const float world_fraction = hi_t / length;
                 if (world_fraction < hits.closest) {
-                    const Vec3 local_point = at(hi_t);
                     const Vec3 world_point = matrix4_point(view.transform, local_point);
                     const Vec3 world_normal = matrix4_vector(view.transform, sampler.gradient(local_point));
                     hits.hit = true;
@@ -839,9 +885,30 @@ struct PhysicsWorld::Impl {
                 }
                 return;   // only the nearest crossing in this Terrain matters
             }
-            const float step = std::max(d, min_step);
+            const Vec3 p = at(t);
+            const terrain::ChunkCoord coord = chunk_coord_at(p);
+            if (in_sure_part(coord, p) && terrain_chunk_has_collider(view.terrain, coord)) {
+                // Box3D's own cast already tested this chunk's shape: jump
+                // to the ray's exact exit from what that shape surely
+                // covers (R28) rather than testing it again. Solid there
+                // means the crossing lies inside it, where Box3D's
+                // front-face hit is nearer: stop. In the chunk's last cell
+                // below a max face, march on as usual.
+                const float exit = sure_exit_of(coord) + past_face;
+                if (exit > t) {
+                    if (exit >= t1) {
+                        return;
+                    }
+                    if (!(sampler.distance(at(exit)) > 0.f)) {
+                        return;
+                    }
+                    prev_t = exit;
+                    t = exit;
+                    continue;
+                }
+            }
             prev_t = t;
-            t += step;
+            t += std::max(d, min_step);
         }
     }
 

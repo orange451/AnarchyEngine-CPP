@@ -491,6 +491,12 @@ void SelectTerrainNodes(const engine_core::TerrainView& view, const TerrainCamer
             dropped.insert(key);
             continue;
         }
+        // R23: far over the pixel budget now (the camera came on faster than
+        // the fade), it goes at once, and what replaces it draws whole.
+        if (sight.pixelError(nodes[index], sight.box(nodes[index])) > kTerrainFadeOutPixelError) {
+            dropped.insert(key);
+            continue;
+        }
         // Out of view, it stays in the fade (kept in next, left out of the
         // draws below) so that it draws its part again should it come back
         // into view before the fade is done.

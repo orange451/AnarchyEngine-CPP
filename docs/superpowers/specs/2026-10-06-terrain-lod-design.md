@@ -119,3 +119,7 @@ Task 7 crack fix (`LodBuilder`, ruling R21):
 Task 7 draw distance:
 
 - **The Scene View's far plane is 4000 units, its near plane 0.2** (`kSceneFar`, `kSceneNear` in `RenderMath.hpp`), so terrain LOD shows terrain well past the old 1000. With a 24-bit depth buffer, depth precision is about 4.8 units at 4000 (z^2 / (near * 2^24)), so small objects on far terrain may shimmer against it. A reversed-Z or logarithmic depth buffer is future work.
+
+Task 7 fade-outs (ruling R23):
+
+- **A fade-out never shows a node far over the pixel budget.** A node fading out whose pixel error at the current camera is over `kTerrainFadeOutPixelError` (2 px) goes at once, and what replaces it draws whole, so each pixel is still drawn once. Without it, a camera closing faster than a fade (or children arriving a frame late from residency) left coarse nodes dithering out at up to 129 px on the render check's descent. With node errors halving per level, this also ends a zoom-in hold (R18) as soon as the outgoing node passes 2 px; holds on the way out are unchanged.

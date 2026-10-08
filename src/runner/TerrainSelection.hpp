@@ -29,6 +29,10 @@ namespace runner {
 constexpr float kTerrainPixelError = 1.f;
 // How long a switch between levels cross-fades.
 constexpr double kTerrainFadeSeconds = 0.25;
+// A node fading out whose pixel error is over this goes at once (ruling
+// R23), and what replaces it draws whole: no fade-out shows a node far over
+// kTerrainPixelError, as when the camera dives faster than a fade.
+constexpr float kTerrainFadeOutPixelError = 2.f;
 // A drawn node this close to switching (its pixel error at least this) has
 // its children uploaded ahead, nearest first, at most kTerrainPrefetchUploads a frame.
 constexpr float kTerrainPrefetchPixelError = 0.5f;
@@ -128,8 +132,10 @@ float NodePixelError(float error, float distance, float fov_y_degrees, int pane_
 // the set, or a parent needed to split it missing a child), what is chosen
 // there draws whole at once and the rest of that fade stops: never a hole.
 // So does a coarser node replacing descendants that drew only part of its
-// region last frame (the rest out of view). A node fading out that leaves
-// the view stays in its fade, undrawn, and draws again if it comes back.
+// region last frame (the rest out of view), and what replaces a node whose
+// pixel error has grown over kTerrainFadeOutPixelError while it fades out
+// (that node goes at once). A node fading out that leaves the view stays in
+// its fade, undrawn, and draws again if it comes back.
 void SelectTerrainNodes(const engine_core::TerrainView& view, const TerrainCamera& camera, double now_seconds,
                         TerrainFadeState& state, std::vector<NodeChoice>& out);
 

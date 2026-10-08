@@ -453,24 +453,24 @@ TEST_CASE("SEL7 a region mid-fade finishes its fade before it switches again, ev
     CHECK(Coverage(view, out, 64) == "");
 
     SECTION("zooming in again at +0.1 s") {
-        // The grandchildren are wanted now, but the children are still fading in: held.
+        // The grandchildren are wanted now, and the children, still fading in,
+        // are held. But the top fading out is 3 px from here, over
+        // kTerrainFadeOutPixelError: it goes at once (R23), and the children draw whole.
         out = Select(view, kClosest, 1.1, state);
         CHECK(CountLevel(view, out, 5, true) == 4);
-        CHECK(CountLevel(view, out, 6, false) == 1);
+        CHECK(CountLevel(view, out, 6, false) == 0);
         CHECK(CountLevel(view, out, 4, true) == 0);
+        CHECK(std::all_of(out.begin(), out.end(), [](const NodeChoice& choice) { return choice.fade == 1.f; }));
         CHECK(Coverage(view, out, 64) == "");
+        // Whole, they hold nothing: the switch to the grandchildren starts, the children (1.5 px) fading out.
         out = Select(view, kClosest, 1.2, state);
-        CHECK(CountLevel(view, out, 4, true) == 0);
-        CHECK(Coverage(view, out, 64) == "");
-        // Done at +0.25 s: now the switch to the grandchildren starts.
-        out = Select(view, kClosest, 1.25, state);
         CHECK(CountLevel(view, out, 4, true) == 16);
         CHECK(CountLevel(view, out, 5, false) == 4);
         CHECK(CountLevel(view, out, 6, false) == 0);
         CHECK(Coverage(view, out, 64) == "");
         out = Select(view, kClosest, 1.35, state);
         CHECK(Coverage(view, out, 64) == "");
-        out = Select(view, kClosest, 1.5, state);
+        out = Select(view, kClosest, 1.45, state);
         CHECK(out.size() == 16);
         CHECK(Coverage(view, out, 64) == "");
     }
@@ -830,4 +830,77 @@ TEST_CASE("SEL13 zooming and turning at once, culled, draws every pixel in view 
         cameras.push_back(aimed({x, 5.f + h * 20000.f, z}, yaw, drop));
     }
     run([&](int frame) { return cameras[static_cast<std::size_t>(frame)]; }, 400, 1.0 / 30.0);
+}
+
+TEST_CASE("SEL14 diving faster than a fade, no node fading out draws over 2 px, every pixel drawn once",
+          "[terrain][lod][render]") {
+    // Ruling R23. The invariant, each frame: every node drawn fading out has
+    // a pixel error of at most kTerrainFadeOutPixelError; every node drawn
+    // fading in (or steady) over it is the finest available there (level 0,
+    // or a child in its child_mask not published); and every chunk is drawn
+    // exactly once at each dither threshold.
+    const auto run = [](const TerrainView& view, const char* name) {
+        NodeKeySet published;
+        for (const TerrainNodeView& node : *view.nodes) {
+            published.insert(node.key);
+        }
+        const auto finestAvailable = [&](const TerrainNodeView& node) {
+            if (node.key.level == 0 || node.child_mask == 0) {
+                return true;
+            }
+            const auto children = engine_core::terrain::children_of(node.key);
+            for (int i = 0; i < 8; ++i) {
+                if ((node.child_mask & (1u << i)) != 0 && published.count(children[static_cast<std::size_t>(i)]) == 0) {
+                    return true;
+                }
+            }
+            return false;
+        };
+        TerrainFadeState state;
+        float worstOut = 0.f;
+        float worstIn = 0.f;
+        int fadingOutDrawn = 0;
+        int finestOver = 0;
+        // Down from 40,000 units to 5 in one second at 60 frames a second:
+        // 16 % closer each frame, a fade (15 frames) spanning a factor of 9.
+        constexpr int kFrames = 61;
+        for (int frame = 0; frame < kFrames; ++frame) {
+            const float t = static_cast<float>(frame) / static_cast<float>(kFrames - 1);
+            const Vec3 eye{500.f, 40000.f * std::pow(5.f / 40000.f, t), 500.f};
+            const std::vector<NodeChoice> out =
+                Select(view, Looking(eye, {eye.x + 1.f, 0.f, eye.z + 1.f}, false), frame / 60.0, state);
+            INFO(name << " frame " << frame << " eye height " << eye.y);
+            REQUIRE(Coverage(view, out, 64) == "");
+            for (const NodeChoice& choice : out) {
+                const TerrainNodeView& node = (*view.nodes)[choice.index];
+                const float dx = std::max({node.bounds_min.x - eye.x, 0.f, eye.x - node.bounds_max.x});
+                const float dy = std::max({node.bounds_min.y - eye.y, 0.f, eye.y - node.bounds_max.y});
+                const float dz = std::max({node.bounds_min.z - eye.z, 0.f, eye.z - node.bounds_max.z});
+                const float pixels =
+                    NodePixelError(node.error, std::sqrt(dx * dx + dy * dy + dz * dz), kFov, kPaneHeight);
+                INFO("L" << node.key.level << "(" << node.key.x << "," << node.key.z << ") "
+                         << (choice.incoming ? "in " : "out ") << choice.fade << ", " << pixels << " px");
+                if (!choice.incoming) {
+                    ++fadingOutDrawn;
+                    worstOut = std::max(worstOut, pixels);
+                    CHECK(pixels <= kTerrainFadeOutPixelError);
+                } else if (!finestAvailable(node)) {
+                    worstIn = std::max(worstIn, pixels);
+                    CHECK(pixels <= kTerrainFadeOutPixelError);
+                } else if (pixels > kTerrainFadeOutPixelError) {
+                    ++finestOver;
+                }
+            }
+        }
+        WARN(name << ": largest pixel error drawn fading out " << worstOut << " (" << fadingOutDrawn
+                  << " drawn), fading in or steady but not the finest available " << worstIn << "; "
+                  << finestOver << " finest-available draws over " << kTerrainFadeOutPixelError << " px");
+        // The dive still cross-fades: R23 cuts only fades far over budget.
+        CHECK(fadingOutDrawn > 0);
+        return finestOver;
+    };
+    run(Slab(64), "everything published");
+    // Level 0 not built for x below chunk 32, under the camera (residency behind it):
+    // level 1 is the finest there, drawn however large its error.
+    CHECK(run(Slab(64, [](const NodeKey& key) { return key.level > 0 || key.x >= 32; }), "half without level 0") > 0);
 }

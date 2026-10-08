@@ -107,7 +107,11 @@ std::shared_ptr<jadefx::ImageView> icon_view(const std::string& class_name) {
     if ( !icon ) {
         return icon_file("wat.gif");
     }
-    
+    // Class icons are 16px squares whatever the file's size, so a larger one
+    // (icon-sky.png is 32px) is not squashed to the row's height only.
+    icon->setPrefSize(16, 16);
+    icon->setMinSize(16, 16);
+    icon->setMaxSize(16, 16);
     return icon;
 }
 

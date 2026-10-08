@@ -946,25 +946,16 @@ void TerrainLodShots(runner::Renderer& renderer, OffscreenTarget& target, int wi
         auto* workspace = dynamic_cast<engine_core::Workspace*>(game.instance(game.scene_service("Workspace")));
         Expect(workspace != nullptr && workspace->set_current_camera(eye.id()), "the island's camera is current");
 
-        // The edit below can hold chunk jobs with no triangles (air) on their
-        // worker while holdAir is set; 64 workers, more than it holds.
-        std::atomic<bool> holdAir{false};
-        engine_core::TerrainWorld world(
-            [&holdAir](const terrain::ChunkMesh& mesh) -> std::shared_ptr<void> {
-                while (mesh.triangles.empty() && holdAir.load()) {
-                    std::this_thread::sleep_for(std::chrono::milliseconds(1));
-                }
-                return nullptr;
-            },
-            64);
+        // A normal pool; the edit at the end makes its own, which can hold jobs.
+        engine_core::TerrainWorld world;
         // Until an update after the pool is idle publishes no new node set.
-        const auto settle = [&](int passes) {
+        const auto settleWorld = [&](engine_core::TerrainWorld& pool, int passes) {
             std::uint64_t settled = ~std::uint64_t{0};
             for (int pass = 0; pass < passes; ++pass) {
-                world.update(game);
-                world.wait_idle();
-                world.update(game);
-                const std::uint64_t revision = world.views().empty() ? 0 : world.views()[0].nodes_revision;
+                pool.update(game);
+                pool.wait_idle();
+                pool.update(game);
+                const std::uint64_t revision = pool.views().empty() ? 0 : pool.views()[0].nodes_revision;
                 if (revision == settled) {
                     return pass;
                 }
@@ -972,6 +963,7 @@ void TerrainLodShots(runner::Renderer& renderer, OffscreenTarget& target, int wi
             }
             return passes;
         };
+        const auto settle = [&](int passes) { return settleWorld(world, passes); };
         const auto lookFrom = [&](const engine_core::Vec3& from, const engine_core::Vec3& to) {
             const engine_core::Matrix4 placedAt = engine_core::matrix4_look_at(from, to, {0.f, 1.f, 0.f});
             (void)eye.set_transform(placedAt);
@@ -1206,62 +1198,68 @@ void TerrainLodShots(runner::Renderer& renderer, OffscreenTarget& target, int wi
         std::vector<runner::MeshDraw> draws;
 
         // 30 frames 0.1 s apart from the far camera down to 4 units over the
-        // ground, every one checked, every 10th (and the last) written, and
-        // the one with the most nodes cross-fading.
+        // ground at (endX, endZ), looking at endAt by the end, every one
+        // checked, every 10th (and the last) written, and the one with the
+        // most nodes cross-fading. label names the frames; returns that most.
         constexpr int kFrames = 30;
         constexpr double kFrameSeconds = 0.1;
-        // Down onto the rolling grass west of the ridge, looking on west across it.
-        const float endX = 400.f;
-        const float endZ = 560.f;
-        const engine_core::Vec3 endAt{endX - 180.f, ground(endX - 180.f, endZ + 120.f), endZ + 120.f};
-        runner::TerrainFadeState fades;
-        int mostFading = 0;
-        int mostFadingFrame = -1;
-        std::vector<runner::MeshDraw> mostFadingDraws;
-        engine_core::Matrix4 mostFadingCamera = engine_core::matrix4_identity();
-        const Clock::time_point sequence = Clock::now();
-        for (int frame = 0; frame < kFrames; ++frame) {
-            const float s = static_cast<float>(frame) / static_cast<float>(kFrames - 1);
-            const float x = farEye.x + (endX - farEye.x) * s;
-            const float z = farEye.z + (endZ - farEye.z) * s;
-            const float startAbove = farEye.y - ground(farEye.x, farEye.z);
-            const float above = startAbove * std::pow(4.f / startAbove, s);
-            const engine_core::Vec3 from{x, ground(x, z) + above, z};
-            const engine_core::Vec3 to{farAt.x + (endAt.x - farAt.x) * s, farAt.y + (endAt.y - farAt.y) * s,
-                                       farAt.z + (endAt.z - farAt.z) * s};
-            const engine_core::Matrix4 cameraWorld = lookFrom(from, to);
-            // The pool keeps up: what this frame's camera queued is built and published.
-            world.update(game);
-            world.wait_idle();
-            world.update(game);
-            draws.clear();
-            describe(cameraWorld, fades);
-            runner::AppendTerrainDraws(world.views(), camera(cameraWorld), now, fades, meshes, renderer, draws);
-            char name[32];
-            std::snprintf(name, sizeof(name), "seq-%02d", frame);
-            int fading = 0;
-            LodSummary(draws, &fading);
-            const bool written = frame % 10 == 0 || frame == kFrames - 1;
-            check(draws, cameraWorld, name, "");
-            if (written) {
-                litShot(draws, cameraWorld, std::string("lod-") + name + ".png");
-            } else if (fading > mostFading) {
-                mostFading = fading;
-                mostFadingFrame = frame;
-                mostFadingDraws = draws;
-                mostFadingCamera = cameraWorld;
+        const auto descend = [&](const char* label, float endX, float endZ, const engine_core::Vec3& endAt) {
+            runner::TerrainFadeState fades;
+            worstCracks = worstOutside = 0;
+            worstMaterialFar = 0.0;
+            int mostFading = 0;
+            int mostFadingFrame = -1;
+            std::vector<runner::MeshDraw> mostFadingDraws;
+            engine_core::Matrix4 mostFadingCamera = engine_core::matrix4_identity();
+            const Clock::time_point sequence = Clock::now();
+            for (int frame = 0; frame < kFrames; ++frame) {
+                const float s = static_cast<float>(frame) / static_cast<float>(kFrames - 1);
+                const float x = farEye.x + (endX - farEye.x) * s;
+                const float z = farEye.z + (endZ - farEye.z) * s;
+                const float startAbove = farEye.y - ground(farEye.x, farEye.z);
+                const float above = startAbove * std::pow(4.f / startAbove, s);
+                const engine_core::Vec3 from{x, ground(x, z) + above, z};
+                const engine_core::Vec3 to{farAt.x + (endAt.x - farAt.x) * s, farAt.y + (endAt.y - farAt.y) * s,
+                                           farAt.z + (endAt.z - farAt.z) * s};
+                const engine_core::Matrix4 cameraWorld = lookFrom(from, to);
+                // The pool keeps up: what this frame's camera queued is built and published.
+                world.update(game);
+                world.wait_idle();
+                world.update(game);
+                draws.clear();
+                describe(cameraWorld, fades);
+                runner::AppendTerrainDraws(world.views(), camera(cameraWorld), now, fades, meshes, renderer, draws);
+                char name[32];
+                std::snprintf(name, sizeof(name), "%s-%02d", label, frame);
+                int fading = 0;
+                LodSummary(draws, &fading);
+                const bool written = frame % 10 == 0 || frame == kFrames - 1;
+                check(draws, cameraWorld, name, "");
+                if (written) {
+                    litShot(draws, cameraWorld, std::string("lod-") + name + ".png");
+                } else if (fading > mostFading) {
+                    mostFading = fading;
+                    mostFadingFrame = frame;
+                    mostFadingDraws = draws;
+                    mostFadingCamera = cameraWorld;
+                }
+                now += kFrameSeconds;
             }
-            now += kFrameSeconds;
-        }
-        std::printf("lod sequence: %d frames in %.2f s; worst cracks %lld, outside %lld, wrong material %.3f%%\n",
-                    kFrames, seconds(sequence), static_cast<long long>(worstCracks),
-                    static_cast<long long>(worstOutside), worstMaterialFar);
-        if (mostFadingFrame >= 0) {
-            char name[48];
-            std::snprintf(name, sizeof(name), "lod-seq-fade-%02d.png", mostFadingFrame);
-            std::printf("the sequence's most cross-fading frame: %d (%d nodes fading)\n", mostFadingFrame, mostFading);
-            litShot(mostFadingDraws, mostFadingCamera, name);
-        }
+            std::printf("lod %s: %d frames in %.2f s; worst cracks %lld, outside %lld, wrong material %.3f%%\n", label,
+                        kFrames, seconds(sequence), static_cast<long long>(worstCracks),
+                        static_cast<long long>(worstOutside), worstMaterialFar);
+            if (mostFadingFrame >= 0) {
+                char name[48];
+                std::snprintf(name, sizeof(name), "lod-%s-fade-%02d.png", label, mostFadingFrame);
+                std::printf("the %s descent's most cross-fading frame: %d (%d nodes fading)\n", label, mostFadingFrame,
+                            mostFading);
+                litShot(mostFadingDraws, mostFadingCamera, name);
+            }
+            return mostFading;
+        };
+        // Down onto the rolling grass west of the ridge, looking on west across it.
+        const int mostFading = descend("seq", 400.f, 560.f,
+                                       engine_core::Vec3{220.f, ground(220.f, 680.f), 680.f});
         Expect(mostFading > 0, "the sequence cross-fades between levels");
 
         // From off the island's corner, 1300 units from its middle: its far
@@ -1271,13 +1269,32 @@ void TerrainLodShots(runner::Renderer& renderer, OffscreenTarget& target, int wi
         settle(400);
         stillShot(outer, "far-4000");
 
-        // A bomb by a close camera (ruling R24): a ball of radius 8 out of the
-        // ground where its top is in chunk y 1 (so the air chunks queued above
-        // it sit in level-1 nodes with no surface), seen from 40 units off and
-        // 6 above the ground. Frames at 60 fps while the pool works unwaited:
-        // none may fade, or draw the edit's 3 x 3 x 3 chunks with a coarser node
-        // than before it. (Last: the full-detail reference is the island before it.)
+        // A bomb by a close camera (rulings R24, R26): a ball of radius 8 out
+        // of the ground where its top is in chunk y 1 (so the air chunks
+        // queued above it sit in level-1 nodes with no surface), seen from 40
+        // units off and 6 above the ground. Frames at 60 fps while the pool
+        // works unwaited: none may fade, or draw the edit's 3 x 3 x 3 chunks
+        // with a coarser node than before it, and each is checked against the
+        // full detail after the edit: no see-through crack in any frame. Its
+        // own TerrainWorld, with 64 workers and a hook that can hold air
+        // chunk jobs (the rest of the shots use a normal pool); its own mesh
+        // cache, since its revisions start again from 1.
         {
+            std::atomic<bool> holdAir{false};
+            engine_core::TerrainWorld editWorld(
+                [&holdAir](const terrain::ChunkMesh& mesh) -> std::shared_ptr<void> {
+                    while (mesh.triangles.empty() && holdAir.load()) {
+                        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                    }
+                    return nullptr;
+                },
+                64);
+            struct Release {
+                std::atomic<bool>& hold;
+                ~Release() { hold = false; }
+            } release{holdAir};
+            runner::MeshCache editMeshes;
+            runner::TerrainFadeState editFades;
             // The first spot from the middle outwards whose ground is 38 to 56 units high.
             engine_core::Vec3 bomb{kIslandMiddle, ground(kIslandMiddle, kIslandMiddle), kIslandMiddle};
             for (float r = 0.f; r < 300.f && !(bomb.y >= 38.f && bomb.y <= 56.f); r += 8.f) {
@@ -1293,7 +1310,9 @@ void TerrainLodShots(runner::Renderer& renderer, OffscreenTarget& target, int wi
             const engine_core::Vec3 editEye{bomb.x - 40.f, std::max(ground(bomb.x - 40.f, bomb.z), bomb.y) + 6.f,
                                             bomb.z};
             const engine_core::Matrix4 editCamera = lookFrom(editEye, bomb);
-            settle(400);
+            const Clock::time_point editSettle = Clock::now();
+            settleWorld(editWorld, 400);
+            std::printf("lod edit: its own pool settled in %.2f s\n", seconds(editSettle));
             constexpr float kChunkUnits = static_cast<float>(terrain::kChunkSize);
             const int bombChunk[3] = {static_cast<int>(std::floor(bomb.x / kChunkUnits)),
                                       static_cast<int>(std::floor(bomb.y / kChunkUnits)),
@@ -1303,9 +1322,9 @@ void TerrainLodShots(runner::Renderer& renderer, OffscreenTarget& target, int wi
             Expect(bombChunk[1] == 1, "lod edit: the bomb's ground is in chunk y 1");
             // The coarsest level drawn over the edit's chunks, and how many draws fade.
             const auto editFrame = [&](int& coarsest, int& fadingDraws) {
-                runner::TerrainFadeState copy = fades;
+                runner::TerrainFadeState copy = editFades;
                 std::vector<runner::NodeChoice> choices;
-                const engine_core::TerrainView& current = world.views()[0];
+                const engine_core::TerrainView& current = editWorld.views()[0];
                 runner::SelectTerrainNodes(current, camera(editCamera), now, copy, choices);
                 coarsest = -1;
                 fadingDraws = 0;
@@ -1323,12 +1342,13 @@ void TerrainLodShots(runner::Renderer& renderer, OffscreenTarget& target, int wi
                     }
                 }
                 draws.clear();
-                runner::AppendTerrainDraws(world.views(), camera(editCamera), now, fades, meshes, renderer, draws);
+                runner::AppendTerrainDraws(editWorld.views(), camera(editCamera), now, editFades, editMeshes, renderer,
+                                           draws);
             };
             int before = -1;
             int fadingBefore = 0;
             for (int frame = 0; frame < 8; ++frame) {   // any fade from the camera's move is done
-                world.update(game);
+                editWorld.update(game);
                 editFrame(before, fadingBefore);
                 now += 0.1;
             }
@@ -1338,64 +1358,105 @@ void TerrainLodShots(runner::Renderer& renderer, OffscreenTarget& target, int wi
             terrain::Shape ball;
             ball.center = bomb;
             ball.radius = 8.f;
+            // The air chunk jobs (no triangles) are held until the others have
+            // landed (no more for 50 frames): an order the pool may finish them
+            // in, made certain. R26: the edit's batch waits for all of them.
+            holdAir = true;
+            const std::uint64_t meshedBefore = editWorld.meshed_count();
+            Expect(!placed.edit_volume([&](terrain::VoxelVolume& v) { return v.subtract(ball); }).has_value(),
+                   "lod edit: the bomb subtracts");
+            // The full detail after the edit, from the voxels (the pool has not seen the edit yet).
+            const Clock::time_point remeshing = Clock::now();
+            const auto chunksAfter = UploadTerrain(placed.volume());
+            const FlatFrame fullAfter = flatPass(TerrainDraws(chunksAfter, flatLook), editCamera);
+            std::printf("lod edit: the full detail after it, %d chunk meshes, %.2f s\n",
+                        static_cast<int>(chunksAfter.size()), seconds(remeshing));
             int coarsestDuring = -1;
             int fadingDuring = 0;
             int framesNodesChanged = 0;
+            int framesNodesChangedHeld = 0;
             int frames = 0;
-            std::uint64_t lastRevision = world.views()[0].nodes_revision;
-            const auto oneFrame = [&](const char* shot) {
-                world.update(game);
-                if (world.views()[0].nodes_revision != lastRevision) {
-                    lastRevision = world.views()[0].nodes_revision;
+            int framesCracked = 0;
+            std::int64_t worstEditCracks = 0;
+            std::int64_t worstEditOutside = 0;
+            int worstEditFrame = -1;
+            runner::ViewPixels worstEditDiff;
+            std::uint64_t lastRevision = editWorld.views()[0].nodes_revision;
+            const auto oneFrame = [&](const char* shot, bool held) {
+                editWorld.update(game);
+                if (editWorld.views()[0].nodes_revision != lastRevision) {
+                    lastRevision = editWorld.views()[0].nodes_revision;
                     ++framesNodesChanged;
+                    framesNodesChangedHeld += held && frames > 0 ? 1 : 0;
                 }
                 int coarsest = -1;
                 int fading = 0;
                 editFrame(coarsest, fading);
                 coarsestDuring = std::max(coarsestDuring, coarsest);
                 fadingDuring += fading;
+                // See-through: the full detail after the edit covers a pixel this frame leaves empty.
+                runner::ViewPixels diffPicture;
+                const LodDiff diff = CompareFlat(flatPass(draws, editCamera), fullAfter, &diffPicture);
+                framesCracked += diff.cracks > 0 ? 1 : 0;
+                worstEditOutside = std::max(worstEditOutside, diff.outside);
+                if (diff.cracks > worstEditCracks) {
+                    worstEditCracks = diff.cracks;
+                    worstEditFrame = frames;
+                    worstEditDiff = std::move(diffPicture);
+                }
                 if (shot != nullptr) {
                     litShot(draws, editCamera, shot);
                 }
                 now += 1.0 / 60.0;
                 ++frames;
             };
-            // The air chunk jobs (no triangles) are held until the others have
-            // landed (no more for 50 frames) and been published: an order the
-            // pool may finish them in, made certain.
-            holdAir = true;
-            const std::uint64_t meshedBefore = world.meshed_count();
-            Expect(!placed.edit_volume([&](terrain::VoxelVolume& v) { return v.subtract(ball); }).has_value(),
-                   "lod edit: the bomb subtracts");
             std::uint64_t landed = meshedBefore;
+            int heldFrames = 0;
             for (int wait = 0, quiet = 0; wait < 3000 && (landed == meshedBefore || quiet < 50); ++wait) {
-                oneFrame(nullptr);
+                oneFrame(nullptr, true);
+                ++heldFrames;
                 std::this_thread::sleep_for(std::chrono::milliseconds(1));
-                quiet = world.meshed_count() == landed ? quiet + 1 : 0;
-                landed = world.meshed_count();
+                quiet = editWorld.meshed_count() == landed ? quiet + 1 : 0;
+                landed = editWorld.meshed_count();
             }
             std::printf("lod edit: %d chunk jobs with triangles landed while the air ones were held\n",
                         static_cast<int>(landed - meshedBefore));
             Expect(landed > meshedBefore, "lod edit: the bomb's surface chunks landed");
             for (int frame = 0; frame < 10; ++frame) {
-                oneFrame(frame == 9 ? "lod-edit-during.png" : nullptr);
+                oneFrame(frame == 9 ? "lod-edit-during.png" : nullptr, true);
+                ++heldFrames;
             }
             holdAir = false;
             for (int frame = 0; frame < 50; ++frame) {
                 if (frame == 40) {
-                    world.wait_idle();   // the rest lands; the last frames see the rebuilt nodes
+                    editWorld.wait_idle();   // the rest lands; the last frames see the rebuilt nodes
                 }
-                oneFrame(frame == 49 ? "lod-edit-after.png" : nullptr);
+                oneFrame(frame == 49 ? "lod-edit-after.png" : nullptr, false);
                 std::this_thread::sleep_for(std::chrono::milliseconds(5));
             }
             std::printf("lod edit: coarsest over the edit L%d before, L%d during; %d draws faded over %d frames; the "
-                        "node set changed in %d of them\n",
-                        before, coarsestDuring, fadingDuring, frames, framesNodesChanged);
+                        "node set changed in %d of them (%d while the air was held, after the edit's own frame)\n",
+                        before, coarsestDuring, fadingDuring, frames, framesNodesChanged, framesNodesChangedHeld);
+            std::printf("lod edit: against the full detail after it, %d of %d frames see through (worst %lld pixels, "
+                        "frame %d); outside %lld at most (the old surface over the crater, while held)\n",
+                        framesCracked, frames, static_cast<long long>(worstEditCracks), worstEditFrame,
+                        static_cast<long long>(worstEditOutside));
+            if (worstEditFrame >= 0) {
+                write(worstEditDiff, "lod-diff-edit-worst.png");
+            }
             Expect(framesNodesChanged > 0, "lod edit: the bomb re-meshed nodes");
+            Expect(framesNodesChangedHeld == 0, "lod edit: nothing of the batch shows while part of it is held (" +
+                                                    std::to_string(framesNodesChangedHeld) + " frames changed)");
             Expect(fadingDuring == 0, "lod edit: nothing fades (" + std::to_string(fadingDuring) + " draws)");
             Expect(coarsestDuring <= before, "lod edit: nothing over it drawn coarser (L" +
                                                  std::to_string(coarsestDuring) + " against L" +
                                                  std::to_string(before) + ")");
+            Expect(framesCracked == 0, "lod edit: no frame sees through the edit (" + std::to_string(framesCracked) +
+                                           " frames, worst " + std::to_string(worstEditCracks) + " pixels)");
+            draws.clear();
+            runner::TerrainFadeState none;
+            runner::AppendTerrainDraws({}, runner::TerrainCamera{}, now, none, editMeshes, renderer, draws);
+            editMeshes.clear();
         }
 
         draws.clear();

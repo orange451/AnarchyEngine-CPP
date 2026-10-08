@@ -989,3 +989,50 @@ TEST_CASE("SEL14 diving faster than a fade, no node fading out draws over 2 px, 
     // level 1 is the finest there, drawn however large its error.
     CHECK(run(Slab(64, [](const NodeKey& key) { return key.level > 0 || key.x >= 32; }), "half without level 0") > 0);
 }
+
+
+TEST_CASE("SEL17 a stale node with every child published is descended, whole, and drawn again whole once rebuilt",
+          "[terrain][lod][render]") {
+    // Ruling R26. From far off the top node of an 8 x 8 slab draws.
+    const TerrainView slab = Slab(8);
+    const TerrainCamera far = Looking({128.f, 3000.f, 128.f}, {128.f, 0.f, 128.f}, false);
+    TerrainFadeState state;
+    Select(slab, far, 0.0, state);
+    REQUIRE(Select(slab, far, 1.0, state).size() == 1u);
+    // A view of slab with the nodes over chunk (0, 0, 0) at levels from..3 stale.
+    const auto staleFrom = [&](int from, std::uint64_t revision) {
+        TerrainView view = slab;
+        auto nodes = std::make_shared<std::vector<TerrainNodeView>>(*slab.nodes);
+        for (TerrainNodeView& node : *nodes) {
+            node.stale = node.key.level >= from && node.key.x == 0 && node.key.y == 0 && node.key.z == 0;
+        }
+        view.nodes = nodes;
+        view.nodes_revision = revision;
+        return view;
+    };
+    const auto check = [&](const TerrainView& view, double now, int finest, std::size_t count) {
+        INFO("at " << now);
+        const std::vector<NodeChoice> choices = Select(view, far, now, state);
+        CHECK(Coverage(view, choices, 8) == "");
+        CHECK(choices.size() == count);
+        for (const NodeChoice& choice : choices) {
+            const NodeKey& key = KeyOf(view, choice);
+            INFO("L" << key.level << " (" << key.x << ", " << key.y << ", " << key.z << ")");
+            CHECK(choice.incoming);
+            CHECK(choice.fade == 1.f);
+            CHECK_FALSE((*view.nodes)[choice.index].stale);
+            if (key.x == 0 && key.z == 0) CHECK(key.level == finest);
+        }
+    };
+    // The edit queued chunk (0, 0, 0): levels 1 to 3 over it go stale. Selection
+    // goes down to it through them, below the pixel budget, with no fade.
+    const TerrainView edited = staleFrom(1, 2);
+    for (const double now : {1.0 + 1.0 / 60.0, 1.1, 1.3}) check(edited, now, 0, 3u + 3u + 4u);   // 3 L2s, 3 L1s, 4 chunks
+    // Level 1 rebuilt: drawn there, whole.
+    const TerrainView level1 = staleFrom(2, 3);
+    for (const double now : {1.4, 1.5, 1.7}) check(level1, now, 1, 3u + 4u);   // 3 L2s, 4 L1s
+    // Every level rebuilt: the top draws again, whole.
+    TerrainView rebuilt = slab;
+    rebuilt.nodes_revision = 4;
+    for (const double now : {1.8, 1.9, 2.1}) check(rebuilt, now, 3, 1u);
+}

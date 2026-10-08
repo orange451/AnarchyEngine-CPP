@@ -153,9 +153,28 @@ private:
         std::vector<ChunkCollider> colliders_vec;
         std::shared_ptr<const TerrainLook> look;
         std::array<LookInput, 256> look_inputs{};
+        // R26: the chunk jobs one update's edits queued (a batch) publish
+        // together, once each has landed or failed. A batch waits only on
+        // its own jobs: a chunk queued again by a later edit leaves its
+        // earlier batch (which no longer waits on it) for the later one.
+        // A Terrain's first sight is not batched: its chunks show as they land.
+        struct EditBatch {
+            std::size_t waiting = 0;                    // jobs not landed yet
+            std::vector<terrain::MeshResult> landed;    // held until waiting is 0
+        };
+        std::unordered_map<std::uint64_t, EditBatch> batches;
+        // Per chunk with an edit job in flight: its batch.
+        std::unordered_map<terrain::ChunkCoord, std::uint64_t, terrain::ChunkCoordHash> chunk_batch;
     };
 
+    // A result off the pool: dropped if stale, held if its edit batch still
+    // waits on other jobs, else applied (with its batch's held results).
     void accept_result(const terrain::MeshResult& result);
+    // Publishes one current result: meshes, colliders, the LOD tree.
+    void apply_result(TerrainRecord& record, const terrain::MeshResult& result);
+    // coord's edit job is no longer awaited by its batch (it landed, or an
+    // edit queued it again); a batch left waiting on nothing is applied.
+    void leave_batch(TerrainRecord& record, const terrain::ChunkCoord& coord, const terrain::MeshResult* landed);
     void queue_dirty(InstanceId terrain_id, Terrain& terrain, TerrainRecord& record, bool first_seen, bool has_camera,
                       Vec3 camera_pos);
     // One Terrain's LOD work for this update: drops and re-queues chunk
@@ -177,6 +196,7 @@ private:
     std::uint64_t next_job_revision_ = 1;         // backs every TerrainRecord::chunk_revisions value
     std::uint64_t next_chunks_set_revision_ = 1;  // backs every TerrainRecord::chunks_revision value
     std::uint64_t next_nodes_set_revision_ = 1;   // backs every TerrainRecord::nodes_revision value
+    std::uint64_t next_batch_ = 0;                // names each TerrainRecord::EditBatch
     // Shared by every Terrain's LodTree (node job and TerrainNodeView
     // revisions): never reused for this TerrainWorld's life, so a node job
     // from a Terrain's previous stay in Workspace can never be accepted.

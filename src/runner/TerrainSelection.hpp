@@ -82,6 +82,8 @@ struct TerrainFadeState {
         std::vector<engine_core::terrain::NodeKey> keys;   // the set's, in its order
         std::vector<std::uint8_t> masks;                   // and their child_masks
         std::vector<std::size_t> roots;
+        // The stale nodes (R26) last frame descended through, and their ancestors.
+        NodeKeySet forced, forcedAncestors;
         bool seen = false;
     };
     std::unordered_map<engine_core::InstanceId, PerTerrain> terrains;
@@ -94,7 +96,7 @@ struct TerrainFadeState {
     // SelectTerrainCasters and SelectTerrainPrefetch after it.
     std::vector<std::size_t> stack;
     std::vector<std::size_t> selected;
-    NodeKeySet chosen, chosenAncestors, held, holdPath, snapped, snappedAncestors, vanished, vanishedAncestors;
+    NodeKeySet chosen, chosenAncestors, held, holdPath, snapped, snappedAncestors, vanished, vanishedAncestors, forced;
     // Per key, what last frame drew under it: Relatives bits, and the fade of what fades out there.
     std::unordered_map<engine_core::terrain::NodeKey, std::pair<std::uint8_t, float>,
                        engine_core::terrain::NodeKeyHash>
@@ -122,7 +124,14 @@ float NodePixelError(float error, float distance, float fov_y_degrees, int pane_
 // made, not built yet). From each, a node outside camera's view
 // is skipped with its children; a node whose pixel error is under
 // kTerrainPixelError, or at level 0, or with any child in its child_mask
-// missing from the set, is drawn; otherwise each child is tested in turn.
+// missing from the set, is drawn; otherwise each child is tested in turn. A
+// stale node (R26: its mesh predates an edit under it) whose children in its
+// child_mask are all published is never drawn: its children are tested
+// instead, whatever its pixel error or hold.
+//
+// An edit swaps without a fade (R24, R26): a node newly chosen under a stale
+// node descended through this frame, or related to one descended through
+// last frame (now rebuilt), draws whole at once and what it replaces stops.
 //
 // A node newly chosen where last frame drew an ancestor or descendant of it
 // fades in from 0 over kTerrainFadeSeconds, while those fade out; one newly

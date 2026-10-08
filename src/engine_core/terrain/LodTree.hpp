@@ -44,6 +44,11 @@ struct TerrainNodeView {
     // selection meanwhile (TerrainSelection: no published ancestor covers them).
     // Always 0 at level 0.
     std::uint8_t child_mask = 0;
+    // R26: the node awaits a rebuild because a chunk under it was queued
+    // or re-meshed since its build (an edit): its mesh shows the terrain as
+    // it was. Selection draws such a node only when it cannot descend (a
+    // child in child_mask is not published). Always false at level 0.
+    bool stale = false;
     // Exactly one of these is set (R12). Level 0: mesh is the chunk mesh
     // and compact is null. Levels >= 1: compact is the node's quantized
     // mesh, shared with LodTree (never copied), and mesh is null, so nothing

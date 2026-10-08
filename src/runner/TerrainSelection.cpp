@@ -220,15 +220,37 @@ Sight Look(const engine_core::TerrainView& view, const TerrainCamera& camera, co
     return sight;
 }
 
+// node's children in its child_mask, into found (count of them); false if
+// any is not published (R4: then node draws instead).
+bool PublishedChildren(const PerTerrain& terrain, const TerrainNodeView& node, std::size_t (&found)[8], int& count) {
+    const std::array<NodeKey, 8> children = engine_core::terrain::children_of(node.key);
+    count = 0;
+    for (int i = 0; i < 8; ++i) {
+        if ((node.child_mask & (1u << i)) == 0) {
+            continue;
+        }
+        const std::size_t child = Find(terrain, children[static_cast<std::size_t>(i)]);
+        if (child == kNone) {
+            return false;
+        }
+        found[count++] = child;
+    }
+    return true;
+}
+
 // From the roots: what to draw with no fades, culled when cull is set. A
 // node in held draws without its error tested; one in holdPath (an ancestor
-// of a held node) splits whatever its error, if it can.
+// of a held node) splits whatever its error, if it can. A stale node (R26)
+// whose children are all published splits whatever its error or hold, and
+// goes into forced (when given).
 void Traverse(const Sight& sight, bool cull, const NodeKeySet& held, const NodeKeySet& holdPath,
-              std::vector<std::size_t>& stack, std::vector<std::size_t>& selected) {
+              std::vector<std::size_t>& stack, std::vector<std::size_t>& selected, NodeKeySet* forced) {
     const std::vector<TerrainNodeView>& nodes = sight.nodes;
     const bool holding = !held.empty();
     selected.clear();
     stack.assign(sight.terrain.roots.begin(), sight.terrain.roots.end());
+    std::size_t found[8];
+    int count = 0;
     while (!stack.empty()) {
         const std::size_t index = stack.back();
         stack.pop_back();
@@ -237,33 +259,30 @@ void Traverse(const Sight& sight, bool cull, const NodeKeySet& held, const NodeK
         if (cull && !sight.inView(box)) {
             continue;
         }
+        if (node.key.level == 0 || node.child_mask == 0) {
+            selected.push_back(index);
+            continue;
+        }
+        // R26: a stale node shows the terrain from before an edit; its
+        // published children show it since. Below the pixel budget if need be.
+        if (node.stale && PublishedChildren(sight.terrain, node, found, count)) {
+            if (forced != nullptr) {
+                forced->insert(node.key);
+            }
+            stack.insert(stack.end(), found, found + count);
+            continue;
+        }
         if (holding && held.count(node.key) != 0) {
             selected.push_back(index);
             continue;
         }
         const bool split = holding && holdPath.count(node.key) != 0;
-        if (node.key.level == 0 || node.child_mask == 0 ||
-            (!split && sight.pixelError(node, box) < kTerrainPixelError)) {
+        if (!split && sight.pixelError(node, box) < kTerrainPixelError) {
             selected.push_back(index);
             continue;
         }
         // R4: descend only when every child with surface is published.
-        const std::array<NodeKey, 8> children = engine_core::terrain::children_of(node.key);
-        std::size_t found[8];
-        int count = 0;
-        bool complete = true;
-        for (int i = 0; i < 8; ++i) {
-            if ((node.child_mask & (1u << i)) == 0) {
-                continue;
-            }
-            const std::size_t child = Find(sight.terrain, children[static_cast<std::size_t>(i)]);
-            if (child == kNone) {
-                complete = false;
-                break;
-            }
-            found[count++] = child;
-        }
-        if (!complete) {
+        if (!PublishedChildren(sight.terrain, node, found, count)) {
             selected.push_back(index);
             continue;
         }
@@ -369,6 +388,8 @@ void SelectTerrainNodes(const engine_core::TerrainView& view, const TerrainCamer
         terrain.roots.clear();
         terrain.slots.clear();
         terrain.indexFor = nullptr;
+        terrain.forced.clear();
+        terrain.forcedAncestors.clear();
         return;
     }
     const std::vector<TerrainNodeView>& nodes = *view.nodes;
@@ -392,7 +413,9 @@ void SelectTerrainNodes(const engine_core::TerrainView& view, const TerrainCamer
     }
     const Sight sight = Look(view, camera, terrain);
     std::vector<std::size_t>& selected = state.selected;
-    Traverse(sight, sight.cull, state.held, state.holdPath, state.stack, selected);
+    NodeKeySet& forced = state.forced;
+    forced.clear();
+    Traverse(sight, sight.cull, state.held, state.holdPath, state.stack, selected, &forced);
 
     // Fades: what last frame drew (terrain.fades) against what this one chose.
     auto& chosen = state.chosen;
@@ -420,6 +443,12 @@ void SelectTerrainNodes(const engine_core::TerrainView& view, const TerrainCamer
                 fade = Fade{1.f, now_seconds, true};
                 snapped.insert(key);
             }
+        } else if (AncestorIn(forced, key, fadeLimit) || Related(terrain.forced, terrain.forcedAncestors, key, fadeLimit)) {
+            // An edit's swap (R24, R26): reached under a stale node this
+            // frame, or where last frame descended through one (now rebuilt).
+            // Whole at once, and what it replaces stops.
+            fade = Fade{1.f, now_seconds, true};
+            snapped.insert(key);
         } else {
             // New: what of its ancestors and descendants did last frame draw?
             if (!belowReady) {
@@ -563,6 +592,11 @@ void SelectTerrainNodes(const engine_core::TerrainView& view, const TerrainCamer
                              [&](const NodeChoice& choice) { return !sight.inView(sight.box(nodes[choice.index])); }),
               out.end());
     terrain.fades.swap(next);
+    terrain.forced.swap(forced);
+    terrain.forcedAncestors.clear();
+    for (const NodeKey& key : terrain.forced) {
+        AddAncestors(terrain.forcedAncestors, key, fadeLimit);
+    }
 }
 
 void SelectTerrainCasters(const engine_core::TerrainView& view, const TerrainCamera& camera,
@@ -580,7 +614,7 @@ void SelectTerrainCasters(const engine_core::TerrainView& view, const TerrainCam
     }
     // The same selection as the frame's, holds and all, but not culled: in
     // view it is what was chosen; the rest is out of view.
-    Traverse(sight, false, state.held, state.holdPath, state.stack, out);
+    Traverse(sight, false, state.held, state.holdPath, state.stack, out, nullptr);
     const std::vector<TerrainNodeView>& nodes = *view.nodes;
     out.erase(std::remove_if(out.begin(), out.end(),
                              [&](std::size_t index) { return state.chosen.count(nodes[index].key) != 0; }),

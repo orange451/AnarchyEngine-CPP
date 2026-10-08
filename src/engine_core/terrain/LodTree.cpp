@@ -128,7 +128,10 @@ int LodTree::top_level() {
     return top_;
 }
 
-void LodTree::mark_stale(Node& node) { node.revision = next_revision(); }
+void LodTree::mark_stale(Node& node) {
+    node.revision = next_revision();
+    changed_ = true;   // a published node's stale flag (R26) shows at once
+}
 
 void LodTree::ensure_ancestors(ChunkCoord coord, bool mark) {
     NodeKey key = chunk_key(coord);
@@ -457,6 +460,7 @@ std::vector<TerrainNodeView> LodTree::nodes_for_view() {
             }
             view.compact = node.compact;
             view.error = node.error;
+            view.stale = node.stale();
             const std::array<NodeKey, 8> children = children_of(key);
             for (std::size_t i = 0; i < children.size(); ++i) {
                 const Node* child = find(children[i]);

@@ -21,6 +21,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -881,6 +882,184 @@ TEST_CASE("LT12 a bomb by a close camera: no frame draws its region coarser or w
         INFO("level " << key.level);
         REQUIRE(tree->find(key) != nullptr);
         REQUIRE(tree->find(key)->built);
+        REQUIRE_FALSE(tree->find(key)->stale());
+    }
+}
+
+TEST_CASE("LT13 an edit across a chunk border and a level-1 seam: each frame covers every chunk once, with no stale "
+          "node drawn over published children, and the edit's chunks show together",
+          "[terrain][lod][render]") {
+    SimRole role;
+    Game game;
+    Terrain& t = island_terrain(game, 8, 1);   // the top in chunk y 1, about 48 units up
+    const float span = kChunkSize * t.volume().voxel_size();
+    // Over the island, 5 chunks up: levels 0-1 stay resident, and a small
+    // pane draws the edit's region coarse (level >= 1), so the edit's
+    // re-meshed chunks lie under a node that is stale until rebuilt.
+    const Vec3 eye{4.f * span, 48.f + 150.f, 4.5f * span};
+    camera_at(game, eye);
+    // One surface chunk's job, (2, 1, 4), can be held on its worker: the
+    // rest of the edit's chunks land first.
+    const ChunkCoord held_chunk{2, 1, 4};
+    std::atomic<bool> hold{false};
+    TerrainWorld world(
+        [&](const ChunkMesh& mesh) -> std::shared_ptr<void> {
+            if (!mesh.positions.empty()) {
+                Vec3 sum{};
+                for (const Vec3& p : mesh.positions) sum = Vec3{sum.x + p.x, sum.y + p.y, sum.z + p.z};
+                const float n = static_cast<float>(mesh.positions.size());
+                const ChunkCoord at{static_cast<int>(std::floor(sum.x / n / span)),
+                                    static_cast<int>(std::floor(sum.y / n / span)),
+                                    static_cast<int>(std::floor(sum.z / n / span))};
+                while (at == held_chunk && hold.load()) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+            return std::make_shared<int>(1);
+        },
+        16);
+    struct Release {
+        std::atomic<bool>& hold;
+        ~Release() { hold = false; }
+    } release{hold};
+    double now = 0.0;
+    settle_lod(world, game, now);
+    const LodTree* tree = world.lod_tree(t.id());
+    REQUIRE(tree != nullptr);
+
+    runner::TerrainCamera camera;
+    camera.world = matrix4_translation(eye.x, eye.y, eye.z);
+    camera.fov_y_degrees = 60.f;
+    camera.pane_height = 120;
+    camera.pane_width = 0;   // no culling
+    camera.far_z = 1e7f;
+    runner::TerrainFadeState fades;
+    std::vector<runner::NodeChoice> choices;
+    const auto frame = [&] {
+        world.update(game, now);
+        runner::SelectTerrainNodes(world.views()[0], camera, now / 1000.0, fades, choices);
+        now += 16.0;
+    };
+    // The edit's footprint: chunks x 0..3 (the ball spans x 1 and 2), y 0..2, z 3..5.
+    const auto in_footprint = [](const NodeKey& key) {
+        return key.level == 0 && key.x >= 0 && key.x <= 3 && key.y >= 0 && key.y <= 2 && key.z >= 3 && key.z <= 5;
+    };
+    // Per footprint chunk, its published level-0 revision.
+    const auto published_chunks = [&] {
+        std::unordered_map<NodeKey, std::uint64_t, NodeKeyHash> out;
+        for (const TerrainNodeView& node : *world.views()[0].nodes) {
+            if (in_footprint(node.key)) out[node.key] = node.revision;
+        }
+        return out;
+    };
+    for (int i = 0; i < 30; ++i) frame();
+    int coarsest = 0;
+    for (const runner::NodeChoice& choice : choices) {
+        const NodeKey& key = (*world.views()[0].nodes)[choice.index].key;
+        for (const ChunkCoord& c : {ChunkCoord{1, 1, 4}, ChunkCoord{2, 1, 4}}) {
+            for (const NodeKey& up : ancestors_of(c, 3)) {
+                if (key == up) coarsest = std::max(coarsest, key.level);
+            }
+        }
+    }
+    INFO("the edit's region is drawn at level " << coarsest << " before it");
+    REQUIRE(coarsest >= 1);
+    const auto before = published_chunks();
+
+    int frames = 0;
+    std::vector<std::unordered_map<NodeKey, std::uint64_t, NodeKeyHash>> history;
+    const auto check = [&](const char* when) {
+        INFO(when << ", frame " << frames);
+        const std::vector<TerrainNodeView>& nodes = *world.views()[0].nodes;
+        std::unordered_map<NodeKey, int, NodeKeyHash> published;
+        for (std::size_t i = 0; i < nodes.size(); ++i) published[nodes[i].key] = static_cast<int>(i);
+        std::unordered_map<ChunkCoord, int, ChunkCoordHash> drawn;
+        for (const runner::NodeChoice& choice : choices) {
+            const TerrainNodeView& node = nodes[choice.index];
+            const NodeKey& key = node.key;
+            INFO("L" << key.level << " (" << key.x << ", " << key.y << ", " << key.z << ") fade " << choice.fade);
+            REQUIRE(choice.incoming);
+            REQUIRE(choice.fade == 1.f);
+            const int side = 1 << key.level;
+            for (int x = key.x * side; x < (key.x + 1) * side; ++x)
+                for (int y = key.y * side; y < (key.y + 1) * side; ++y)
+                    for (int z = key.z * side; z < (key.z + 1) * side; ++z) ++drawn[ChunkCoord{x, y, z}];
+            // No stale node drawn while every child in its mask is published.
+            if (key.level >= 1) {
+                const LodTree::Node* found = tree->find(key);
+                bool all_published = node.child_mask != 0;
+                const std::array<NodeKey, 8> children = children_of(key);
+                for (int i = 0; i < 8; ++i) {
+                    if ((node.child_mask & (1u << i)) != 0 && published.count(children[static_cast<std::size_t>(i)]) == 0) {
+                        all_published = false;
+                    }
+                }
+                REQUIRE_FALSE((found != nullptr && found->stale() && all_published));
+            }
+        }
+        // Every chunk with surface drawn exactly once.
+        for (const auto& [key, node] : tree->nodes()) {
+            if (key.level != 0 || !node.has_surface) continue;
+            const ChunkCoord coord{key.x, key.y, key.z};
+            INFO("chunk (" << coord.x << ", " << coord.y << ", " << coord.z << ")");
+            const auto found = drawn.find(coord);
+            REQUIRE(found != drawn.end());
+            REQUIRE(found->second == 1);
+        }
+        history.push_back(published_chunks());
+        ++frames;
+    };
+
+    // A ball of radius 6 on the border of chunks x 1 and 2 (x = 64), which
+    // is also the seam between level-1 nodes x 0 and 1.
+    hold = true;
+    Shape ball;
+    ball.center = Vec3{2.f * span, 48.f, 4.5f * span};
+    ball.radius = 6.f;
+    REQUIRE_FALSE(t.edit_volume([&](VoxelVolume& v) { return v.subtract(ball); }));
+    // Until the edit's other chunks have landed (none for 100 frames).
+    std::uint64_t landed = world.meshed_count();
+    for (int i = 0, quiet = 0; i < 5000 && quiet < 100; ++i) {
+        frame();
+        check("chunks landing, (2, 1, 4) held");
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        quiet = world.meshed_count() == landed ? quiet + 1 : 0;
+        landed = world.meshed_count();
+    }
+    hold = false;
+    for (int i = 0; i < 40; ++i) {
+        if (i % 4 == 0) std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        frame();
+        check("released");
+    }
+    for (int i = 0; i < 20; ++i) {
+        world.wait_idle();
+        frame();
+        check("rebuilding");
+    }
+    // The edit's chunks changed together: in each frame, none of them or all.
+    const auto after = published_chunks();
+    std::vector<NodeKey> changed;
+    for (const auto& [key, revision] : after) {
+        const auto old = before.find(key);
+        if (old == before.end() || old->second != revision) changed.push_back(key);
+    }
+    for (const auto& [key, revision] : before) {
+        if (after.count(key) == 0) changed.push_back(key);
+    }
+    REQUIRE(changed.size() >= 2);
+    for (std::size_t f = 0; f < history.size(); ++f) {
+        std::size_t moved = 0;
+        for (const NodeKey& key : changed) {
+            const auto now_it = history[f].find(key);
+            const auto old_it = before.find(key);
+            const std::uint64_t now_revision = now_it != history[f].end() ? now_it->second : 0;
+            const std::uint64_t old_revision = old_it != before.end() ? old_it->second : 0;
+            moved += now_revision != old_revision ? 1 : 0;
+        }
+        INFO("frame " << f << ": " << moved << " of the edit's " << changed.size() << " changed chunks published new");
+        REQUIRE((moved == 0 || moved == changed.size()));
+    }
+    for (const NodeKey& key : ancestors_of(ChunkCoord{2, 1, 4}, 3)) {
+        INFO("level " << key.level);
         REQUIRE_FALSE(tree->find(key)->stale());
     }
 }

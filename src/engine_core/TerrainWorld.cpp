@@ -62,6 +62,48 @@ void TerrainWorld::accept_result(const terrain::MeshResult& result) {
         // in their respective records.
         return;
     }
+    if (!result.failed) {
+        ++meshed_count_;   // counted on landing, whether or not its batch publishes yet
+    }
+    if (record.chunk_batch.count(result.coord) != 0) {
+        leave_batch(record, result.coord, &result);   // an edit's job: published with its batch
+        return;
+    }
+    apply_result(record, result);
+}
+
+void TerrainWorld::leave_batch(TerrainRecord& record, const terrain::ChunkCoord& coord,
+                               const terrain::MeshResult* landed) {
+    const auto member = record.chunk_batch.find(coord);
+    if (member == record.chunk_batch.end()) {
+        return;
+    }
+    const auto batch_it = record.batches.find(member->second);
+    record.chunk_batch.erase(member);
+    if (batch_it == record.batches.end()) {
+        return;
+    }
+    TerrainRecord::EditBatch& batch = batch_it->second;
+    if (landed != nullptr) {
+        batch.landed.push_back(*landed);
+    }
+    if (--batch.waiting > 0) {
+        return;
+    }
+    // Every job of the batch is in: publish them together. A result whose
+    // chunk was queued again since (a later edit) is dropped; that chunk
+    // shows with the later batch.
+    std::vector<terrain::MeshResult> results = std::move(batch.landed);
+    record.batches.erase(batch_it);
+    for (const terrain::MeshResult& result : results) {
+        const auto live = record.chunk_revisions.find(result.coord);
+        if (live != record.chunk_revisions.end() && live->second == result.revision) {
+            apply_result(record, result);
+        }
+    }
+}
+
+void TerrainWorld::apply_result(TerrainRecord& record, const terrain::MeshResult& result) {
     if (result.failed) {
         // The job threw: the chunk keeps its mesh and collider, and its
         // LOD ancestors stop waiting on it.
@@ -71,7 +113,6 @@ void TerrainWorld::accept_result(const terrain::MeshResult& result) {
         }
         return;
     }
-    ++meshed_count_;
     // A job queued only to bring a dropped mesh back: the voxels are as
     // they were, so the collider PhysicsWorld already holds stays (R5:
     // residency never touches colliders) and no LOD ancestor goes stale.
@@ -130,7 +171,18 @@ void TerrainWorld::queue_dirty(InstanceId terrain_id, Terrain& terrain, TerrainR
         volume.take_dirty(dirty);
     }
     const float voxel_size = static_cast<float>(volume.voxel_size());
+    // R26: an edit's chunks (not a first sight's) publish together.
+    std::uint64_t batch = 0;
+    if (!first_seen && !dirty.empty()) {
+        batch = ++next_batch_;
+        record.batches[batch].waiting = 0;
+    }
     for (const terrain::ChunkCoord& coord : dirty) {
+        if (batch != 0) {
+            leave_batch(record, coord, nullptr);   // an earlier batch stops waiting on its old job
+            record.chunk_batch[coord] = batch;
+            ++record.batches[batch].waiting;
+        }
         // Drawn from a counter that lives on TerrainWorld, not this record,
         // so the value is unique for the TerrainWorld's whole life -- see the
         // comment on TerrainRecord::chunk_revisions.
@@ -328,6 +380,8 @@ void TerrainWorld::update(DataModel& game, double now_ms) {
         if (record.tree == nullptr || record.tree->voxel_size() != voxel_size) {
             record.tree = std::make_unique<terrain::LodTree>(voxel_size, &next_node_revision_);
             record.residency_jobs.clear();
+            record.batches.clear();   // their jobs' results no longer match (every chunk is queued again)
+            record.chunk_batch.clear();
             if (!record.meshes.empty()) {
                 record.meshes.clear();   // made at the old voxel size
                 record.chunks_dirty = true;

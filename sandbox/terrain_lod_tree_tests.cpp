@@ -16,16 +16,19 @@
 #include "terrain/LodTree.hpp"
 #include "terrain/SurfaceNets.hpp"
 #include "terrain/VoxelVolume.hpp"
+#include "runner/TerrainSelection.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <functional>
 #include <memory>
 #include <stdexcept>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 
@@ -37,8 +40,9 @@ namespace {
 // A flat-bottomed island over chunks [0, n) x {0} x [0, n): a gentle rolling
 // top, its walls and floor kept 4 cells inside the outer chunks so every
 // surface quad belongs to a chunk of the island itself (no -1 or n chunk).
-std::optional<std::string> fill_island(VoxelVolume& volume, int n) {
-    const int x1 = kChunkSize * n - 1, z1 = x1, y1 = kChunkSize - 1;
+// lift raises the top by that many chunks (the floor stays in chunk 0).
+std::optional<std::string> fill_island(VoxelVolume& volume, int n, int lift = 0) {
+    const int x1 = kChunkSize * n - 1, z1 = x1, y1 = kChunkSize * (1 + lift) - 1;
     const int lo = 4, hi = kChunkSize * n - 5;
     const int width = x1 + 1, height = y1 + 1, depth = z1 + 1;
     std::vector<float> distances(static_cast<std::size_t>(width) * static_cast<std::size_t>(height) *
@@ -46,7 +50,7 @@ std::optional<std::string> fill_island(VoxelVolume& volume, int n) {
     std::vector<std::uint8_t> materials(distances.size(), 1);
     for (int z = 0; z <= z1; ++z) {
         for (int x = 0; x <= x1; ++x) {
-            const float surface = 16.f + 2.f * std::sin(static_cast<float>(x) / 40.f) * std::cos(static_cast<float>(z) / 50.f);
+            const float surface = static_cast<float>(16 + kChunkSize * lift) + 2.f * std::sin(static_cast<float>(x) / 40.f) * std::cos(static_cast<float>(z) / 50.f);
             for (int y = 0; y <= y1; ++y) {
                 const float d = std::max({static_cast<float>(y) - surface, static_cast<float>(lo - y),
                                           static_cast<float>(lo - x), static_cast<float>(x - hi),
@@ -189,10 +193,10 @@ const TerrainNodeView* find_view(const std::vector<TerrainNodeView>& nodes, cons
     return nullptr;
 }
 
-Terrain& island_terrain(DataModel& game, int n) {
+Terrain& island_terrain(DataModel& game, int n, int lift = 0) {
     auto& t = game.create<Terrain>();
     game.set_parent(t.id(), workspace_of(game));
-    REQUIRE_FALSE(t.edit_volume([&](VoxelVolume& v) { return fill_island(v, n); }));
+    REQUIRE_FALSE(t.edit_volume([&](VoxelVolume& v) { return fill_island(v, n, lift); }));
     return t;
 }
 
@@ -675,4 +679,208 @@ TEST_CASE("LT10 a Terrain straddling the origin has one root per side, each chun
     check_roots(box_chunks(ChunkCoord{-2, -2, -2}, ChunkCoord{1, 1, 1}), 1, 8u);
     // No straddle: one root (the control).
     check_roots(box_chunks(ChunkCoord{0, 0, 0}, ChunkCoord{3, 0, 3}), 2, 1u);
+}
+
+// Ruling R24: an edit swaps the re-meshed nodes in place. The chunks queued
+// with it (the 26 around each edited one) include air chunks above the
+// surface; when those sit in a level-1 node that held no surface (here the
+// island's top is in chunk y 1, so the air chunks y 2 are under level-1 y 1),
+// queuing them must not change what the published nodes say about their
+// children, or a drawn region falls back to a coarser ancestor until those
+// chunks come back empty, then fades back in.
+
+TEST_CASE("LT11 a node being rebuilt after an edit stays published, mesh and child_mask, until replaced",
+          "[terrain][lod]") {
+    // Only chunks y 1 have surface: y 0 below is solid and y 2 above is air, both meshed empty.
+    TreeRig rig(1.f, [](ChunkCoord c) -> std::shared_ptr<const anarchy::amesh::Data> {
+        return c.y == 1 ? fake_chunk_mesh(c) : nullptr;
+    });
+    std::vector<ChunkCoord> island;
+    for (const ChunkCoord& c : island_chunks(8)) island.push_back(ChunkCoord{c.x, 1, c.z});
+    rig.edit(island);
+    rig.settle();
+    REQUIRE(rig.tree.top_level() == 3);
+    const std::vector<TerrainNodeView> before = rig.tree.nodes_for_view();
+    REQUIRE(count_level(before, 0) == 64);
+    REQUIRE(count_level(before, 1) == 16);
+
+    // The published set stays as it was (keys, revisions, meshes and masks)
+    // while the edit is in flight, until a node's own rebuild lands.
+    const auto unchanged = [&](const char* when) {
+        INFO(when);
+        const std::vector<TerrainNodeView> now = rig.tree.nodes_for_view();
+        REQUIRE(now.size() == before.size());
+        for (std::size_t i = 0; i < now.size(); ++i) {
+            const NodeKey& key = now[i].key;
+            INFO("level " << key.level << " (" << key.x << ", " << key.y << ", " << key.z << ")");
+            REQUIRE((key == before[i].key));
+            REQUIRE(int{now[i].child_mask} == int{before[i].child_mask});
+            REQUIRE(now[i].revision == before[i].revision);
+            REQUIRE((now[i].compact == before[i].compact && now[i].mesh == before[i].mesh));
+        }
+    };
+    // An edit in chunk (4, 1, 4): it and its 26 neighbors are queued, 9 of them air (y 2).
+    const ChunkCoord edited{4, 1, 4};
+    std::vector<ChunkCoord> footprint;
+    for (int dz = -1; dz <= 1; ++dz)
+        for (int dy = -1; dy <= 1; ++dy)
+            for (int dx = -1; dx <= 1; ++dx) footprint.push_back(ChunkCoord{4 + dx, 1 + dy, 4 + dz});
+    for (const ChunkCoord& c : footprint) rig.tree.chunk_queued(c, true);
+    unchanged("all queued");
+    // The air chunks land first, one at a time: still nothing published changes.
+    for (const ChunkCoord& c : footprint) {
+        if (c.y == 2) {
+            rig.tree.chunk_meshed(c, nullptr, true);
+            unchanged("an air chunk landed");
+        }
+    }
+    // Ancestors wait for the surface chunks; what they rebuild swaps in place.
+    for (const ChunkCoord& c : footprint) {
+        if (c.y != 2) rig.tree.chunk_meshed(c, rig.mesh_chunk(c), true);
+    }
+    rig.settle();
+    const std::vector<TerrainNodeView> after = rig.tree.nodes_for_view();
+    REQUIRE(after.size() == before.size());
+    for (std::size_t i = 0; i < after.size(); ++i) {
+        REQUIRE((after[i].key == before[i].key));
+        REQUIRE(int{after[i].child_mask} == int{before[i].child_mask});
+    }
+    for (const NodeKey& key : ancestors_of(edited, 3)) {
+        INFO("level " << key.level);
+        REQUIRE(find_view(after, key)->revision != find_view(before, key)->revision);
+    }
+
+    // The other way round (the air chunks land last), the same holds.
+    for (const ChunkCoord& c : footprint) rig.tree.chunk_queued(c, true);
+    for (const ChunkCoord& c : footprint) {
+        if (c.y != 2) rig.tree.chunk_meshed(c, rig.mesh_chunk(c), true);
+    }
+    const std::vector<TerrainNodeView> mid = rig.tree.nodes_for_view();
+    REQUIRE(mid.size() == after.size());
+    for (std::size_t i = 0; i < mid.size(); ++i) {
+        INFO("level " << mid[i].key.level << " (" << mid[i].key.x << ", " << mid[i].key.y << ", " << mid[i].key.z
+                      << ")");
+        REQUIRE((mid[i].key == after[i].key));
+        REQUIRE(int{mid[i].child_mask} == int{after[i].child_mask});
+        if (mid[i].key.level > 0) REQUIRE(mid[i].revision == after[i].revision);   // old mesh until rebuilt
+    }
+}
+
+TEST_CASE("LT12 a bomb by a close camera: no frame draws its region coarser or with a fade",
+          "[terrain][lod][render]") {
+    SimRole role;
+    Game game;
+    Terrain& t = island_terrain(game, 8, 1);   // the top in chunk y 1
+    const float span = kChunkSize * t.volume().voxel_size();
+    const Vec3 eye{4.5f * span, 48.f + 30.f, 4.5f * span};
+    camera_at(game, eye);
+    // Air chunk jobs (no triangles) can be held on their worker, to land after the rest.
+    std::atomic<bool> hold_air{false};
+    TerrainWorld world(
+        [&](const ChunkMesh& mesh) -> std::shared_ptr<void> {
+            if (mesh.triangles.empty()) {
+                while (hold_air.load()) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                return nullptr;
+            }
+            return std::make_shared<int>(1);
+        },
+        16);   // more workers than held jobs, so the rest still run
+    // A failed REQUIRE must not leave a worker held while world joins it.
+    struct Release {
+        std::atomic<bool>& hold;
+        ~Release() { hold = false; }
+    } release{hold_air};
+    double now = 0.0;
+    settle_lod(world, game, now);
+    REQUIRE(world.views()[0].top_level == 3);
+
+    runner::TerrainCamera camera;
+    camera.world = matrix4_translation(eye.x, eye.y, eye.z);
+    camera.fov_y_degrees = 60.f;
+    camera.pane_height = 1080;
+    camera.pane_width = 0;   // no culling: every chunk is in view
+    camera.far_z = 1e7f;
+    runner::TerrainFadeState fades;
+    std::vector<runner::NodeChoice> choices;
+    // Per island chunk (x, y, z), the level drawing it.
+    const auto levels = [&] {
+        std::unordered_map<ChunkCoord, int, ChunkCoordHash> out;
+        const std::vector<TerrainNodeView>& nodes = *world.views()[0].nodes;
+        for (const runner::NodeChoice& choice : choices) {
+            const NodeKey& key = nodes[choice.index].key;
+            const int side = 1 << key.level;
+            for (int x = key.x * side; x < (key.x + 1) * side; ++x)
+                for (int y = key.y * side; y < (key.y + 1) * side; ++y)
+                    for (int z = key.z * side; z < (key.z + 1) * side; ++z) {
+                        if (x >= 0 && x < 8 && z >= 0 && z < 8 && y >= 0 && y < 2) {
+                            out[ChunkCoord{x, y, z}] = key.level;
+                        }
+                    }
+        }
+        return out;
+    };
+    const auto frame = [&] {
+        world.update(game, now);
+        runner::SelectTerrainNodes(world.views()[0], camera, now / 1000.0, fades, choices);
+        now += 16.0;
+    };
+    for (int i = 0; i < 30; ++i) frame();   // any first-sight fades are done
+    for (const runner::NodeChoice& choice : choices) REQUIRE(choice.fade == 1.f);
+    const auto settled = levels();
+    REQUIRE(settled.size() == 128u);
+
+    int frames = 0;
+    const auto check = [&](const char* when) {
+        INFO(when << ", frame " << frames);
+        const std::vector<TerrainNodeView>& nodes = *world.views()[0].nodes;
+        for (const runner::NodeChoice& choice : choices) {
+            const NodeKey& key = nodes[choice.index].key;
+            INFO("L" << key.level << " (" << key.x << ", " << key.y << ", " << key.z << ") fade " << choice.fade
+                     << (choice.incoming ? " in" : " out"));
+            REQUIRE(choice.incoming);
+            REQUIRE(choice.fade == 1.f);
+        }
+        const auto drawn = levels();
+        for (const auto& [chunk, level] : settled) {
+            INFO("chunk (" << chunk.x << ", " << chunk.y << ", " << chunk.z << ") was L" << level);
+            const auto found = drawn.find(chunk);
+            REQUIRE(found != drawn.end());     // no hole
+            REQUIRE(found->second <= level);   // never coarser
+        }
+        ++frames;
+    };
+
+    // The bomb: a ball of radius 8 out of the top of chunk (4, 1, 4), right under the camera.
+    hold_air = true;
+    Shape ball;
+    ball.center = Vec3{4.5f * span, 48.f, 4.5f * span};
+    ball.radius = 8.f;
+    REQUIRE_FALSE(t.edit_volume([&](VoxelVolume& v) { return v.subtract(ball); }));
+    const std::uint64_t meshed = world.meshed_count();
+    // Until the 18 surface chunks of its 27 have landed (the 9 air ones held), then a few frames more.
+    for (int i = 0; i < 5000 && world.meshed_count() < meshed + 18; ++i) {
+        frame();
+        check("surface chunks landing");
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    REQUIRE(world.meshed_count() >= meshed + 18);
+    for (int i = 0; i < 10; ++i) {
+        frame();
+        check("air chunks held");
+    }
+    hold_air = false;
+    for (int i = 0; i < 60; ++i) {
+        world.wait_idle();
+        frame();
+        check("rebuilding");
+    }
+    // Every ancestor of the edit was rebuilt, and nothing is left stale.
+    const LodTree* tree = world.lod_tree(t.id());
+    REQUIRE(tree != nullptr);
+    for (const NodeKey& key : ancestors_of(ChunkCoord{4, 1, 4}, 3)) {
+        INFO("level " << key.level);
+        REQUIRE(tree->find(key) != nullptr);
+        REQUIRE(tree->find(key)->built);
+        REQUIRE_FALSE(tree->find(key)->stale());
+    }
 }

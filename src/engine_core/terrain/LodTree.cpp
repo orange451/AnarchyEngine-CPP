@@ -155,7 +155,9 @@ bool LodTree::has_children(const NodeKey& key) const {
 }
 
 bool LodTree::surfaced(const NodeKey& key, const Node& node) const {
-    return key.level == 0 ? node.has_surface : (!node.built || node.has_surface);
+    // A level >= 1 node not built yet (one an edit's queued chunks just
+    // made, most of them air that comes back empty) counts once it is.
+    return key.level == 0 ? node.has_surface : (node.built && node.has_surface);
 }
 
 bool LodTree::child_ready(const NodeKey& key, const Node& node) const {

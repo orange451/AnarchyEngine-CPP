@@ -21,6 +21,7 @@
 #include <limits>
 #include <memory>
 #include <string>
+#include <tuple>
 #include <vector>
 
 using Catch::Approx;
@@ -345,6 +346,90 @@ TEST_CASE("SEL5 a node with a child missing from the set is drawn instead of its
         return KeyOf(noTop, choice).level == 6;
     }));
     CHECK(Coverage(missing, out, 64) == "");
+}
+
+TEST_CASE("SEL15 an edit swaps nodes in place: new revisions and new nodes draw whole, nothing coarsens",
+          "[terrain][lod][render]") {
+    // Ruling R24. Close over the corner of an 8 x 8 slab: level 0 there.
+    const TerrainView slab = Slab(8);
+    const TerrainCamera close = Looking({16.f, 20.f, 16.f}, {16.f, 0.f, 16.f}, false);
+    TerrainFadeState state;
+    Select(slab, close, 0.0, state);
+    const std::vector<NodeChoice> settled = Select(slab, close, 1.0, state);
+    REQUIRE(Coverage(slab, settled, 8) == "");
+    const auto name = [](const NodeKey& key) {
+        return "L" + std::to_string(key.level) + "(" + std::to_string(key.x) + "," + std::to_string(key.y) + "," +
+               std::to_string(key.z) + ")";
+    };
+    // The chosen keys, sorted; each drawn whole (no fade).
+    const auto keys = [&](const TerrainView& view, const std::vector<NodeChoice>& choices) {
+        std::vector<std::string> out;
+        for (const NodeChoice& choice : choices) {
+            INFO(name(KeyOf(view, choice)));
+            CHECK(choice.incoming);
+            CHECK(choice.fade == 1.f);
+            out.push_back(name(KeyOf(view, choice)));
+        }
+        std::sort(out.begin(), out.end());
+        return out;
+    };
+    const std::vector<std::string> before = keys(slab, settled);
+
+    // 1. The edit re-meshed every node: the same keys with new revisions, a new set.
+    TerrainView remeshed = slab;
+    auto nodes = std::make_shared<std::vector<TerrainNodeView>>(*slab.nodes);
+    for (TerrainNodeView& node : *nodes) node.revision += 1000;
+    remeshed.nodes = nodes;
+    remeshed.nodes_revision = 2;
+    for (const double now : {1.1, 1.2, 1.4}) {
+        INFO("re-meshed, at " << now);
+        CHECK(keys(remeshed, Select(remeshed, close, now, state)) == before);
+    }
+
+    // 2. The edit made surface in a region with none: chunk (0, 2, 0), whose
+    // level-1 parent is not built yet, so the level-2 node over it leaves that
+    // parent out of its child_mask. It is a root and draws whole at once; the
+    // rest is as it was (nothing coarser), no hole.
+    TerrainView grown = remeshed;
+    auto withNew = std::make_shared<std::vector<TerrainNodeView>>(*nodes);
+    TerrainNodeView fresh;
+    fresh.key = NodeKey{0, 0, 2, 0};
+    fresh.revision = 5000;
+    engine_core::terrain::node_bounds(fresh.key, 1.f, fresh.bounds_min, fresh.bounds_max);
+    withNew->insert(withNew->begin(), fresh);
+    grown.nodes = withNew;
+    grown.nodes_revision = 3;
+    std::vector<std::string> withFresh = before;
+    withFresh.push_back(name(fresh.key));
+    std::sort(withFresh.begin(), withFresh.end());
+    for (const double now : {1.5, 1.6, 1.8}) {
+        INFO("new chunk, at " << now);
+        CHECK(keys(grown, Select(grown, close, now, state)) == withFresh);
+    }
+
+    // 3. Its parent is built: the level-2 node now counts it, selection
+    // reaches the new chunk through it, and still nothing fades.
+    TerrainView built = grown;
+    auto withParent = std::make_shared<std::vector<TerrainNodeView>>(*withNew);
+    TerrainNodeView parent;
+    parent.key = NodeKey{1, 0, 1, 0};
+    parent.revision = 5001;
+    parent.error = 0.5f;
+    parent.child_mask = 1u << 0;   // child (0, 2, 0)
+    engine_core::terrain::node_bounds(parent.key, 1.f, parent.bounds_min, parent.bounds_max);
+    for (TerrainNodeView& node : *withParent) {
+        if (node.key == NodeKey{2, 0, 0, 0}) node.child_mask = static_cast<std::uint8_t>(node.child_mask | (1u << 2));
+    }
+    withParent->push_back(parent);
+    std::sort(withParent->begin(), withParent->end(), [](const TerrainNodeView& a, const TerrainNodeView& b) {
+        return std::tie(a.key.level, a.key.x, a.key.y, a.key.z) < std::tie(b.key.level, b.key.x, b.key.y, b.key.z);
+    });
+    built.nodes = withParent;
+    built.nodes_revision = 4;
+    for (const double now : {1.9, 2.0, 2.2}) {
+        INFO("parent built, at " << now);
+        CHECK(keys(built, Select(built, close, now, state)) == withFresh);
+    }
 }
 
 TEST_CASE("SEL6 selection over a 4 km island's nodes takes under half a millisecond", "[.][terrain-bench]") {

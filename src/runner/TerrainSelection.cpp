@@ -53,17 +53,23 @@ std::size_t Find(const PerTerrain& terrain, const NodeKey& key) {
     }
 }
 
-// The table and roots for nodes, a new node set. The same keys as the last
-// (only meshes changed, as an edit re-meshing nodes does) keep both.
+// The table and roots for nodes, a new node set. The same keys and masks as
+// the last (only meshes changed, as an edit re-meshing nodes does) keep both.
 void Index(PerTerrain& terrain, const std::vector<TerrainNodeView>& nodes, int levelLimit) {
-    if (terrain.keys.size() == nodes.size() && !terrain.slots.empty() &&
-        std::equal(nodes.begin(), nodes.end(), terrain.keys.begin(),
-                   [](const TerrainNodeView& node, const NodeKey& key) { return node.key == key; })) {
-        return;
+    if (terrain.keys.size() == nodes.size() && !terrain.slots.empty()) {
+        bool same = true;
+        for (std::size_t index = 0; index < nodes.size() && same; ++index) {
+            same = nodes[index].key == terrain.keys[index] && nodes[index].child_mask == terrain.masks[index];
+        }
+        if (same) {
+            return;
+        }
     }
     terrain.keys.resize(nodes.size());
+    terrain.masks.resize(nodes.size());
     for (std::size_t index = 0; index < nodes.size(); ++index) {
         terrain.keys[index] = nodes[index].key;
+        terrain.masks[index] = nodes[index].child_mask;
     }
     std::size_t size = 16;
     while (size < nodes.size() * 2) {
@@ -78,15 +84,22 @@ void Index(PerTerrain& terrain, const std::vector<TerrainNodeView>& nodes, int l
         }
         terrain.slots[slot] = static_cast<std::uint32_t>(index + 1);
     }
-    // A root has no published ancestor; nearly every node's parent is published, one lookup.
+    // A root has no published ancestor covering it: none at all, or the
+    // nearest one's child_mask leaves out the child on the way down (a
+    // child not built yet, new since that ancestor's build: R24), so
+    // selection would never reach it from there. Nearly every node's parent
+    // is published, one lookup.
     terrain.roots.clear();
     for (std::size_t index = 0; index < nodes.size(); ++index) {
         NodeKey key = terrain.keys[index];
         bool root = true;
         while (key.level < levelLimit) {
+            const NodeKey child = key;
             key = Parent(key);
-            if (Find(terrain, key) != kNone) {
-                root = false;
+            const std::size_t above = Find(terrain, key);
+            if (above != kNone) {
+                const int bit = (child.x - key.x * 2) + 2 * (child.y - key.y * 2) + 4 * (child.z - key.z * 2);
+                root = (terrain.masks[above] & (1u << bit)) == 0;
                 break;
             }
         }

@@ -75,11 +75,12 @@ struct TerrainFadeState {
         std::unordered_map<engine_core::terrain::NodeKey, Fade, engine_core::terrain::NodeKeyHash> fades;
         // Of the node set whose nodes_revision is indexRevision: an open-addressed
         // table of node index + 1 by key (0 empty; its size a power of two), and
-        // the roots, the nodes with no published ancestor.
+        // the roots, the nodes no published ancestor covers.
         std::uint64_t indexRevision = 0;
         const void* indexFor = nullptr;
         std::vector<std::uint32_t> slots;
         std::vector<engine_core::terrain::NodeKey> keys;   // the set's, in its order
+        std::vector<std::uint8_t> masks;                   // and their child_masks
         std::vector<std::size_t> roots;
         bool seen = false;
     };
@@ -115,8 +116,10 @@ float NodePixelError(float error, float distance, float fov_y_degrees, int pane_
 // (any origin, never decreasing). Pure but for state, which carries fades
 // between frames, keyed by Terrain and node.
 //
-// The roots are the published nodes with no published ancestor (the nodes at
-// top_level once those are built). From each, a node outside camera's view
+// The roots are the published nodes no published ancestor covers: those with
+// none (the nodes at top_level once those are built), and those whose nearest
+// one leaves the child on the way down out of its child_mask (a node an edit
+// made, not built yet). From each, a node outside camera's view
 // is skipped with its children; a node whose pixel error is under
 // kTerrainPixelError, or at level 0, or with any child in its child_mask
 // missing from the set, is drawn; otherwise each child is tested in turn.

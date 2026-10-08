@@ -31,9 +31,18 @@ struct TerrainNodeView {
     // Terrain-local: the union of node_bounds(key) and the mesh's own AABB
     // (R2 -- Surface Nets boundary vertices and skirts lie outside the box).
     Vec3 bounds_min{}, bounds_max{};
-    // R4: bit i set when children_of(key)[i] exists in the tree with surface
-    // (built or not yet built). Selection descends only when every child in
-    // the mask is in the published set. Always 0 at level 0.
+    // R4: bit i set when children_of(key)[i] exists in the tree with surface:
+    // a level-0 child whose last mesh had triangles (resident or not), a
+    // level >= 1 child once built with surface (resident or not). Selection
+    // descends only when every child in the mask is in the published set.
+    // A child not built yet is left out (R24): a parent
+    // is built only once its children are, so such a child is new since the
+    // parent's build -- made by an edit, whose queued neighbor chunks are
+    // mostly air and come back empty -- and its region had no surface in the
+    // parent's mesh. Counting it would make the parent draw itself, coarse,
+    // until it was built or removed. Its published descendants are roots for
+    // selection meanwhile (TerrainSelection: no published ancestor covers them).
+    // Always 0 at level 0.
     std::uint8_t child_mask = 0;
     // Exactly one of these is set (R12). Level 0: mesh is the chunk mesh
     // and compact is null. Levels >= 1: compact is the node's quantized

@@ -8,6 +8,7 @@
 // to the whole ChunkMap rather than one chunk's 26 neighbors.
 
 #include "Vector3.hpp"
+#include "terrain/BlendWeights.hpp"
 #include "terrain/VoxelChunk.hpp"
 #include "terrain/VoxelVolume.hpp"
 
@@ -41,6 +42,9 @@ public:
     // distance is lowest among its cell's 8 corners -- the same rule
     // SurfaceNets' build_vertices uses to pick a vertex's Id.
     std::uint8_t id(Vec3 p) const;
+    // Task 2 (terrain textures): the same blend_weights() rule, over the 8
+    // corners of p's cell (the same 8 cells id() and distance() read).
+    BlendIds blend(Vec3 p) const;
 
 private:
     Cell cell_at(int cx, int cy, int cz) const;

@@ -1,5 +1,6 @@
 #include "terrain/SurfaceNets.hpp"
 
+#include "terrain/BlendWeights.hpp"
 #include "terrain/VoxelVolume.hpp"
 
 #include <algorithm>
@@ -188,9 +189,12 @@ void build_vertices(const std::vector<float>& distances, const std::vector<std::
         for (int j = kCellMin; j <= kCellMax; ++j) {
             for (int i = kCellMin; i <= kCellMax; ++i) {
                 float d[8];
+                std::uint8_t corner_ids[8];
                 int mask = 0;
                 for (int c = 0; c < 8; ++c) {
-                    d[c] = distances[sample_index(i + kCorner[c][0], j + kCorner[c][1], k + kCorner[c][2])];
+                    const std::size_t index = sample_index(i + kCorner[c][0], j + kCorner[c][1], k + kCorner[c][2]);
+                    d[c] = distances[index];
+                    corner_ids[c] = ids[index];
                     if (d[c] < 0.f) {
                         mask |= 1 << c;
                     }
@@ -226,13 +230,7 @@ void build_vertices(const std::vector<float>& distances, const std::vector<std::
                 const float fy = sum_y / static_cast<float>(count);
                 const float fz = sum_z / static_cast<float>(count);
 
-                int lowest = 0;
-                for (int c = 1; c < 8; ++c) {
-                    if (d[c] < d[lowest]) {
-                        lowest = c;
-                    }
-                }
-                const std::uint8_t id = ids[sample_index(i + kCorner[lowest][0], j + kCorner[lowest][1], k + kCorner[lowest][2])];
+                const BlendIds blend = blend_weights(d, corner_ids, voxel_size);
                 const Vec3 normal = gradient(distances, i, j, k, fx, fy, fz);
 
                 // Absolute integer cell + fraction, combined in one float
@@ -250,14 +248,10 @@ void build_vertices(const std::vector<float>& distances, const std::vector<std::
                 vertex.n[0] = normal.x;
                 vertex.n[1] = normal.y;
                 vertex.n[2] = normal.z;
-                vertex.t[0] = 1.f;
-                vertex.t[1] = 0.f;
-                vertex.t[2] = 0.f;
-                vertex.t[3] = 0.f;
-                vertex.rgba[0] = id;
-                vertex.rgba[1] = 0;
-                vertex.rgba[2] = 0;
-                vertex.rgba[3] = 0;
+                for (int s = 0; s < 4; ++s) {
+                    vertex.t[s] = blend.weights[s];
+                    vertex.rgba[s] = blend.ids[s];
+                }
 
                 const std::uint32_t vertex_index = static_cast<std::uint32_t>(render.vertices.size());
                 render.vertices.push_back(vertex);
@@ -380,6 +374,12 @@ ChunkMesh surface_nets(const MeshInput& input) {
     }
     render.indices = mesh.triangles;
     anarchy::amesh::compute_aabb(render);
+    // Decision 1 (terrain textures): split border triangles -- whose three
+    // vertices do not carry the same material set -- into their own
+    // vertices, so the shader can blend without a geometry shader. Render
+    // mesh only: mesh.positions/mesh.triangles (collision) were already
+    // captured above and are untouched by this.
+    split_border_triangles(render);
     mesh.render = std::make_shared<const anarchy::amesh::Data>(std::move(render));
     return mesh;
 }

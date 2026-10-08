@@ -9,6 +9,7 @@
 #include "Terrain.hpp"
 #include "TerrainWorld.hpp"
 #include "amesh.hpp"
+#include "terrain/BlendWeights.hpp"
 #include "terrain/LodBuilder.hpp"
 #include "terrain/LodNode.hpp"
 #include "terrain/LodTree.hpp"
@@ -807,30 +808,34 @@ TEST_CASE("RS1 a level-2 node of a ball re-shades every original vertex's normal
 
 namespace {
 
-// Independent of VoxelSampler: the same "lowest-distance corner's Id" rule
-// Surface Nets uses, but read straight from volume.cell() (VoxelVolume's
-// own chunk-map lookup, not VoxelSampler's) rather than calling the
-// production sampler under test.
+// Independent of VoxelSampler: the same blend_weights() rule
+// VoxelSampler::blend() (and so reshade_vertices) now uses for a vertex's
+// dominant Id -- Task 2 of the terrain textures plan superseded the old
+// "lowest-distance corner's Id alone" rule this helper used to mirror, with
+// one that votes over every corner within voxel_size of the surface and
+// keeps the top Id (ties by lower Id); rgba[0] is that top Id. Read straight
+// from volume.cell() (VoxelVolume's own chunk-map lookup, not VoxelSampler's)
+// rather than calling the production sampler under test.
 std::uint8_t expected_id_at(const VoxelVolume& volume, Vec3 p) {
     const float voxel_size = volume.voxel_size();
     const int ix = static_cast<int>(std::floor(p.x / voxel_size));
     const int iy = static_cast<int>(std::floor(p.y / voxel_size));
     const int iz = static_cast<int>(std::floor(p.z / voxel_size));
 
-    int lowest_distance = std::numeric_limits<int>::max();
-    std::uint8_t lowest_id = 0;
+    float distances[8];
+    std::uint8_t ids[8];
+    int c = 0;
     for (int dz = 0; dz <= 1; ++dz) {
         for (int dy = 0; dy <= 1; ++dy) {
             for (int dx = 0; dx <= 1; ++dx) {
                 const Cell cell = volume.cell(CellCoord{ix + dx, iy + dy, iz + dz});
-                if (static_cast<int>(cell.distance) < lowest_distance) {
-                    lowest_distance = cell.distance;
-                    lowest_id = cell.material;
-                }
+                distances[c] = dequantize(cell.distance, voxel_size);
+                ids[c] = cell.material;
+                ++c;
             }
         }
     }
-    return lowest_id;
+    return blend_weights(distances, ids, voxel_size).ids[0];
 }
 
 }  // namespace
@@ -861,7 +866,17 @@ TEST_CASE("RS2 a node spanning a two-material boundary assigns each vertex the f
         const std::uint8_t expected = expected_id_at(volume, p);
         INFO("vertex " << i << " position (" << p.x << ", " << p.y << ", " << p.z << "), rgba[0] " << int(v.rgba[0])
                         << ", expected " << int(expected));
-        REQUIRE(static_cast<int>(v.rgba[0]) == static_cast<int>(expected));
+        // Decision 1 (terrain textures): a vertex whose triangle spans more
+        // than one material set gets split, carrying that triangle's merged
+        // Ids (top 4 by summed weight *over the triangle*) rather than only
+        // this one corner's own independently-sampled Id -- rgba[0] is then
+        // the triangle's dominant Id, not necessarily this corner's own.
+        // The corner's own Id is still carried (projected and renormalized
+        // onto the merged set), just not necessarily in slot 0, so check
+        // for it among all 4 slots rather than slot 0 alone.
+        const bool carries_expected =
+            v.rgba[0] == expected || v.rgba[1] == expected || v.rgba[2] == expected || v.rgba[3] == expected;
+        REQUIRE(carries_expected);
         saw_material_a = saw_material_a || v.rgba[0] == 2;
         saw_material_b = saw_material_b || v.rgba[0] == 5;
     }
@@ -1212,7 +1227,16 @@ TEST_CASE("RS7 on a clay mound half-buried in a grass slab, every level-1 triang
                                             (v[0]->p[1] + v[1]->p[1] + v[2]->p[1]) / 3.f,
                                             (v[0]->p[2] + v[1]->p[2] + v[2]->p[2]) / 3.f};
                         const std::uint8_t truth = sampler.id(centroid);
-                        const bool any = v[0]->rgba[0] == truth || v[1]->rgba[0] == truth || v[2]->rgba[0] == truth;
+                        // Decision 1 (terrain textures): a corner carries
+                        // truth in any of its 4 slots, not necessarily
+                        // slot 0 -- a split triangle's three corners share
+                        // one triangle-wide merged slot layout, so truth
+                        // (if the triangle carries it at all) could land in
+                        // any of them, the same for every corner.
+                        auto carries = [](const anarchy::amesh::Vertex* vv, std::uint8_t id) {
+                            return vv->rgba[0] == id || vv->rgba[1] == id || vv->rgba[2] == id || vv->rgba[3] == id;
+                        };
+                        const bool any = carries(v[0], truth) || carries(v[1], truth) || carries(v[2], truth);
                         if (!any) {
                             continue;   // no vertex carries it: nothing a triangle's own Ids can do
                         }
@@ -1232,7 +1256,7 @@ TEST_CASE("RS7 on a clay mound half-buried in a grass slab, every level-1 triang
                                       << " centroid (" << centroid.x << ", " << centroid.y << ", " << centroid.z
                                       << ") Ids " << int(v[0]->rgba[0]) << " " << int(v[1]->rgba[0]) << " "
                                       << int(v[2]->rgba[0]) << ", the field's " << int(truth));
-                        REQUIRE(v[2]->rgba[0] == truth);
+                        REQUIRE(carries(v[2], truth));
                         ++checked;
                     }
                     // Skirts fold into the solid: no skirt vertex out in the air.

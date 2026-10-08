@@ -1,5 +1,6 @@
 #include "terrain/LodBuilder.hpp"
 
+#include "terrain/BlendWeights.hpp"
 #include "terrain/VoxelSampler.hpp"
 
 #include <meshoptimizer.h>
@@ -283,10 +284,10 @@ std::vector<std::uint32_t> collect_border_edges(const anarchy::amesh::Data& mesh
 
 // Re-shades every vertex of mesh from the full-resolution field sampler
 // reads: normal = the field's gradient at the vertex's (unchanged) position;
-// Id = the lowest-distance corner's Id of the full-resolution cell around
-// it. Mirrors exactly what SurfaceNets.cpp's build_vertices writes for a
-// vertex's n/rgba (rgba[1..3] stay 0; weight[] is untouched -- a Surface
-// Nets mesh carries no skinning weights to begin with).
+// Ids/weights = blend_weights() over the full-resolution cell around it
+// (VoxelSampler::blend). Mirrors exactly what SurfaceNets.cpp's
+// build_vertices writes for a vertex's n/rgba/t (weight[] is untouched -- a
+// Surface Nets mesh carries no skinning weights to begin with).
 void reshade_vertices(anarchy::amesh::Data& mesh, const VoxelSampler& sampler) {
     for (anarchy::amesh::Vertex& v : mesh.vertices) {
         const Vec3 p{v.p[0], v.p[1], v.p[2]};
@@ -294,10 +295,11 @@ void reshade_vertices(anarchy::amesh::Data& mesh, const VoxelSampler& sampler) {
         v.n[0] = n.x;
         v.n[1] = n.y;
         v.n[2] = n.z;
-        v.rgba[0] = sampler.id(p);
-        v.rgba[1] = 0;
-        v.rgba[2] = 0;
-        v.rgba[3] = 0;
+        const BlendIds blend = sampler.blend(p);
+        for (int s = 0; s < 4; ++s) {
+            v.rgba[s] = blend.ids[s];
+            v.t[s] = blend.weights[s];
+        }
     }
 }
 
@@ -862,6 +864,13 @@ LodResult build_node(const LodInput& input) {
     const float skirt_depth = std::max(2.f * result.error, input.voxel_size);
     add_skirts(best_mesh, result.border_edges, border_thirds, skirt_depth);
     anarchy::amesh::compute_aabb(best_mesh);  // skirt vertices can lie outside the pre-skirt AABB
+
+    // Decision 1 (terrain textures): split border triangles last, after
+    // border-edge collection and skirts -- both rely on this node's own
+    // shared-vertex topology (an edge used by exactly one triangle), which
+    // splitting (new, unshared vertices per split triangle) would otherwise
+    // disturb. Render mesh only, same as surface_nets' own call.
+    split_border_triangles(best_mesh);
 
     result.mesh = std::make_shared<const anarchy::amesh::Data>(std::move(best_mesh));
     return result;

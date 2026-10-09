@@ -8,6 +8,7 @@
 #include "Project.hpp"
 #include "PropertyBag.hpp"
 #include "TerrainMaterial.hpp"
+#include "terrain/AlodStore.hpp"
 #include "terrain/AvoxFile.hpp"
 #include "terrain/TerrainStash.hpp"
 
@@ -126,15 +127,21 @@ bool captured_voxels(const std::vector<std::byte>* captured, std::string& path, 
     return true;
 }
 
-// Writes chunks as the .avox file at path under root.
+// Writes chunks as the .avox file at path under root; key, when given, gets
+// the written bytes' content key.
 std::optional<std::string> write_avox(const std::filesystem::path& root, const std::string& name,
-                                      const std::string& path, const terrain::ChunkMap& chunks, float voxel_size) {
+                                      const std::string& path, const terrain::ChunkMap& chunks, float voxel_size,
+                                      std::uint64_t* key = nullptr) {
     if (std::optional<std::string> error = resource_path_error(path)) {
         return "Terrain " + name + ": DataPath " + path + ": " + *error;
     }
     terrain::VoxelVolume volume(voxel_size);
     volume.set_chunks(chunks);
-    return write_resource_file(root, path, terrain::encode_avox(volume));
+    const std::vector<std::byte> bytes = terrain::encode_avox(volume);
+    if (key != nullptr) {
+        *key = terrain::content_key_of(bytes.data(), bytes.size());
+    }
+    return write_resource_file(root, path, bytes);
 }
 
 }  // namespace
@@ -302,11 +309,22 @@ void Terrain::load_data_path(std::string path) {
     }
     // A paste: the copy starts with its source's voxels and its own file.
     volume_.set_chunks(std::move(chunks));
+    content_key_ = 0;
     data_path_ = own_data_path(std::string());
     emit_property("DataPath");
     note_unrecorded_edit(id());
     // The paste's step recorded this Terrain empty when it was made.
     refresh_created_record(id());
+}
+
+std::filesystem::path Terrain::lod_cache_path() const {
+    const std::filesystem::path root = resources_root();
+    if (root.empty() || data_path_.empty() || resource_path_error(data_path_)) {
+        return std::filesystem::path();
+    }
+    std::filesystem::path file = root / std::filesystem::u8path(data_path_);
+    file.replace_extension(".alod");
+    return file;
 }
 
 void Terrain::read_data_file(std::string path) {
@@ -319,6 +337,7 @@ void Terrain::read_data_file(std::string path) {
     std::optional<std::string> damage = resource_path_error(data_path_);
     const std::filesystem::path file = root / std::filesystem::u8path(data_path_);
     std::error_code error;
+    content_key_ = 0;
     if (!damage && !std::filesystem::is_regular_file(file, error)) {
         volume_.set_chunks(terrain::ChunkMap{});
         warn("Terrain " + name(id()) + ": its voxel file " + data_path_ + " is missing, so it is empty");
@@ -339,6 +358,9 @@ void Terrain::read_data_file(std::string path) {
             damage = std::string("it could not be read");
         } else {
             damage = terrain::decode_avox(reinterpret_cast<const std::byte*>(bytes.data()), bytes.size(), loaded);
+            if (!damage) {
+                content_key_ = terrain::content_key_of(reinterpret_cast<const std::byte*>(bytes.data()), bytes.size());
+            }
         }
     }
     if (damage) {
@@ -493,8 +515,14 @@ std::optional<std::string> Terrain::save_resources(const std::filesystem::path& 
         (chunks.empty() || std::filesystem::is_regular_file(root / std::filesystem::u8path(path), error))) {
         return std::nullopt;
     }
-    if (std::optional<std::string> failure = write_avox(root, name(id()), path, chunks, voxel_size)) {
+    std::uint64_t key = 0;
+    if (std::optional<std::string> failure = write_avox(root, name(id()), path, chunks, voxel_size, &key)) {
         return failure;
+    }
+    // During play the file gets Play's snapshot, not the voxels TerrainWorld
+    // shows, so the key (which the far-mesh cache follows) stays as it was.
+    if (!simulation_running()) {
+        content_key_ = key;
     }
     // Every chunk now has its frame: the edited ones stop holding their
     // cells, so the ChunkCache's budget covers them too.

@@ -164,6 +164,9 @@ public:
     std::size_t compact_bytes() const;
     // Every level-0 chunk with surface, for the store's next commit.
     std::vector<ChunkCoord> surface_chunks() const;
+    // No chunk job in flight and no level >= 1 node stale: every built node
+    // shows the voxels as they are.
+    bool settled() const;
 
     // Every resident node with a mesh: level 0 with its chunk mesh, levels
     // >= 1 with their shared compact mesh (R12: nothing is unpacked here).

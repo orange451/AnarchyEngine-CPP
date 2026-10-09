@@ -464,6 +464,15 @@ std::size_t LodTree::compact_bytes() const {
     return total;
 }
 
+bool LodTree::settled() const {
+    for (const auto& [key, node] : nodes_) {
+        if (key.level == 0 ? node.in_flight : node.stale()) {
+            return false;
+        }
+    }
+    return true;
+}
+
 std::vector<ChunkCoord> LodTree::surface_chunks() const {
     std::vector<ChunkCoord> out;
     for (const auto& [key, node] : nodes_) {

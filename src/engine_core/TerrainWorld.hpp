@@ -11,12 +11,15 @@
 // nodes, colliders, and look tables.
 
 #include "DataModel.hpp"
+#include "TerrainMemory.hpp"
+#include "terrain/AlodStore.hpp"
 #include "terrain/LodTree.hpp"
 #include "terrain/TerrainMesher.hpp"
 
 #include <array>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -134,6 +137,11 @@ public:
     // False when terrain is not one this TerrainWorld has published a view
     // for, is no longer a live Terrain in game (nothing built), or a build threw.
     bool build_colliders_now(DataModel& game, InstanceId terrain, const std::vector<terrain::ChunkCoord>& chunks);
+
+    // What terrain holds in RAM, as of the last few updates (refreshed every
+    // kMemoryRefreshUpdates). Any thread.
+    TerrainMemory memory(InstanceId terrain) const;
+    static constexpr int kMemoryRefreshUpdates = 30;
 
     // A first sight queues its chunks a few at a time rather than all at
     // once: at most this many jobs per mesher thread are in flight, so a
@@ -318,6 +326,16 @@ private:
         bool first_build_sorted = false;
         bool first_build_had_camera = false;
         terrain::ChunkCoord first_build_camera{};
+        // The far-mesh cache beside the Terrain's .avox (null: none, e.g. no
+        // project). tree writes its far nodes there and reads them back.
+        std::unique_ptr<terrain::AlodStore> store;
+        // The Terrain's content key as last seen (it changes on a save).
+        std::uint64_t saved_key = 0;
+        // An edit landed since saved_key: the tree no longer matches the
+        // file on disk, so the store is not committed until the next save.
+        bool edited_since_save = false;
+        // The store's last commit matches saved_key's voxels.
+        bool store_committed = false;
     };
 
     // A result off the pool: dropped if stale, held if its edit batch still
@@ -335,6 +353,12 @@ private:
     void expire_batches(TerrainRecord& record, double now_ms);
     void queue_dirty(InstanceId terrain_id, Terrain& terrain, TerrainRecord& record, bool first_seen, bool has_camera,
                       Vec3 camera_pos, double now_ms);
+    // First sight: opens the Terrain's .alod (true: the tree adopted it, so
+    // there is no first build) or starts a new one.
+    bool open_store(Terrain& terrain, TerrainRecord& record);
+    // Commits the store once the tree has settled on the saved voxels, or
+    // rewrites it under a new content key after a save.
+    void update_store(Terrain& terrain, TerrainRecord& record);
     // Queues first_build's chunks, nearest first, while fewer than
     // kFirstBuildJobsPerThread jobs per mesher thread are in flight.
     void admit_first_build(InstanceId terrain_id, Terrain& terrain, TerrainRecord& record, bool has_camera,
@@ -374,6 +398,11 @@ private:
     // revisions): never reused for this TerrainWorld's life, so a node job
     // from a Terrain's previous stay in Workspace can never be accepted.
     std::uint64_t next_node_revision_ = 0;
+    // memory()'s figures per Terrain: chunk and far mesh bytes, refreshed by
+    // update every kMemoryRefreshUpdates.
+    mutable std::mutex memory_mutex_;
+    std::unordered_map<InstanceId, TerrainMemory> memory_;
+    int memory_countdown_ = 0;
 };
 
 }  // namespace engine_core

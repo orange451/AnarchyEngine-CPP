@@ -6,6 +6,7 @@
 #include "Terrain.hpp"
 #include "TerrainMaterial.hpp"
 #include "TerrainTextures.hpp"
+#include "terrain/ChunkCache.hpp"
 #include "terrain/VoxelVolume.hpp"
 #include "profiler/Profiler.hpp"
 
@@ -255,6 +256,13 @@ void TerrainWorld::queue_dirty(InstanceId terrain_id, Terrain& terrain, TerrainR
                 }
             }
         }
+        if (open_store(terrain, record)) {
+            // The tree took every far node from the .alod: only what is
+            // near gets meshed, as update_lod asks for it.
+            record.first_build.clear();
+            record.first_build_skip.clear();
+            return;
+        }
         // Not queued here: admit_first_build hands them to the mesher a few
         // at a time. The tree counts each in flight now, so no parent
         // builds before all of its chunks have landed.
@@ -267,6 +275,9 @@ void TerrainWorld::queue_dirty(InstanceId terrain_id, Terrain& terrain, TerrainR
         return;
     }
     volume.take_dirty(dirty);
+    if (!dirty.empty()) {
+        record.edited_since_save = true;
+    }
     if (!record.first_build.empty()) {
         // Meshed by this edit with its new voxels: the first build leaves them.
         record.first_build_skip.insert(dirty.begin(), dirty.end());
@@ -312,6 +323,93 @@ void TerrainWorld::queue_dirty(InstanceId terrain_id, Terrain& terrain, TerrainR
         terrain::MeshInput input = terrain::mesh_input(volume, coord);
         input.build_collider = want_collider;
         mesher_.queue(terrain_id, revision, std::move(input), job_distance);
+    }
+}
+
+bool TerrainWorld::open_store(Terrain& terrain, TerrainRecord& record) {
+    record.tree->attach_store(nullptr);
+    record.store.reset();
+    record.saved_key = terrain.content_key();
+    record.edited_since_save = false;
+    record.store_committed = false;
+    const std::filesystem::path path = terrain.lod_cache_path();
+    if (path.empty() || record.saved_key == 0) {
+        return false;   // no project, or voxels no file holds yet
+    }
+    const float voxel_size = terrain.volume().voxel_size();
+    if (std::optional<terrain::AlodStore> store = terrain::AlodStore::open(path, record.saved_key, voxel_size)) {
+        record.store = std::make_unique<terrain::AlodStore>(std::move(*store));
+        record.tree->attach_store(record.store.get());
+        record.tree->adopt_store();
+        record.store_committed = true;
+        return true;
+    }
+    if (std::optional<terrain::AlodStore> store = terrain::AlodStore::create(path, record.saved_key, voxel_size)) {
+        record.store = std::make_unique<terrain::AlodStore>(std::move(*store));
+        record.tree->attach_store(record.store.get());
+    }
+    return false;
+}
+
+void TerrainWorld::update_store(Terrain& terrain, TerrainRecord& record) {
+    if (record.store == nullptr || record.edited_since_save || !record.first_build.empty() ||
+        !record.pending_jobs.empty() || !record.tree->settled()) {
+        return;
+    }
+    if (record.saved_key == 0) {
+        return;
+    }
+    if (record.store->content_key() == record.saved_key) {
+        if (!record.store_committed) {
+            record.store->set_surface_chunks(record.tree->surface_chunks());
+            record.store_committed = record.store->commit();
+        }
+        return;
+    }
+    // A save changed the voxels' key: write every far node, as the tree
+    // now has them, to a new store under it, and swap it in.
+    PROFILE_SCOPE("Terrain far-mesh cache rewrite", profiler::Group::Engine);
+    const std::filesystem::path path = record.store->path();
+    std::filesystem::path temp = path;
+    temp += ".tmp";
+    const float voxel_size = terrain.volume().voxel_size();
+    {
+        std::optional<terrain::AlodStore> fresh = terrain::AlodStore::create(temp, record.saved_key, voxel_size);
+        if (!fresh) {
+            return;
+        }
+        for (const auto& [key, node] : record.tree->nodes()) {
+            if (key.level < 2 || !node.built || !node.has_surface) {
+                continue;
+            }
+            std::shared_ptr<const terrain::CompactMesh> mesh = node.compact;
+            if (mesh == nullptr) {
+                mesh = record.store->load(key);
+            }
+            if (mesh == nullptr || !fresh->put(key, *mesh, node.error, node.bounds_min, node.bounds_max)) {
+                return;   // the old store stays; the next save tries again
+            }
+        }
+        fresh->set_surface_chunks(record.tree->surface_chunks());
+        if (!fresh->commit()) {
+            return;
+        }
+    }
+    const std::uint64_t old_key = record.store->content_key();
+    record.tree->attach_store(nullptr);
+    record.store.reset();   // closes the file so it can be replaced
+    std::error_code error;
+    std::filesystem::rename(temp, path, error);
+    // Renamed: the new store. Not: the old one, still on disk, still able to
+    // read back the nodes the tree has let go of.
+    const std::uint64_t key = error ? old_key : record.saved_key;
+    if (std::optional<terrain::AlodStore> store = terrain::AlodStore::open(path, key, voxel_size)) {
+        record.store = std::make_unique<terrain::AlodStore>(std::move(*store));
+        record.tree->attach_store(record.store.get());
+        record.store_committed = !error;
+    }
+    if (error) {
+        std::filesystem::remove(temp, error);
     }
 }
 
@@ -393,6 +491,15 @@ void TerrainWorld::update_lod(InstanceId terrain_id, Terrain& terrain, TerrainRe
     std::vector<terrain::ChunkCoord> drops;
     std::vector<terrain::ChunkCoord> needs;
     tree.update_residency(camera, drops, needs);
+    if (record.store != nullptr) {
+        // Far nodes the tree wants back: a few KB to a few MB each, read
+        // here rather than on a worker since the store is not thread-safe.
+        std::vector<terrain::NodeKey> loads;
+        tree.take_loads(loads);
+        for (const terrain::NodeKey& key : loads) {
+            tree.node_loaded(key, record.store->load(key));
+        }
+    }
     for (const terrain::ChunkCoord& coord : drops) {
         if (record.meshes.erase(coord) != 0) {
             record.chunks_dirty = true;   // colliders stay (R5)
@@ -667,6 +774,14 @@ void TerrainWorld::update(DataModel& game, double now_ms) {
             PROFILE_SCOPE("Terrain batches", profiler::Group::Engine);
             expire_batches(record, now_ms);
         }
+        if (!fresh && terrain->content_key() != record.saved_key) {
+            // Saved since the last update: the file now holds the voxels as
+            // they were then. An edit queued below (made after, or not yet
+            // taken) marks them changed again.
+            record.saved_key = terrain->content_key();
+            record.edited_since_save = false;
+            record.store_committed = false;
+        }
         {
             PROFILE_SCOPE("Terrain queue", profiler::Group::Engine);
             queue_dirty(id, *terrain, record, fresh, has_camera, camera_pos, now_ms);
@@ -675,6 +790,7 @@ void TerrainWorld::update(DataModel& game, double now_ms) {
         {
             PROFILE_SCOPE("Terrain LOD", profiler::Group::Engine);
             update_lod(id, *terrain, record, now_ms, has_camera, camera_pos);
+            update_store(*terrain, record);
         }
         if (!terrain->can_collide()) {
             // Nothing to show through it: let any collider interest lapse
@@ -709,6 +825,42 @@ void TerrainWorld::update(DataModel& game, double now_ms) {
         view.top_level = record.tree->top_level();
         views_.push_back(std::move(view));
     }
+
+    // memory()'s figures: a walk over every Terrain's meshes and nodes, so
+    // only every so many updates.
+    if (--memory_countdown_ <= 0) {
+        memory_countdown_ = kMemoryRefreshUpdates;
+        std::unordered_map<InstanceId, TerrainMemory> figures;
+        for (const auto& [id, record] : terrains_) {
+            TerrainMemory& memory = figures[id];
+            for (const auto& [coord, chunk] : record.meshes) {
+                (void)coord;
+                if (chunk.mesh != nullptr) {
+                    memory.chunk_meshes += chunk.mesh->vertices.size() * sizeof(anarchy::amesh::Vertex) +
+                                           chunk.mesh->indices.size() * sizeof(std::uint32_t);
+                }
+            }
+            memory.far_meshes = record.tree != nullptr ? record.tree->compact_bytes() : 0;
+        }
+        std::lock_guard<std::mutex> lock(memory_mutex_);
+        memory_ = std::move(figures);
+    }
+}
+
+TerrainMemory TerrainWorld::memory(InstanceId terrain) const {
+    TerrainMemory out;
+    {
+        std::lock_guard<std::mutex> lock(memory_mutex_);
+        const auto found = memory_.find(terrain);
+        if (found != memory_.end()) {
+            out = found->second;
+        }
+    }
+    const terrain::ChunkCache& cache = terrain::ChunkCache::global();
+    out.compressed_voxels = cache.compressed_bytes();
+    out.decoded_cache = cache.bytes();
+    out.decoded_budget = cache.budget();
+    return out;
 }
 
 const std::vector<TerrainWorld::ChunkCollider>* TerrainWorld::colliders(InstanceId terrain) const {

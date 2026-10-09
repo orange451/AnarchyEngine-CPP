@@ -60,6 +60,13 @@ public:
     // damaged one also gives the Terrain a new DataPath at once, so no save
     // ever writes over it.
     void load_data_path(std::string path);
+    // The content key (terrain::content_key_of) of the .avox bytes this
+    // Terrain last read or wrote; 0 when it has none (new, pasted, empty).
+    // SimulationThread.
+    std::uint64_t content_key() const { return content_key_; }
+    // Where the far-mesh cache (.alod) for DataPath lives: the .avox's path
+    // with the .alod extension; empty without a project or DataPath.
+    std::filesystem::path lod_cache_path() const;
 
     // The TerrainMaterial children, by Id. Those on Id 0 are left out.
     std::vector<TerrainMaterial*> materials() const;
@@ -142,6 +149,7 @@ private:
     bool saved_ = false;
     std::string saved_path_;
     terrain::ChunkMap saved_chunks_;
+    std::uint64_t content_key_ = 0;
 };
 
 }  // namespace engine_core

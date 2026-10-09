@@ -742,6 +742,11 @@ TerrainEditorHost IdeLayout::terrain_editor_host() {
             runner_.simulation().terrain_textures().published(terrain);
         return set ? set->revision : 0;
     };
+    // The header's voxel and mesh memory: TerrainWorld::memory is safe to
+    // call from any thread, so no on_simulation hop either.
+    host.terrain_memory = [this](engine_core::InstanceId terrain) {
+        return runner_.simulation().terrain_world().memory(terrain);
+    };
     return host;
 }
 

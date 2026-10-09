@@ -2,11 +2,15 @@
 // .alod far-mesh cache. No instances unless a test says otherwise.
 
 #include "support.hpp"
+#include "Camera.hpp"
+#include "Project.hpp"
+#include "SceneService.hpp"
 #include "Terrain.hpp"
 #include "TerrainWorld.hpp"
 #include "terrain/AlodStore.hpp"
 #include "terrain/AvoxFile.hpp"
 #include "terrain/ChunkCache.hpp"
+#include "terrain/LodTree.hpp"
 #include "terrain/ShapeDistance.hpp"
 #include "terrain/SurfaceNets.hpp"
 #include "terrain/VoxelChunk.hpp"
@@ -458,4 +462,151 @@ TEST_CASE("AL6 content keys differ when the bytes do", "[terrain]") {
     REQUIRE(content_key_of(a.data(), a.size()) == content_key_of(a.data(), a.size()));
     REQUIRE(content_key_of(a.data(), a.size()) != content_key_of(b.data(), b.size()));
     REQUIRE(content_key_of(a.data(), a.size()) != 0u);
+}
+
+// ---- The .alod store wired into Terrain and TerrainWorld (Task 6) ----
+
+namespace {
+
+constexpr int kSlabChunks = 24;   // a 24 x 1 x 24 chunk slab: wider than kNearChunks reaches
+
+std::optional<std::string> fill_slab(VoxelVolume& volume) {
+    Shape slab;
+    slab.kind = Shape::Kind::Block;
+    const float side = static_cast<float>(kSlabChunks * kChunkSize);
+    slab.frame = matrix4_translation(side * 0.5f, 16.f, side * 0.5f);
+    slab.size = Vec3{side - 8.f, 16.f, side - 8.f};
+    return volume.fill(slab, 1);
+}
+
+Camera& look_from(DataModel& game, Vec3 at) {
+    Camera& camera = game.create<Camera>();
+    camera.set_transform(matrix4_translation(at.x, at.y, at.z));
+    game.set_parent(camera.id(), workspace_of(game));
+    auto* workspace = dynamic_cast<Workspace*>(game.instance(workspace_of(game)));
+    REQUIRE(workspace != nullptr);
+    REQUIRE(workspace->set_current_camera(camera.id()));
+    return camera;
+}
+
+Terrain& slab_named(DataModel& game) {
+    auto* terrain = dynamic_cast<Terrain*>(game.instance(game.find_first_child(workspace_of(game), "Slab")));
+    REQUIRE(terrain != nullptr);
+    return *terrain;
+}
+
+// Updates until the first build is in, every job has landed, and the LOD
+// tree has built what it can, with a clock past the debounce each update.
+void settle_all(TerrainWorld& world, DataModel& game, InstanceId id, double& now) {
+    for (int i = 0; i < 24; ++i) {
+        world.update(game, now);
+        world.wait_idle();
+        now += 2.0 * kRebuildIntervalMs;
+        if (world.first_build_remaining(id) != 0 || world.jobs_in_flight(id) != 0) {
+            i = 0;
+        }
+    }
+}
+
+// A project with the slab saved, and its first (cold) build run so the
+// .alod is written.
+void make_slab_project(const TempDir& dir) {
+    Game game;
+    Project project = Project::create(dir.path, game);
+    auto& t = game.create<Terrain>();
+    game.set_parent(t.id(), workspace_of(game));
+    game.set_name(t.id(), "Slab");
+    REQUIRE_FALSE(t.edit_volume([&](VoxelVolume& v) { return fill_slab(v); }));
+    project.save();
+    look_from(game, Vec3{16.f, 40.f, 16.f});
+    TerrainWorld world({}, 2);
+    double now = 0.0;
+    settle_all(world, game, t.id(), now);
+    REQUIRE(std::filesystem::is_regular_file(t.lod_cache_path()));
+}
+
+}  // namespace
+
+TEST_CASE("TW-A1 a reopened Terrain shows its far nodes from the .alod and meshes only what is near", "[terrain]") {
+    SimRole role;
+    TempDir dir;
+    make_slab_project(dir);
+    Game game;
+    Project project = Project::load(dir.path, game);
+    Terrain& t = slab_named(game);
+    REQUIRE(AlodStore::open(t.lod_cache_path(), t.content_key(), t.volume().voxel_size()));
+    const std::size_t footprint = first_footprint(t.volume()).size();
+    look_from(game, Vec3{16.f, 40.f, 16.f});
+    TerrainWorld world({}, 2);
+    double now = 0.0;
+    settle_all(world, game, t.id(), now);
+    REQUIRE(world.meshed_count() < footprint / 2);
+    REQUIRE(world.views().size() == 1u);
+    REQUIRE(world.views()[0].nodes != nullptr);
+    const LodTree* tree = world.lod_tree(t.id());
+    REQUIRE(tree != nullptr);
+    bool top_shown = false;
+    for (const TerrainNodeView& node : *world.views()[0].nodes) {
+        top_shown = top_shown || node.key.level == world.views()[0].top_level;
+    }
+    REQUIRE(top_shown);
+}
+
+TEST_CASE("TW-A2 an edit saved after a warm open is in the .alod a later open reads", "[terrain]") {
+    SimRole role;
+    TempDir dir;
+    make_slab_project(dir);
+    const ChunkCoord far_chunk{kSlabChunks - 2, 0, kSlabChunks - 2};
+    const NodeKey far_node = node_of(far_chunk, 2);
+    std::size_t before_vertices = 0;
+    std::filesystem::path alod;
+    {
+        Game game;
+        Project project = Project::load(dir.path, game);
+        Terrain& t = slab_named(game);
+        alod = t.lod_cache_path();
+        {
+            std::optional<AlodStore> store = AlodStore::open(alod, t.content_key(), t.volume().voxel_size());
+            REQUIRE(store);
+            before_vertices = store->load(far_node)->positions.size();
+        }
+        look_from(game, Vec3{16.f, 40.f, 16.f});
+        TerrainWorld world({}, 2);
+        double now = 0.0;
+        settle_all(world, game, t.id(), now);
+        // Carve a deep pit into the far corner, then save.
+        const float x = (static_cast<float>(far_chunk.x) + 0.5f) * kChunkSize;
+        const float z = (static_cast<float>(far_chunk.z) + 0.5f) * kChunkSize;
+        REQUIRE_FALSE(t.edit_volume([&](VoxelVolume& v) { return v.subtract(ball_at(x, 24.f, z, 14.f)); }));
+        settle_all(world, game, t.id(), now);
+        project.save();
+        settle_all(world, game, t.id(), now);
+        std::optional<AlodStore> store = AlodStore::open(alod, t.content_key(), t.volume().voxel_size());
+        REQUIRE(store);   // rewritten for the saved voxels
+        REQUIRE(store->load(far_node)->positions.size() != before_vertices);
+    }
+    Game game;
+    Project project = Project::load(dir.path, game);
+    Terrain& t = slab_named(game);
+    std::optional<AlodStore> store = AlodStore::open(alod, t.content_key(), t.volume().voxel_size());
+    REQUIRE(store);
+    REQUIRE(store->load(far_node)->positions.size() != before_vertices);
+}
+
+TEST_CASE("TW-A3 a damaged .alod is rebuilt from the voxels", "[terrain]") {
+    SimRole role;
+    TempDir dir;
+    make_slab_project(dir);
+    Game game;
+    Project project = Project::load(dir.path, game);
+    Terrain& t = slab_named(game);
+    const std::filesystem::path alod = t.lod_cache_path();
+    std::filesystem::resize_file(alod, std::filesystem::file_size(alod) - 1);
+    const std::size_t footprint = first_footprint(t.volume()).size();
+    look_from(game, Vec3{16.f, 40.f, 16.f});
+    TerrainWorld world({}, 2);
+    double now = 0.0;
+    settle_all(world, game, t.id(), now);
+    REQUIRE(world.meshed_count() >= footprint);
+    REQUIRE(AlodStore::open(alod, t.content_key(), t.volume().voxel_size()));
 }

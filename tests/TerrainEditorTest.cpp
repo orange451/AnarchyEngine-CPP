@@ -626,6 +626,55 @@ void TL_T3_header_shows_and_updates_texture_memory() {
            ("TL-T3 the figure is no longer 0 MB after the build (" + after + ")").c_str());
 }
 
+// The Rig with the tab open on its Terrain and a stub terrain_memory, which
+// the test changes to see the header follow.
+struct MemoryPaneRig : Rig {
+    engine_core::TerrainMemory memory{};
+    std::shared_ptr<ide::IdeTerrainEditor> editor;
+    std::shared_ptr<jadefx::Scene> scene;
+    double time = 0;
+
+    MemoryPaneRig() {
+        memory.compressed_voxels = 104u * 1024u * 1024u;
+        memory.decoded_cache = 212u * 1024u * 1024u;
+        memory.decoded_budget = 256u * 1024u * 1024u;
+        memory.chunk_meshes = 80u * 1024u * 1024u;
+        memory.far_meshes = 300u * 1024u * 1024u;
+        ide::TerrainEditorHost host;
+        host.terrain_memory = [this](InstanceId) { return memory; };
+        editor = jadefx::make<ide::IdeTerrainEditor>(game, terrain_id, std::move(host));
+        editor->setPrefWidthRatio(1);
+        editor->setPrefHeightRatio(1);
+        scene = jadefx::make<jadefx::Scene>(editor, kWidth, kHeight);
+        frames(2);
+    }
+
+    void frames(int count = 1) {
+        for (int i = 0; i < count; ++i) {
+            scene->layout(kWidth, kHeight, time);
+            time += 0.05;
+        }
+    }
+
+    std::string counter() const { return editor->counter() != nullptr ? editor->counter()->getText() : std::string(); }
+};
+
+// TL-M1: the header shows the Terrain's memory (voxels, the decoded-chunk
+// cache against its budget, meshes), and follows it as it changes.
+void TL_M1_header_shows_terrain_memory() {
+    MemoryPaneRig rig;
+    const std::string before = rig.counter();
+    Expect(before.find("voxels 104 MB") != std::string::npos, ("TL-M1 shows the voxels (" + before + ")").c_str());
+    Expect(before.find("cache 212/256 MB") != std::string::npos,
+           ("TL-M1 shows the cache against its budget (" + before + ")").c_str());
+    Expect(before.find("meshes 380 MB") != std::string::npos,
+           ("TL-M1 shows chunk and far meshes together (" + before + ")").c_str());
+    rig.memory.far_meshes = 500u * 1024u * 1024u;
+    rig.frames(ide::IdeTerrainEditor::kMemoryPollFrames + 1);
+    const std::string after = rig.counter();
+    Expect(after.find("meshes 580 MB") != std::string::npos, ("TL-M1 follows a change (" + after + ")").c_str());
+}
+
 }  // namespace
 
 int main() {
@@ -642,6 +691,7 @@ int main() {
     TE10_click_selects();
     TE11_add_tile_disabled_at_cap();
     TL_T3_header_shows_and_updates_texture_memory();
+    TL_M1_header_shows_terrain_memory();
     if (gFailures != 0) {
         std::fprintf(stderr, "%d failed\n", gFailures);
         return 1;

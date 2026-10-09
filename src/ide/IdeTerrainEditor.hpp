@@ -6,6 +6,7 @@
 #include "TerrainMaterials.hpp"
 
 #include "DataModel.hpp"
+#include "TerrainMemory.hpp"
 
 #include <cstdint>
 #include <functional>
@@ -40,6 +41,9 @@ struct TerrainEditorHost {
     // in: the header then shows no textures figure.
     std::function<std::size_t(engine_core::InstanceId terrain)> texture_memory_bytes;
     std::function<std::uint64_t(engine_core::InstanceId terrain)> texture_revision;
+    // The header's "voxels N MB, cache N/N MB, meshes N MB" figures, polled
+    // every IdeTerrainEditor::kMemoryPollFrames frames. Empty: no figures.
+    std::function<engine_core::TerrainMemory(engine_core::InstanceId terrain)> terrain_memory;
 };
 
 class AssetPicker;
@@ -69,6 +73,9 @@ class IdeTerrainEditor : public IdePane {
 public:
     IdeTerrainEditor(engine_core::DataModel& world, engine_core::InstanceId terrain, TerrainEditorHost host = {});
     ~IdeTerrainEditor() override;
+
+    // How often the header asks the host for the Terrain's memory figures.
+    static constexpr int kMemoryPollFrames = 30;
 
     engine_core::InstanceId terrain() const { return terrain_; }
     // The Terrain as last read.
@@ -140,6 +147,10 @@ private:
     TerrainMaterialsView view_;
     std::uint64_t seen_tree_ = ~std::uint64_t{0};
     std::uint64_t seen_texture_revision_ = ~std::uint64_t{0};
+    // The memory figures as the header shows them, and frames until the
+    // next poll of host_.terrain_memory.
+    std::string memory_text_;
+    int memory_poll_in_ = 0;
     ChangeFlag edited_;
     std::uint64_t watch_ = 0;
     std::vector<engine_core::InstanceId> watched_;

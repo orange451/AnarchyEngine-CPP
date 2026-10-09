@@ -6,6 +6,7 @@
 #include "Terrain.hpp"
 #include "TerrainMaterial.hpp"
 #include "TerrainTextures.hpp"
+#include "terrain/ChunkCache.hpp"
 #include "terrain/VoxelVolume.hpp"
 #include "profiler/Profiler.hpp"
 
@@ -255,9 +256,32 @@ void TerrainWorld::queue_dirty(InstanceId terrain_id, Terrain& terrain, TerrainR
                 }
             }
         }
-        dirty.assign(footprint.begin(), footprint.end());
-    } else {
-        volume.take_dirty(dirty);
+        if (open_store(terrain, record)) {
+            // The tree took every far node from the .alod: only what is
+            // near gets meshed, as update_lod asks for it.
+            record.first_build.clear();
+            record.first_build_skip.clear();
+            return;
+        }
+        // Not queued here: admit_first_build hands them to the mesher a few
+        // at a time. The tree counts each in flight now, so no parent
+        // builds before all of its chunks have landed.
+        record.first_build.assign(footprint.begin(), footprint.end());
+        record.first_build_skip.clear();
+        record.first_build_sorted = false;
+        for (const terrain::ChunkCoord& coord : record.first_build) {
+            record.tree->chunk_queued(coord, true);
+        }
+        return;
+    }
+    volume.take_dirty(dirty);
+    if (!dirty.empty()) {
+        record.edited_since_save = true;
+        record.tree->set_store_writes(false);   // before this edit's nodes rebuild
+    }
+    if (!record.first_build.empty()) {
+        // Meshed by this edit with its new voxels: the first build leaves them.
+        record.first_build_skip.insert(dirty.begin(), dirty.end());
     }
     const float voxel_size = static_cast<float>(volume.voxel_size());
     // R26: an edit's chunks (not a first sight's) publish together.
@@ -303,6 +327,181 @@ void TerrainWorld::queue_dirty(InstanceId terrain_id, Terrain& terrain, TerrainR
     }
 }
 
+bool TerrainWorld::open_store(Terrain& terrain, TerrainRecord& record) {
+    record.tree->attach_store(nullptr);
+    record.store.reset();
+    record.saved_key = terrain.content_key();
+    record.edited_since_save = false;
+    record.store_committed = false;
+    record.rewrite_failed_key = 0;
+    const std::filesystem::path path = terrain.lod_cache_path();
+    if (path.empty() || record.saved_key == 0) {
+        return false;   // no project, or voxels no file holds yet
+    }
+    {
+        // A rewrite a previous session could not finish or rename.
+        std::filesystem::path temp = path;
+        temp += ".tmp";
+        std::error_code ignored;
+        std::filesystem::remove(temp, ignored);
+    }
+    const float voxel_size = terrain.volume().voxel_size();
+    if (std::optional<terrain::AlodStore> store = terrain::AlodStore::open(path, record.saved_key, voxel_size)) {
+        record.store = std::make_unique<terrain::AlodStore>(std::move(*store));
+        record.tree->attach_store(record.store.get());
+        record.tree->adopt_store();
+        record.store_committed = true;
+        return true;
+    }
+    if (std::optional<terrain::AlodStore> store = terrain::AlodStore::create(path, record.saved_key, voxel_size)) {
+        record.store = std::make_unique<terrain::AlodStore>(std::move(*store));
+        record.tree->attach_store(record.store.get());
+    }
+    return false;
+}
+
+void TerrainWorld::update_store(Terrain& terrain, TerrainRecord& record) {
+    if (record.store == nullptr || record.edited_since_save || !record.first_build.empty() ||
+        !record.pending_jobs.empty() || !record.tree->settled()) {
+        return;
+    }
+    if (record.saved_key == 0) {
+        return;
+    }
+    if (record.store->content_key() == record.saved_key) {
+        if (!record.store_committed) {
+            record.store->set_surface_chunks(record.tree->surface_chunks());
+            record.store_committed = record.store->commit();
+        }
+        return;
+    }
+    // A save changed the voxels' key: write every far node, as the tree
+    // now has them, to a new store under it, and swap it in. One try per
+    // key: a failure waits for the next save rather than retrying every
+    // update.
+    if (record.rewrite_failed_key == record.saved_key) {
+        return;
+    }
+    PROFILE_SCOPE("Terrain far-mesh cache rewrite", profiler::Group::Engine);
+    const std::filesystem::path path = terrain.lod_cache_path();
+    std::filesystem::path temp = path;
+    temp += ".tmp";
+    const float voxel_size = terrain.volume().voxel_size();
+    const auto give_up = [&] {
+        record.rewrite_failed_key = record.saved_key;
+        std::error_code ignored;
+        std::filesystem::remove(temp, ignored);
+    };
+    if (path.empty()) {
+        give_up();
+        return;
+    }
+    {
+        std::optional<terrain::AlodStore> fresh = terrain::AlodStore::create(temp, record.saved_key, voxel_size);
+        if (!fresh) {
+            give_up();
+            return;
+        }
+        for (const auto& [key, node] : record.tree->nodes()) {
+            if (key.level < 2 || !node.built || !node.has_surface) {
+                continue;
+            }
+            std::shared_ptr<const terrain::CompactMesh> mesh = node.compact;
+            if (mesh == nullptr) {
+                mesh = record.store->load(key);
+            }
+            if (mesh == nullptr || !fresh->put(key, *mesh, node.error, node.bounds_min, node.bounds_max)) {
+                fresh.reset();
+                give_up();   // the old store stays; the next save tries again
+                return;
+            }
+        }
+        fresh->set_surface_chunks(record.tree->surface_chunks());
+        if (!fresh->commit()) {
+            fresh.reset();
+            give_up();
+            return;
+        }
+    }
+    record.tree->attach_store(nullptr);
+    record.store.reset();   // closes the file so it can be replaced
+    std::error_code error;
+    std::filesystem::rename(temp, path, error);
+    // Not renamed (something holds the old file open): the new store stays
+    // where it is for this session. It holds every node, so the tree reads
+    // back from it; the next open finds the old file stale and rebuilds.
+    if (std::optional<terrain::AlodStore> store =
+            terrain::AlodStore::open(error ? temp : path, record.saved_key, voxel_size)) {
+        record.store = std::make_unique<terrain::AlodStore>(std::move(*store));
+        record.tree->attach_store(record.store.get());
+        record.tree->mark_all_persisted();
+        record.store_committed = true;
+    } else {
+        // Neither file opens: nothing can be read back, so nothing may leave RAM.
+        record.tree->forget_persisted();
+        record.rewrite_failed_key = record.saved_key;
+    }
+}
+
+void TerrainWorld::admit_first_build(InstanceId terrain_id, Terrain& terrain, TerrainRecord& record, bool has_camera,
+                                     Vec3 camera_pos) {
+    if (record.first_build.empty()) {
+        return;
+    }
+    const std::size_t cap = static_cast<std::size_t>(mesher_.thread_count()) * kFirstBuildJobsPerThread;
+    if (record.pending_jobs.size() >= cap) {
+        return;
+    }
+    terrain::VoxelVolume& volume = terrain.volume();
+    const float voxel_size = static_cast<float>(volume.voxel_size());
+    const Matrix4& transform = terrain.transform();
+    // Re-sorted only when the camera moves to another chunk: farthest
+    // first, so the nearest is popped off the back.
+    if (has_camera) {
+        const Vec3 local = matrix4_point(matrix4_inverse(transform), camera_pos);
+        const float span = terrain::kChunkSize * voxel_size;
+        const terrain::ChunkCoord camera_chunk{static_cast<int>(std::floor(local.x / span)),
+                                               static_cast<int>(std::floor(local.y / span)),
+                                               static_cast<int>(std::floor(local.z / span))};
+        if (!record.first_build_sorted || !record.first_build_had_camera ||
+            !(camera_chunk == record.first_build_camera)) {
+            std::vector<std::pair<float, terrain::ChunkCoord>> keyed;
+            keyed.reserve(record.first_build.size());
+            for (const terrain::ChunkCoord& coord : record.first_build) {
+                const Vec3 center = matrix4_point(transform, chunk_center_local(coord, voxel_size));
+                keyed.emplace_back(distance(center, camera_pos), coord);
+            }
+            std::sort(keyed.begin(), keyed.end(),
+                      [](const auto& a, const auto& b) { return a.first > b.first; });
+            for (std::size_t i = 0; i < keyed.size(); ++i) {
+                record.first_build[i] = keyed[i].second;
+            }
+            record.first_build_sorted = true;
+            record.first_build_had_camera = true;
+            record.first_build_camera = camera_chunk;
+        }
+    }
+    while (!record.first_build.empty() && record.pending_jobs.size() < cap) {
+        const terrain::ChunkCoord coord = record.first_build.back();
+        record.first_build.pop_back();
+        if (record.first_build_skip.count(coord) != 0 || record.pending_jobs.count(coord) != 0) {
+            continue;   // an edit (or another job) already meshes it with its current voxels
+        }
+        const std::uint64_t revision = ++next_job_revision_;
+        record.chunk_revisions[coord] = revision;
+        const bool want_collider = record.collider_interest.count(coord) != 0;
+        record.pending_jobs[coord] = TerrainRecord::PendingJob{true, want_collider};
+        const float job_distance =
+            has_camera ? distance(matrix4_point(transform, chunk_center_local(coord, voxel_size)), camera_pos) : 0.f;
+        terrain::MeshInput input = terrain::mesh_input(volume, coord);
+        input.build_collider = want_collider;
+        mesher_.queue(terrain_id, revision, std::move(input), job_distance);
+    }
+    if (record.first_build.empty()) {
+        record.first_build_skip.clear();
+    }
+}
+
 void TerrainWorld::update_lod(InstanceId terrain_id, Terrain& terrain, TerrainRecord& record, double now_ms,
                               bool has_camera, Vec3 camera_pos) {
     terrain::LodTree& tree = *record.tree;
@@ -321,7 +520,37 @@ void TerrainWorld::update_lod(InstanceId terrain_id, Terrain& terrain, TerrainRe
 
     std::vector<terrain::ChunkCoord> drops;
     std::vector<terrain::ChunkCoord> needs;
-    tree.update_residency(camera, drops, needs);
+    // A residency pass walks every node, so while the camera stays in its
+    // chunk it runs at most every kResidencyIntervalMs, however many chunks
+    // land meanwhile (a huge Terrain's first build lands some every update,
+    // and play's collider jobs keep landing). Without a camera it always
+    // runs: everything is wanted, and nothing waits on distance.
+    const bool camera_moved = has_camera != record.residency_had_camera ||
+                              (has_camera && !(camera_chunk == record.residency_camera));
+    // With no camera every node is wanted. A Terrain with a far-mesh store
+    // (one in a project, possibly huge, warm-opened with every far node out
+    // of RAM) waits for the camera instead: wanting everything there means
+    // meshing every chunk and reading every node at once, which is exactly
+    // what the store is there to avoid. Studio's first updates after an
+    // open come before Workspace has a camera.
+    const bool wait_for_camera = !has_camera && record.store != nullptr;
+    if (!wait_for_camera &&
+        (!has_camera || camera_moved || now_ms - record.residency_ms >= kResidencyIntervalMs)) {
+        PROFILE_SCOPE("Terrain residency", profiler::Group::Engine);
+        tree.update_residency(camera, drops, needs);
+        record.residency_ms = now_ms;
+        record.residency_had_camera = has_camera;
+        record.residency_camera = camera_chunk;
+    }
+    if (record.store != nullptr) {
+        // Far nodes the tree wants back: a few KB to a few MB each, read
+        // here rather than on a worker since the store is not thread-safe.
+        std::vector<terrain::NodeKey> loads;
+        tree.take_loads(loads);
+        for (const terrain::NodeKey& key : loads) {
+            tree.node_loaded(key, record.store->load(key));
+        }
+    }
     for (const terrain::ChunkCoord& coord : drops) {
         if (record.meshes.erase(coord) != 0) {
             record.chunks_dirty = true;   // colliders stay (R5)
@@ -355,13 +584,23 @@ void TerrainWorld::update_lod(InstanceId terrain_id, Terrain& terrain, TerrainRe
     }
 
     std::vector<terrain::NodeBuildRequest> builds;
-    tree.next_builds(now_ms, camera, builds);
+    {
+        PROFILE_SCOPE("Terrain next builds", profiler::Group::Engine);
+        tree.next_builds(now_ms, camera, builds);
+    }
     if (builds.empty()) {
         return;
     }
-    // Spec decision 4: one snapshot of the chunk map (a copy of pointers to
-    // immutable chunks) per update, and only when a node job is queued.
-    const auto voxels = std::make_shared<const terrain::ChunkMap>(volume.chunks());
+    // Spec decision 4: a snapshot of the chunk map (a copy of pointers to
+    // immutable chunks) for the node jobs, taken only when one is queued and
+    // kept until the voxels change: copying a huge Terrain's map (tens of
+    // thousands of entries) every update was most of an update.
+    if (record.voxels_snapshot == nullptr || record.voxels_snapshot_revision != volume.revision()) {
+        PROFILE_SCOPE("Terrain voxel snapshot", profiler::Group::Engine);
+        record.voxels_snapshot = std::make_shared<const terrain::ChunkMap>(volume.chunks());
+        record.voxels_snapshot_revision = volume.revision();
+    }
+    const std::shared_ptr<const terrain::ChunkMap>& voxels = record.voxels_snapshot;
     for (terrain::NodeBuildRequest& build : builds) {
         float job_distance = 0.f;
         if (has_camera) {
@@ -596,13 +835,29 @@ void TerrainWorld::update(DataModel& game, double now_ms) {
             PROFILE_SCOPE("Terrain batches", profiler::Group::Engine);
             expire_batches(record, now_ms);
         }
+        const std::uint64_t key = terrain->content_key();
+        if (!fresh && key != 0 && key != record.saved_key) {
+            // Saved since the last update: the file now holds the voxels as
+            // they were then. An edit queued below (made after, or not yet
+            // taken) marks them changed again. (0 means only that they
+            // changed, which edited_since_save already tracks.)
+            record.saved_key = key;
+            record.edited_since_save = false;
+            record.store_committed = false;
+        }
+        record.tree->set_store_writes(!record.edited_since_save);
         {
             PROFILE_SCOPE("Terrain queue", profiler::Group::Engine);
             queue_dirty(id, *terrain, record, fresh, has_camera, camera_pos, now_ms);
+            admit_first_build(id, *terrain, record, has_camera, camera_pos);
         }
         {
             PROFILE_SCOPE("Terrain LOD", profiler::Group::Engine);
             update_lod(id, *terrain, record, now_ms, has_camera, camera_pos);
+            if (!has_camera || now_ms - record.store_ms >= kStoreCheckIntervalMs) {
+                record.store_ms = now_ms;
+                update_store(*terrain, record);
+            }
         }
         if (!terrain->can_collide()) {
             // Nothing to show through it: let any collider interest lapse
@@ -619,10 +874,17 @@ void TerrainWorld::update(DataModel& game, double now_ms) {
         if (record.chunks_dirty || first_seen) {
             publish_chunks(record);
         }
-        if (record.tree->take_changed() || fresh) {
+        // Rebuilt at most every kNodeListIntervalMs (the tree's changed flag
+        // waits until then), since the list covers every node.
+        const bool list_due = !has_camera || now_ms - record.nodes_ms >= kNodeListIntervalMs;
+        if (fresh || (list_due && record.tree->take_changed())) {
             PROFILE_SCOPE("Terrain node list", profiler::Group::Engine);
+            if (fresh) {
+                record.tree->take_changed();
+            }
             record.nodes = std::make_shared<const std::vector<TerrainNodeView>>(record.tree->nodes_for_view());
             record.nodes_revision = ++next_nodes_set_revision_;
+            record.nodes_ms = now_ms;
         }
 
         TerrainView view;
@@ -637,6 +899,42 @@ void TerrainWorld::update(DataModel& game, double now_ms) {
         view.top_level = record.tree->top_level();
         views_.push_back(std::move(view));
     }
+
+    // memory()'s figures: a walk over every Terrain's meshes and nodes, so
+    // only every so many updates.
+    if (--memory_countdown_ <= 0) {
+        memory_countdown_ = kMemoryRefreshUpdates;
+        std::unordered_map<InstanceId, TerrainMemory> figures;
+        for (const auto& [id, record] : terrains_) {
+            TerrainMemory& memory = figures[id];
+            for (const auto& [coord, chunk] : record.meshes) {
+                (void)coord;
+                if (chunk.mesh != nullptr) {
+                    memory.chunk_meshes += chunk.mesh->vertices.size() * sizeof(anarchy::amesh::Vertex) +
+                                           chunk.mesh->indices.size() * sizeof(std::uint32_t);
+                }
+            }
+            memory.far_meshes = record.tree != nullptr ? record.tree->compact_bytes() : 0;
+        }
+        std::lock_guard<std::mutex> lock(memory_mutex_);
+        memory_ = std::move(figures);
+    }
+}
+
+TerrainMemory TerrainWorld::memory(InstanceId terrain) const {
+    TerrainMemory out;
+    {
+        std::lock_guard<std::mutex> lock(memory_mutex_);
+        const auto found = memory_.find(terrain);
+        if (found != memory_.end()) {
+            out = found->second;
+        }
+    }
+    const terrain::ChunkCache& cache = terrain::ChunkCache::global();
+    out.compressed_voxels = cache.compressed_bytes();
+    out.decoded_cache = cache.bytes();
+    out.decoded_budget = cache.budget();
+    return out;
 }
 
 const std::vector<TerrainWorld::ChunkCollider>* TerrainWorld::colliders(InstanceId terrain) const {

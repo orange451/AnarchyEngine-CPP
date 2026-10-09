@@ -54,11 +54,16 @@ few seconds. Editing, saving, undo, colliders, raycasts, and sampling behave as 
   means the cache is ignored and rebuilt.
 - On open with a valid cache, far nodes load from the file and the full-map meshing pass
   is skipped (near chunks still mesh on demand).
-- `LodTree` keeps far nodes under a byte budget (default 512 MB): nodes far from the camera
-  and not drawn recently are dropped and reloaded from the `.alod` on demand. The coarsest
-  level covering the whole map is always resident, so the horizon never has holes.
-- Edits dirty nodes as today; dirty nodes rebuild in memory and the `.alod` is rewritten
-  on save.
+- `LodTree` keeps a level ≥ 2 node in RAM within `kFarRingNodes` (4) nodes of the camera at
+  its own level, and drops it beyond 6 once the `.alod` holds its current build; it is
+  read back when the camera comes near again. Nodes per level stay about constant however
+  large the map is, so this bounds far-mesh memory without a byte budget (planning
+  refinement of the original 512 MB budget). The top level is always resident, so the
+  horizon never has holes: an evicted node's nearest resident ancestor draws instead.
+- Level 1 is not stored: it is cheap to rebuild from chunks once the camera is near.
+- Edits dirty nodes as today; dirty nodes rebuild in memory (and are appended to the
+  `.alod`, uncommitted). The `.alod` is committed only when the tree matches the saved
+  `.avox`: after the first build, and after each save (rewritten under the new content key).
 
 ## Budgets and UI
 
@@ -66,7 +71,7 @@ few seconds. Editing, saving, undo, colliders, raycasts, and sampling behave as 
 |---|---|
 | Compressed voxels | size of map (~104 MB here) |
 | Decoded chunk cache | 256 MB (setting) |
-| Far LOD meshes | 512 MB (setting) |
+| Far LOD meshes | a ring of `kFarRingNodes` nodes per level |
 | Near meshes, colliders, textures | as today |
 
 Total expected ~1–1.5 GB. Budgets are engine settings, not constants. The Configure

@@ -20,6 +20,7 @@
 #include <limits>
 #include <memory>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace engine_core {
@@ -71,6 +72,14 @@ inline constexpr int kNearChunks = 6;
 inline constexpr int kFarChunks = 8;
 // A stale node is queued for a rebuild at most once per this many ms.
 inline constexpr double kRebuildIntervalMs = 100.0;
+// With a store attached, a level >= 2 node is kept in RAM within this many
+// nodes of the camera at its own level (L-infinity, in that level's node
+// spans), and dropped beyond kFarRingNodes + 2 once the store holds its
+// current build. Nodes per level stay about constant however big the
+// Terrain is. The top level never leaves.
+inline constexpr int kFarRingNodes = 4;
+
+class AlodStore;
 
 // A node build next_builds asks for. input.voxels is left null: the caller
 // fills in its chunk-map snapshot (spec decision 4). revision goes back with
@@ -138,6 +147,38 @@ public:
     // camera_chunk first within a level. Marks each queued.
     void next_builds(double now_ms, const ChunkCoord* camera_chunk, std::vector<NodeBuildRequest>& out);
 
+    // Far nodes (level >= 2) are written to store as they build, and from
+    // then on may leave RAM (see kFarRingNodes). Null: every node stays.
+    // The store must outlive the tree or be detached first.
+    void attach_store(AlodStore* store) { store_ = store; }
+    // Off while the voxels differ from the saved file (edits not yet saved):
+    // rebuilt nodes are not written to the store, and so stay in RAM, until
+    // a save rewrites the store from RAM. On by default.
+    void set_store_writes(bool on) { store_writes_ = on; }
+    // The store now holds every current level >= 2 build (it was just
+    // rewritten from them): each may leave RAM.
+    void mark_all_persisted();
+    // Nothing can be read back: every level >= 2 node stays in RAM (those
+    // already out are read from nowhere, so they rebuild when wanted).
+    void forget_persisted();
+    // A warm start, on a tree with no nodes yet: every node the store holds,
+    // built and current but not in RAM, a level-1 node over each of its
+    // surface chunks (built, not in RAM), and a level-0 node per surface
+    // chunk with no mesh. update_residency then asks for what is near.
+    void adopt_store();
+    // Level >= 2 nodes update_residency wants read back from the store;
+    // the caller reads each and hands it to node_loaded.
+    void take_loads(std::vector<NodeKey>& out);
+    // key's mesh as the store had it (null: unreadable, so it is rebuilt).
+    void node_loaded(const NodeKey& key, std::shared_ptr<const CompactMesh> mesh);
+    // Bytes of the level >= 1 meshes in RAM.
+    std::size_t compact_bytes() const;
+    // Every level-0 chunk with surface, for the store's next commit.
+    std::vector<ChunkCoord> surface_chunks() const;
+    // No chunk job in flight and no level >= 1 node stale: every built node
+    // shows the voxels as they are.
+    bool settled();
+
     // Every resident node with a mesh: level 0 with its chunk mesh, levels
     // >= 1 with their shared compact mesh (R12: nothing is unpacked here).
     std::vector<TerrainNodeView> nodes_for_view();
@@ -170,6 +211,10 @@ public:
         double last_build_ms = -std::numeric_limits<double>::infinity();
         bool built = false;
         bool resident = false;   // compact holds the mesh
+        // Level >= 2: the store holds this build, so compact may be dropped
+        // and read back. Cleared when the node goes stale.
+        bool persisted = false;
+        bool loading = false;    // asked for through take_loads, not landed
         std::shared_ptr<const CompactMesh> compact;   // shared with each TerrainNodeView of this build
         float error = 0.f;
         bool stale() const { return built_revision != revision; }
@@ -186,7 +231,10 @@ private:
     // Creates coord's missing ancestors up to top_ (created ones are stale);
     // with mark, also marks the existing ones stale.
     void ensure_ancestors(ChunkCoord coord, bool mark);
-    void mark_stale(Node& node);
+    void mark_stale(const NodeKey& key, Node& node);
+    // key's parent goes on build_check_: key changed in a way that may make
+    // its parent ready to build.
+    void touch_parent(const NodeKey& key);
     bool has_children(const NodeKey& key) const;
     bool surfaced(const NodeKey& key, const Node& node) const;
     bool child_ready(const NodeKey& key, const Node& node) const;
@@ -199,7 +247,34 @@ private:
     // erased node's mesh was part of it).
     void prune_up(const NodeKey& key, bool had_surface);
 
+    // update_residency's pass over levels >= 2: evicts persisted far nodes
+    // and asks for wanted ones back. near null: every node; else only
+    // residency_candidates around near.
+    void update_far_residency(const ChunkCoord* camera_chunk, const ChunkCoord* near);
+    // Cleans published_ and stale_ and buckets them by level for
+    // residency_candidates.
+    void sort_residency_sets();
+    // The level's nodes a residency pass can change: in RAM, children of a
+    // stale node, within reach_nodes of camera's node, or at the top.
+    std::vector<NodeKey> residency_candidates(int level, ChunkCoord camera, int reach_nodes) const;
+
     float voxel_size_;
+    AlodStore* store_ = nullptr;
+    bool store_writes_ = true;
+    // Level >= 1 nodes next_builds should look at: those marked stale or
+    // created since, and parents of nodes that landed, built, loaded, or
+    // left. Everything else is either current or still waiting on a child.
+    std::unordered_set<NodeKey, NodeKeyHash> build_check_;
+    // Supersets, cleaned lazily, so that per-update work follows what is in
+    // RAM and what is changing rather than the size of the Terrain: nodes
+    // with a mesh in RAM, level >= 1 nodes that went stale, and level-0
+    // nodes put in flight.
+    std::unordered_set<NodeKey, NodeKeyHash> published_;
+    std::unordered_set<NodeKey, NodeKeyHash> stale_;
+    std::unordered_set<NodeKey, NodeKeyHash> in_flight_;
+    std::vector<std::vector<NodeKey>> published_by_level_;
+    std::vector<std::vector<NodeKey>> stale_by_level_;
+    std::vector<NodeKey> loads_;
     std::uint64_t own_revisions_ = 0;
     std::uint64_t* revisions_;
     std::unordered_map<NodeKey, Node, NodeKeyHash> nodes_;   // every level, level 0 included

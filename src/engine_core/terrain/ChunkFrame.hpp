@@ -18,4 +18,8 @@ namespace engine_core::terrain {
 // (32,768 bytes).
 std::vector<std::byte> encode_chunk_frame(const Cell* cells);
 
+// The reverse: writes the frame's 32,768 cells into cells. False when the
+// frame is damaged.
+bool decode_chunk_frame(const std::byte* frame, std::size_t frame_size, Cell* cells);
+
 }  // namespace engine_core::terrain

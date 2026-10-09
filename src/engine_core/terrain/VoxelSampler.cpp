@@ -31,6 +31,7 @@ const ChunkData* VoxelSampler::chunk_at(const ChunkCoord& coord) const {
     }
     const auto found = chunks_.find(coord);
     cached_chunk_ = (found == chunks_.end()) ? nullptr : found->second.get();
+    cached_cells_ = cached_chunk_ != nullptr ? cached_chunk_->cells() : nullptr;
     cached_coord_ = coord;
     cached_valid_ = true;
     return cached_chunk_;
@@ -43,7 +44,8 @@ Cell VoxelSampler::cell_at(int cx, int cy, int cz) const {
         return Cell{};  // missing chunk: air, exactly as VoxelVolume::cell() treats it
     }
     const int index = cell_index(cx - coord.x * kChunkSize, cy - coord.y * kChunkSize, cz - coord.z * kChunkSize);
-    return chunk->cell(index);
+    // chunk_at() just pinned this chunk's cells (null when uniform).
+    return cached_cells_ ? (*cached_cells_)[static_cast<std::size_t>(index)] : chunk->cell(0);
 }
 
 float VoxelSampler::distance(Vec3 p) const {

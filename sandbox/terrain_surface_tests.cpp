@@ -565,10 +565,15 @@ Terrain& terrain_in_workspace(DataModel& game) {
     return t;
 }
 
+// A first build is admitted a few chunks per update, so the count starts
+// once it is all admitted.
 void settle(TerrainWorld& world, DataModel& game) {
     for (int i = 0; i < 4; ++i) {
         world.update(game);
         world.wait_idle();
+        if (!world.first_build_done()) {
+            i = 0;
+        }
     }
     world.update(game);
 }
@@ -764,8 +769,7 @@ TEST_CASE("TW7 a mesh from a Terrain's previous stay in Workspace is dropped, no
         release = true;
     }
     gate_cv.notify_all();
-    world.wait_idle();
-    world.update(game);
+    settle(world, game);   // the first build admits a few chunks per update
     // This stay's 27 fresh jobs (26 air plus the one real chunk, repainted)
     // are accepted; the one job left over from the previous stay must be
     // dropped as stale, not counted a 28th time.
@@ -1643,6 +1647,9 @@ TEST_CASE("RM1 a raycast at a settled island returns the same instance, material
         for (int i = 0; i < 4; ++i) {
             world.update(rig.game, now_ms);
             world.wait_idle();
+            if (!world.first_build_done()) {
+                i = 0;
+            }
         }
         world.update(rig.game, now_ms);
     };
@@ -1718,6 +1725,9 @@ TEST_CASE("RM6 with colliders loaded around only some chunks, oblique and grazin
         for (int i = 0; i < 4; ++i) {
             world.update(rig.game, now_ms);
             world.wait_idle();
+            if (!world.first_build_done()) {
+                i = 0;
+            }
         }
         world.update(rig.game, now_ms);
     };

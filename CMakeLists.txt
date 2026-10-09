@@ -638,6 +638,7 @@ add_library(engine_core STATIC
     src/engine_core/BrushBindings.cpp
     src/engine_core/BrushVisuals.cpp
     src/engine_core/terrain/VoxelChunk.cpp
+    src/engine_core/terrain/ChunkCache.cpp
     src/engine_core/terrain/ShapeDistance.cpp
     src/engine_core/terrain/VoxelVolume.cpp
     src/engine_core/terrain/AvoxFile.cpp
@@ -648,6 +649,7 @@ add_library(engine_core STATIC
     src/engine_core/terrain/VoxelSampler.cpp
     src/engine_core/terrain/LodBuilder.cpp
     src/engine_core/terrain/LodTree.cpp
+    src/engine_core/terrain/AlodStore.cpp
     src/engine_core/terrain/HeightDerive.cpp
     src/engine_core/terrain/LayerBuilder.cpp
     src/engine_core/TerrainWorld.cpp
@@ -1004,6 +1006,7 @@ add_executable(sandbox
     sandbox/brush_geometry_tests.cpp
     sandbox/brush_tests.cpp
     sandbox/terrain_voxel_tests.cpp
+    sandbox/terrain_streaming_tests.cpp
     sandbox/terrain_instance_tests.cpp
     sandbox/terrain_surface_tests.cpp
     sandbox/terrain_lua_tests.cpp

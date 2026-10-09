@@ -1,6 +1,9 @@
 #include "terrain/VoxelChunk.hpp"
 
+#include "terrain/ChunkCache.hpp"
 #include "terrain/ChunkFrame.hpp"
+
+#include <cstdlib>
 
 namespace engine_core::terrain {
 
@@ -35,9 +38,9 @@ std::shared_ptr<ChunkData> ChunkData::clone_dense() const {
     auto copy = std::make_shared<ChunkData>();
     copy->uniform_ = false;
     if (uniform_) {
-        copy->cells_.assign(kChunkCells, value_);
+        copy->owned_ = std::make_shared<CellArray>(static_cast<std::size_t>(kChunkCells), value_);
     } else {
-        copy->cells_ = cells_;
+        copy->owned_ = std::make_shared<CellArray>(*cells());
     }
     return copy;
 }
@@ -56,10 +59,11 @@ void ChunkData::finish() {
     // scan, since there are only 256 entries to fold regardless of how
     // large the chunk is.
     bool used_flat[256] = {};
-    const Cell first = cells_[0];
+    const CellArray& cells = *owned_;
+    const Cell first = cells[0];
     bool same = true;
     for (int i = 0; i < kChunkCells; ++i) {
-        const Cell c = cells_[static_cast<std::size_t>(i)];
+        const Cell c = cells[static_cast<std::size_t>(i)];
         if (c.distance != kAirDistance) {
             used_flat[c.material] = true;
         }
@@ -78,8 +82,7 @@ void ChunkData::finish() {
     if (same) {
         uniform_ = true;
         value_ = first;
-        cells_.clear();
-        cells_.shrink_to_fit();
+        owned_.reset();
     }
 }
 
@@ -94,9 +97,10 @@ void ChunkData::finish_with_mask(const std::array<std::uint64_t, 4>& mask) {
     // the first cell that disagrees with cell 0 instead of visiting all
     // 32,768: the caller already proved the mask, so once this chunk is
     // known non-uniform there's nothing left to compute here.
-    const Cell first = cells_[0];
+    const CellArray& cells = *owned_;
+    const Cell first = cells[0];
     for (int i = 1; i < kChunkCells; ++i) {
-        if (!(cells_[static_cast<std::size_t>(i)] == first)) {
+        if (!(cells[static_cast<std::size_t>(i)] == first)) {
             used_ = mask;
             return;
         }
@@ -104,8 +108,7 @@ void ChunkData::finish_with_mask(const std::array<std::uint64_t, 4>& mask) {
     // Every cell agrees with cell 0: this chunk collapses to uniform.
     uniform_ = true;
     value_ = first;
-    cells_.clear();
-    cells_.shrink_to_fit();
+    owned_.reset();
     used_ = {};
     if (value_.distance != kAirDistance) {
         used_[value_.material >> 6] |= 1ull << (value_.material & 63);
@@ -118,7 +121,8 @@ const std::vector<std::byte>& ChunkData::encoded() const {
     // stays right forever.
     std::call_once(encoded_once_, [this]() {
         if (!uniform_) {
-            encoded_ = encode_chunk_frame(cells_.data());
+            encoded_ = encode_chunk_frame(cells()->data());
+            ChunkCache::global().add_compressed(encoded_.size());
         }
     });
     return encoded_;
@@ -128,7 +132,54 @@ void ChunkData::adopt_encoded(std::vector<std::byte> frame) {
     // Marks the flag triggered without running the encoder, so encoded()
     // never recompresses a chunk that was just decoded from this very frame.
     std::call_once(encoded_once_, [] {});
+    ChunkCache::global().remove_compressed(encoded_.size());
     encoded_ = std::move(frame);
+    ChunkCache::global().add_compressed(encoded_.size());
+}
+
+ChunkData::~ChunkData() { ChunkCache::global().remove_compressed(encoded_.size()); }
+
+CellsPtr ChunkData::cells() const {
+    if (uniform_) {
+        return nullptr;
+    }
+    std::lock_guard<std::mutex> lock(cells_mutex_);
+    if (owned_) {
+        return owned_;
+    }
+    if (CellsPtr cached = cached_.lock()) {
+        ChunkCache::global().touch(cached.get());
+        return cached;
+    }
+    auto decoded = std::make_shared<CellArray>(static_cast<std::size_t>(kChunkCells));
+    // The frame was checked when it was read (decode_avox) or made here
+    // (encoded()), so failing now means memory was corrupted.
+    if (!decode_chunk_frame(encoded_.data(), encoded_.size(), decoded->data())) {
+        std::abort();
+    }
+    CellsPtr shared = std::move(decoded);
+    cached_ = shared;
+    ChunkCache::global().insert(shared);
+    return shared;
+}
+
+void ChunkData::release_cells() const {
+    if (uniform_) {
+        return;
+    }
+    encoded();   // made from owned_ if this chunk has no frame yet
+    std::lock_guard<std::mutex> lock(cells_mutex_);
+    if (!owned_) {
+        return;
+    }
+    cached_ = owned_;
+    ChunkCache::global().insert(owned_);
+    owned_.reset();
+}
+
+bool ChunkData::cells_owned() const {
+    std::lock_guard<std::mutex> lock(cells_mutex_);
+    return owned_ != nullptr;
 }
 
 }  // namespace engine_core::terrain

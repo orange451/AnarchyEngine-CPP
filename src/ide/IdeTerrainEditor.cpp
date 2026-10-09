@@ -353,6 +353,15 @@ private:
     std::function<void()> cancel_;
 };
 
+std::string megabytes(std::size_t bytes) { return std::to_string(bytes / (1024 * 1024)); }
+
+// "voxels 104 MB, cache 212/256 MB, meshes 380 MB".
+std::string memory_figures(const engine_core::TerrainMemory& memory) {
+    return "voxels " + megabytes(memory.compressed_voxels) + " MB, cache " + megabytes(memory.decoded_cache) + "/" +
+           megabytes(memory.decoded_budget) + " MB, meshes " + megabytes(memory.chunk_meshes + memory.far_meshes) +
+           " MB";
+}
+
 }  // namespace
 
 // One TerrainMaterial's card and the widgets that change with it.
@@ -583,7 +592,19 @@ void IdeTerrainEditor::refresh() {
     // Sculpting moves no tree or property, only the voxels' revision. A
     // background texture build landing moves none of those either, only
     // textures (Task 5: the header's "· N MB textures" figure).
-    if (tree == seen_tree_ && !edited && voxel_revision() == view_.voxel_revision && textures == seen_texture_revision_) {
+    // The memory figures move with no revision to watch (the camera
+    // streaming meshes in and out), so they are polled.
+    bool memory_moved = false;
+    if (host_.terrain_memory && --memory_poll_in_ <= 0) {
+        memory_poll_in_ = kMemoryPollFrames;
+        std::string text = memory_figures(host_.terrain_memory(terrain_));
+        if (text != memory_text_) {
+            memory_text_ = std::move(text);
+            memory_moved = true;
+        }
+    }
+    if (tree == seen_tree_ && !edited && voxel_revision() == view_.voxel_revision &&
+        textures == seen_texture_revision_ && !memory_moved) {
         return;
     }
     seen_tree_ = tree;
@@ -628,6 +649,9 @@ void IdeTerrainEditor::show_header() {
     if (view_.alive && host_.texture_memory_bytes) {
         const std::size_t megabytes = host_.texture_memory_bytes(terrain_) / (1024 * 1024);
         subtitle += " · " + std::to_string(megabytes) + " MB textures";
+    }
+    if (view_.alive && !memory_text_.empty()) {
+        subtitle += " · " + memory_text_;
     }
     subtitle_->setText(subtitle);
     const bool at_cap = !view_.alive || count >= static_cast<std::size_t>(kMaxMaterials);

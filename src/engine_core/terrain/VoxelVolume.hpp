@@ -26,6 +26,10 @@ struct CellCoord {
 
 using ChunkMap = std::unordered_map<ChunkCoord, ChunkPtr, ChunkCoordHash>;
 
+// Hands every dense chunk's cells to the ChunkCache (ChunkData::
+// release_cells()), e.g. once a save has encoded them all. Any thread.
+void release_all_cells(const ChunkMap& chunks);
+
 // A Terrain's voxels: every chunk that is not all air. SimulationThread only;
 // chunks handed out are shared and immutable.
 class VoxelVolume {

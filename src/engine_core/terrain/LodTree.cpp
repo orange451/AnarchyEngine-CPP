@@ -1,5 +1,7 @@
 #include "terrain/LodTree.hpp"
 
+#include "terrain/AlodStore.hpp"
+
 #include <algorithm>
 #include <tuple>
 #include <utility>
@@ -106,9 +108,18 @@ int LodTree::top_level() {
     return top_;
 }
 
-void LodTree::mark_stale(Node& node) {
+void LodTree::mark_stale(const NodeKey& key, Node& node) {
     node.revision = next_revision();
+    node.persisted = false;   // the store holds the build it is about to replace
     changed_ = true;   // a published node's stale flag (R26) shows at once
+    build_check_.insert(key);
+    stale_.insert(key);
+}
+
+void LodTree::touch_parent(const NodeKey& key) {
+    if (key.level < top_) {
+        build_check_.insert(parent_of(key));
+    }
 }
 
 void LodTree::ensure_ancestors(ChunkCoord coord, bool mark) {
@@ -120,10 +131,14 @@ void LodTree::ensure_ancestors(ChunkCoord coord, bool mark) {
         if (created) {
             node.revision = node.min_revision = next_revision();   // stale until built
             node_bounds(key, voxel_size_, node.bounds_min, node.bounds_max);
+            build_check_.insert(key);
+            stale_.insert(key);
         } else if (mark) {
-            mark_stale(node);
+            mark_stale(key, node);
         }
     }
+    // The chunk itself changed (queued, landed): its parent may now be ready.
+    touch_parent(chunk_key(coord));
 }
 
 bool LodTree::has_children(const NodeKey& key) const {
@@ -174,6 +189,7 @@ void LodTree::chunk_queued(ChunkCoord coord, bool edited) {
     }
     it->second.in_flight = true;   // the reference survives the rehashes below
     it->second.failed = false;
+    in_flight_.insert(chunk_key(coord));
     refresh_top();
     ensure_ancestors(coord, edited);
 }
@@ -198,6 +214,7 @@ void LodTree::chunk_meshed(ChunkCoord coord, std::shared_ptr<const anarchy::ames
     node.chunk_mesh = std::move(mesh);
     node.mesh_revision = next_revision();
     changed_ = true;
+    published_.insert(key);
     refresh_top();
     ensure_ancestors(coord, edited || !was_surface);
 }
@@ -237,10 +254,11 @@ void LodTree::prune_up(const NodeKey& key, bool had_surface) {
             continue;
         }
         pruning = false;
+        build_check_.insert(up);   // one child fewer: it may be ready now
         if (!had_surface) {
             break;
         }
-        mark_stale(parent->second);
+        mark_stale(up, parent->second);
     }
 }
 
@@ -256,6 +274,7 @@ void LodTree::chunk_failed(ChunkCoord coord) {
     }
     node->in_flight = false;
     node->failed = true;   // keeps chunk_mesh (null if it was dropped)
+    touch_parent(chunk_key(coord));
 }
 
 void LodTree::node_failed(const NodeResult& result) {
@@ -268,6 +287,7 @@ void LodTree::node_failed(const NodeResult& result) {
     }
     // last_build_ms stays: next_builds offers it again after the debounce window.
     node->queued_revision = 0;
+    build_check_.insert(result.key);
 }
 
 void LodTree::node_built(const NodeResult& result) {
@@ -294,8 +314,13 @@ void LodTree::node_built(const NodeResult& result) {
         pack(*mesh, node->bounds_min, node->bounds_max, result.result.surface_index_count));
     node->has_surface = true;
     node->resident = true;
+    node->loading = false;
     node->error = result.result.error;
     node->mesh_revision = next_revision();
+    node->persisted = store_ != nullptr && store_writes_ && result.key.level >= 2 &&
+                      store_->put(result.key, *node->compact, node->error, node->bounds_min, node->bounds_max);
+    touch_parent(result.key);   // current now: its parent may be ready
+    published_.insert(result.key);
 }
 
 void LodTree::update_residency(const ChunkCoord* camera_chunk, std::vector<ChunkCoord>& out_drop_chunks,
@@ -307,10 +332,9 @@ void LodTree::update_residency(const ChunkCoord* camera_chunk, std::vector<Chunk
         return;
     }
     refresh_top();
-    // Level 1 first: one it marks stale here wants its chunks below.
-    for (auto& [key, node] : nodes_) {
+    const auto level1 = [&](const NodeKey& key, Node& node) {
         if (key.level != 1 || !node.built || !node.has_surface) {
-            continue;   // unbuilt nodes are stale already; empty ones hold nothing
+            return;   // unbuilt nodes are stale already; empty ones hold nothing
         }
         const int distance = camera_chunk != nullptr ? linf_chunks(*camera_chunk, key) : 0;
         const bool wanted = camera_chunk == nullptr || distance <= kNearChunks || parent_wants(key);
@@ -321,12 +345,16 @@ void LodTree::update_residency(const ChunkCoord* camera_chunk, std::vector<Chunk
                 changed_ = true;
             }
         } else if (wanted && !node.stale()) {
-            mark_stale(node);   // rebuilt from its chunks, which are wanted now
+            mark_stale(key, node);   // rebuilt from its chunks, which are wanted now
+            if (stale_by_level_.size() < 2) {
+                stale_by_level_.resize(2);
+            }
+            stale_by_level_[1].push_back(key);   // so the level-0 pass below wants its chunks
         }
-    }
-    for (auto& [key, node] : nodes_) {
+    };
+    const auto level0 = [&](const NodeKey& key, Node& node) {
         if (key.level != 0 || !node.has_surface) {
-            continue;
+            return;
         }
         const ChunkCoord coord{key.x, key.y, key.z};
         const int distance = camera_chunk != nullptr ? linf_chunks(*camera_chunk, key) : 0;
@@ -340,7 +368,28 @@ void LodTree::update_residency(const ChunkCoord* camera_chunk, std::vector<Chunk
             }
         } else if (wanted && !node.in_flight && !node.failed) {
             node.in_flight = true;
+            in_flight_.insert(key);
             out_need_chunks.push_back(coord);
+        }
+    };
+    if (camera_chunk == nullptr || top_ <= 1) {
+        // No camera (everything wanted) or a tiny tree: every node.
+        update_far_residency(camera_chunk, nullptr);
+        for (auto& [key, node] : nodes_) level1(key, node);
+        for (auto& [key, node] : nodes_) level0(key, node);
+    } else {
+        // Only the nodes a pass can change: those in RAM (to drop), those
+        // near the camera (to want), and the children of stale nodes (a
+        // rebuild wants them). A huge Terrain's other tens of thousands of
+        // nodes are neither, and walking them every pass was the hitch.
+        sort_residency_sets();
+        update_far_residency(camera_chunk, camera_chunk);
+        for (const NodeKey& key : residency_candidates(1, *camera_chunk, kNearChunks / 2 + 1)) {
+            if (Node* node = find_mutable(key)) level1(key, *node);
+        }
+        // After level 1: a node it just marked stale wants its chunks now.
+        for (const NodeKey& key : residency_candidates(0, *camera_chunk, kNearChunks)) {
+            if (Node* node = find_mutable(key)) level0(key, *node);
         }
     }
     // What this pass changed itself (level-1 nodes marked stale, chunks
@@ -352,6 +401,239 @@ void LodTree::update_residency(const ChunkCoord* camera_chunk, std::vector<Chunk
     }
 }
 
+void LodTree::update_far_residency(const ChunkCoord* camera_chunk, const ChunkCoord* near) {
+    if (store_ == nullptr) {
+        return;
+    }
+    const auto far = [&](const NodeKey& key, Node& node) {
+        if (key.level < 2 || !node.built || !node.has_surface) {
+            return;
+        }
+        // In this level's node spans: 0 inside the node, 1 in the next ring.
+        const int rings = camera_chunk != nullptr ? linf_chunks(*camera_chunk, key) / (1 << key.level) : 0;
+        // A stale parent rebuilds from this node, so it must be in RAM.
+        const bool wanted = camera_chunk == nullptr || key.level >= top_ || rings <= kFarRingNodes || parent_wants(key);
+        if (node.resident) {
+            if (!wanted && rings > kFarRingNodes + 2 && node.persisted && !node.stale()) {
+                node.compact.reset();
+                node.resident = false;
+                changed_ = true;
+            }
+        } else if (wanted && node.persisted && !node.stale() && !node.loading) {
+            node.loading = true;
+            loads_.push_back(key);
+        }
+    };
+    if (near == nullptr) {
+        for (auto& [key, node] : nodes_) far(key, node);
+        return;
+    }
+    for (int level = top_; level >= 2; --level) {
+        for (const NodeKey& key : residency_candidates(level, *near, kFarRingNodes + 1)) {
+            if (Node* node = find_mutable(key)) far(key, *node);
+        }
+    }
+}
+
+void LodTree::sort_residency_sets() {
+    for (std::vector<NodeKey>& keys : published_by_level_) keys.clear();
+    for (std::vector<NodeKey>& keys : stale_by_level_) keys.clear();
+    const auto bucket = [](std::vector<std::vector<NodeKey>>& by_level, const NodeKey& key) {
+        const std::size_t level = static_cast<std::size_t>(std::max(0, key.level));
+        if (by_level.size() <= level) by_level.resize(level + 1);
+        by_level[level].push_back(key);
+    };
+    // Both sets are supersets, cleaned here: a key whose node is gone or no
+    // longer in RAM (or no longer stale) leaves.
+    for (auto it = published_.begin(); it != published_.end();) {
+        const Node* node = find(*it);
+        const bool in_ram = node != nullptr && (it->level == 0 ? node->chunk_mesh != nullptr : node->resident);
+        if (!in_ram) {
+            it = published_.erase(it);
+            continue;
+        }
+        bucket(published_by_level_, *it);
+        ++it;
+    }
+    for (auto it = stale_.begin(); it != stale_.end();) {
+        const Node* node = find(*it);
+        if (node == nullptr || it->level == 0 || !node->stale()) {
+            it = stale_.erase(it);
+            continue;
+        }
+        bucket(stale_by_level_, *it);
+        ++it;
+    }
+    if (stale_by_level_.size() < 2) stale_by_level_.resize(2);
+}
+
+std::vector<NodeKey> LodTree::residency_candidates(int level, ChunkCoord camera, int reach_nodes) const {
+    std::unordered_set<NodeKey, NodeKeyHash> out;
+    const auto add = [&](const NodeKey& key) {
+        if (nodes_.count(key) != 0) out.insert(key);
+    };
+    const std::size_t at = static_cast<std::size_t>(level);
+    if (at < published_by_level_.size()) {
+        out.insert(published_by_level_[at].begin(), published_by_level_[at].end());
+    }
+    if (at + 1 < stale_by_level_.size()) {
+        for (const NodeKey& parent : stale_by_level_[at + 1]) {
+            for (const NodeKey& child : children_of(parent)) add(child);
+        }
+    }
+    const NodeKey center = node_of(camera, level);
+    for (int dz = -reach_nodes; dz <= reach_nodes; ++dz) {
+        for (int dy = -reach_nodes; dy <= reach_nodes; ++dy) {
+            for (int dx = -reach_nodes; dx <= reach_nodes; ++dx) {
+                add(NodeKey{level, center.x + dx, center.y + dy, center.z + dz});
+            }
+        }
+    }
+    if (level >= top_ && !level0_.empty()) {
+        const NodeKey lo = node_of(level0_.lo(), level);
+        const NodeKey hi = node_of(level0_.hi(), level);
+        for (int z = lo.z; z <= hi.z; ++z)
+            for (int y = lo.y; y <= hi.y; ++y)
+                for (int x = lo.x; x <= hi.x; ++x) add(NodeKey{level, x, y, z});
+    }
+    return std::vector<NodeKey>(out.begin(), out.end());
+}
+
+void LodTree::adopt_store() {
+    if (store_ == nullptr) {
+        return;
+    }
+    residency_dirty_ = true;
+    changed_ = true;
+    const auto built_node = [&](const NodeKey& key) -> Node& {
+        Node& node = nodes_[key];
+        node.revision = node.min_revision = node.built_revision = next_revision();
+        node.built = true;
+        node.has_surface = true;
+        node.resident = false;
+        node_bounds(key, voxel_size_, node.bounds_min, node.bounds_max);
+        return node;
+    };
+    for (const ChunkCoord& coord : store_->surface_chunks()) {
+        const NodeKey key = chunk_key(coord);
+        Node& chunk = nodes_[key];
+        chunk.has_surface = true;
+        node_bounds(key, voxel_size_, chunk.bounds_min, chunk.bounds_max);
+        level0_.add(coord);
+        // Level 1 is not stored: cheap to rebuild from its chunks once near.
+        const NodeKey parent = parent_of(key);
+        if (nodes_.count(parent) == 0) {
+            built_node(parent);
+        }
+    }
+    for (const auto& [key, entry] : store_->entries()) {
+        if (key.level < 2) {
+            continue;
+        }
+        Node& node = built_node(key);
+        node.bounds_min = entry.bounds_min;
+        node.bounds_max = entry.bounds_max;
+        node.error = entry.error;
+        node.persisted = true;
+    }
+    // Any ancestor the store lacks is created stale and built from its
+    // children (read back for the purpose: parent_wants).
+    refresh_top();
+    for (const ChunkCoord& coord : store_->surface_chunks()) {
+        ensure_ancestors(coord, false);
+    }
+}
+
+void LodTree::take_loads(std::vector<NodeKey>& out) {
+    out.insert(out.end(), loads_.begin(), loads_.end());
+    loads_.clear();
+}
+
+void LodTree::node_loaded(const NodeKey& key, std::shared_ptr<const CompactMesh> mesh) {
+    Node* node = find_mutable(key);
+    if (node == nullptr) {
+        return;
+    }
+    node->loading = false;
+    if (node->resident || node->stale() || !node->persisted) {
+        return;   // rebuilt or edited while the read was pending: that wins
+    }
+    residency_dirty_ = true;
+    if (mesh == nullptr) {
+        mark_stale(key, *node);   // unreadable: built again from its children
+        return;
+    }
+    node->compact = std::move(mesh);
+    node->resident = true;
+    node->mesh_revision = next_revision();
+    changed_ = true;
+    touch_parent(key);   // in RAM again: a stale parent waiting on it may build
+    published_.insert(key);
+}
+
+std::size_t LodTree::compact_bytes() const {
+    std::size_t total = 0;
+    for (const NodeKey& key : published_) {
+        const Node* node = find(key);
+        if (key.level >= 1 && node != nullptr && node->resident && node->compact != nullptr) {
+            total += node->compact->bytes();
+        }
+    }
+    return total;
+}
+
+void LodTree::mark_all_persisted() {
+    for (auto& [key, node] : nodes_) {
+        if (key.level >= 2 && node.built && node.has_surface && !node.stale()) {
+            node.persisted = true;
+        }
+    }
+    residency_dirty_ = true;
+}
+
+void LodTree::forget_persisted() {
+    for (auto& [key, node] : nodes_) {
+        if (key.level < 2 || !node.persisted) {
+            continue;
+        }
+        node.persisted = false;
+        if (!node.resident) {
+            mark_stale(key, node);   // its mesh is gone with the store: built again when wanted
+        }
+    }
+    residency_dirty_ = true;
+}
+
+bool LodTree::settled() {
+    // stale_ and in_flight_ hold every such node (and some that no longer
+    // are, cleaned here), so this follows the work left, not the tree's size.
+    for (auto it = stale_.begin(); it != stale_.end();) {
+        const Node* node = find(*it);
+        if (node != nullptr && it->level >= 1 && node->stale()) {
+            return false;
+        }
+        it = stale_.erase(it);
+    }
+    for (auto it = in_flight_.begin(); it != in_flight_.end();) {
+        const Node* node = find(*it);
+        if (node != nullptr && node->in_flight) {
+            return false;
+        }
+        it = in_flight_.erase(it);
+    }
+    return true;
+}
+
+std::vector<ChunkCoord> LodTree::surface_chunks() const {
+    std::vector<ChunkCoord> out;
+    for (const auto& [key, node] : nodes_) {
+        if (key.level == 0 && node.has_surface) {
+            out.push_back(ChunkCoord{key.x, key.y, key.z});
+        }
+    }
+    return out;
+}
+
 void LodTree::next_builds(double now_ms, const ChunkCoord* camera_chunk, std::vector<NodeBuildRequest>& out) {
     refresh_top();
     struct Candidate {
@@ -359,9 +641,19 @@ void LodTree::next_builds(double now_ms, const ChunkCoord* camera_chunk, std::ve
         int distance;
     };
     std::vector<Candidate> candidates;
-    for (const auto& [key, node] : nodes_) {
-        if (key.level == 0 || !node.stale() || node.queued_revision == node.revision ||
-            now_ms - node.last_build_ms < kRebuildIntervalMs) {
+    // Only nodes that changed, or whose children did, since they were last
+    // looked at (build_check_): a node that was not ready stays not ready
+    // until one of those events touches it again. A huge Terrain has tens
+    // of thousands of nodes waiting; walking them all every update was most
+    // of the simulation step.
+    std::vector<NodeKey> waiting;   // stale and ready but inside the debounce window
+    for (const NodeKey& key : build_check_) {
+        const Node* node = find(key);
+        if (key.level == 0 || node == nullptr || !node->stale() || node->queued_revision == node->revision) {
+            continue;
+        }
+        if (now_ms - node->last_build_ms < kRebuildIntervalMs) {
+            waiting.push_back(key);
             continue;
         }
         bool ready = true;
@@ -376,6 +668,8 @@ void LodTree::next_builds(double now_ms, const ChunkCoord* camera_chunk, std::ve
             candidates.push_back(Candidate{key, camera_chunk != nullptr ? linf_chunks(*camera_chunk, key) : 0});
         }
     }
+    build_check_.clear();
+    build_check_.insert(waiting.begin(), waiting.end());
     std::sort(candidates.begin(), candidates.end(), [](const Candidate& a, const Candidate& b) {
         return std::tie(a.key.level, a.distance, a.key.x, a.key.y, a.key.z) <
                std::tie(b.key.level, b.distance, b.key.x, b.key.y, b.key.z);
@@ -418,7 +712,13 @@ void LodTree::next_builds(double now_ms, const ChunkCoord* camera_chunk, std::ve
 std::vector<TerrainNodeView> LodTree::nodes_for_view() {
     refresh_top();
     std::vector<TerrainNodeView> out;
-    for (auto& [key, node] : nodes_) {
+    // Only nodes that may have a mesh in RAM: the rest have nothing to show.
+    for (const NodeKey& key : published_) {
+        const auto found = nodes_.find(key);
+        if (found == nodes_.end()) {
+            continue;
+        }
+        Node& node = found->second;
         TerrainNodeView view;
         view.key = key;
         view.revision = node.mesh_revision;

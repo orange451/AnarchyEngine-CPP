@@ -534,6 +534,30 @@ Built expand(const std::vector<Face>& faces, double distance) {
 Built clip(const std::vector<Face>& faces, const Face& face) {
     std::vector<Face> clipped = faces;
     clipped.push_back(face);
+    Face& cut = clipped.back();
+    // A cut with no Material wears the brush's: that of the face it most nearly
+    // faces, so a slanted top keeps the top's texture and a cut wall its side's.
+    // Its axes stay world-aligned, so the texture runs on across the cut.
+    const auto plane = plane_of(cut);
+    if (cut.material.empty() && plane) {
+        const Face* nearest = nullptr;
+        double best = -2.0;
+        for (const Face& other : faces) {
+            const auto other_plane = plane_of(other);
+            if (other.material.empty() || !other_plane) continue;
+            const double facing = dot(other_plane->normal, plane->normal);
+            if (facing > best) {
+                best = facing;
+                nearest = &other;
+            }
+        }
+        if (nearest != nullptr) {
+            cut.material = nearest->material;
+            cut.scale_u = nearest->scale_u;
+            cut.scale_v = nearest->scale_v;
+            cut.rotation = nearest->rotation;
+        }
+    }
     return build(std::move(clipped));
 }
 

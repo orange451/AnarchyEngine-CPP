@@ -91,6 +91,26 @@ TEST_CASE("BG4 a diagonal clip cuts a corner off", "[brush]") {
     REQUIRE(near(volume(corner.shape), 64.0 - 4.5));
 }
 
+TEST_CASE("BG14 a cut with no Material wears the face it most nearly faces", "[brush]") {
+    std::vector<Face> box = make_box({4, 4, 4});
+    for (Face& face : box) {
+        const auto plane = plane_of(face);
+        face.material = plane->normal.y > 0.5 ? "top" : "side";
+        face.scale_u = plane->normal.y > 0.5 ? 2.0 : 1.0;
+    }
+    const Built slope = clip(box, face_from_plane({0, 1, 0.5}, {0, 1, 0}));
+    REQUIRE(slope.ok());
+    REQUIRE(slope.faces.back().material == "top");
+    REQUIRE(slope.faces.back().scale_u == 2.0);
+
+    // A Material given is kept.
+    Face painted = face_from_plane({1, 0, 0.2}, {1, 0, 0});
+    painted.material = "mine";
+    REQUIRE(clip(box, painted).faces.back().material == "mine");
+    // A side-on cut takes a side's.
+    REQUIRE(clip(box, face_from_plane({1, 0.2, 0}, {1, 0, 0})).faces.back().material == "side");
+}
+
 TEST_CASE("BG5 move_face and expand", "[brush]") {
     const std::vector<Face> box = make_box({4, 4, 4});
     const std::size_t top = face_facing(build(box).shape, {0, 1, 0});

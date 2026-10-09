@@ -126,6 +126,8 @@ Built build(std::vector<Face> faces);
 // were. Face indices start at 0 here.
 Built move_face(const std::vector<Face>& faces, std::size_t index, double distance);
 Built expand(const std::vector<Face>& faces, double distance);
+// A face with no Material takes the Material, scale, and rotation of the face
+// whose normal is nearest its own.
 Built clip(const std::vector<Face>& faces, const Face& face);
 // Every face's points moved by the matrix (row-major 3x4: rotation/scale then
 // translation), axes turned with it. Mirroring matrices keep faces outward.

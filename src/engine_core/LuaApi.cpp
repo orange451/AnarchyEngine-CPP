@@ -1489,7 +1489,8 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
     add("Brush", "GetBounds", "The smallest and largest corner, in the Brush's space.", "Vector3,Vector3", false, {});
     add("Brush", "ContainsPoint", "Whether a point in the Brush's space is inside or on it.", "boolean", false,
         {P("point", "Vector3")});
-    add("Brush", "Clip", "Adds a face, cutting away everything in front of it.", "nil", false,
+    add("Brush", "Clip", "Adds a face, cutting away everything in front of it. A face with no Material takes the Material, scale, and "
+        "rotation of the face it most nearly faces.", "nil", false,
         {P("face", "BrushFace")});
     add("Brush", "MoveFace", "Moves a face along its normal; negative moves it in.", "nil", false,
         {P("index", "number"), P("distance", "number")});

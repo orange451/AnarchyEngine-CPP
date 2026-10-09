@@ -164,7 +164,7 @@ end)
 -- Turning on and off ----------------------------------------------------------
 
 local toolbar = plugin:CreateToolbar("Move")
-local toggle = toolbar:CreateButton("Move", "Select and move parts in the Scene View", "icons/Model.png", "Move")
+local toggle = toolbar:CreateButton("Move", "Select and move parts in the Scene View", "icons/Dragger.png", "Move")
 
 local function turn_off()
 	if not active then

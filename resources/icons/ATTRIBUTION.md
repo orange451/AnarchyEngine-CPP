@@ -20,3 +20,6 @@ match their Fugue icon by eye. Fugue's eye.png, folder.png, keyboard.png,
 network.png, new.png, plus.png, and script.png are left out: their names
 match ours (Eye.png and so on) on a case-insensitive file system, and ours
 are different icons.
+
+Dragger.png is our own, drawn in the Fugue style: the Move tool's three axis
+handles (X red, Y green, Z blue) around a white hub.

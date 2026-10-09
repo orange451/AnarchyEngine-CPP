@@ -239,6 +239,12 @@ public:
     // Moves page as a tab into beside's dock (side 0), or into a new dock left, right,
     // above, or below it (sides 1 to 4), as dragging its tab there does. For tests.
     void move_page_for_tests(IdePane* page, IdePane* beside, int side);
+    // Answers the question Save as Plugin asks when the file is there: Replace. For tests.
+    void replace_plugin_for_tests() {
+        if (!alerts_.empty() && alerts_.back() && alerts_.back()->getResult() == nullptr) {
+            alerts_.back()->setResult(jadefx::ButtonType("Replace", jadefx::ButtonType::Data::OkDone));
+        }
+    }
     // Writes the paused profiler's history as a page a browser shows. False, with why.
     bool save_profile_capture(const std::filesystem::path& file, std::string& error);
     // Writes the layout to layout.json in the config folder. A close request

@@ -2,11 +2,14 @@
 #include "ide/IdePane.hpp"
 #include "ide/PluginLoader.hpp"
 #include "ide/PluginRibbon.hpp"
+#include "runner/GameView.hpp"
 
 #include "DataModel.hpp"
 #include "Engine.hpp"
 #include "Folder.hpp"
 #include "Gui.hpp"
+#include "Matrix4.hpp"
+#include "UserInputService.hpp"
 #include "SelectionService.hpp"
 #include "FileBytes.hpp"
 #include "InstanceFile.hpp"
@@ -212,6 +215,7 @@ int RunPluginsTests() {
         // Saving again reloads the plugin; its page comes back in the same dock.
         const void* dockBefore = layout.dock_of_for_tests(page);
         layout.save_as_plugin(widgetTool);
+        layout.replace_plugin_for_tests();
         frames(4);
         ide::IdePane* reloaded = layout.page_named_for_tests(paneName);
         Expect(layout.page_open_for_tests(reloaded), "a reload opens the page again");
@@ -307,6 +311,84 @@ int RunPluginsTests() {
         layout.poll_plugins(true);
         frames(3);
         Expect(layout.page_named_for_tests(paneName) == nullptr, "unloading the plugin removes its page");
+
+        // An active plugin hears the Scene View's mouse and has its left button to itself.
+        {
+            auto* view = dynamic_cast<runner::GameView*>(layout.page_named_for_tests("Scene View"));
+            Expect(view != nullptr, "the studio has a Scene View");
+            // The Scene View in front, with a camera, as a painted frame would leave it.
+            layout.close_landing();
+            // The Center test above left its page in front of the Scene View.
+            layout.close_page_for_tests(layout.page_named_for_tests("plugin:Center Tool/Mid"));
+            if (view != nullptr) {
+                layout.reveal_window(view);
+                view->setViewForTests(engine_core::matrix4_translation(0.f, 5.f, 10.f), 70.f);
+                view->requestFocus();
+            }
+            frames(2);
+            const engine_core::InstanceId tool = MakeToolFolder(
+                engine, "Mouse Tool",
+                "_G.mousePlugin = plugin\n"
+                "plugin.Deactivation:Connect(function() Instance.new('Folder', workspace).Name = 'MouseOff' end)\n"
+                "local mouse = plugin:GetMouse()\n"
+                "mouse.Button1Down:Connect(function()\n"
+                "    local f = Instance.new('Folder')\n"
+                "    f.Name = 'MouseDown'\n"
+                "    f.Parent = workspace\n"
+                "end)\n"
+                "plugin:Activate()");
+            layout.save_as_plugin(tool);
+            frames(3);
+            // Where the press lands, and whether the game's input saw the left button go down.
+            auto click = [&](bool& gameSaw) {
+                const double x = view->getAbsoluteX() + view->getWidth() / 2;
+                const double y = view->getAbsoluteY() + view->getHeight() / 2;
+                scene->noteMove(x, y);
+                // The pointer is over the view, as a layout finds, before it presses.
+                frames(1);
+                scene->noteButton(0, true, x, y);
+                const engine_core::ThreadRole role = engine_core::thread_role();
+                engine_core::set_thread_role(engine_core::ThreadRole::Simulation);
+                engine.on_simulation([&](engine_core::DataModel& game) {
+                    game.input().dispatch(game.events());
+                    gameSaw = game.input().button_down(0);
+                    game.events().drain();
+                });
+                engine_core::set_thread_role(role);
+                scene->noteButton(0, false, x, y);
+                DrainEvents(engine);
+                frames(2);
+            };
+            auto inWorkspace = [&](const char* name) {
+                bool found = false;
+                engine.on_simulation([&](engine_core::DataModel& game) {
+                    found = game.find_first_child(game.scene_service("Workspace"), name) != 0;
+                });
+                return found;
+            };
+            bool gameSaw = true;
+            if (view != nullptr) {
+                click(gameSaw);
+            }
+            Expect(inWorkspace("MouseDown"), "the active plugin's Button1Down fires on a click in the Scene View");
+            Expect(!gameSaw, "and the game's input, where selection listens, never sees that left button");
+
+            // Turning on the view's Brush tool deactivates the plugin; the left button goes back.
+            if (view != nullptr) {
+                view->requestFocus();
+                scene->noteKey(jadefx::Key::B, true, false, 0);
+                scene->noteKey(jadefx::Key::B, false, false, 0);
+                frames(2);
+                DrainEvents(engine);
+                frames(1);
+                scene->noteKey(jadefx::Key::B, true, false, 0);
+                scene->noteKey(jadefx::Key::B, false, false, 0);
+                frames(2);
+                click(gameSaw);
+            }
+            Expect(inWorkspace("MouseOff"), "turning on the Brush tool fires the plugin's Deactivation");
+            Expect(gameSaw, "and after it the game's input sees the left button again");
+        }
 
         // Where the user puts a page is where it opens again; InitialDock is only its first place.
         auto setSpotEnabled = [&](bool enabled) {

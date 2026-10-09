@@ -224,7 +224,8 @@ void emit_signal_types(std::ostringstream& out, const std::vector<SignalType>& s
 // but the checker cannot tell a plugin's Script from another, so it is declared
 // for every script, as Roblox's is.
 void emit_plugin(std::ostringstream& out) {
-    if (!lua_class_known("Signal") || !lua_class_known("Connection") || !lua_class_known("DockWidget")) {
+    if (!lua_class_known("Signal") || !lua_class_known("Connection") || !lua_class_known("DockWidget") ||
+        !lua_class_known("Matrix4") || !lua_class_known("Instance")) {
         return;
     }
     out << "declare extern type Signal_Plugin with\n"
@@ -241,9 +242,31 @@ void emit_plugin(std::ostringstream& out) {
            "    function CreateButton(self, id: string, tooltip: string?, icon: string?, text: string?): "
            "PluginToolbarButton\n"
            "end\n\n"
+           "declare extern type PluginMouse with\n"
+           "    Hit: Matrix4\n"
+           "    Target: Instance?\n"
+           "    UnitRay: {Origin: Vector3, Direction: Vector3}\n"
+           "    X: number\n"
+           "    Y: number\n"
+           "    Shift: boolean\n"
+           "    Ctrl: boolean\n"
+           "    Alt: boolean\n"
+           "    Button1Down: Signal_Plugin\n"
+           "    Button1Up: Signal_Plugin\n"
+           "    Button2Down: Signal_Plugin\n"
+           "    Button2Up: Signal_Plugin\n"
+           "    Move: Signal_Plugin\n"
+           "    WheelForward: Signal_Plugin\n"
+           "    WheelBackward: Signal_Plugin\n"
+           "end\n\n"
            "declare extern type Plugin with\n"
            "    Name: string\n"
            "    Unloading: Signal_Plugin\n"
+           "    Deactivation: Signal_Plugin\n"
+           "    function Activate(self, exclusiveMouse: boolean?): ()\n"
+           "    function Deactivate(self): ()\n"
+           "    function IsActivated(self): boolean\n"
+           "    function GetMouse(self): PluginMouse\n"
            "    function CreateToolbar(self, name: string): PluginToolbar\n"
            "    function CreateDockWidget(self, id: string, options: {Title: string?, InitialDock: string?, "
            "Enabled: boolean?, Width: number?, Height: number?, MinWidth: number?, MinHeight: number?}?): "

@@ -5,9 +5,12 @@
 #include "ScriptBindings.hpp"
 
 #include "Gui.hpp"
+#include "Matrix4.hpp"
+#include "PhysicsWorld.hpp"
 
 #include <algorithm>
 #include <cstring>
+#include <optional>
 #include <string>
 #include <utility>
 
@@ -37,6 +40,11 @@ int toolbar_tostring(lua_State* state) {
 
 int button_tostring(lua_State* state) {
     lua_pushstring(state, "PluginToolbarButton");
+    return 1;
+}
+
+int mouse_tostring(lua_State* state) {
+    lua_pushstring(state, "PluginMouse");
     return 1;
 }
 
@@ -93,6 +101,26 @@ int ScriptBindings::plugin_index(lua_State* state) {
             push_plugin_signal(state, runtime->plugin_ui().unloading_key(ud->serial), "Unloading");
             return 1;
         }
+        if (std::strcmp(key, "Deactivation") == 0) {
+            push_plugin_signal(state, runtime->plugin_ui().deactivation_key(ud->serial), "Deactivation");
+            return 1;
+        }
+        if (std::strcmp(key, "Activate") == 0) {
+            lua_pushcfunction(state, &ScriptBindings::plugin_activate, "Activate");
+            return 1;
+        }
+        if (std::strcmp(key, "Deactivate") == 0) {
+            lua_pushcfunction(state, &ScriptBindings::plugin_deactivate, "Deactivate");
+            return 1;
+        }
+        if (std::strcmp(key, "IsActivated") == 0) {
+            lua_pushcfunction(state, &ScriptBindings::plugin_is_activated, "IsActivated");
+            return 1;
+        }
+        if (std::strcmp(key, "GetMouse") == 0) {
+            lua_pushcfunction(state, &ScriptBindings::plugin_get_mouse, "GetMouse");
+            return 1;
+        }
         if (std::strcmp(key, "CreateToolbar") == 0) {
             lua_pushcfunction(state, &ScriptBindings::plugin_create_toolbar, "CreateToolbar");
             return 1;
@@ -102,6 +130,140 @@ int ScriptBindings::plugin_index(lua_State* state) {
             return 1;
         }
         luaL_error(state, "%s is not a valid member of Plugin", key);
+    });
+}
+
+// The plugin a method's self names, or a Lua error when it has unloaded.
+static std::uint32_t live_plugin(lua_State* state, ScriptRuntime*& runtime) {
+    const auto* ud = static_cast<PluginUd*>(luaL_checkudata(state, 1, kPluginMeta));
+    runtime = runtime_from(state);
+    if (runtime == nullptr || runtime->plugin_ui().plugin_name(ud->serial) == nullptr) {
+        luaL_error(state, "the plugin has unloaded");
+    }
+    return ud->serial;
+}
+
+int ScriptBindings::plugin_activate(lua_State* state) {
+    return lua_guard(state, [&] {
+        ScriptRuntime* runtime = nullptr;
+        const std::uint32_t serial = live_plugin(state, runtime);
+        // Roblox's exclusiveMouse argument is taken and ignored: an active plugin
+        // always has the left button to itself.
+        runtime->plugin_ui().activate(serial);
+        return 0;
+    });
+}
+
+int ScriptBindings::plugin_deactivate(lua_State* state) {
+    return lua_guard(state, [&] {
+        ScriptRuntime* runtime = nullptr;
+        const std::uint32_t serial = live_plugin(state, runtime);
+        runtime->plugin_ui().deactivate(serial);
+        return 0;
+    });
+}
+
+int ScriptBindings::plugin_is_activated(lua_State* state) {
+    return lua_guard(state, [&] {
+        ScriptRuntime* runtime = nullptr;
+        const std::uint32_t serial = live_plugin(state, runtime);
+        lua_pushboolean(state, runtime->plugin_ui().active() == serial);
+        return 1;
+    });
+}
+
+int ScriptBindings::plugin_get_mouse(lua_State* state) {
+    return lua_guard(state, [&] {
+        ScriptRuntime* runtime = nullptr;
+        const std::uint32_t serial = live_plugin(state, runtime);
+        // One mouse per plugin, kept in the plugin cache beside the plugin's own userdata.
+        lua_getfield(state, LUA_REGISTRYINDEX, kPluginCache);
+        const double key = -static_cast<double>(serial);
+        lua_pushnumber(state, key);
+        lua_rawget(state, -2);
+        if (test_userdata(state, -1, kPluginMouseMeta) == nullptr) {
+            lua_pop(state, 1);
+            auto* mouse = static_cast<PluginUd*>(lua_newuserdata(state, sizeof(PluginUd)));
+            mouse->serial = serial;
+            luaL_getmetatable(state, kPluginMouseMeta);
+            lua_setmetatable(state, -2);
+            lua_pushnumber(state, key);
+            lua_pushvalue(state, -2);
+            lua_rawset(state, -4);
+        }
+        lua_remove(state, -2);
+        return 1;
+    });
+}
+
+int ScriptBindings::mouse_index(lua_State* state) {
+    return lua_guard(state, [&] {
+        const auto* ud = static_cast<PluginUd*>(luaL_checkudata(state, 1, kPluginMouseMeta));
+        const char* key = luaL_checkstring(state, 2);
+        ScriptRuntime* runtime = runtime_from(state);
+        if (runtime == nullptr || runtime->plugin_ui().plugin_name(ud->serial) == nullptr) {
+            luaL_error(state, "the mouse's plugin has unloaded");
+        }
+        const PluginUi& ui = runtime->plugin_ui();
+        const PluginMouseEvent& mouse = ui.mouse();
+        static const std::pair<const char*, PluginMouseEvent::Kind> kSignals[] = {
+            {"Button1Down", PluginMouseEvent::Kind::Button1Down},
+            {"Button1Up", PluginMouseEvent::Kind::Button1Up},
+            {"Button2Down", PluginMouseEvent::Kind::Button2Down},
+            {"Button2Up", PluginMouseEvent::Kind::Button2Up},
+            {"Move", PluginMouseEvent::Kind::Move},
+            {"WheelForward", PluginMouseEvent::Kind::WheelForward},
+            {"WheelBackward", PluginMouseEvent::Kind::WheelBackward}};
+        for (const auto& [name, kind] : kSignals) {
+            if (std::strcmp(key, name) == 0) {
+                push_plugin_signal(state, ui.mouse_key(ud->serial, kind), name);
+                return 1;
+            }
+        }
+        if (std::strcmp(key, "X") == 0) {
+            lua_pushnumber(state, mouse.x);
+            return 1;
+        }
+        if (std::strcmp(key, "Y") == 0) {
+            lua_pushnumber(state, mouse.y);
+            return 1;
+        }
+        if (std::strcmp(key, "Shift") == 0 || std::strcmp(key, "Ctrl") == 0 || std::strcmp(key, "Alt") == 0) {
+            lua_pushboolean(state, key[0] == 'S' ? mouse.shift : key[0] == 'C' ? mouse.ctrl : mouse.alt);
+            return 1;
+        }
+        if (std::strcmp(key, "UnitRay") == 0) {
+            lua_createtable(state, 0, 2);
+            lua_pushvector(state, mouse.origin.x, mouse.origin.y, mouse.origin.z);
+            lua_setfield(state, -2, "Origin");
+            lua_pushvector(state, mouse.direction.x, mouse.direction.y, mouse.direction.z);
+            lua_setfield(state, -2, "Direction");
+            return 1;
+        }
+        if (std::strcmp(key, "Hit") == 0 || std::strcmp(key, "Target") == 0) {
+            // Read when asked, so a move costs nothing until a script looks.
+            constexpr float kReach = 1000.f;
+            const Vec3 reach{mouse.direction.x * kReach, mouse.direction.y * kReach, mouse.direction.z * kReach};
+            std::optional<RayHit> hit;
+            if (PhysicsWorld* physics = runtime->game_->physics()) {
+                hit = physics->raycast(*runtime->game_, mouse.origin, reach, RayFilter{});
+            }
+            if (key[0] == 'T') {
+                if (hit && hit->instance != 0) {
+                    runtime->push_instance(state, hit->instance);
+                } else {
+                    lua_pushnil(state);
+                }
+                return 1;
+            }
+            const Vec3 at = hit ? hit->position
+                                : Vec3{mouse.origin.x + reach.x, mouse.origin.y + reach.y, mouse.origin.z + reach.z};
+            // Like Roblox's Mouse.Hit: at the point, looking along the ray.
+            const Vec3 ahead{at.x + mouse.direction.x, at.y + mouse.direction.y, at.z + mouse.direction.z};
+            push_matrix4(state, matrix4_look_at(at, ahead, Vec3{0.f, 1.f, 0.f}));
+            return 1;
+        }
+        luaL_error(state, "%s is not a valid member of PluginMouse", key);
     });
 }
 
@@ -295,6 +457,7 @@ void open_plugin_api(lua_State* state) {
     install(state, kPluginToolbarMeta, &ScriptBindings::toolbar_index, object_newindex, toolbar_tostring);
     install(state, kPluginButtonMeta, &ScriptBindings::button_index, &ScriptBindings::button_newindex,
             button_tostring);
+    install(state, kPluginMouseMeta, &ScriptBindings::mouse_index, object_newindex, mouse_tostring);
     // One userdata per plugin, so plugin == plugin holds across its threads.
     lua_newtable(state);
     lua_newtable(state);

@@ -743,3 +743,94 @@ TEST_CASE("PL25 InitialDock Center opens a dock widget in the middle dock", "[PL
     REQUIRE(widget != nullptr);
     REQUIRE(widget->initial_dock == engine_core::DockSide::Center);
 }
+
+TEST_CASE("PL26 one plugin is active at a time, and Deactivation says when it stops", "[PL26]") {
+    ScriptRig rig;
+    const InstanceId a = add_folder(rig.game, "A", rig.game.core());
+    add_script(rig.game, a, "M",
+               "_G.a = plugin\n"
+               "plugin.Deactivation:Connect(function() print('A off', plugin:IsActivated()) end)\n"
+               "plugin:Activate()\n"
+               "print('A on', plugin:IsActivated())");
+    const InstanceId b = add_folder(rig.game, "B", rig.game.core());
+    add_script(rig.game, b, "M",
+               "_G.b = plugin\n"
+               "plugin.Deactivation:Connect(function() print('B off') end)");
+    rig.runtime.drain_output();
+    REQUIRE(rig.runtime.register_plugin(a, "A"));
+    REQUIRE(rig.runtime.register_plugin(b, "B"));
+    rig.game.events().drain();
+    REQUIRE(texts(rig.runtime.drain_output()) == std::vector<std::string>{"A on\ttrue\n"});
+    REQUIRE(rig.runtime.plugin_ui().mouse_held());
+
+    // B taking over turns A off.
+    rig.runtime.plugin_ui().activate(rig.runtime.plugin_serial(b));
+    REQUIRE(rig.runtime.plugin_ui().active() == rig.runtime.plugin_serial(b));
+    rig.game.events().drain();
+    REQUIRE(texts(rig.runtime.drain_output()) == std::vector<std::string>{"A off\tfalse\n"});
+
+    // Deactivate, and unloading the active plugin, let go of the mouse.
+    rig.runtime.plugin_ui().deactivate_all();
+    rig.game.events().drain();
+    REQUIRE(texts(rig.runtime.drain_output()) == std::vector<std::string>{"B off\n"});
+    REQUIRE_FALSE(rig.runtime.plugin_ui().mouse_held());
+    rig.runtime.plugin_ui().activate(rig.runtime.plugin_serial(a));
+    REQUIRE(rig.runtime.plugin_ui().mouse_held());
+    REQUIRE(rig.runtime.unregister_plugin(a));
+    REQUIRE_FALSE(rig.runtime.plugin_ui().mouse_held());
+}
+
+TEST_CASE("PL27 the active plugin's mouse hears the Scene View", "[PL27]") {
+    ScriptRig rig;
+    const InstanceId folder = add_folder(rig.game, "Brush", rig.game.core());
+    add_script(rig.game, folder, "M",
+               "local mouse = plugin:GetMouse()\n"
+               "print(mouse == plugin:GetMouse())\n"
+               "mouse.Button1Down:Connect(function()\n"
+               "    local ray = mouse.UnitRay\n"
+               "    local hit = mouse.Hit\n"
+               "    print('down', mouse.X, mouse.Y, mouse.Shift, mouse.Ctrl, mouse.Alt, ray.Direction.Z,\n"
+               "          math.floor(hit.Position.Z + 0.5), mouse.Target)\n"
+               "end)\n"
+               "mouse.Button1Up:Connect(function() print('up') end)\n"
+               "mouse.Move:Connect(function() print('move', mouse.X) end)\n"
+               "mouse.WheelForward:Connect(function() print('wheel') end)");
+    rig.runtime.drain_output();
+    REQUIRE(rig.runtime.register_plugin(folder, "Brush"));
+    REQUIRE(texts(rig.runtime.drain_output()) == std::vector<std::string>{"true\n"});
+
+    engine_core::PluginMouseEvent press;
+    press.kind = engine_core::PluginMouseEvent::Kind::Button1Down;
+    press.x = 40;
+    press.y = 30;
+    press.origin = engine_core::Vec3{0.f, 0.f, 0.f};
+    press.direction = engine_core::Vec3{0.f, 0.f, -1.f};
+    press.shift = true;
+    // Not active: nothing fires.
+    rig.runtime.plugin_mouse_event(press);
+    rig.game.events().drain();
+    REQUIRE(rig.runtime.drain_output().lines.empty());
+
+    rig.runtime.plugin_ui().activate(rig.runtime.plugin_serial(folder));
+    // Handlers run at the next drain and read the mouse as it is then, so each
+    // event drains here as a simulation step would.
+    rig.runtime.plugin_mouse_event(press);
+    rig.game.events().drain();
+    engine_core::PluginMouseEvent move = press;
+    move.kind = engine_core::PluginMouseEvent::Kind::Move;
+    move.x = 41;
+    rig.runtime.plugin_mouse_event(move);
+    rig.game.events().drain();
+    engine_core::PluginMouseEvent up = move;
+    up.kind = engine_core::PluginMouseEvent::Kind::Button1Up;
+    rig.runtime.plugin_mouse_event(up);
+    rig.game.events().drain();
+    engine_core::PluginMouseEvent wheel = move;
+    wheel.kind = engine_core::PluginMouseEvent::Kind::WheelForward;
+    rig.runtime.plugin_mouse_event(wheel);
+    rig.game.events().drain();
+    // Nothing in the world here: Hit is 1000 units along the ray, and Target is nil.
+    REQUIRE(texts(rig.runtime.drain_output()) ==
+            std::vector<std::string>{"down\t40\t30\ttrue\tfalse\tfalse\t-1\t-1000\tnil\n", "move\t41\n", "up\n",
+                                     "wheel\n"});
+}

@@ -4,6 +4,7 @@
 #include "amesh.hpp"
 #include "GuiLayer.hpp"
 #include "MeshCache.hpp"
+#include "PluginUi.hpp"
 #include "ProfilerOverlay.hpp"
 #include "BrushTool.hpp"
 #include "TerrainBrush.hpp"
@@ -103,6 +104,18 @@ public:
     ProfilerOverlay& profilerOverlay() { return *profilerOverlay_; }
     // A script's MouseBehavior asks for a lock and the profiler is not showing.
     bool pointerWanted() const;
+    // A plugin is active: it hears the view's mouse and has the left button to itself.
+    bool pluginHeld() const;
+    // The camera and field of view rays leave from, as a painted frame sets them. For
+    // headless tests, which never paint.
+    void setViewForTests(const engine_core::Matrix4& camera, float fovDegrees) {
+        viewCamera_ = camera;
+        viewFov_ = fovDegrees;
+    }
+    // Sends a mouse event, with the ray through (x, y), to the active plugin's mouse.
+    void postPluginMouse(engine_core::PluginMouseEvent::Kind kind, double x, double y, int mods);
+    // Keeps the view's own tools and an active plugin from both holding the left button.
+    void syncPluginTool();
 
     // The player's view: no camera list, since a game shows only
     // itself, and the view follows the Workspace's CurrentCamera, as a script
@@ -274,6 +287,10 @@ private:
     std::string listedGuid_;
     // The engine that owns game_. Each paint tells its render thread a frame happened.
     engine_core::Engine* engine_ = nullptr;
+    // PluginUi::activations() as syncPluginTool last saw it, and whether a tool of
+    // the view's own was on then.
+    std::uint64_t pluginActivations_ = 0;
+    bool toolsWereOn_ = false;
     // Whether this view last locked its scene's pointer.
     bool pointerLocked_ = false;
     // setPlayerView: the link follows the Workspace's CurrentCamera.

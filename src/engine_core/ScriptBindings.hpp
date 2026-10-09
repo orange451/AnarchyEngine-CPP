@@ -72,6 +72,8 @@ inline constexpr const char* kPluginMeta = "AE.Plugin";
 inline constexpr const char* kPluginCache = "AE.PluginCache";
 inline constexpr const char* kPluginToolbarMeta = "AE.PluginToolbar";
 inline constexpr const char* kPluginButtonMeta = "AE.PluginToolbarButton";
+// A plugin's mouse, a PluginUd: what GetMouse returns.
+inline constexpr const char* kPluginMouseMeta = "AE.PluginMouse";
 
 // The plugin global: which plugin, by the serial that owns its threads.
 struct PluginUd {
@@ -405,6 +407,11 @@ struct ScriptBindings {
     static int plugin_index(lua_State* state);
     static int plugin_create_toolbar(lua_State* state);
     static int plugin_create_dock_widget(lua_State* state);
+    static int plugin_activate(lua_State* state);
+    static int plugin_deactivate(lua_State* state);
+    static int plugin_is_activated(lua_State* state);
+    static int plugin_get_mouse(lua_State* state);
+    static int mouse_index(lua_State* state);
     static int toolbar_index(lua_State* state);
     static int toolbar_create_button(lua_State* state);
     static int button_index(lua_State* state);

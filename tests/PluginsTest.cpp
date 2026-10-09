@@ -8,6 +8,7 @@
 #include "Folder.hpp"
 #include "Gui.hpp"
 #include "SelectionService.hpp"
+#include "FileBytes.hpp"
 #include "InstanceFile.hpp"
 #include "Script.hpp"
 #include "ScriptRuntime.hpp"
@@ -306,6 +307,73 @@ int RunPluginsTests() {
         layout.poll_plugins(true);
         frames(3);
         Expect(layout.page_named_for_tests(paneName) == nullptr, "unloading the plugin removes its page");
+
+        // Where the user puts a page is where it opens again; InitialDock is only its first place.
+        auto setSpotEnabled = [&](bool enabled) {
+            engine.on_simulation([&](engine_core::DataModel& game) {
+                for (engine_core::InstanceId id : game.get_children(game.core())) {
+                    if (game.name(id) == "Spot Tool") {
+                        if (auto* widget = dynamic_cast<engine_core::DockWidget*>(
+                                game.instance(game.find_first_child(id, "W")))) {
+                            widget->set_enabled(enabled);
+                        }
+                    }
+                }
+            });
+        };
+        const char* const spotName = "plugin:Spot Tool/W";
+        layout.save_as_plugin(MakeToolFolder(engine, "Spot Tool",
+                                             "plugin:CreateDockWidget('W', {InitialDock = 'TopRight', Enabled = true})"));
+        frames(4);
+        ide::IdePane* console = layout.page_named_for_tests("Console");
+        // As a tab with Console.
+        layout.move_page_for_tests(layout.page_named_for_tests(spotName), console, 0);
+        frames(3);
+        layout.close_page_for_tests(layout.page_named_for_tests(spotName));
+        frames(3);
+        setSpotEnabled(true);
+        frames(3);
+        Expect(layout.dock_of_for_tests(layout.page_named_for_tests(spotName)) == layout.dock_of_for_tests(console),
+               "a page moved in with Console opens there again, not at its InitialDock");
+        // In a dock of its own, left of Console's.
+        layout.move_page_for_tests(layout.page_named_for_tests(spotName), console, 1);
+        frames(3);
+        const void* ownDock = layout.dock_of_for_tests(layout.page_named_for_tests(spotName));
+        Expect(ownDock != nullptr && ownDock != layout.dock_of_for_tests(console), "the page has a dock of its own");
+        const std::size_t docksMoved = layout.dock_count_for_tests();
+        layout.close_page_for_tests(layout.page_named_for_tests(spotName));
+        frames(3);
+        setSpotEnabled(true);
+        frames(3);
+        ide::IdePane* spot = layout.page_named_for_tests(spotName);
+        Expect(layout.page_open_for_tests(spot) && layout.dock_of_for_tests(spot) != layout.dock_of_for_tests(console) &&
+                   layout.dock_of_for_tests(spot) != layout.dock_of_for_tests(layout.page_named_for_tests("Game Explorer")),
+               "a page alone in its own dock opens in a dock of its own again");
+        Expect(layout.dock_count_for_tests() == docksMoved, "beside Console, as it was, with no extra dock");
+        layout.move_page_for_tests(spot, layout.page_named_for_tests("Properties"), 0);
+        frames(3);
+    }
+    // A new studio with the same config folder opens the page where it was left.
+    {
+        ide::IdeLayout layout(1280, 800, config);
+        auto scene = jadefx::make<jadefx::Scene>(nullptr, 1280, 800);
+        layout.mount(*scene);
+        double time = 0.1;
+        for (int i = 0; i < 2; ++i) {
+            scene->layout(1280, 800, time);
+            layout.flushFrame();
+            time += 0.02;
+        }
+        layout.poll_plugins(true);
+        for (int i = 0; i < 4; ++i) {
+            scene->layout(1280, 800, time);
+            layout.flushFrame();
+            time += 0.02;
+        }
+        ide::IdePane* spot = layout.page_named_for_tests("plugin:Spot Tool/W");
+        Expect(spot != nullptr && layout.dock_of_for_tests(spot) != nullptr &&
+                   layout.dock_of_for_tests(spot) == layout.dock_of_for_tests(layout.page_named_for_tests("Properties")),
+               "after a restart the page opens where the user left it");
     }
     std::error_code error;
     std::filesystem::remove_all(config, error);

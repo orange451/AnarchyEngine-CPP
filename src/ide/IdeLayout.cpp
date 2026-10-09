@@ -24,6 +24,18 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight, const std::filesys
         layout_file_ = config / "layout.json";
         default_layout_file_ = config / "default-layout.json";
         plugins_dir_ = config / "plugins";
+        plugin_spots_file_ = config / "plugin-docks.json";
+        std::string text;
+        std::string error;
+        engine_core::JsonValue spots;
+        if (engine_core::read_file(plugin_spots_file_, text, error) && engine_core::parse_json(text, spots, error) &&
+            spots.is_object()) {
+            for (const engine_core::JsonValue::Member& member : spots.members()) {
+                if (member.second.is_object()) {
+                    plugin_spots_[member.first] = member.second;
+                }
+            }
+        }
     }
     runner_.prepare();
     // Before any widget reads a color.

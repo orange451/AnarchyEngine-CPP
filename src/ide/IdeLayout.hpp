@@ -214,6 +214,17 @@ public:
     // The dock a plugin page opens in for side: the one sitting there in the main
     // window, by position, or a new one beside the work area when none is.
     IdeDock* dock_at(engine_core::DockSide side, double width, double height);
+    // The name layout.json knows page by, or empty for a page it does not keep.
+    std::string saved_page_name(const IdePane* page) const;
+    // Where page sits, as a plugin page remembers it: {"tab": name} when another kept
+    // page shares its dock, else {"beside": name, "side": Left | Right | Top | Bottom,
+    // "size": points} for the neighbor it shares the longest edge with. Null when it is
+    // not docked in the main window, or nothing named is next to it.
+    engine_core::JsonValue page_spot(IdePane* page);
+    // The dock a spot names: the named page's, or a new one beside it. Null when that
+    // page is not docked in the main window.
+    IdeDock* dock_for_spot(const engine_core::JsonValue& spot, const IdePane* self);
+    void save_plugin_spots();
     // The Window menu's Plugins submenu, made again when its widgets change.
     void fill_plugins_menu();
     // The tabbed ribbon, for tests.
@@ -225,6 +236,9 @@ public:
     void close_page_for_tests(IdePane* page) { close_page(page); }
     const void* dock_of_for_tests(IdePane* page) const { return dockContaining(page); }
     std::size_t dock_count_for_tests() const { return docks_.size(); }
+    // Moves page as a tab into beside's dock (side 0), or into a new dock left, right,
+    // above, or below it (sides 1 to 4), as dragging its tab there does. For tests.
+    void move_page_for_tests(IdePane* page, IdePane* beside, int side);
     // Writes the paused profiler's history as a page a browser shows. False, with why.
     bool save_profile_capture(const std::filesystem::path& file, std::string& error);
     // Writes the layout to layout.json in the config folder. A close request
@@ -714,6 +728,10 @@ private:
     // read before its plugin loaded, or from its plugin unloading. Used once, and only
     // while that dock is still in docks_.
     std::unordered_map<std::string, IdeDock*> plugin_docks_;
+    // Where each plugin page was last docked, by pane name, kept in plugin-docks.json in
+    // the config folder so it outlives the studio. It wins over InitialDock.
+    std::map<std::string, engine_core::JsonValue> plugin_spots_;
+    std::filesystem::path plugin_spots_file_;
     jadefx::Menu* plugins_menu_ = nullptr;
     std::string plugins_menu_shown_;
     std::unordered_map<std::string, std::vector<int>> script_folds_;

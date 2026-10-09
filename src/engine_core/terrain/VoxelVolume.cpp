@@ -6,6 +6,13 @@
 
 namespace engine_core::terrain {
 
+void release_all_cells(const ChunkMap& chunks) {
+    for (const auto& [coord, chunk] : chunks) {
+        (void)coord;
+        chunk->release_cells();
+    }
+}
+
 VoxelVolume::VoxelVolume(VoxelVolume&& other) noexcept : voxel_size_(other.voxel_size_) {
     *this = std::move(other);
 }

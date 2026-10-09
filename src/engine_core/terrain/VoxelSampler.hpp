@@ -62,6 +62,9 @@ private:
     float voxel_size_;
     mutable ChunkCoord cached_coord_{};
     mutable const ChunkData* cached_chunk_ = nullptr;
+    // cached_chunk_'s cells, pinned while it stays the cached chunk (null
+    // for a uniform one).
+    mutable CellsPtr cached_cells_;
     mutable bool cached_valid_ = false;
 };
 

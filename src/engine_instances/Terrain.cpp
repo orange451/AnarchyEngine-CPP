@@ -496,6 +496,9 @@ std::optional<std::string> Terrain::save_resources(const std::filesystem::path& 
     if (std::optional<std::string> failure = write_avox(root, name(id()), path, chunks, voxel_size)) {
         return failure;
     }
+    // Every chunk now has its frame: the edited ones stop holding their
+    // cells, so the ChunkCache's budget covers them too.
+    terrain::release_all_cells(chunks);
     saved_ = true;
     saved_path_ = std::move(path);
     saved_chunks_ = std::move(chunks);

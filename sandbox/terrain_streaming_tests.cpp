@@ -4,7 +4,9 @@
 #include "terrain/AvoxFile.hpp"
 #include "terrain/ChunkCache.hpp"
 #include "terrain/ShapeDistance.hpp"
+#include "terrain/SurfaceNets.hpp"
 #include "terrain/VoxelChunk.hpp"
+#include "terrain/VoxelSampler.hpp"
 #include "terrain/VoxelVolume.hpp"
 
 #include <catch2/catch_test_macros.hpp>
@@ -161,5 +163,30 @@ TEST_CASE("CC7 editing a released chunk changes only the copy", "[terrain]") {
         for (int i = 0; i < kChunkCells; i += 1013) {
             REQUIRE(chunk->cell(i) == volume.chunks().at(coord)->cell(i));
         }
+    }
+}
+
+TEST_CASE("CC8 meshing a released volume matches meshing it decoded", "[terrain]") {
+    VoxelVolume volume(1.f);
+    REQUIRE_FALSE(volume.fill(ball_at(0.f, 0.f, 0.f, 50.f), 1));
+    const ChunkMesh reference = surface_nets(mesh_input(volume, ChunkCoord{0, 0, 1}));
+    REQUIRE_FALSE(reference.positions.empty());
+    BudgetGuard guard(kChunkBytes);   // fewer than the 27 neighbours
+    release_all_cells(volume.chunks());
+    const ChunkMesh streamed = surface_nets(mesh_input(volume, ChunkCoord{0, 0, 1}));
+    REQUIRE(streamed.positions.size() == reference.positions.size());
+    REQUIRE(streamed.triangles == reference.triangles);
+    REQUIRE(streamed.triangle_ids == reference.triangle_ids);
+}
+
+TEST_CASE("CC9 a sampler reads released chunks", "[terrain]") {
+    VoxelVolume volume(1.f);
+    REQUIRE_FALSE(volume.fill(ball_at(0.f, 0.f, 0.f, 50.f), 1));
+    const float inside = VoxelSampler(volume.chunks(), 1.f).distance(Vec3{0.5f, 0.5f, 48.5f});
+    BudgetGuard guard(kChunkBytes);
+    release_all_cells(volume.chunks());
+    REQUIRE(VoxelSampler(volume.chunks(), 1.f).distance(Vec3{0.5f, 0.5f, 48.5f}) == inside);
+    for (const auto& [coord, chunk] : volume.chunks()) {
+        REQUIRE_FALSE(chunk->cells_owned());
     }
 }

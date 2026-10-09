@@ -85,6 +85,14 @@ void fill_samples(const MeshInput& input, std::vector<float>& distances, std::ve
     distances.resize(total);
     ids.resize(total);
     const float voxel_size = input.voxel_size;
+    // Each dense neighbor's cells, pinned once for the whole fill rather
+    // than per sample (they may live only in the ChunkCache).
+    std::array<CellsPtr, 27> pins;
+    for (std::size_t n = 0; n < pins.size(); ++n) {
+        if (input.neighbors[n]) {
+            pins[n] = input.neighbors[n]->cells();
+        }
+    }
     for (int k = kSampleMin; k <= kSampleMax; ++k) {
         const Local lk = locate(k);
         for (int j = kSampleMin; j <= kSampleMax; ++j) {
@@ -93,7 +101,10 @@ void fill_samples(const MeshInput& input, std::vector<float>& distances, std::ve
                 const Local li = locate(i);
                 const std::size_t neighbor = static_cast<std::size_t>((lk.offset + 1) * 9 + (lj.offset + 1) * 3 + (li.offset + 1));
                 const ChunkPtr& chunk = input.neighbors[neighbor];
-                const Cell cell = chunk ? chunk->cell(cell_index(li.index, lj.index, lk.index)) : Cell{};
+                const CellsPtr& cells = pins[neighbor];
+                const Cell cell = cells   ? (*cells)[static_cast<std::size_t>(cell_index(li.index, lj.index, lk.index))]
+                                  : chunk ? chunk->cell(0)
+                                          : Cell{};
                 const std::size_t index = sample_index(i, j, k);
                 distances[index] = dequantize(cell.distance, voxel_size);
                 ids[index] = cell.material;

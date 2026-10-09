@@ -1360,7 +1360,7 @@ redraw_pane()
 -- Turning on and off ----------------------------------------------------------
 
 local toolbar = plugin:CreateToolbar("Brushes")
-local toggle = toolbar:CreateButton("Brushes", "Draw and edit brushes", "icons/Box.png", "Brushes")
+local toggle = toolbar:CreateButton("Brushes", "Draw and edit brushes", "icons/layer-shape-polygon.png", "Brushes")
 
 local function turn_off()
 	if not active then

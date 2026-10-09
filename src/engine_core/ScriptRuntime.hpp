@@ -179,6 +179,10 @@ public:
     const std::string* plugin_name(InstanceId root) const;
     // The serial that owns the registered root's threads and connections, or 0.
     std::uint32_t plugin_serial(InstanceId root) const;
+    // Fires the plugin's Unloading and runs its handlers now, before it is
+    // unregistered. SimulationThread, outside any Lua call. Nothing for a root
+    // that is not a plugin.
+    void fire_plugin_unloading(InstanceId root);
     // Registered roots in the order they were registered. A root that died drops out.
     std::vector<InstanceId> plugins() const;
     bool plugin_vm_open() const { return plugin_.state != nullptr; }

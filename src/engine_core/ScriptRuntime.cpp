@@ -1834,6 +1834,8 @@ std::uint32_t ScriptRuntime::plugin_serial(InstanceId root) const {
     return found != plugins_.end() ? found->serial : 0;
 }
 
+void ScriptRuntime::fire_plugin_unloading(InstanceId /*root*/) {}
+
 std::vector<InstanceId> ScriptRuntime::plugins() const {
     std::vector<InstanceId> out;
     if (game_ == nullptr) {

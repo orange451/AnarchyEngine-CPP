@@ -5,12 +5,17 @@
 
 #include "Engine.hpp"
 #include "Folder.hpp"
+#include "InstanceFile.hpp"
 #include "ModuleScript.hpp"
+#include "ide/PluginLoader.hpp"
 #include "ScriptRuntime.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <chrono>
+#include <filesystem>
+#include <fstream>
 #include <string>
 #include <thread>
 #include <vector>
@@ -37,6 +42,25 @@ std::vector<std::string> texts(const ScriptRuntime::OutputBatch& batch) {
         out.push_back(line.text);
     }
     return out;
+}
+
+// Writes a plugin file holding a Folder named name with one Script per source.
+void write_plugin(const std::filesystem::path& folder, const std::string& name,
+                  const std::vector<std::string>& sources) {
+    engine_core::CopiedNode root;
+    root.class_name = "Folder";
+    root.name = name;
+    for (std::size_t i = 0; i < sources.size(); ++i) {
+        engine_core::CopiedNode script;
+        script.class_name = "Script";
+        script.name = "S" + std::to_string(i);
+        script.has_source = true;
+        script.source = sources[i];
+        root.children.push_back(std::move(script));
+    }
+    std::filesystem::create_directories(folder);
+    std::string error;
+    REQUIRE(engine_core::save_instance_file(folder / (name + ide::kPluginExtension), {root}, error));
 }
 
 }  // namespace
@@ -403,4 +427,118 @@ TEST_CASE("PL11 a Folder registered in Core is one plugin, and its Scripts do no
     const InstanceId s = add_script(rig.game, loose, "S", "print('s')").id();
     rig.runtime.start_core_scripts();
     REQUIRE(rig.runtime.is_plugin(s));
+}
+
+TEST_CASE("PL12 user plugins load, unload, and reload with their files", "[PL12]") {
+    ScriptRig rig;
+    TempDir dir;
+    ide::PluginLoader loader;
+    write_plugin(dir.path, "Alpha", {"print('alpha 1')", "task.wait(100) print('never')"});
+    rig.runtime.drain_output();
+
+    loader.sync_user(rig.game, rig.runtime, ide::scan_plugins(dir.path));
+    REQUIRE(loader.user().size() == 1);
+    const InstanceId root = loader.user()[0].root;
+    REQUIRE(rig.game.parent(root) == rig.game.core());
+    REQUIRE(rig.runtime.is_plugin(root));
+    REQUIRE(*rig.runtime.plugin_name(root) == "Alpha");
+    REQUIRE(rig.runtime.plugins() == std::vector<InstanceId>{root});
+    REQUIRE(texts(rig.runtime.drain_output()) == std::vector<std::string>{"alpha 1\n"});
+
+    // Unchanged files do nothing.
+    loader.sync_user(rig.game, rig.runtime, ide::scan_plugins(dir.path));
+    REQUIRE(loader.user()[0].root == root);
+    REQUIRE(rig.runtime.drain_output().lines.empty());
+
+    // A changed file reloads with the new source; the old waiting thread is gone.
+    write_plugin(dir.path, "Alpha", {"print('alpha 2, longer')"});
+    loader.sync_user(rig.game, rig.runtime, ide::scan_plugins(dir.path));
+    REQUIRE_FALSE(rig.game.alive(root));
+    REQUIRE(texts(rig.runtime.drain_output()) == std::vector<std::string>{"alpha 2, longer\n"});
+    rig.frames(2, 200.0);
+    REQUIRE(rig.runtime.drain_output().lines.empty());
+
+    // A removed file unloads.
+    std::filesystem::remove(dir.path / "Alpha.aeplugin");
+    loader.sync_user(rig.game, rig.runtime, ide::scan_plugins(dir.path));
+    REQUIRE(loader.user().empty());
+    REQUIRE(rig.game.get_children(rig.game.core()).empty());
+    REQUIRE(rig.runtime.plugins().empty());
+}
+
+TEST_CASE("PL13 a bad plugin file logs once, leaves Core clean, and loads once fixed", "[PL13]") {
+    ScriptRig rig;
+    TempDir dir;
+    std::filesystem::create_directories(dir.path);
+    std::ofstream(dir.path / "Broken.aeplugin") << R"({"format":"aeinst","vers)";
+    ide::PluginLoader loader;
+    rig.runtime.drain_output();
+
+    loader.sync_user(rig.game, rig.runtime, ide::scan_plugins(dir.path));
+    std::vector<std::string> out = texts(rig.runtime.drain_output());
+    REQUIRE(out.size() == 1);
+    REQUIRE(out[0].find("Plugin \"Broken\" failed to load") != std::string::npos);
+    REQUIRE(rig.game.get_children(rig.game.core()).empty());
+    // Polling again with the same stamp does not repeat the error.
+    loader.sync_user(rig.game, rig.runtime, ide::scan_plugins(dir.path));
+    REQUIRE(rig.runtime.drain_output().lines.empty());
+
+    // A root that is not a Folder is refused too.
+    engine_core::CopiedNode script;
+    script.class_name = "Script";
+    script.name = "Lonely";
+    std::string error;
+    REQUIRE(engine_core::save_instance_file(dir.path / "Lonely.aeplugin", {script}, error));
+    loader.sync_user(rig.game, rig.runtime, ide::scan_plugins(dir.path));
+    out = texts(rig.runtime.drain_output());
+    REQUIRE(out.size() == 1);
+    REQUIRE(out[0].find("Plugin \"Lonely\" failed to load: its root must be one Folder") != std::string::npos);
+    REQUIRE(rig.game.get_children(rig.game.core()).empty());
+
+    // Fixed: it loads.
+    write_plugin(dir.path, "Broken", {"print('fixed')"});
+    loader.sync_user(rig.game, rig.runtime, ide::scan_plugins(dir.path));
+    REQUIRE(texts(rig.runtime.drain_output()) == std::vector<std::string>{"fixed\n"});
+}
+
+TEST_CASE("PL14 plugin file names and the scan order", "[PL14]") {
+    REQUIRE(ide::plugin_file_name("Terrain Tools") == "Terrain Tools");
+    REQUIRE(ide::plugin_file_name("a/b:c*?") == "a_b_c__");
+    REQUIRE(ide::plugin_file_name("trailing. ") == "trailing");
+    REQUIRE(ide::plugin_file_name("") == "Plugin");
+    TempDir dir;
+    write_plugin(dir.path, "Zed", {});
+    write_plugin(dir.path, "Apple", {});
+    std::ofstream(dir.path / "notes.txt") << "x";
+    const std::vector<ide::PluginStamp> stamps = ide::scan_plugins(dir.path);
+    REQUIRE(stamps.size() == 2);
+    REQUIRE(stamps[0].name == "Apple");
+    REQUIRE(stamps[1].name == "Zed");
+    REQUIRE(ide::scan_plugins(dir.path / "missing").empty());
+}
+
+TEST_CASE("PL15 a plugin with no enabled Script still loads, and its tree survives the round trip", "[PL15]") {
+    ScriptRig rig;
+    TempDir dir;
+    engine_core::Folder& source = rig.game.create<engine_core::Folder>();
+    rig.game.set_name(source.id(), "Quiet");
+    rig.game.set_parent(source.id(), workspace_of(rig.game));
+    engine_core::Script& off = add_script(rig.game, source.id(), "Off", "print('off')");
+    off.set_enabled(false);
+    add_folder(rig.game, "Empty", source.id());
+    std::filesystem::create_directories(dir.path);
+    std::string error;
+    REQUIRE(engine_core::save_instance_file(dir.path / "Quiet.aeplugin", {engine_core::copy_tree(rig.game, source.id())},
+                                            error));
+    rig.runtime.drain_output();
+    ide::PluginLoader loader;
+    loader.sync_user(rig.game, rig.runtime, ide::scan_plugins(dir.path));
+    REQUIRE(loader.user().size() == 1);
+    const InstanceId root = loader.user()[0].root;
+    REQUIRE(rig.runtime.is_plugin(root));
+    REQUIRE(rig.runtime.drain_output().lines.empty());
+    REQUIRE(rig.game.find_first_child(root, "Empty") != 0);
+    const auto* loaded = dynamic_cast<engine_core::Script*>(rig.game.instance(rig.game.find_first_child(root, "Off")));
+    REQUIRE(loaded != nullptr);
+    REQUIRE_FALSE(loaded->enabled());
 }

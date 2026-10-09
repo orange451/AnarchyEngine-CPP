@@ -41,15 +41,31 @@ bool SameShape(const std::vector<engine_core::PluginToolbarState>& a,
 
 }  // namespace
 
-PluginRibbon::PluginRibbon(std::shared_ptr<jadefx::Node> home, jadefx::Node* homeAnchor,
-                           std::function<void(std::uint32_t)> click, std::function<void(const std::string&)> warn)
+PluginRibbon::PluginRibbon(std::shared_ptr<jadefx::Node> leading, std::shared_ptr<jadefx::Node> home,
+                           jadefx::Node* homeAnchor, std::function<void(std::uint32_t)> click,
+                           std::function<void(const std::string&)> warn)
     : home_(std::move(home)), homeAnchor_(homeAnchor), click_(std::move(click)), warn_(std::move(warn)) {
     getClassList().add("ide-ribbon-area");
     setPrefWidthRatio(1);
+    // The tab bar: leading at the left, the tabs in the middle of the whole bar,
+    // whatever leading's width. Each layer fills the bar and takes the mouse only
+    // where it has something.
+    auto bar = jadefx::make<jadefx::StackPane>();
+    bar->getClassList().add("ide-ribbon-tabs");
+    bar->setPrefWidthRatio(1);
+    bar->setMinSize(0, kRibbonHeight);
+    bar->setPrefHeight(kRibbonHeight);
+    auto left = jadefx::make<jadefx::HBox>();
+    left->setAlignment(jadefx::Pos::CenterLeft);
+    left->setPrefWidthRatio(1);
+    left->setPickOnBounds(false);
+    if (leading) {
+        left->getChildren().add(std::move(leading));
+    }
     auto tabs = jadefx::make<jadefx::HBox>();
-    tabs->getClassList().add("ide-ribbon-tabs");
-    tabs->setAlignment(jadefx::Pos::CenterLeft);
+    tabs->setAlignment(jadefx::Pos::Center);
     tabs->setPrefWidthRatio(1);
+    tabs->setPickOnBounds(false);
     tabs->setSpacing(2);
     const char* names[] = {"Home", "Plugins"};
     for (int i = 0; i < 2; ++i) {
@@ -70,7 +86,10 @@ PluginRibbon::PluginRibbon(std::shared_ptr<jadefx::Node> home, jadefx::Node* hom
     plugins_->setPrefWidthRatio(1);
     plugins_->setMinSize(0, kRibbonHeight);
     plugins_->setPrefHeight(kRibbonHeight);
-    getChildren().add(std::move(tabs));
+    bar->getChildren().add(std::move(left));
+    bar->getChildren().add(std::move(tabs));
+    tabBar_ = bar.get();
+    getChildren().add(std::move(bar));
     getChildren().add(home_);
     rebuild();
     showTab(0);
@@ -185,16 +204,19 @@ void PluginRibbon::rebuild() {
         children.removeIf([&placed](const std::shared_ptr<jadefx::Node>& item) { return item == placed; });
     }
     homeGroups_.clear();
-    for (const engine_core::PluginToolbarState& toolbar : toolbars_) {
-        if (toolbar.builtin) {
-            homeGroups_.push_back(MakeSeparator());
-            homeGroups_.push_back(makeGroup(toolbar));
-        }
-    }
     std::size_t at = children.size();
     for (std::size_t i = 0; i < children.size(); ++i) {
         if (children[i].get() == homeAnchor_) {
             at = i;
+        }
+    }
+    for (const engine_core::PluginToolbarState& toolbar : toolbars_) {
+        if (toolbar.builtin) {
+            // A separator only between groups, not at the row's start.
+            if (at > 0 || !homeGroups_.empty()) {
+                homeGroups_.push_back(MakeSeparator());
+            }
+            homeGroups_.push_back(makeGroup(toolbar));
         }
     }
     for (const std::shared_ptr<jadefx::Node>& group : homeGroups_) {

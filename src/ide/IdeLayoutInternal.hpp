@@ -203,7 +203,7 @@ scene {
 }
 .ide-ribbon-tabs {
     background-color: var(--ide-ribbon-color);
-    padding: 2px 6px 0 6px;
+    padding: 3px 6px;
 }
 .ide-ribbon-tab {
     padding: 1px 10px;

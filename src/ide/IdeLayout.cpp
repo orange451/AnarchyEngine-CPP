@@ -103,10 +103,15 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight, const std::filesys
     session_buttons_[2] = resume.get();
     session_buttons_[3] = stop.get();
     ShowSession(*test, *pause, *resume, *stop, false, false);
-    ribbon->getChildren().add(std::move(test));
-    ribbon->getChildren().add(std::move(pause));
-    ribbon->getChildren().add(std::move(resume));
-    ribbon->getChildren().add(std::move(stop));
+    test->setElementId("test-button");
+    // Test, Pause, Resume, and Stop sit on the tab bar, at its left, whichever tab shows.
+    auto session = jadefx::make<jadefx::HBox>();
+    session->setSpacing(2);
+    session->setAlignment(jadefx::Pos::CenterLeft);
+    session->getChildren().add(std::move(test));
+    session->getChildren().add(std::move(pause));
+    session->getChildren().add(std::move(resume));
+    session->getChildren().add(std::move(stop));
     auto gap = jadefx::make<jadefx::Pane>();
     gap->setStyle("width: 100%;");
     gap->setMouseTransparent(true);
@@ -178,7 +183,7 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight, const std::filesys
     top->setPrefWidthRatio(1);
     top->getChildren().add(menuBar);
     auto tabbed = jadefx::make<PluginRibbon>(
-        ribbon, gap.get(),
+        session, ribbon, gap.get(),
         [this](std::uint32_t button) {
             runner_.simulation().on_simulation(
                 [this, button](engine_core::DataModel&) { runner_.simulation().scripts().plugin_ui().click(button); });

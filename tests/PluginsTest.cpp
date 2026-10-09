@@ -20,6 +20,7 @@
 #include "jadefx/jadefx.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
@@ -128,6 +129,23 @@ int RunPluginsTests() {
             return gFailures;
         }
         Expect(ribbon->tab() == 0, "the ribbon opens on Home");
+        {
+            // The tab bar: Test, Pause, Resume, and Stop at its left, Home and Plugins in its middle.
+            jadefx::Node* bar = ribbon->tabBar();
+            jadefx::Node* testButton = bar->getElementById("test-button");
+            Expect(testButton != nullptr, "Test is on the tab bar");
+            Expect(testButton != nullptr && testButton->getAbsoluteX() < bar->getAbsoluteX() + 40,
+                   "at its left");
+            std::vector<jadefx::Node*> tabs = bar->getElementsByClassName("ide-ribbon-tab");
+            Expect(tabs.size() == 2, "Home and Plugins are on the tab bar");
+            if (tabs.size() == 2) {
+                const double middle = (tabs[0]->getAbsoluteX() + tabs[1]->getAbsoluteX() + tabs[1]->getWidth()) / 2;
+                const double barMiddle = bar->getAbsoluteX() + bar->getWidth() / 2;
+                Expect(std::abs(middle - barMiddle) < 4, "and the tabs sit in the middle of the bar");
+            }
+            Expect(ribbon->homeRow()->getElementsByClassName("ide-ribbon-button").size() == 1,
+                   "the Home row keeps only the Grid toggle when no built-in has a toolbar");
+        }
         Expect(ribbon->pluginsRow()->getElementsByClassName("ide-ribbon-empty").size() == 1,
                "with no plugin toolbars the Plugins tab says how to add one");
         const engine_core::InstanceId tool = MakeToolFolder(

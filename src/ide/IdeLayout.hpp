@@ -32,6 +32,8 @@ class GameView;
 
 namespace ide {
 
+class PluginRibbon;
+
 class IdeDock;
 class IdePane;
 enum class DropSide;
@@ -193,6 +195,10 @@ public:
     // Lists the plugins folder, at most once a second unless now, and has the
     // simulation load, unload, or reload whatever changed since the last list.
     void poll_plugins(bool now);
+    // Shows the plugins' toolbars on the Plugins tab when they changed.
+    void refresh_plugin_ribbon();
+    // The tabbed ribbon, for tests.
+    PluginRibbon* plugin_ribbon_for_tests() const { return plugin_ribbon_; }
     // Writes the paused profiler's history as a page a browser shows. False, with why.
     bool save_profile_capture(const std::filesystem::path& file, std::string& error);
     // Writes the layout to layout.json in the config folder. A close request
@@ -663,6 +669,9 @@ private:
     // What the last poll listed, and the scene time the next one waits for.
     std::vector<PluginStamp> plugin_stamps_;
     double plugin_poll_at_ = 0;
+    // The ribbon, and the PluginUi revision its Plugins tab last showed.
+    PluginRibbon* plugin_ribbon_ = nullptr;
+    std::uint64_t plugin_ui_revision_ = 0;
     std::unordered_map<std::string, std::vector<int>> script_folds_;
     std::filesystem::path fold_file_;
     // The open project. Null until Open or Save As.

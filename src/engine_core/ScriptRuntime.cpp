@@ -1852,6 +1852,18 @@ void ScriptRuntime::fire_plugin_unloading(InstanceId root) {
         return;
     }
     plugin_ui_.fire_unloading(serial);
+    // Its handlers run now, before the plugin stops. A paused edit runs here on the
+    // caller's thread while the simulation waits for it, so it drains as the
+    // simulation would; any other thread may not drain at all.
+    if (!game_->on_gameplay_thread()) {
+        return;
+    }
+    const ThreadRole role = thread_role();
+    set_thread_role(ThreadRole::Simulation);
+    struct Restore {
+        ThreadRole role;
+        ~Restore() { set_thread_role(role); }
+    } restore{role};
     game_->events().drain();
 }
 

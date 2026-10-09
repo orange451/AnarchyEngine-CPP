@@ -9,6 +9,7 @@
 #include "IdeAssets.hpp"
 #include "IdeLayoutInternal.hpp"
 #include "McpSetup.hpp"
+#include "PluginRibbon.hpp"
 #include "ScratchResources.hpp"
 
 #include "EditorFont.hpp"
@@ -164,7 +165,17 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight, const std::filesys
     auto top = jadefx::make<jadefx::VBox>();
     top->setPrefWidthRatio(1);
     top->getChildren().add(menuBar);
-    top->getChildren().add(ribbon);
+    auto tabbed = jadefx::make<PluginRibbon>(
+        ribbon,
+        [this](std::uint32_t button) {
+            runner_.simulation().on_simulation(
+                [this, button](engine_core::DataModel&) { runner_.simulation().scripts().plugin_ui().click(button); });
+        },
+        [this](const std::string& text) {
+            runner_.simulation().scripts().append_output(engine_core::ScriptRuntime::OutputKind::Error, text);
+        });
+    plugin_ribbon_ = tabbed.get();
+    top->getChildren().add(std::move(tabbed));
 
     engine_core::DataModel& game = runner_.simulation().datamodel();
     ExplorerHost host;
@@ -519,6 +530,23 @@ void GrowToFit(const jadefx::Node* area, jadefx::Scene* scene, const std::functi
 }
 }  // namespace
 
+void IdeLayout::refresh_plugin_ribbon() {
+    if (plugin_ribbon_ == nullptr) {
+        return;
+    }
+    engine_core::Engine& engine = runner_.simulation();
+    // The simulation may be inside a step. Skip this frame rather than wait.
+    engine_core::DataModelLock lock(engine.datamodel(), engine_core::DataModelLock::Read, std::chrono::milliseconds(1));
+    if (!lock.owns()) {
+        return;
+    }
+    const engine_core::PluginUi& ui = engine.scripts().plugin_ui();
+    if (ui.revision() != plugin_ui_revision_) {
+        plugin_ui_revision_ = ui.revision();
+        plugin_ribbon_->setToolbars(ui.toolbars());
+    }
+}
+
 void IdeLayout::flushFrame() {
     ++frames_;
     noteScriptFocus();
@@ -539,6 +567,7 @@ void IdeLayout::flushFrame() {
         check_disk();
     }
     poll_plugins(false);
+    refresh_plugin_ribbon();
     refresh_modified();
     // A tab that is not showing, or a closed page kept for reopening, is not
     // laid out, so Problems would stop counting. Its tick keeps the list and

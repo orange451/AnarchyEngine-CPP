@@ -201,6 +201,37 @@ scene {
     background-color: transparent;
     opacity: 0.4;
 }
+.ide-ribbon-tabs {
+    background-color: var(--ide-ribbon-color);
+    padding: 2px 6px 0 6px;
+}
+.ide-ribbon-tab {
+    padding: 1px 10px;
+    border-radius: 4px 4px 0 0;
+    color: var(--ide-muted-text-color);
+    transition: background-color 0.12s;
+}
+.ide-ribbon-tab:hover {
+    background-color: var(--ide-ribbon-hover-color);
+}
+.ide-ribbon-tab.on {
+    color: var(--ide-text-color);
+    background-color: var(--ide-ribbon-pressed-color);
+}
+.ide-ribbon-caption {
+    padding: 0 6px;
+    font-size: 11px;
+    color: var(--ide-muted-text-color);
+}
+.ide-ribbon-separator {
+    width: 1px;
+    height: 20px;
+    background-color: var(--ide-ribbon-border-color);
+}
+.ide-ribbon-empty {
+    padding: 0 6px;
+    color: var(--ide-muted-text-color);
+}
 .ide-viewport {
     background-color: var(--ide-viewport-color);
 }

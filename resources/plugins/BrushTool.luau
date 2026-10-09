@@ -1082,7 +1082,7 @@ end
 
 local widget = plugin:CreateDockWidget("Brushes", {
 	Title = "Brushes",
-	InitialDock = "BottomLeft",
+	InitialDock = "TopRight",
 	Enabled = false,
 	Width = 240,
 	Height = 420,

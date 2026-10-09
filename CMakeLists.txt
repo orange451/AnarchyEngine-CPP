@@ -609,6 +609,7 @@ add_library(engine_core STATIC
     src/engine_core/Engine.cpp
     src/engine_core/LuaEngine.cpp
     src/engine_core/LuaApi.cpp
+    src/engine_core/InstanceFile.cpp
     src/engine_core/PropertyReflection.cpp
     src/engine_core/InstanceRef.cpp
     src/engine_core/LuaReflect.cpp
@@ -957,6 +958,7 @@ add_executable(sandbox
     sandbox/mesh_shapes_tests.cpp
     sandbox/matrix4_tests.cpp
     sandbox/plugin_tests.cpp
+    sandbox/instance_file_tests.cpp
     sandbox/camera_tests.cpp
     sandbox/light_tests.cpp
     sandbox/skybox_tests.cpp

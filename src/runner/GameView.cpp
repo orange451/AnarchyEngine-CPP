@@ -986,8 +986,8 @@ void GameView::refreshCameraList() {
 
 void GameView::collectHandles(const engine_core::VisualSnapshot& snapshot) {
     handleVertices_.clear();
-    // An active plugin tool has the left button; the Move tool's arrows would only be in the way.
-    if (!pluginHeld() && viewFov_ > 0.f && getWidth() > 0.0 && getHeight() > 0.0) {
+    // Drawn whether or not a plugin is active: the Move tool is one, and its handles are its Dragger's.
+    if (viewFov_ > 0.f && getWidth() > 0.0 && getHeight() > 0.0) {
         engine_core::DraggerView view;
         view.camera = viewCamera_;
         view.fov_degrees = viewFov_;

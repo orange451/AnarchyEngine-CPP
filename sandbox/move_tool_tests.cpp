@@ -91,16 +91,30 @@ struct MoveRig {
         rig.frames(1);
         click_move_button();
     }
-    // The Move button on the Home tab, as a click on it turns the tool on and off.
-    void click_move_button() {
+    // A card of the Move tool's group on the Home tab, by its id, as a click on it does.
+    void click_card(const char* key) {
         bool clicked = false;
         for (const engine_core::PluginToolbarState& bar : rig.runtime.plugin_ui().toolbars()) {
-            if (bar.name == "Move" && !bar.buttons.empty()) {
-                clicked = rig.runtime.plugin_ui().click(bar.buttons[0].id);
+            for (const engine_core::PluginButtonState& button : bar.buttons) {
+                if (bar.name == "Move" && button.key == key) {
+                    clicked = rig.runtime.plugin_ui().click(button.id);
+                }
             }
         }
         REQUIRE(clicked);
         rig.frames(1);
+    }
+    void click_move_button() { click_card("Move"); }
+    // Whether the card shows lit.
+    bool lit(const char* key) {
+        for (const engine_core::PluginToolbarState& bar : rig.runtime.plugin_ui().toolbars()) {
+            for (const engine_core::PluginButtonState& button : bar.buttons) {
+                if (bar.name == "Move" && button.key == key) {
+                    return button.active;
+                }
+            }
+        }
+        return false;
     }
     InstanceId part_at(const char* name, float x, float y, float z) {
         const InstanceId id = add_part(rig.game, name);
@@ -436,4 +450,40 @@ TEST_CASE("MT13 a click on nothing clears the selection; Shift keeps it; a press
     move.post(true, 20, 20);
     move.post(false, 20, 20);
     REQUIRE(move.rig.game.selection().get().empty());
+}
+
+TEST_CASE("MT14 Select sits left of Move in its group; it selects with no handles, and the two take turns", "[MT14]") {
+    MoveRig move;
+    std::vector<std::string> keys;
+    for (const engine_core::PluginToolbarState& bar : move.rig.runtime.plugin_ui().toolbars()) {
+        if (bar.name == "Move") {
+            for (const engine_core::PluginButtonState& button : bar.buttons) {
+                keys.push_back(button.key);
+            }
+        }
+    }
+    REQUIRE(keys == std::vector<std::string>{"Select", "Move"});
+    const InstanceId a = move.part_at("A", 0, 0, -10);
+    // Move is on (the rig turns it on). Select takes over: no handles, still active.
+    move.click_card("Select");
+    REQUIRE(move.lit("Select"));
+    REQUIRE_FALSE(move.lit("Move"));
+    REQUIRE(move.rig.runtime.plugin_ui().active() != 0);
+    move.rig.game.selection().set({a});
+    move.rig.frames(1);
+    REQUIRE_FALSE(handles_at(move.rig.game));
+    // A click on nothing clears the selection, as the Move tool's does.
+    move.post(true, 20, 20);
+    move.post(false, 20, 20);
+    REQUIRE(move.rig.game.selection().get().empty());
+    // Move again: handles on the selection.
+    move.rig.game.selection().set({a});
+    move.click_card("Move");
+    REQUIRE(move.lit("Move"));
+    REQUIRE_FALSE(move.lit("Select"));
+    REQUIRE(handles_at(move.rig.game));
+    // Clicking the lit card turns the tool off.
+    move.click_card("Move");
+    REQUIRE(move.rig.runtime.plugin_ui().active() == 0);
+    REQUIRE_FALSE(move.lit("Move"));
 }

@@ -1,7 +1,7 @@
--- The studio's Move tool, on the Home tab. While it is on, clicking in the
--- Scene View selects what is under the pointer (Shift or Ctrl adds it or takes
--- it away, and clicking nothing clears the selection), and translate handles
--- sit at the middle of the PVInstances selected or inside what is selected,
+-- The studio's Select and Move tools, one group on the Home tab. While either is
+-- on, clicking in the Scene View selects what is under the pointer (Shift or Ctrl adds it or takes
+-- it away, and clicking nothing clears the selection). With Move, translate handles
+-- also sit at the middle of the PVInstances selected or inside what is selected,
 -- while the place is not playing, so selecting a Folder moves everything in
 -- it. Dragging them moves the Dragger and each of those PVInstances by the
 -- same offset, as one undo step. The Dragger lives in Core, so it is never
@@ -15,6 +15,8 @@ local SPACE = Enum.TransformSpace.World
 local INCREMENT = 1 -- units
 
 local active = false
+-- Which card is on: "Select", which only selects, or "Move", which shows the handles too.
+local mode = "Move"
 local dragger
 -- Where each moved instance was when the drag began, the Dragger included.
 local starts = {}
@@ -101,7 +103,7 @@ local function place()
 	if dragger ~= nil and dragger.Dragging then
 		return
 	end
-	local list = if active then selected() else {}
+	local list = if active and mode == "Move" then selected() else {}
 	if #list == 0 then
 		drop_dragger()
 		return
@@ -118,7 +120,7 @@ local function update()
 		connection:Disconnect()
 	end
 	watching = {}
-	if active then
+	if active and mode == "Move" then
 		for _, item in selected() do
 			table.insert(watching, item.Changed:Connect(function(property)
 				if property == "Transform" then
@@ -163,35 +165,51 @@ end)
 
 -- Turning on and off ----------------------------------------------------------
 
+-- Two cards in one group: Select picks with no handles, Move picks and moves.
 local toolbar = plugin:CreateToolbar("Move")
-local toggle = toolbar:CreateButton("Move", "Select and move parts in the Scene View", "icons/Dragger.png", "Move")
+local cards = {
+	Select = toolbar:CreateButton("Select", "Select anything in the Scene View", "icons/cursor.png", "Select"),
+	Move = toolbar:CreateButton("Move", "Select and move parts in the Scene View", "icons/Dragger.png", "Move"),
+}
+
+local function light()
+	for name, card in cards do
+		card:SetActive(active and mode == name)
+	end
+end
 
 local function turn_off()
 	if not active then
 		return
 	end
 	active = false
-	toggle:SetActive(false)
+	light()
 	update()
 end
 
-local function turn_on()
-	if active or RunService:IsRunning() then
+local function turn_on(which)
+	if RunService:IsRunning() then
 		return
 	end
-	active = true
-	toggle:SetActive(true)
-	plugin:Activate(true)
+	mode = which
+	if not active then
+		active = true
+		plugin:Activate(true)
+	end
+	light()
 	update()
 end
 
-toggle.Click:Connect(function()
-	if active then
-		plugin:Deactivate()
-	else
-		turn_on()
-	end
-end)
+for name, card in cards do
+	card.Click:Connect(function()
+		-- The lit card turns the tool off; the other one switches to it.
+		if active and mode == name then
+			plugin:Deactivate()
+		else
+			turn_on(name)
+		end
+	end)
+end
 
 plugin.Deactivation:Connect(turn_off)
 Selection.SelectionChanged:Connect(update)

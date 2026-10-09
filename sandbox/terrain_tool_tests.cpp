@@ -9,6 +9,7 @@
 #include "Gui.hpp"
 #include "PluginUi.hpp"
 #include "SceneService.hpp"
+#include "SelectionService.hpp"
 #include "Terrain.hpp"
 #include "ide/PluginLoader.hpp"
 
@@ -53,6 +54,7 @@ struct TerrainToolRig {
             engine_core::Terrain& made = rig.game.create<engine_core::Terrain>();
             rig.game.set_parent(made.id(), workspace);
             terrain = made.id();
+            rig.game.selection().set({terrain});
         }
         rig.game.history().reset_waypoints();
         REQUIRE(loader.load(rig.game, rig.runtime, {terrain_tool_file()}) == 1);
@@ -91,6 +93,46 @@ struct TerrainToolRig {
             }
         }
         return "";
+    }
+    // The text of each Label and Button the pane shows: it and every GUI above it Visible.
+    std::vector<std::string> shown() {
+        std::vector<std::string> out;
+        for (InstanceId id = 1; id < 100000; ++id) {
+            const auto* item = dynamic_cast<const engine_core::GuiValues*>(rig.game.instance(id));
+            if ((dynamic_cast<const engine_core::Label*>(item) == nullptr &&
+                 dynamic_cast<const engine_core::Button*>(item) == nullptr) ||
+                rig.game.parent(id) == 0) {
+                continue;
+            }
+            bool visible = true;
+            for (InstanceId at = id; at != 0; at = rig.game.parent(at)) {
+                const auto* gui = dynamic_cast<const engine_core::GuiValues*>(rig.game.instance(at));
+                if (gui == nullptr || dynamic_cast<const engine_core::DockWidget*>(gui) != nullptr) {
+                    break;
+                }
+                visible = visible && gui->flag(engine_core::GuiProperty::Visible);
+            }
+            if (visible) {
+                out.push_back(item->text(engine_core::GuiProperty::Text));
+            }
+        }
+        return out;
+    }
+    bool showing(const std::string& text) {
+        const std::vector<std::string> texts = shown();
+        return std::find(texts.begin(), texts.end(), text) != texts.end();
+    }
+    // Presses the pane's Button with this text, as a click on it does.
+    void press(const std::string& text) {
+        for (InstanceId id = 1; id < 100000; ++id) {
+            const auto* button = dynamic_cast<const engine_core::Button*>(rig.game.instance(id));
+            if (button != nullptr && button->text(engine_core::GuiProperty::Text) == text) {
+                rig.game.fire_event(id, engine_core::kGuiAction);
+                rig.frames(1);
+                return;
+            }
+        }
+        FAIL("no Button " << text);
     }
     bool pane_open() {
         for (InstanceId id = 1; id < 100000; ++id) {
@@ -199,8 +241,32 @@ TEST_CASE("TB6 Shift while setting Add's height makes the box a cube", "[TB6]") 
     REQUIRE_FALSE(tools.solid(0, 10, 0));
 }
 
-TEST_CASE("TB7 Add in a place with no Terrain makes one, in the same undo step", "[TB7]") {
+TEST_CASE("TB7 with no Terrain selected the pane hides its controls and offers Insert terrain", "[TB7]") {
     TerrainToolRig tools(false);
+    tools.click("Grow");
+    INFO(tools.rig.runtime.last_error());
+    REQUIRE(tools.showing("No terrain selected"));
+    REQUIRE(tools.showing("Insert terrain"));
+    REQUIRE_FALSE(tools.showing("Size 8 units"));
+    // Insert makes one in Workspace, selects it, and is one undo step.
+    tools.press("Insert terrain");
+    const InstanceId workspace = tools.rig.game.scene_service("Workspace");
+    const InstanceId made = tools.rig.game.find_first_child(workspace, "Terrain");
+    REQUIRE(made != 0);
+    REQUIRE(tools.rig.game.selection().get() == std::vector<InstanceId>{made});
+    REQUIRE(tools.showing("Size 8 units"));
+    REQUIRE_FALSE(tools.showing("No terrain selected"));
+    REQUIRE(tools.rig.game.history().can_undo().second == "Insert Terrain");
+    tools.rig.game.history().undo();
+    tools.rig.frames(1);
+    REQUIRE(tools.rig.game.find_first_child(workspace, "Terrain") == 0);
+    REQUIRE(tools.showing("No terrain selected"));
+}
+
+TEST_CASE("TB8 the tools work only on the selected Terrain; Add with none selected fills nothing", "[TB8]") {
+    TerrainToolRig tools;
+    tools.rig.game.selection().set({});
+    tools.rig.frames(1);
     tools.click("Add");
     using Kind = engine_core::PluginMouseEvent::Kind;
     tools.mouse(Kind::Move, 50, 50);
@@ -210,12 +276,8 @@ TEST_CASE("TB7 Add in a place with no Terrain makes one, in the same undo step",
     tools.mouse(Kind::Button1Down, 150, 150);
     tools.mouse(Kind::Button1Up, 150, 150);
     INFO(tools.rig.runtime.last_error());
-    const InstanceId workspace = tools.rig.game.scene_service("Workspace");
-    REQUIRE(tools.rig.game.find_first_child(workspace, "Terrain") != 0);
-    REQUIRE(tools.solid(0, 2, 0));
-    tools.rig.game.history().undo();
-    tools.rig.frames(1);
-    REQUIRE(tools.rig.game.find_first_child(workspace, "Terrain") == 0);
+    REQUIRE_FALSE(tools.solid(0, 2, 0));
+    REQUIRE(tools.showing("No terrain selected"));
 }
 
 TEST_CASE("TB4 Play turns the terrain tools off and closes the pane", "[TB4]") {

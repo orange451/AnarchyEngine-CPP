@@ -3,8 +3,8 @@
 -- height, click to fill; Shift keeps it square, then a cube; Alt ends the
 -- footprint early), Grow raises the ground under a ball at the pointer (Shift
 -- lowers it), Smooth evens it out, and Paint sets its material (Shift: the default).
--- They edit the selected Terrain, else the first one in Workspace, while the
--- place is not playing. Each stroke is one undo step. The Terrain pane holds
+-- They edit the selected Terrain while the place is not playing; with none
+-- selected, the pane offers to insert one. Each stroke is one undo step. The Terrain pane holds
 -- the size, strength, grid, and material. Turning on another tool, or Play, turns
 -- them off.
 local RunService = game:GetService("RunService")
@@ -95,16 +95,11 @@ readoutText.TextColor = Color3.new(1, 0.84, 0.47)
 readoutText.Style = "background-color: rgba(20, 22, 26, 0.85); padding: 2px 6px; border-radius: 4px;"
 readoutText.Parent = readout
 
--- The Terrain the tools edit: the selected one, else the first in Workspace.
+-- The Terrain the tools edit: the selected one. With none, the pane offers to insert one.
 local function terrain(): Terrain?
 	for _, item in Selection:Get() do
 		if item:IsA("Terrain") and item.Parent ~= nil then
 			return item :: any
-		end
-	end
-	for _, child in workspace:GetChildren() do
-		if child:IsA("Terrain") then
-			return child :: any
 		end
 	end
 	return nil
@@ -329,19 +324,14 @@ local function commit_draw()
 	if extent.X < 1e-4 or extent.Y < 1e-4 or extent.Z < 1e-4 then
 		return
 	end
-	lastHeight = math.abs(height)
-	begin_stroke()
-	-- A place with no Terrain gets one, in the same undo step as the box.
 	local t = terrain()
 	if t == nil then
-		local made = Instance.new("Terrain")
-		made.Name = "Terrain"
-		made.Parent = workspace
-		t = made
+		return
 	end
+	lastHeight = math.abs(height)
+	begin_stroke()
 	t:FillBlock(Matrix4.new((lo + hi) / 2), extent, material(t))
 	end_stroke()
-	redraw_pane()
 end
 
 -- The grid around the pointer, on the plane drawn on.
@@ -462,12 +452,22 @@ local widget = plugin:CreateDockWidget("Terrain", {
 	MinWidth = 180,
 })
 
-local root = Instance.new("VBox")
-root.Spacing = 6
--- The pane shows through, so the studio's theme colors it.
-root.BackgroundTransparency = 1
-root.Style = "padding: 8px;"
-root.Parent = widget
+local function vbox(parent: Instance): VBox
+	local box = Instance.new("VBox")
+	box.Spacing = 6
+	-- The pane shows through, so the studio's theme colors it.
+	box.BackgroundTransparency = 1
+	box.Parent = parent
+	return box
+end
+
+local pane = vbox(widget)
+pane.Style = "padding: 8px;"
+-- The controls, shown while a Terrain is selected.
+local root = vbox(pane)
+-- Shown instead while none is.
+local empty = vbox(pane)
+empty.Visible = false
 
 local function label(text: string, parent: Instance): Label
 	local made = Instance.new("Label")
@@ -557,9 +557,24 @@ materialButton = button(root, "", function()
 	redraw_pane()
 end)
 
+label("No terrain selected", empty)
+-- A new Terrain in Workspace, selected, as one undo step.
+button(empty, "Insert terrain", function()
+	local id = History:TryBeginRecording("Insert Terrain")
+	local made = Instance.new("Terrain")
+	made.Name = "Terrain"
+	made.Parent = workspace
+	if id ~= nil then
+		History:FinishRecording(id, Enum.FinishRecordingOperation.Commit)
+	end
+	Selection:Set({ made })
+end)
+
 function redraw_pane()
 	local t = terrain()
-	terrainLabel.Text = if t ~= nil then "Terrain: " .. t.Name else "No Terrain yet: Add makes one"
+	root.Visible = t ~= nil
+	empty.Visible = t == nil
+	terrainLabel.Text = if t ~= nil then "Terrain: " .. t.Name else ""
 	sizeLabel.Text = string.format("Size %d units", size)
 	strengthLabel.Text = string.format("Strength %d%%", math.floor(strength * 100 + 0.5))
 	gridLabel.Text = string.format("Grid %d units", grid)

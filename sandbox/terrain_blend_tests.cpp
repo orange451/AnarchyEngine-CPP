@@ -151,8 +151,9 @@ TEST_CASE("BW2 a vertex on a two-material border: both Ids, weights sum to 1, ea
 
 TEST_CASE("BW3 never more than 4 Ids, sorted by descending weight, sum 1", "[terrain][textures]") {
     const float voxel_size = 1.f;
-    // 8 distinct Ids, each a single vote: ties broken by lower Id keep 1,2,3,4.
-    const float distances[8] = {0.1f, -0.1f, 0.2f, -0.2f, 0.3f, -0.3f, 0.05f, -0.05f};
+    // 8 distinct Ids on 8 solid corners near the surface, each a single
+    // vote: ties broken by lower Id keep 1,2,3,4.
+    const float distances[8] = {-0.1f, -0.15f, -0.2f, -0.25f, -0.3f, -0.35f, -0.05f, -0.4f};
     const std::uint8_t ids[8] = {1, 2, 3, 4, 5, 6, 7, 8};
     const BlendIds blend = blend_weights(distances, ids, voxel_size);
 
@@ -442,4 +443,23 @@ TEST_CASE("BW8 a rolling two-material island grows render vertices by at most 30
             REQUIRE(set_b == set_c);
         }
     }
+}
+
+TEST_CASE("BW10 only solid corners vote: air corners' Ids (0 from WriteVoxels, or a fill's leftover) never blend in",
+          "[terrain][textures]") {
+    const float voxel_size = 1.f;
+    // A surface cell: four solid grass (3) corners below, four air corners
+    // above holding Id 0, as a WriteVoxels caller writes them.
+    const float distances[8] = {-0.4f, -0.6f, -0.3f, -0.5f, 0.6f, 0.4f, 0.7f, 0.5f};
+    const std::uint8_t air_zero[8] = {3, 3, 3, 3, 0, 0, 0, 0};
+    BlendIds blend = blend_weights(distances, air_zero, voxel_size);
+    REQUIRE(blend.ids[0] == 3);
+    REQUIRE(blend.weights[0] == 1.f);
+    REQUIRE(blend.weights[1] == 0.f);
+    // The same with rock (7) left on the air side by an earlier fill that was
+    // dug away: the wall shows the ground it cuts into.
+    const std::uint8_t air_rock[8] = {3, 3, 3, 3, 7, 7, 7, 7};
+    blend = blend_weights(distances, air_rock, voxel_size);
+    REQUIRE(blend.ids[0] == 3);
+    REQUIRE(blend.weights[0] == 1.f);
 }

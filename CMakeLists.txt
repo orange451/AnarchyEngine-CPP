@@ -787,6 +787,7 @@ add_executable(studio-tests
     tests/BillboardLayerTest.cpp
     tests/ProfilerOverlayTest.cpp
     tests/UiFrameProfileTest.cpp
+    tests/PluginsTest.cpp
 )
 target_link_libraries(studio-tests PRIVATE studio)
 

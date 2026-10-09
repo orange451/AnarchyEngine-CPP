@@ -11,6 +11,8 @@ public:
     Folder(DataModel::ChildTag tag, DataModel::State& state, InstanceId id) : DataModel(tag, state, id) {}
 
     const char* class_name() const override;
+    // The usual actions, and Save as Plugin, which writes it to the plugins folder.
+    void context_actions(std::vector<ContextAction>& out) const override;
 };
 
 }  // namespace engine_core

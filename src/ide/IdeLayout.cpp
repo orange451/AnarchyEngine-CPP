@@ -22,6 +22,7 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight, const std::filesys
     if (!config.empty()) {
         layout_file_ = config / "layout.json";
         default_layout_file_ = config / "default-layout.json";
+        plugins_dir_ = config / "plugins";
     }
     runner_.prepare();
     // Before any widget reads a color.
@@ -52,6 +53,14 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight, const std::filesys
         ->setOnAction([this](jadefx::ActionEvent&) { save_project_as(); });
     file->getItems().add(jadefx::make<jadefx::SeparatorMenuItem>());
     AddItem(*file, "Export Game…", "Export.png", 0, 0)->setOnAction([this](jadefx::ActionEvent&) { export_game(); });
+    AddItem(*file, "Open Plugins Folder", "AssetFolder.png", 0, 0)->setOnAction([this](jadefx::ActionEvent&) {
+        if (plugins_dir_.empty()) {
+            return;
+        }
+        std::error_code made;
+        std::filesystem::create_directories(plugins_dir_, made);
+        reveal_folder(plugins_dir_);
+    });
     file->getItems().add(jadefx::make<jadefx::SeparatorMenuItem>());
     AddItem(*file, "Preferences\u2026", nullptr, jadefx::Key::Comma, jadefx::Key::ModControl)
         ->setOnAction([this](jadefx::ActionEvent&) { open_preferences(); });
@@ -407,6 +416,7 @@ void IdeLayout::load_plugins() {
         scripts.append_output(engine_core::ScriptRuntime::OutputKind::Error, "Plugin: " + error);
     }
     run_now([&](engine_core::DataModel& game) { plugins_.load(game, scripts, files); });
+    poll_plugins(true);
 }
 
 void IdeLayout::mount(jadefx::Scene& scene) {
@@ -516,6 +526,8 @@ void IdeLayout::flushFrame() {
     // notes that changes wait; after it, or once an edit ends, it runs.
     const bool focused = scene_ != nullptr && scene_->isWindowFocused();
     if (focused && !was_focused_) {
+        // A plugin file saved in another program loads as soon as the studio is back.
+        plugin_poll_at_ = 0;
         if (in_test()) {
             check_disk();
         } else {
@@ -526,6 +538,7 @@ void IdeLayout::flushFrame() {
     if (check_pending_ && !in_test() && !editing_field()) {
         check_disk();
     }
+    poll_plugins(false);
     refresh_modified();
     // A tab that is not showing, or a closed page kept for reopening, is not
     // laid out, so Problems would stop counting. Its tick keeps the list and

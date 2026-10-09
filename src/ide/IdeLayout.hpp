@@ -187,6 +187,12 @@ public:
     // Once a frame, after the scene lays out; the main window's stage calls it.
     // Coming back to the window checks the disk here.
     void flushFrame();
+    // Writes the Folder to the plugins folder as <Name>.aeplugin, asking first when
+    // one by that name is there, then loads it without waiting for the next poll.
+    void save_as_plugin(std::uint32_t folder);
+    // Lists the plugins folder, at most once a second unless now, and has the
+    // simulation load, unload, or reload whatever changed since the last list.
+    void poll_plugins(bool now);
     // Writes the paused profiler's history as a page a browser shows. False, with why.
     bool save_profile_capture(const std::filesystem::path& file, std::string& error);
     // Writes the layout to layout.json in the config folder. A close request
@@ -649,8 +655,14 @@ private:
     // Stop restores the place, then these strings are written back.
     std::unordered_map<std::uint32_t, std::string> kept_sources_;
     std::unique_ptr<Clip> clip_;
-    // The studio's built-in plugins, reloaded each time the place is made, opened, or rebuilt.
+    // The studio's built-in plugins, reloaded each time the place is made, opened, or
+    // rebuilt, and the user's, from plugins_dir_.
     PluginLoader plugins_;
+    // plugins/ in the config folder. Empty keeps no user plugins.
+    std::filesystem::path plugins_dir_;
+    // What the last poll listed, and the scene time the next one waits for.
+    std::vector<PluginStamp> plugin_stamps_;
+    double plugin_poll_at_ = 0;
     std::unordered_map<std::string, std::vector<int>> script_folds_;
     std::filesystem::path fold_file_;
     // The open project. Null until Open or Save As.

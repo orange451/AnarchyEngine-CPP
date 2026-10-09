@@ -7,6 +7,8 @@
 #include "IdeTerrainEditor.hpp"
 
 #include "FileBytes.hpp"
+#include "Folder.hpp"
+#include "InstanceFile.hpp"
 #include "Gui.hpp"
 #include "Terrain.hpp"
 
@@ -105,6 +107,9 @@ void IdeLayout::run_action(engine_core::InstanceAction action, std::uint32_t id)
         break;
     case engine_core::InstanceAction::Rename:
         // The explorer renames in its own row.
+        break;
+    case engine_core::InstanceAction::SaveAsPlugin:
+        save_as_plugin(id);
         break;
     }
 }
@@ -879,6 +884,85 @@ bool IdeLayout::editors_unflushed() const {
         }
     }
     return false;
+}
+
+void IdeLayout::poll_plugins(bool now) {
+    if (plugins_dir_.empty()) {
+        return;
+    }
+    const double clock = scene_ != nullptr ? scene_->timeSeconds() : 0;
+    if (!now && clock < plugin_poll_at_) {
+        return;
+    }
+    plugin_poll_at_ = clock + 1.0;
+    std::vector<PluginStamp> stamps = scan_plugins(plugins_dir_);
+    if (stamps == plugin_stamps_) {
+        return;
+    }
+    plugin_stamps_ = stamps;
+    runner_.simulation().on_simulation([this, alive = std::weak_ptr<int>(alive_), stamps = std::move(stamps)](
+                                           engine_core::DataModel& game) {
+        if (alive.expired()) {
+            return;
+        }
+        plugins_.sync_user(game, runner_.simulation().scripts(), stamps);
+    });
+}
+
+void IdeLayout::save_as_plugin(std::uint32_t folder) {
+    if (plugins_dir_.empty()) {
+        show_toast("Plugins need the studio's config folder");
+        return;
+    }
+    std::vector<CopiedNode> copies;
+    std::string name;
+    run_now([&](engine_core::DataModel& game) {
+        if (dynamic_cast<const engine_core::Folder*>(game.instance(folder)) == nullptr) {
+            return;
+        }
+        name = game.name(folder);
+        copies.push_back(engine_core::copy_tree(game, folder));
+    });
+    if (copies.empty()) {
+        return;
+    }
+    const std::string file_name = plugin_file_name(name);
+    const std::filesystem::path path = plugins_dir_ / std::filesystem::u8path(file_name + kPluginExtension);
+    auto write = [this, path, file_name, copies = std::move(copies)] {
+        std::error_code made;
+        std::filesystem::create_directories(plugins_dir_, made);
+        std::string error;
+        if (!engine_core::save_instance_file(path, copies, error)) {
+            show_toast("Could not save plugin \"" + file_name + "\": " + error);
+            return;
+        }
+        show_toast("Saved plugin \"" + file_name + "\"");
+        poll_plugins(true);
+    };
+    if (!std::filesystem::exists(path)) {
+        write();
+        return;
+    }
+    const jadefx::ButtonType replace("Replace", jadefx::ButtonType::Data::OkDone);
+    auto alert = std::make_shared<jadefx::Alert>(jadefx::AlertType::Confirmation,
+                                                 "The plugin saved under this name will be replaced and reloaded.",
+                                                 std::vector<jadefx::ButtonType>{replace, jadefx::ButtonType::Cancel()});
+    alert->setTitle("Anarchy Engine");
+    alert->setHeaderText("Replace plugin \"" + file_name + "\"?");
+    alert->setOnClosed([replace, write](const jadefx::ButtonType* choice) {
+        if (choice != nullptr && *choice == replace) {
+            write();
+        }
+    });
+    alerts_.erase(std::remove_if(alerts_.begin(), alerts_.end(),
+                                 [](const std::shared_ptr<jadefx::Alert>& item) {
+                                     return !item || item->getResult() != nullptr;
+                                 }),
+                  alerts_.end());
+    alerts_.push_back(alert);
+    if (scene_ != nullptr) {
+        alert->show(*scene_);
+    }
 }
 
 }  // namespace ide

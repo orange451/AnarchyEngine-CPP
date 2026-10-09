@@ -542,3 +542,18 @@ TEST_CASE("PL15 a plugin with no enabled Script still loads, and its tree surviv
     REQUIRE(loaded != nullptr);
     REQUIRE_FALSE(loaded->enabled());
 }
+
+TEST_CASE("PL16 a Folder offers Save as Plugin; other classes do not", "[PL16]") {
+    ScriptRig rig;
+    const InstanceId folder = add_folder(rig.game, "F", workspace_of(rig.game));
+    auto offers = [&](InstanceId id) {
+        std::vector<engine_core::ContextAction> actions;
+        rig.game.instance(id)->context_actions(actions);
+        return std::any_of(actions.begin(), actions.end(), [](const engine_core::ContextAction& action) {
+            return action.action == engine_core::InstanceAction::SaveAsPlugin;
+        });
+    };
+    REQUIRE(offers(folder));
+    REQUIRE(std::string(engine_core::action_label(engine_core::InstanceAction::SaveAsPlugin)) == "Save as Plugin");
+    REQUIRE_FALSE(offers(add_script(rig.game, folder, "S", "").id()));
+}

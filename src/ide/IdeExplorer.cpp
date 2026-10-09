@@ -92,6 +92,8 @@ const char* ActionIcon(InstanceAction action) {
         return "Rename.png";
     case InstanceAction::Delete:
         return "Cross.png";
+    case InstanceAction::SaveAsPlugin:
+        return "Export.png";
     }
     return nullptr;
 }

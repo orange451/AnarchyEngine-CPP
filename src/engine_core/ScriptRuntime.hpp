@@ -2,6 +2,7 @@
 
 #include "Events.hpp"
 #include "LuaApi.hpp"
+#include "PluginUi.hpp"
 #include "RunService.hpp"
 #include "ScriptHost.hpp"
 #include "TableSnapshot.hpp"
@@ -183,6 +184,11 @@ public:
     // unregistered. SimulationThread, outside any Lua call. Nothing for a root
     // that is not a plugin.
     void fire_plugin_unloading(InstanceId root);
+    // The registered root a serial owns, or 0.
+    InstanceId plugin_root(std::uint32_t serial) const;
+    // The plugins' toolbars, buttons, and signals.
+    PluginUi& plugin_ui() { return plugin_ui_; }
+    const PluginUi& plugin_ui() const { return plugin_ui_; }
     // Registered roots in the order they were registered. A root that died drops out.
     std::vector<InstanceId> plugins() const;
     bool plugin_vm_open() const { return plugin_.state != nullptr; }
@@ -440,6 +446,9 @@ private:
     bool thread_ok(const Thread& thread) const;
     Thread& new_thread(Vm& vm, InstanceId script, std::uint32_t generation);
     void set_script_global(lua_State* co, InstanceId script);
+    // A plugin VM thread's `plugin`: the Plugin object of the plugin whose serial owns it,
+    // or nil. Defined in PluginBindings.cpp.
+    void set_plugin_global(lua_State* co, std::uint32_t serial);
     void remember_error(lua_State* state);
     // remember_error plus a console line. require uses remember_error alone so a caught
     // failure is not logged twice when the caller resumes.
@@ -506,6 +515,7 @@ private:
     // step_tools fires it, and Started and Stopped, for what changed since
     // the step before.
     Signal selection_changed_;
+    PluginUi plugin_ui_;
     std::uint64_t selection_revision_ = 0;
     bool was_running_ = false;
     // ChangeHistoryService's OnUndo, OnRedo, OnRecordingStarted, and

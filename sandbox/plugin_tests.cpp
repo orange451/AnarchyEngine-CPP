@@ -1,4 +1,3 @@
-// Plugins, whose Scripts run in the plugin VM, and the scheduler the console and plugin
 // VMs share with the play VM: waits, tasks, and connections that go on while stopped.
 
 #include "support.hpp"
@@ -7,6 +6,7 @@
 #include "Folder.hpp"
 #include "InstanceFile.hpp"
 #include "ModuleScript.hpp"
+#include "PluginUi.hpp"
 #include "ide/PluginLoader.hpp"
 #include "ScriptRuntime.hpp"
 
@@ -556,4 +556,56 @@ TEST_CASE("PL16 a Folder offers Save as Plugin; other classes do not", "[PL16]")
     REQUIRE(offers(folder));
     REQUIRE(std::string(engine_core::action_label(engine_core::InstanceAction::SaveAsPlugin)) == "Save as Plugin");
     REQUIRE_FALSE(offers(add_script(rig.game, folder, "S", "").id()));
+}
+
+TEST_CASE("PL17 plugin is one object per plugin, with its Name; Play and Console have none", "[PL17]") {
+    ScriptRig rig;
+    const InstanceId folder = add_folder(rig.game, "Tools", rig.game.core());
+    engine_core::ModuleScript& lib = rig.game.create<engine_core::ModuleScript>();
+    rig.game.set_name(lib.id(), "Lib");
+    lib.set_source("return function() return plugin end");
+    rig.game.set_parent(lib.id(), folder);
+    add_script(rig.game, folder, "A", "_G.pa = plugin print(plugin.Name, tostring(plugin))");
+    add_script(rig.game, folder, "B",
+               "print(plugin == _G.pa, require(script.Parent.Lib)() == plugin)\n"
+               "task.spawn(function() print('spawned', plugin == _G.pa) end)\n"
+               "print(pcall(function() plugin.Name = 'x' end))");
+    rig.runtime.drain_output();
+    REQUIRE(rig.runtime.register_plugin(folder, "ToolsFile"));
+    std::vector<std::string> out = texts(rig.runtime.drain_output());
+    REQUIRE(out.size() == 4);
+    REQUIRE(out[0] == "ToolsFile\tPlugin\n");
+    REQUIRE(out[1] == "true\ttrue\n");
+    REQUIRE(out[2].rfind("false\t", 0) == 0);
+    // What a Script spawns runs after it, as in one pass of a play step.
+    REQUIRE(out[3] == "spawned\ttrue\n");
+
+    rig.runtime.run_chunk("print(plugin)");
+    REQUIRE(texts(rig.runtime.drain_output()) == std::vector<std::string>{"nil\n"});
+    add_script(rig.game, "Play", "print('play', plugin)");
+    rig.game.start_simulation();
+    rig.frames(1);
+    REQUIRE(texts(rig.runtime.drain_output()) == std::vector<std::string>{"play\tnil\n"});
+    rig.game.stop_simulation();
+}
+
+TEST_CASE("PL18 Unloading runs before the plugin's threads stop", "[PL18]") {
+    ScriptRig rig;
+    TempDir dir;
+    write_plugin(dir.path, "Bye", {"plugin.Unloading:Connect(function() print('unloading', plugin.Name) end)"});
+    ide::PluginLoader loader;
+    loader.sync_user(rig.game, rig.runtime, ide::scan_plugins(dir.path));
+    rig.runtime.drain_output();
+    std::filesystem::remove(dir.path / "Bye.aeplugin");
+    loader.sync_user(rig.game, rig.runtime, ide::scan_plugins(dir.path));
+    REQUIRE(texts(rig.runtime.drain_output()) == std::vector<std::string>{"unloading\tBye\n"});
+    REQUIRE(rig.runtime.plugins().empty());
+}
+
+TEST_CASE("PL19 icon paths stay inside icons/", "[PL19]") {
+    REQUIRE(engine_core::plugin_icon_path_ok("icons/Brush.png"));
+    REQUIRE_FALSE(engine_core::plugin_icon_path_ok("Brush.png"));
+    REQUIRE_FALSE(engine_core::plugin_icon_path_ok("icons/../shaders/x.png"));
+    REQUIRE_FALSE(engine_core::plugin_icon_path_ok("icons/"));
+    REQUIRE_FALSE(engine_core::plugin_icon_path_ok("icons\\x.png"));
 }

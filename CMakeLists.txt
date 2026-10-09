@@ -615,6 +615,8 @@ add_library(engine_core STATIC
     src/engine_core/LuaReflect.cpp
     src/engine_core/ScriptBindings.cpp
     src/engine_core/RaycastBindings.cpp
+    src/engine_core/PluginBindings.cpp
+    src/engine_core/PluginUi.cpp
     src/engine_core/TerrainBindings.cpp
     src/engine_core/ScriptRuntime.cpp
     src/engine_core/TableSnapshot.cpp

@@ -693,7 +693,54 @@ bool GameView::frameTimeCurrent() const {
            std::chrono::duration<double>(std::chrono::steady_clock::now() - lastMeasured_).count() < kStaleSeconds;
 }
 
+bool GameView::pluginHeld() const { return engine_ != nullptr && engine_->scripts().plugin_ui().mouse_held(); }
+
+void GameView::postPluginMouse(engine_core::PluginMouseEvent::Kind kind, double x, double y, int mods) {
+    if (engine_ == nullptr) {
+        return;
+    }
+    const std::optional<engine_core::DraggerRay> ray = rayAt(x, y);
+    if (!ray) {
+        return;
+    }
+    engine_core::PluginMouseEvent event;
+    event.kind = kind;
+    event.x = localX(x);
+    event.y = localY(y);
+    event.origin = ray->origin;
+    event.direction = ray->direction;
+    event.shift = (mods & 0x1) != 0;
+    event.ctrl = (mods & (0x2 | 0x8)) != 0;
+    event.alt = (mods & 0x4) != 0;
+    engine_core::Engine* engine = engine_;
+    engine->on_simulation(
+        [engine, event](engine_core::DataModel&) { engine->scripts().plugin_mouse_event(event); });
+}
+
+void GameView::syncPluginTool() {
+    if (engine_ == nullptr) {
+        return;
+    }
+    // One tool has the left button at a time: a plugin that activates turns the
+    // view's own off, and one of those turning on deactivates the plugin.
+    const std::uint64_t activations = engine_->scripts().plugin_ui().activations();
+    const bool toolsOn = terrainBrush_->active() || brushTool_->active();
+    if (activations != pluginActivations_) {
+        pluginActivations_ = activations;
+        if (pluginHeld() && toolsOn) {
+            terrainBrush_->turnOff();
+            brushTool_->turnOff();
+            refreshOverlays();
+        }
+    } else if (toolsOn && !toolsWereOn_ && pluginHeld()) {
+        engine_core::Engine* engine = engine_;
+        engine->on_simulation([engine](engine_core::DataModel&) { engine->scripts().plugin_ui().deactivate_all(); });
+    }
+    toolsWereOn_ = terrainBrush_->active() || brushTool_->active();
+}
+
 void GameView::layoutChildren() {
+    syncPluginTool();
     // Layout runs every frame, before the paint, so the list and the link are
     // current when the list lays out and when the paint follows the Camera.
     // One snapshot for this frame's layout and paint, so billboards sit where
@@ -1226,6 +1273,17 @@ void GameView::handleMousePressed(const jadefx::MouseEvent& event) {
         IdePane::handleMousePressed(event);
         return;
     }
+    // An active plugin hears both buttons, and has the left one to itself, so
+    // selection and dragging do not act on it. The camera keeps the right one.
+    if (pluginHeld() && (event.button == 0 || event.button == 1)) {
+        postPluginMouse(event.button == 0 ? engine_core::PluginMouseEvent::Kind::Button1Down
+                                          : engine_core::PluginMouseEvent::Kind::Button2Down,
+                        event.x, event.y, event.mods);
+        if (event.button == 0) {
+            IdePane::handleMousePressed(event);
+            return;
+        }
+    }
     if (game_ != nullptr) {
         game_->input().post_mouse_button(event.button, true, localX(event.x), localY(event.y));
     }
@@ -1242,6 +1300,15 @@ void GameView::handleMouseReleased(const jadefx::MouseEvent& event) {
         brushTool_->release(brushMods(event.mods));
         IdePane::handleMouseReleased(event);
         return;
+    }
+    if (pluginHeld() && (event.button == 0 || event.button == 1)) {
+        postPluginMouse(event.button == 0 ? engine_core::PluginMouseEvent::Kind::Button1Up
+                                          : engine_core::PluginMouseEvent::Kind::Button2Up,
+                        event.x, event.y, event.mods);
+        if (event.button == 0) {
+            IdePane::handleMouseReleased(event);
+            return;
+        }
     }
     if (game_ != nullptr) {
         game_->input().post_mouse_button(event.button, false, localX(event.x), localY(event.y));
@@ -1260,6 +1327,9 @@ void GameView::handleMouseDragged(const jadefx::MouseEvent& event) {
         syncBrushView();
         brushTool_->hover(rayAt(event.x, event.y), brushMods(event.mods));
     }
+    if (pluginHeld()) {
+        postPluginMouse(engine_core::PluginMouseEvent::Kind::Move, event.x, event.y, event.mods);
+    }
     if (game_ != nullptr) {
         game_->input().post_mouse_move(localX(event.x), localY(event.y));
     }
@@ -1276,6 +1346,9 @@ void GameView::handleMouseMoved(const jadefx::MouseEvent& event) {
         syncBrushView();
         brushTool_->hover(rayAt(event.x, event.y), brushMods(event.mods));
     }
+    if (pluginHeld()) {
+        postPluginMouse(engine_core::PluginMouseEvent::Kind::Move, event.x, event.y, event.mods);
+    }
     if (game_ != nullptr) {
         game_->input().post_mouse_move(localX(event.x), localY(event.y));
     }
@@ -1291,6 +1364,11 @@ void GameView::handleHoverChanged() {
 }
 
 void GameView::handleScroll(jadefx::ScrollEvent& event) {
+    if (pluginHeld() && event.deltaY != 0) {
+        postPluginMouse(event.deltaY > 0 ? engine_core::PluginMouseEvent::Kind::WheelForward
+                                         : engine_core::PluginMouseEvent::Kind::WheelBackward,
+                        event.x, event.y, 0);
+    }
     if (game_ != nullptr) {
         game_->input().post_wheel(localX(event.x), localY(event.y), static_cast<float>(event.deltaY));
     }

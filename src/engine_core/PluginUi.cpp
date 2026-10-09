@@ -53,6 +53,10 @@ void PluginUi::add_plugin(std::uint32_t serial, std::string name, bool builtin) 
     plugin.name = std::move(name);
     plugin.builtin = builtin;
     plugin.unloading = make_signal();
+    plugin.deactivation = make_signal();
+    for (std::uint32_t& key : plugin.mouse) {
+        key = make_signal();
+    }
     plugins_.emplace(serial, std::move(plugin));
 }
 
@@ -61,7 +65,16 @@ void PluginUi::remove_plugin(std::uint32_t serial) {
     if (found == plugins_.end()) {
         return;
     }
+    // Its handlers are gone with it, so nothing hears its Deactivation.
+    if (active_ == serial) {
+        active_ = 0;
+        held_.store(false);
+    }
     release(found->second.unloading);
+    release(found->second.deactivation);
+    for (std::uint32_t key : found->second.mouse) {
+        release(key);
+    }
     plugins_.erase(found);
     const auto gone = std::remove_if(toolbars_.begin(), toolbars_.end(), [&](const Toolbar& toolbar) {
         if (toolbar.serial != serial) {
@@ -201,6 +214,54 @@ bool PluginUi::click(std::uint32_t button) {
     }
     events_->emit_args(clicked->id(), 0, {});
     return true;
+}
+
+void PluginUi::emit(std::uint32_t key) {
+    Signal* fired = signal(key);
+    if (fired != nullptr && events_ != nullptr) {
+        events_->emit_args(fired->id(), 0, {});
+    }
+}
+
+void PluginUi::activate(std::uint32_t serial) {
+    if (plugins_.count(serial) == 0) {
+        return;
+    }
+    if (active_ != 0 && active_ != serial) {
+        emit(deactivation_key(active_));
+    }
+    active_ = serial;
+    held_.store(true);
+    activations_.fetch_add(1);
+}
+
+void PluginUi::deactivate(std::uint32_t serial) {
+    if (serial == 0 || active_ != serial) {
+        return;
+    }
+    active_ = 0;
+    held_.store(false);
+    emit(deactivation_key(serial));
+}
+
+void PluginUi::deactivate_all() { deactivate(active_); }
+
+std::uint32_t PluginUi::deactivation_key(std::uint32_t serial) const {
+    const auto found = plugins_.find(serial);
+    return found != plugins_.end() ? found->second.deactivation : 0;
+}
+
+void PluginUi::mouse_event(const PluginMouseEvent& event) {
+    mouse_ = event;
+    if (active_ != 0) {
+        emit(mouse_key(active_, event.kind));
+    }
+}
+
+std::uint32_t PluginUi::mouse_key(std::uint32_t serial, PluginMouseEvent::Kind kind) const {
+    const auto found = plugins_.find(serial);
+    const int index = static_cast<int>(kind);
+    return found != plugins_.end() && index >= 0 && index < kMouseSignals ? found->second.mouse[index] : 0;
 }
 
 Signal* PluginUi::signal(std::uint32_t key) {

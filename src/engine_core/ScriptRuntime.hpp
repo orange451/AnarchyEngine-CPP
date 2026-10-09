@@ -189,6 +189,9 @@ public:
     // The plugins' toolbars, buttons, and signals.
     PluginUi& plugin_ui() { return plugin_ui_; }
     const PluginUi& plugin_ui() const { return plugin_ui_; }
+    // A Scene View's mouse event, for the active plugin's mouse. SimulationThread; its
+    // handlers run at the next drain.
+    void plugin_mouse_event(const PluginMouseEvent& event) { plugin_ui_.mouse_event(event); }
     // Registered roots in the order they were registered. A root that died drops out.
     std::vector<InstanceId> plugins() const;
     bool plugin_vm_open() const { return plugin_.state != nullptr; }

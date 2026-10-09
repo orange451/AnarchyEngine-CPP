@@ -1984,7 +1984,16 @@ TEST_CASE("A60 plugin and what it makes are declared", "[A60]") {
                                              "local w = plugin:CreateDockWidget('Panel', {Title = 'T', InitialDock = 'TopRight'})\n"
                                              "w.Enabled = true\n"
                                              "local t: string = w.Title\n"
-                                             "print(t)\n");
+                                             "print(t)\n"
+                                             "plugin:Activate(true)\n"
+                                             "local active: boolean = plugin:IsActivated()\n"
+                                             "plugin.Deactivation:Connect(function() plugin:Deactivate() end)\n"
+                                             "local mouse = plugin:GetMouse()\n"
+                                             "mouse.Button1Down:Connect(function()\n"
+                                             "    local at: Vector3 = mouse.Hit.Position\n"
+                                             "    local dir: Vector3 = mouse.UnitRay.Direction\n"
+                                             "    print(at, dir, mouse.X, mouse.Y, mouse.Shift, mouse.Target, active)\n"
+                                             "end)\n");
     settle(analysis);
     INFO(dump(analysis.diagnostics(script.id())));
     REQUIRE(analysis.diagnostics(script.id()).empty());

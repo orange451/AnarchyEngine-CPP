@@ -1,7 +1,9 @@
 #pragma once
 
 #include "Events.hpp"
+#include "Vector3.hpp"
 
+#include <atomic>
 #include <cstdint>
 #include <map>
 #include <memory>
@@ -30,6 +32,21 @@ struct PluginToolbarState {
     std::string plugin;
     std::string name;
     std::vector<PluginButtonState> buttons;
+};
+
+// One mouse event in a Scene View, as the active plugin's mouse hears it.
+struct PluginMouseEvent {
+    enum class Kind { Button1Down, Button1Up, Button2Down, Button2Up, Move, WheelForward, WheelBackward };
+    Kind kind = Kind::Move;
+    // Points from the view's top left.
+    float x = 0;
+    float y = 0;
+    // The ray from the camera through the pointer; direction is unit length.
+    Vec3 origin{};
+    Vec3 direction{0.f, 0.f, -1.f};
+    bool shift = false;
+    bool ctrl = false;
+    bool alt = false;
 };
 
 // The plugins' toolbars, buttons, and signals, which plugin scripts make and
@@ -74,6 +91,27 @@ public:
     // Queues Click. False for a button that is gone or disabled.
     bool click(std::uint32_t button);
 
+    // The active plugin, which has the Scene View's left button to itself and
+    // whose mouse hears the view. At most one; activating another, or this
+    // one going, fires the last one's Deactivation.
+    void activate(std::uint32_t serial);
+    // Fires its Deactivation when serial is the active one.
+    void deactivate(std::uint32_t serial);
+    void deactivate_all();
+    std::uint32_t active() const { return active_; }
+    std::uint32_t deactivation_key(std::uint32_t serial) const;
+    // True while a plugin is active. Any thread may read it: the Scene View
+    // keeps the left button from the game's input while it is set.
+    bool mouse_held() const { return held_.load(); }
+    // Moves each time a plugin is activated, so the Scene View can tell that
+    // one took over from its own tools.
+    std::uint64_t activations() const { return activations_.load(); }
+
+    // The last mouse event's state, and the key of each mouse signal of serial's mouse.
+    void mouse_event(const PluginMouseEvent& event);
+    const PluginMouseEvent& mouse() const { return mouse_; }
+    std::uint32_t mouse_key(std::uint32_t serial, PluginMouseEvent::Kind kind) const;
+
     // Null for a key that is gone.
     Signal* signal(std::uint32_t key);
     // Moves at every change to what toolbars() returns.
@@ -83,11 +121,16 @@ public:
     std::vector<PluginToolbarState> toolbars() const;
 
 private:
+    static constexpr int kMouseSignals = 7;
     struct Plugin {
         std::string name;
         bool builtin = false;
         std::uint32_t unloading = 0;
+        std::uint32_t deactivation = 0;
+        // By PluginMouseEvent::Kind.
+        std::uint32_t mouse[kMouseSignals] = {};
     };
+    void emit(std::uint32_t key);
     struct Toolbar {
         std::uint32_t serial = 0;
         PluginToolbarState state;
@@ -106,6 +149,10 @@ private:
     std::map<std::uint32_t, std::unique_ptr<Signal>> signals_;
     std::uint32_t next_id_ = 1;
     std::uint64_t revision_ = 1;
+    std::uint32_t active_ = 0;
+    std::atomic<bool> held_{false};
+    std::atomic<std::uint64_t> activations_{0};
+    PluginMouseEvent mouse_;
 };
 
 // True for "icons/<file>": under the studio's icons folder, with no "..",

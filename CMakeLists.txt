@@ -129,6 +129,7 @@ set(STUDIO_SOURCES
     src/ide/EditorFont.cpp
     src/ide/IdeLayout.cpp
     src/ide/PluginRibbon.cpp
+    src/ide/PluginWidgetPane.cpp
     src/ide/IdeLayoutDocking.cpp
     src/ide/IdeLayoutEditing.cpp
     src/ide/IdeLayoutMcp.cpp

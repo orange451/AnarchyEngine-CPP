@@ -12,7 +12,9 @@
 #include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -33,6 +35,7 @@ class GameView;
 namespace ide {
 
 class PluginRibbon;
+class PluginWidgetPane;
 
 class IdeDock;
 class IdePane;
@@ -197,8 +200,22 @@ public:
     void poll_plugins(bool now);
     // Shows the plugins' toolbars on the Plugins tab when they changed.
     void refresh_plugin_ribbon();
+    // Makes, titles, opens, closes, and drops the plugins' dock widget pages to
+    // match their DockWidgets, once a frame. A page the user closes clears its
+    // widget's Enabled.
+    void sync_plugin_widgets();
+    // Closes the tab showing page. False when none does.
+    bool close_page(IdePane* page);
+    // The Window menu's Plugins submenu, made again when its widgets change.
+    void fill_plugins_menu();
     // The tabbed ribbon, for tests.
     PluginRibbon* plugin_ribbon_for_tests() const { return plugin_ribbon_; }
+    // A page by the name layout.json knows it by, or null; whether it is docked;
+    // and closing its tab as its close button does. For tests.
+    IdePane* page_named_for_tests(const std::string& name) { return page_named(name).get(); }
+    bool page_open_for_tests(IdePane* page) const { return page != nullptr && dockContaining(page) != nullptr; }
+    void close_page_for_tests(IdePane* page) { close_page(page); }
+    const void* dock_of_for_tests(IdePane* page) const { return dockContaining(page); }
     // Writes the paused profiler's history as a page a browser shows. False, with why.
     bool save_profile_capture(const std::filesystem::path& file, std::string& error);
     // Writes the layout to layout.json in the config folder. A close request
@@ -672,6 +689,24 @@ private:
     // The ribbon, and the PluginUi revision its Plugins tab last showed.
     PluginRibbon* plugin_ribbon_ = nullptr;
     std::uint64_t plugin_ui_revision_ = 0;
+    // A plugin dock widget's page, by its pane name, and what the last frame saw of it.
+    struct PluginWidget {
+        engine_core::InstanceId id = 0;
+        WindowEntry* entry = nullptr;
+        std::shared_ptr<PluginWidgetPane> pane;
+        std::string title;
+        bool enabled = false;
+        bool docked = false;
+        // Enabled as the studio asked the simulation to set it, until the widget has it.
+        std::optional<bool> asked;
+    };
+    std::map<std::string, PluginWidget> plugin_widgets_;
+    // Where a plugin page was docked when it went, by pane name: from a layout.json
+    // read before its plugin loaded, or from its plugin unloading. Used once, and only
+    // while that dock is still in docks_.
+    std::unordered_map<std::string, IdeDock*> plugin_docks_;
+    jadefx::Menu* plugins_menu_ = nullptr;
+    std::string plugins_menu_shown_;
     std::unordered_map<std::string, std::vector<int>> script_folds_;
     std::filesystem::path fold_file_;
     // The open project. Null until Open or Save As.

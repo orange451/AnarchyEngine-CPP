@@ -1,10 +1,12 @@
 #include "ide/IdeLayout.hpp"
+#include "ide/IdePane.hpp"
 #include "ide/PluginLoader.hpp"
 #include "ide/PluginRibbon.hpp"
 
 #include "DataModel.hpp"
 #include "Engine.hpp"
 #include "Folder.hpp"
+#include "Gui.hpp"
 #include "Script.hpp"
 #include "ScriptRuntime.hpp"
 
@@ -151,6 +153,71 @@ int RunPluginsTests() {
         layout.poll_plugins(true);
         frames(2);
         Expect(ribbon->buttonNode(buttonId) == nullptr, "unloading the plugin takes its toolbar away");
+
+        // A dock widget is a studio page drawing the plugin's GUI, and closing it clears Enabled.
+        const engine_core::InstanceId widgetTool =
+            MakeToolFolder(engine, "Widget Tool",
+                           "local w = plugin:CreateDockWidget('Panel', {Title = 'Widget Tool', Enabled = true})\n"
+                           "local label = Instance.new('Label') label.Name = 'Hello' label.Text = 'Hello' label.Parent = w\n"
+                           "_G.widget = w");
+        layout.save_as_plugin(widgetTool);
+        frames(4);
+        const char* const paneName = "plugin:Widget Tool/Panel";
+        ide::IdePane* page = layout.page_named_for_tests(paneName);
+        Expect(page != nullptr, "the widget is a studio page named plugin:<plugin>/<id>");
+        Expect(page != nullptr && page->title() == "Widget Tool", "the page shows the widget's Title");
+        Expect(page != nullptr && page->getElementById("Hello") != nullptr, "the plugin's GUI is drawn in the page");
+        Expect(layout.page_open_for_tests(page), "Enabled = true opens it");
+
+        layout.close_page_for_tests(page);
+        frames(3);
+        auto widgetEnabled = [&] {
+            bool enabled = true;
+            engine.on_simulation([&](engine_core::DataModel& game) {
+                for (engine_core::InstanceId id : game.get_children(game.core())) {
+                    if (game.name(id) == "Widget Tool") {
+                        const auto* widget = dynamic_cast<const engine_core::DockWidget*>(
+                            game.instance(game.find_first_child(id, "Panel")));
+                        enabled = widget != nullptr && widget->enabled();
+                    }
+                }
+            });
+            return enabled;
+        };
+        Expect(!widgetEnabled(), "closing the page sets Enabled to false");
+        Expect(!layout.page_open_for_tests(page), "and it stays closed");
+
+        // Setting Enabled opens it again, with the GUI as the plugin changed it.
+        engine.on_simulation([&](engine_core::DataModel& game) {
+            for (engine_core::InstanceId id : game.get_children(game.core())) {
+                if (game.name(id) == "Widget Tool") {
+                    auto* widget =
+                        dynamic_cast<engine_core::DockWidget*>(game.instance(game.find_first_child(id, "Panel")));
+                    if (widget != nullptr) {
+                        widget->set_enabled(true);
+                        game.destroy(game.find_first_child(widget->id(), "Hello"));
+                    }
+                }
+            }
+        });
+        frames(3);
+        page = layout.page_named_for_tests(paneName);
+        Expect(layout.page_open_for_tests(page), "Enabled = true opens the page again");
+        Expect(page != nullptr && page->getElementById("Hello") == nullptr, "GUI the plugin destroyed leaves the page");
+
+        // Saving again reloads the plugin; its page comes back in the same dock.
+        const void* dockBefore = layout.dock_of_for_tests(page);
+        layout.save_as_plugin(widgetTool);
+        frames(4);
+        ide::IdePane* reloaded = layout.page_named_for_tests(paneName);
+        Expect(layout.page_open_for_tests(reloaded), "a reload opens the page again");
+        Expect(dockBefore != nullptr && layout.dock_of_for_tests(reloaded) == dockBefore, "in the dock it was in");
+
+        // Deleting the plugin takes the page away.
+        std::filesystem::remove(config / "plugins" / "Widget Tool.aeplugin");
+        layout.poll_plugins(true);
+        frames(3);
+        Expect(layout.page_named_for_tests(paneName) == nullptr, "unloading the plugin removes its page");
     }
     std::error_code error;
     std::filesystem::remove_all(config, error);

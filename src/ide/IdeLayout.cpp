@@ -568,6 +568,7 @@ void IdeLayout::flushFrame() {
     }
     poll_plugins(false);
     refresh_plugin_ribbon();
+    sync_plugin_widgets();
     refresh_modified();
     // A tab that is not showing, or a closed page kept for reopening, is not
     // laid out, so Problems would stop counting. Its tick keeps the list and

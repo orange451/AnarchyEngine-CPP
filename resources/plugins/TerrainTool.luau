@@ -445,7 +445,7 @@ end
 
 local widget = plugin:CreateDockWidget("Terrain", {
 	Title = "Terrain",
-	InitialDock = "TopRight",
+	InitialDock = "BottomLeft",
 	Enabled = false,
 	Width = 220,
 	Height = 220,

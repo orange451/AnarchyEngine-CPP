@@ -169,7 +169,7 @@ public:
     // File > New: stops a running simulation, destroys every instance, gives the
     // root a fresh GUID, captures the empty place, and drops undo history.
     static void reset_place(DataModel& game);
-    // The Camera a new place starts with, in Workspace: 3 up and 7 back from
+    // The Camera a new place starts with, in Workspace: 9 up and 21 back from
     // the origin, looking at it, 60 degrees high: the view the Scene View had
     // before there were Cameras. create and reset_place add it. Returns its id.
     static InstanceId add_default_camera(DataModel& game);

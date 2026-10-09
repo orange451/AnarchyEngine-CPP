@@ -1539,7 +1539,7 @@ void Project::reset_place(DataModel& game) {
 
 InstanceId Project::add_default_camera(DataModel& game) {
     Camera& camera = game.create<Camera>();
-    camera.set_transform(matrix4_look_at(Vec3{0.f, 3.f, 7.f}, Vec3{0.f, 0.f, 0.f}, Vec3{0.f, 1.f, 0.f}));
+    camera.set_transform(matrix4_look_at(Vec3{0.f, 9.f, 21.f}, Vec3{0.f, 0.f, 0.f}, Vec3{0.f, 1.f, 0.f}));
     camera.set_field_of_view(Camera::kNewPlaceFieldOfView);
     game.set_parent(camera.id(), game.scene_service("Workspace"));
     return camera.id();

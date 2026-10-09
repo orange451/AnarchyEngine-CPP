@@ -26,6 +26,13 @@
 | Tests | Nothing tests "an edit's chunks show together" any more (LT13's hold hook). The 64-thread "lod edit ... held" check and LT15 are flaky under load. The render check never shows levels 4–5. |
 | Performance | Every node-list change republishes the whole list (about 8.4 ms per edit on a 4 km tree). In-view uploads have no per-frame cap. `discard` in terrain.frag may turn off early depth for terrain. A chunk whose build keeps throwing is retried every physics step. |
 
+## Physics scaling (from the lag fix, f202bca)
+
+| Item | Notes |
+| --- | --- |
+| Hundreds of rigid bodies | Collider interest is incremental now, but each substep still runs 27 lookups per occupied chunk (`build_colliders_now`) even when nothing moved. Plan: remember each body's last chunk and check the ground only when it changes or is not built; add a 500-body stress benchmark with a terrain budget (about 0.5 ms a step, Release). |
+| Fallen parts | Bodies that roll off the island fall forever through empty chunks. Consider `Workspace.FallenPartsDestroyHeight` (Roblox's default is -500). |
+
 ## Earlier terrain notes
 
 - Terrain.png and some effect icons are missing from the Explorer.

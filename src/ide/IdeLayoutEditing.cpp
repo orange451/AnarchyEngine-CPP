@@ -313,6 +313,36 @@ void IdeLayout::duplicate(const std::vector<std::uint32_t>& ids) {
     });
 }
 
+void IdeLayout::group(const std::vector<std::uint32_t>& ids) {
+    if (ids.empty()) {
+        return;
+    }
+    runner_.simulation().on_simulation([this, alive = std::weak_ptr<int>(alive_), ids](engine_core::DataModel& world) {
+        // A selected child goes along with its selected parent.
+        const std::vector<engine_core::InstanceId> tops = cut_set(world, ids);
+        if (tops.empty()) {
+            return;
+        }
+        ScopedRecording step(world, "Group");
+        std::string error;
+        const engine_core::InstanceId folder = insert_instance(world, "Folder", world.parent(tops.front()), error);
+        if (folder == 0) {
+            toast_later(this, alive, std::move(error));
+            return;
+        }
+        std::string refused;
+        if (!move_set(world, tops, folder, &refused)) {
+            world.destroy(folder);
+            toast_later(this, alive, std::move(refused));
+            return;
+        }
+        world.selection().set({folder});
+        if (!refused.empty()) {
+            toast_later(this, alive, std::move(refused));
+        }
+    });
+}
+
 void IdeLayout::cut(const std::vector<std::uint32_t>& ids) {
     if (!clip_) {
         return;

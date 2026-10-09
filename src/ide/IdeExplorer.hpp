@@ -78,7 +78,7 @@ struct ExplorerHost {
 // branches leading to matches are open. An empty field shows every row again,
 // with the branches opened or closed as they were before. The × at the
 // field's right end empties it, and is greyed out while there is nothing to clear. Escape in the field, or the X, moves the keys
-// to the tree. Escape there clears the selection.
+// to the tree. Escape there clears the selection, as it does anywhere in the studio.
 class IdeExplorer : public IdePane {
 public:
     IdeExplorer(engine_core::DataModel& root, std::string name, ExplorerHost host);
@@ -94,7 +94,6 @@ public:
 
 protected:
     void layoutChildren() override;
-    void handleKey(jadefx::KeyEvent& event) override;
 
 private:
     // Preorder encoding of the live hierarchy. ids[0] is the explorer root.

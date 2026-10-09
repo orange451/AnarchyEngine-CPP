@@ -103,6 +103,14 @@ struct Rig {
         explorer->setPrefWidthRatio(1);
         explorer->setPrefHeightRatio(1);
         scene = jadefx::make<jadefx::Scene>(explorer, kWidth, kHeight);
+        // Stands in for the studio, whose Escape clears the selection from any
+        // pane once the focused one leaves the key.
+        scene->addFallbackKeyHook([this](jadefx::KeyEvent& event) {
+            if (event.pressed && event.key == jadefx::Key::Escape && !game.selection().get().empty()) {
+                game.selection().set({});
+                event.consume();
+            }
+        });
         frame(0);
     }
 

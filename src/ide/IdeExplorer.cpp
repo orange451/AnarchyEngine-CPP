@@ -831,17 +831,6 @@ void IdeExplorer::poll_filter() {
     reveal_wanted_ = true;
 }
 
-void IdeExplorer::handleKey(jadefx::KeyEvent& event) {
-    // Keys bubble here from the tree. The filter and the rename field keep their Escape.
-    if (event.pressed && !event.repeat && event.key == jadefx::Key::Escape && !event.shift && !event.alt &&
-        !event.shortcut() && !selected_.empty()) {
-        event.consume();
-        write_selection({});
-        return;
-    }
-    IdePane::handleKey(event);
-}
-
 void IdeExplorer::leave_filter() {
     if (filter_field_->isFocused()) {
         if (jadefx::Scene* scene = getScene()) {

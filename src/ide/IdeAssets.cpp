@@ -722,16 +722,9 @@ void IdeAssets::handleKey(jadefx::KeyEvent& event) {
         return !host_.actions.enabled || host_.actions.enabled(action);
     };
     const int key = event.key;
-    if (plain && (key == jadefx::Key::Delete || key == jadefx::Key::Backspace) && !ids.empty()) {
-        if (host_.actions.run_many && enabled(InstanceAction::Delete)) {
-            host_.actions.run_many(InstanceAction::Delete, ids);
-        }
-        event.consume();
-    } else if (plain && (key == jadefx::Key::Enter || key == jadefx::Key::KpEnter) && ids.size() == 1) {
+    // Delete, Cut, Copy, Group, and Escape are the studio's, on the selection, wherever the keyboard is.
+    if (plain && (key == jadefx::Key::Enter || key == jadefx::Key::KpEnter) && ids.size() == 1) {
         beginRename(ids.front());
-        event.consume();
-    } else if (plain && key == jadefx::Key::Escape && !world_.selection().get().empty()) {
-        world_.selection().set({});
         event.consume();
     } else if (event.shortcut() && key == jadefx::Key::Up) {
         // Up one level, but not above the category. The crumbs walk the tree, so under the read lock.
@@ -753,13 +746,8 @@ void IdeAssets::handleKey(jadefx::KeyEvent& event) {
             }
         }
         event.consume();
-    } else if (event.shortcut() && !event.shift && key == jadefx::Key::X && !ids.empty()) {
-        if (host_.actions.run_many && enabled(InstanceAction::Cut)) {
-            host_.actions.run_many(InstanceAction::Cut, ids);
-        }
-        event.consume();
     } else if (event.shortcut() && !event.shift && key == jadefx::Key::V) {
-        // Paste from the keyboard goes into the folder shown.
+        // Paste from the keyboard goes into the folder shown, not beside the selection.
         if (host_.actions.run && enabled(InstanceAction::Paste)) {
             host_.actions.run(InstanceAction::Paste, browser_.folder());
         }

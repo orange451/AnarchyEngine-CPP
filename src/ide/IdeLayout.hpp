@@ -203,6 +203,7 @@ private:
     void cut(const std::vector<std::uint32_t>& ids);
     void copy(const std::vector<std::uint32_t>& ids);
     void duplicate(const std::vector<std::uint32_t>& ids);
+    void group(const std::vector<std::uint32_t>& ids);
     std::vector<int> recall_folds(const std::string& guid);
     void remember_folds(const std::string& guid, const std::vector<int>& lines);
     void sync_fold_file();
@@ -318,17 +319,27 @@ private:
     void export_saved_game();
     void reapply_editors();
     void restore_closed_edits();
-    // The keys every studio window routes the same way, in this order.
+    // The keys every studio window routes the same way, in this order, before the focused pane sees them.
     void routeKeys(jadefx::KeyEvent& event, jadefx::Scene& scene);
+    // The place's keys, on the selection, from anywhere in a studio window. They
+    // run after the focused pane left the key, so a script editor, a text field,
+    // the Scene View's tools, and an editor with its own selection come first.
+    void routePlaceKeys(jadefx::KeyEvent& event, jadefx::Scene& scene);
+    // Whether the place's keys act with focused holding the keyboard.
+    bool placeKeysAt(jadefx::Node* focused) const;
     void routeUndo(jadefx::KeyEvent& event, jadefx::Scene& scene);
-    // Delete on a focused explorer deletes the selected instances. Text fields keep the key.
-    void routeDelete(jadefx::KeyEvent& event, jadefx::Scene& scene);
-    // F, outside a text field, shows the selection in every explorer.
-    void routeReveal(jadefx::KeyEvent& event, jadefx::Scene& scene);
+    // Delete deletes the selected instances.
+    void routeDelete(jadefx::KeyEvent& event);
+    // F shows the selection in every explorer.
+    void routeReveal(jadefx::KeyEvent& event);
+    // Escape clears the selection.
+    void routeDeselect(jadefx::KeyEvent& event);
     // Cmd+Shift+F and Cmd+Shift+H in a window whose menu bar does not take them.
     void routeSearch(jadefx::KeyEvent& event, jadefx::Scene& scene);
     void routeZoom(jadefx::KeyEvent& event);
-    void routeClipboard(jadefx::KeyEvent& event, jadefx::Scene& scene);
+    void routeClipboard(jadefx::KeyEvent& event);
+    // Ctrl+G groups the selection in a Folder.
+    void routeGroup(jadefx::KeyEvent& event);
     // Zooms the studio and remembers it. announce shows a toast with the new
     // zoom; the status bar's slider, which shows it already, does not.
     void set_zoom(double zoom, bool announce = true);

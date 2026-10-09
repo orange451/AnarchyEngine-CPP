@@ -1,4 +1,6 @@
 #include "IdeLayout.hpp"
+
+#include "IdeTerrainEditor.hpp"
 #include "runner/ProfilerOverlay.hpp"
 #include "runner/UiFrameProfile.hpp"
 
@@ -436,6 +438,11 @@ void IdeLayout::mount(jadefx::Scene& scene) {
             routeKeys(event, *scene_);
         }
     });
+    scene.addFallbackKeyHook([this](jadefx::KeyEvent& event) {
+        if (scene_ != nullptr) {
+            routePlaceKeys(event, *scene_);
+        }
+    });
     for (auto& [text, seconds] : pending_toasts_) {
         show_toast(std::move(text), seconds);
     }
@@ -604,11 +611,31 @@ IdeLayout::~IdeLayout() {
 
 void IdeLayout::routeKeys(jadefx::KeyEvent& event, jadefx::Scene& scene) {
     routeUndo(event, scene);
-    routeDelete(event, scene);
-    routeClipboard(event, scene);
-    routeReveal(event, scene);
     routeSearch(event, scene);
     routeZoom(event);
+}
+
+bool IdeLayout::placeKeysAt(jadefx::Node* focused) const {
+    if (InTextWidget(focused)) {
+        return false;
+    }
+    // These keep their own selection, which the place's keys do not reach.
+    if (Owning<IdePrefabEditor>(focused) != nullptr || Owning<IdeTerrainEditor>(focused) != nullptr) {
+        return false;
+    }
+    // During a test the Scene View's keys are the game's, so a script reading F hears it.
+    return !(in_test() && Owning<runner::GameView>(focused) != nullptr);
+}
+
+void IdeLayout::routePlaceKeys(jadefx::KeyEvent& event, jadefx::Scene& scene) {
+    if (!event.pressed || event.consumed || !placeKeysAt(scene.focusedNode())) {
+        return;
+    }
+    routeDelete(event);
+    routeClipboard(event);
+    routeGroup(event);
+    routeReveal(event);
+    routeDeselect(event);
 }
 
 void IdeLayout::routeZoom(jadefx::KeyEvent& event) {
@@ -641,8 +668,8 @@ void IdeLayout::set_zoom(double zoom, bool announce) {
     }
 }
 
-void IdeLayout::routeDelete(jadefx::KeyEvent& event, jadefx::Scene& scene) {
-    if (!event.pressed || event.consumed || event.shortcut() || event.alt) {
+void IdeLayout::routeDelete(jadefx::KeyEvent& event) {
+    if (event.consumed || event.shortcut() || event.alt || event.shift) {
         return;
     }
     // The Mac keyboard's Delete key is Backspace.
@@ -651,19 +678,18 @@ void IdeLayout::routeDelete(jadefx::KeyEvent& event, jadefx::Scene& scene) {
 #else
     const bool key = event.key == jadefx::Key::Delete;
 #endif
-    jadefx::Node* focused = scene.focusedNode();
-    if (!key || InTextWidget(focused)) {
+    if (!key) {
         return;
     }
-    if (IdeExplorer* explorer = Owning<IdeExplorer>(focused)) {
-        if (explorer->run_on_selection(engine_core::InstanceAction::Delete)) {
-            event.consume();
-        }
+    std::vector<engine_core::InstanceId> selected = runner_.simulation().datamodel().selection().get();
+    if (!selected.empty()) {
+        delete_instances(std::move(selected));
+        event.consume();
     }
 }
 
-void IdeLayout::routeClipboard(jadefx::KeyEvent& event, jadefx::Scene& scene) {
-    if (!event.pressed || event.repeat || event.consumed || !event.shortcut() || event.alt) {
+void IdeLayout::routeClipboard(jadefx::KeyEvent& event) {
+    if (event.repeat || event.consumed || !event.shortcut() || event.alt) {
         return;
     }
     const int key = event.key;
@@ -672,10 +698,6 @@ void IdeLayout::routeClipboard(jadefx::KeyEvent& event, jadefx::Scene& scene) {
     }
     // Shift only changes V: Paste goes beside the selection, Shift+Paste into it.
     if (event.shift && key != jadefx::Key::V) {
-        return;
-    }
-    jadefx::Node* focused = scene.focusedNode();
-    if (InTextWidget(focused) || Owning<IdeExplorer>(focused) == nullptr) {
         return;
     }
     const std::vector<engine_core::InstanceId> selected = runner_.simulation().datamodel().selection().get();
@@ -693,13 +715,21 @@ void IdeLayout::routeClipboard(jadefx::KeyEvent& event, jadefx::Scene& scene) {
     event.consume();
 }
 
-void IdeLayout::routeReveal(jadefx::KeyEvent& event, jadefx::Scene& scene) {
-    if (!event.pressed || event.repeat || event.consumed || event.key != jadefx::Key::F || event.shift ||
-        event.alt || event.control || event.meta || InTextWidget(scene.focusedNode())) {
+void IdeLayout::routeGroup(jadefx::KeyEvent& event) {
+    if (event.repeat || event.consumed || !event.shortcut() || event.shift || event.alt ||
+        event.key != jadefx::Key::G) {
         return;
     }
-    // During a test the Scene View's keys are the game's, so a script reading F hears it.
-    if (in_test() && Owning<runner::GameView>(scene.focusedNode()) != nullptr) {
+    const std::vector<engine_core::InstanceId> selected = runner_.simulation().datamodel().selection().get();
+    if (!selected.empty()) {
+        group(selected);
+        event.consume();
+    }
+}
+
+void IdeLayout::routeReveal(jadefx::KeyEvent& event) {
+    if (event.repeat || event.consumed || event.key != jadefx::Key::F || event.shift || event.alt ||
+        event.control || event.meta) {
         return;
     }
     bool any = false;
@@ -711,6 +741,18 @@ void IdeLayout::routeReveal(jadefx::KeyEvent& event, jadefx::Scene& scene) {
         }
     }
     if (any) {
+        event.consume();
+    }
+}
+
+void IdeLayout::routeDeselect(jadefx::KeyEvent& event) {
+    if (event.repeat || event.consumed || event.key != jadefx::Key::Escape || event.shortcut() || event.shift ||
+        event.alt) {
+        return;
+    }
+    engine_core::SelectionService& selection = runner_.simulation().datamodel().selection();
+    if (!selection.get().empty()) {
+        selection.set({});
         event.consume();
     }
 }

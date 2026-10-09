@@ -1279,6 +1279,7 @@ jadefx::UtilityWindow* IdeLayout::open_floating(const std::string& title, int wi
     scene->setStylesheet(kStylesheet);
     jadefx::Scene* utilityScene = scene.get();
     scene->addKeyHook([this, utilityScene](jadefx::KeyEvent& event) { routeKeys(event, *utilityScene); });
+    scene->addFallbackKeyHook([this, utilityScene](jadefx::KeyEvent& event) { routePlaceKeys(event, *utilityScene); });
     window->stage().setScene(std::move(scene));
     LeaveFieldsOnEscape(window->stage());
     window->setCanClose([this, raw = window.get()]() {

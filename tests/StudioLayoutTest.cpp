@@ -673,6 +673,35 @@ int main() {
                 frame();
                 expect(view->isFocused(), "a click selects the Scene View again");
 
+                // The selection is the place's, not a pane's: Escape clears it from any of them.
+                {
+                    engine_core::DataModel& placed = layout.simulation().datamodel();
+                    auto escape_clears = [&](const char* where) {
+                        placed.selection().set({placed.scene_service("Workspace")});
+                        frame();
+                        scene->noteKey(jadefx::Key::Escape, true, false, 0);
+                        scene->noteKey(jadefx::Key::Escape, false, false, 0);
+                        frame();
+                        const std::string said = std::string("Escape clears the selection from ") + where;
+                        expect(placed.selection().get().empty(), said.c_str());
+                    };
+                    escape_clears("the Scene View");
+                    expect(view->isFocused(), "Escape that clears the selection leaves the Scene View selected");
+                    for (const char* name : {"Properties", "Assets", "Game Explorer"}) {
+                        if (jadefx::Node* pane = showing(name)) {
+                            const double px = pane->getAbsoluteX() + pane->getWidth() - 6;
+                            const double py = pane->getAbsoluteY() + pane->getHeight() - 6;
+                            scene->noteButton(0, true, px, py);
+                            scene->noteButton(0, false, px, py);
+                            frame();
+                            escape_clears(name);
+                        }
+                    }
+                    scene->noteButton(0, true, x, y);
+                    scene->noteButton(0, false, x, y);
+                    frame();
+                }
+
                 // F reveals the selection in the explorers, but during a test
                 // the Scene View's keys are the game's: a script reading F
                 // hears it even with something selected.

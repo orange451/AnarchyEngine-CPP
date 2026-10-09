@@ -453,10 +453,10 @@ void rename_delete_cut_paste() {
     Expect(!rig.editing(), "Enter closes the field");
 
     rig.clickItem(rig.brick, 1.0);
-    rig.key(jadefx::Key::Delete);
-    Expect(!rig.batches.empty() && rig.batches.back().first == "Delete" &&
-               rig.batches.back().second == std::vector<InstanceId>{rig.brick},
-           "Delete deletes the selection");
+    // Delete is the studio's, on the selection wherever the keyboard is; the pane passes it on.
+    const std::size_t before = rig.batches.size();
+    Expect(!rig.scene->noteKey(jadefx::Key::Delete, true, false, 0) && rig.batches.size() == before,
+           "the pane leaves Delete to the studio");
 
     rig.rightClickItem(rig.brick, 2.0);
     Expect(rig.menuItem("Rename") != nullptr && rig.menuItem("Delete") != nullptr, "an item's menu");
@@ -492,8 +492,9 @@ void rename_delete_cut_paste() {
     rig.clickItem(rig.brick, 7.5);
     rig.frame(7.6);
     Expect(!rig.editing() && rig.renames.size() == 1, "a click elsewhere drops the rename");
-    rig.key(jadefx::Key::Escape);
-    Expect(rig.game.selection().get().empty(), "Escape clears the selection");
+    // Escape that clears the selection is the studio's too.
+    Expect(!rig.scene->noteKey(jadefx::Key::Escape, true, false, 0) && !rig.game.selection().get().empty(),
+           "the pane leaves Escape to the studio");
 }
 
 void refused_drop_says_why() {

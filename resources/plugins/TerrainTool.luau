@@ -1,9 +1,11 @@
--- The studio's terrain tools, one group on the Home tab: Add drags a box on the
--- grid floor, Grow raises the ground under a ball at the pointer (Shift lowers
--- it), Smooth evens it out, and Paint sets its material (Shift: the default).
+-- The studio's terrain tools, one group on the Home tab: Add draws a box on the
+-- grid as the Brushes tool does (drag the footprint, let go, move to set the
+-- height, click to fill; Shift keeps it square, then a cube; Alt ends the
+-- footprint early), Grow raises the ground under a ball at the pointer (Shift
+-- lowers it), Smooth evens it out, and Paint sets its material (Shift: the default).
 -- They edit the selected Terrain, else the first one in Workspace, while the
 -- place is not playing. Each stroke is one undo step. The Terrain pane holds
--- the size, strength, and material. Turning on another tool, or Play, turns
+-- the size, strength, grid, and material. Turning on another tool, or Play, turns
 -- them off.
 local RunService = game:GetService("RunService")
 local Selection = game:GetService("Selection")
@@ -18,7 +20,7 @@ local ICONS = {
 	Paint = "icons/paint-brush.png",
 }
 local TIPS = {
-	Add = "Drag a box of terrain on the grid floor",
+	Add = "Drag a footprint, let go, move to set the height, click to fill (Shift: square, then cube)",
 	Grow = "Raise the terrain under the pointer (Shift: lower it)",
 	Smooth = "Even out the terrain under the pointer",
 	Paint = "Paint the terrain under the pointer (Shift: the default material)",
@@ -46,15 +48,50 @@ local held = false
 -- Seconds since the held stroke last applied.
 local sinceApply = 0
 local recording: string? = nil
--- Add: the drag's corners on the grid floor (y = 0).
-local boxStart: Vector3? = nil
-local boxEnd = Vector3.zero
+-- Add draws a box as the Brushes tool does: drag its footprint on the plane
+-- of the surface pressed (or the ground), let go, move to set its height,
+-- and click to fill it. All on the grid.
+local GRIDS = { 1, 2, 4, 8, 16 }
+local grid = 4
+-- nil, "Drawing" (the footprint), or "Height".
+local drawing: string? = nil
+-- The plane drawn on: its axis (1 X, 2 Y, 3 Z), which way it faces, and a point on it.
+local planeAxis, planeSign = 2, 1
+local planePoint = Vector3.zero
+local drawStart = Vector3.zero
+local drawEnd = Vector3.zero
+local height = 0
+local lastHeight = 4
 
 local wire = Instance.new("WireframeAdornment")
 wire.Name = "TerrainToolCursor"
 wire.Color3 = CURSOR
 wire.Visible = false
 wire.Parent = Core
+local gridWire = Instance.new("WireframeAdornment")
+gridWire.Name = "TerrainToolGrid"
+gridWire.Color3 = Color3.new(0.75, 0.8, 0.9)
+gridWire.Transparency = 0.8
+gridWire.Visible = false
+gridWire.Parent = Core
+
+-- The box's size, by the pointer, while Add draws.
+local readoutAnchor = Instance.new("Attachment")
+readoutAnchor.Name = "TerrainToolReadout"
+readoutAnchor.Parent = Core
+local readout = Instance.new("BillboardGui")
+readout.AlwaysOnTop = true
+-- Under the pointer, it must not take the clicks meant for the view.
+readout.MouseTransparent = true
+readout.Visible = false
+readout.Adornee = readoutAnchor
+readout.Parent = Core
+local readoutText = Instance.new("Label")
+readoutText.FontSize = 12
+readoutText.MouseTransparent = true
+readoutText.TextColor = Color3.new(1, 0.84, 0.47)
+readoutText.Style = "background-color: rgba(20, 22, 26, 0.85); padding: 2px 6px; border-radius: 4px;"
+readoutText.Parent = readout
 
 -- The Terrain the tools edit: the selected one, else the first in Workspace.
 local function terrain(): Terrain?
@@ -121,17 +158,194 @@ local function pick()
 	end
 end
 
--- Where the pointer's ray meets the grid floor, or nil.
-local function on_floor(): Vector3?
-	local r = ray()
-	if math.abs(r.Direction.Y) < 1e-5 then
+-- Add's box -------------------------------------------------------------------
+
+local function axis_of(v: Vector3, axis: number): number
+	return axis == 1 and v.X or (axis == 2 and v.Y or v.Z)
+end
+
+local function with_axis(v: Vector3, axis: number, value: number): Vector3
+	if axis == 1 then
+		return Vector3.new(value, v.Y, v.Z)
+	elseif axis == 2 then
+		return Vector3.new(v.X, value, v.Z)
+	end
+	return Vector3.new(v.X, v.Y, value)
+end
+
+local function axis_vec(axis: number, s: number?): Vector3
+	return with_axis(Vector3.zero, axis, s or 1)
+end
+
+-- The world axis a normal lies most along.
+local function nearest_axis(n: Vector3): number
+	local ax, ay, az = math.abs(n.X), math.abs(n.Y), math.abs(n.Z)
+	if ax > ay and ax > az then
+		return 1
+	end
+	return az > ay and 3 or 2
+end
+
+local function snap(x: number): number
+	return math.round(x / grid) * grid
+end
+
+local function snap_vec(v: Vector3): Vector3
+	return Vector3.new(snap(v.X), snap(v.Y), snap(v.Z))
+end
+
+-- Where the ray meets the plane through point with normal; nil when parallel or behind.
+local function ray_plane(r: Ray, point: Vector3, normal: Vector3): Vector3?
+	local denom = r.Direction:Dot(normal)
+	if math.abs(denom) < 1e-6 then
 		return nil
 	end
-	local t = -r.Origin.Y / r.Direction.Y
+	local t = (point - r.Origin):Dot(normal) / denom
 	if t <= 0 then
 		return nil
 	end
 	return r.Origin + r.Direction * t
+end
+
+-- How far along the line (origin, unit dir) the point nearest the ray is.
+local function ray_line(r: Ray, origin: Vector3, dir: Vector3): number
+	local d = r.Direction.Unit
+	local w = origin - r.Origin
+	local b = dir:Dot(d)
+	local denom = 1 - b * b
+	if denom < 1e-6 then
+		return 0
+	end
+	return (b * d:Dot(w) - dir:Dot(w)) / denom
+end
+
+-- The box's corners, as drawn so far.
+local function box(): (Vector3, Vector3)
+	local far = drawEnd + axis_vec(planeAxis, if drawing == "Height" then planeSign * height else 0)
+	return drawStart:Min(drawEnd):Min(far), drawStart:Max(drawEnd):Max(far)
+end
+
+-- A press begins the footprint: on the plane of whatever surface it hits, else the ground.
+local function begin_draw()
+	local r = ray()
+	-- With no physics to cast against, the ground.
+	local ok, result = pcall(function()
+		return workspace:Raycast(r.Origin, r.Direction * RAY_LENGTH)
+	end)
+	if not ok then
+		result = nil
+	end
+	planeAxis, planeSign = 2, 1
+	if result ~= nil then
+		local n = result.Normal
+		-- A slope draws on a level plane through the point hit.
+		if math.max(math.abs(n.X), math.abs(n.Y), math.abs(n.Z)) >= 0.999 then
+			planeAxis = nearest_axis(n)
+			planeSign = axis_of(n, planeAxis) >= 0 and 1 or -1
+		end
+		planePoint = result.Position
+		-- Onto the grid when it is close: terrain's surface sits a hair off it.
+		local along = axis_of(planePoint, planeAxis)
+		if math.abs(snap(along) - along) < 0.25 then
+			planePoint = with_axis(planePoint, planeAxis, snap(along))
+		end
+	else
+		planePoint = Vector3.zero
+	end
+	local start = ray_plane(r, planePoint, axis_vec(planeAxis))
+	if start == nil then
+		return
+	end
+	drawStart = with_axis(snap_vec(start), planeAxis, axis_of(planePoint, planeAxis))
+	drawEnd = drawStart
+	drawing = "Drawing"
+end
+
+local function update_draw()
+	if mouse.Alt then
+		-- Alt mid-drag: the footprint is done; the pointer sets the height now.
+		drawing = "Height"
+		height = lastHeight
+		return
+	end
+	local at = ray_plane(ray(), planePoint, axis_vec(planeAxis))
+	if at == nil then
+		return
+	end
+	local stop = with_axis(snap_vec(at), planeAxis, axis_of(planePoint, planeAxis))
+	if mouse.Shift then
+		-- Square: the longer side wins.
+		local u = planeAxis % 3 + 1
+		local v = u % 3 + 1
+		local du = axis_of(stop, u) - axis_of(drawStart, u)
+		local dv = axis_of(stop, v) - axis_of(drawStart, v)
+		local side = math.max(math.abs(du), math.abs(dv))
+		stop = with_axis(stop, u, axis_of(drawStart, u) + (du < 0 and -side or side))
+		stop = with_axis(stop, v, axis_of(drawStart, v) + (dv < 0 and -side or side))
+	end
+	drawEnd = stop
+end
+
+local function update_height()
+	local h = ray_line(ray(), drawEnd, axis_vec(planeAxis, planeSign))
+	local value = snap(h)
+	if math.abs(value) < grid then
+		value = h < 0 and -grid or grid
+	end
+	if mouse.Shift then
+		-- A cube: as tall as the footprint's longer side.
+		local u = planeAxis % 3 + 1
+		local v = u % 3 + 1
+		local side = math.max(
+			math.abs(axis_of(drawEnd, u) - axis_of(drawStart, u)),
+			math.abs(axis_of(drawEnd, v) - axis_of(drawStart, v))
+		)
+		value = value < 0 and -side or side
+	end
+	height = value
+end
+
+-- The footprint let go: the height next, or nothing when it has no area.
+local function end_footprint()
+	local d = drawEnd - drawStart
+	local u = planeAxis % 3 + 1
+	local v = u % 3 + 1
+	if math.abs(axis_of(d, u)) < 1e-4 or math.abs(axis_of(d, v)) < 1e-4 then
+		drawing = nil
+		return
+	end
+	drawing = "Height"
+	height = lastHeight
+	update_height()
+end
+
+-- The click that fills the box, as one undo step.
+local function commit_draw()
+	local lo, hi = box()
+	drawing = nil
+	local t = terrain()
+	local extent = hi - lo
+	if t == nil or extent.X < 1e-4 or extent.Y < 1e-4 or extent.Z < 1e-4 then
+		return
+	end
+	lastHeight = math.abs(height)
+	begin_stroke()
+	t:FillBlock(Matrix4.new((lo + hi) / 2), extent, material(t))
+	end_stroke()
+end
+
+-- The grid around the pointer, on the plane drawn on.
+local function grid_patch(center: Vector3)
+	local u = planeAxis % 3 + 1
+	local v = u % 3 + 1
+	local cells = 8
+	local c = with_axis(snap_vec(center), planeAxis, axis_of(center, planeAxis))
+	for i = -cells, cells do
+		local a = with_axis(with_axis(c, u, axis_of(c, u) + i * grid), v, axis_of(c, v) - cells * grid)
+		gridWire:AddLine(a, with_axis(a, v, axis_of(c, v) + cells * grid))
+		local b = with_axis(with_axis(c, v, axis_of(c, v) + i * grid), u, axis_of(c, u) - cells * grid)
+		gridWire:AddLine(b, with_axis(b, u, axis_of(c, u) + cells * grid))
+	end
 end
 
 local function apply_ball()
@@ -158,41 +372,43 @@ local function apply_ball()
 	end
 end
 
-local function apply_box()
-	local start = boxStart
-	boxStart = nil
-	local t = terrain()
-	if start == nil or t == nil then
-		return
-	end
-	local width = math.abs(boxEnd.X - start.X)
-	local depth = math.abs(boxEnd.Z - start.Z)
-	if width < 0.5 or depth < 0.5 then
-		return
-	end
-	local middle = Vector3.new((start.X + boxEnd.X) / 2, size / 2, (start.Z + boxEnd.Z) / 2)
-	begin_stroke()
-	t:FillBlock(Matrix4.new(middle), Vector3.new(width, size, depth), material(t))
-	end_stroke()
-end
-
--- The cursor: a wire ball at the hit, with a tick along the normal, or the box being dragged.
+-- The cursor: a wire ball at the hit, with a tick along the normal, or the box being drawn.
 local function redraw()
 	wire:Clear()
+	gridWire:Clear()
+	readout.Visible = false
 	wire.Visible = active
+	gridWire.Visible = active
 	if not active then
 		return
 	end
 	if tool == "Add" then
-		local start = boxStart
-		if start == nil then
+		if drawing == nil then
 			return
 		end
-		local x0, x1 = math.min(start.X, boxEnd.X), math.max(start.X, boxEnd.X)
-		local z0, z1 = math.min(start.Z, boxEnd.Z), math.max(start.Z, boxEnd.Z)
+		local lo, hi = box()
+		grid_patch(drawEnd)
+		local extent = hi - lo
+		local function n(x: number): string
+			return string.format("%d", math.round(x))
+		end
+		readoutText.Text = if drawing == "Height"
+			then n(extent.X) .. " x " .. n(extent.Y) .. " x " .. n(extent.Z) .. "   click to fill"
+			else n(extent.X) .. " x " .. n(extent.Y) .. " x " .. n(extent.Z)
+		-- Up and to the right of the corner, clear of the pointer.
+		local cam = workspace.CurrentCamera
+		local at = hi
+		if cam ~= nil and cam.ViewportSize.Y > 0 then
+			local frame = cam.Transform
+			local depth = math.max((at - frame.Position):Dot(frame.LookVector), 0.05)
+			local step = 2 * depth * math.tan(math.rad(cam.FieldOfView) / 2) / cam.ViewportSize.Y
+			at += frame.RightVector * (step * 16) + frame.UpVector * (step * 24)
+		end
+		readoutAnchor.Offset = Matrix4.new(at)
+		readout.Visible = true
 		local c = {
-			Vector3.new(x0, 0, z0), Vector3.new(x1, 0, z0), Vector3.new(x1, 0, z1), Vector3.new(x0, 0, z1),
-			Vector3.new(x0, size, z0), Vector3.new(x1, size, z0), Vector3.new(x1, size, z1), Vector3.new(x0, size, z1),
+			Vector3.new(lo.X, lo.Y, lo.Z), Vector3.new(hi.X, lo.Y, lo.Z), Vector3.new(hi.X, lo.Y, hi.Z), Vector3.new(lo.X, lo.Y, hi.Z),
+			Vector3.new(lo.X, hi.Y, lo.Z), Vector3.new(hi.X, hi.Y, lo.Z), Vector3.new(hi.X, hi.Y, hi.Z), Vector3.new(lo.X, hi.Y, hi.Z),
 		}
 		for i = 1, 4 do
 			local j = i % 4 + 1
@@ -271,6 +487,8 @@ local terrainLabel = label("", root)
 local sizeRow = row()
 local sizeLabel: Label
 local strengthRow = row()
+local gridRow = row()
+local gridLabel: Label
 local strengthLabel: Label
 local materialButton: Button
 local hintLabel = label("", root)
@@ -307,6 +525,15 @@ button(strengthRow, "+", function()
 	strength = stepped(STRENGTHS, strength, 1)
 	redraw_pane()
 end)
+button(gridRow, "-", function()
+	grid = stepped(GRIDS, grid, -1)
+	redraw_pane()
+end)
+gridLabel = label("", gridRow)
+button(gridRow, "+", function()
+	grid = stepped(GRIDS, grid, 1)
+	redraw_pane()
+end)
 -- Steps through the Terrain's materials, then the default.
 materialButton = button(root, "", function()
 	local t = terrain()
@@ -326,6 +553,7 @@ function redraw_pane()
 	terrainLabel.Text = if t ~= nil then "Terrain: " .. t.Name else "No Terrain: add one to Workspace"
 	sizeLabel.Text = string.format("Size %d units", size)
 	strengthLabel.Text = string.format("Strength %d%%", math.floor(strength * 100 + 0.5))
+	gridLabel.Text = string.format("Grid %d units", grid)
 	if t ~= nil and material(t) == nil then
 		materialName = ""
 	end
@@ -353,7 +581,7 @@ local function turn_off()
 	end
 	active = false
 	held = false
-	boxStart = nil
+	drawing = nil
 	hit = nil
 	end_stroke()
 	light()
@@ -366,7 +594,7 @@ local function turn_on(which: string)
 		return
 	end
 	tool = which
-	boxStart = nil
+	drawing = nil
 	if not active then
 		active = true
 		plugin:Activate(true)
@@ -418,8 +646,13 @@ mouse.Move:Connect(function()
 		return
 	end
 	if tool == "Add" then
-		if boxStart ~= nil then
-			boxEnd = on_floor() or boxEnd
+		if drawing == "Drawing" then
+			update_draw()
+			if drawing == "Height" then
+				update_height()
+			end
+		elseif drawing == "Height" then
+			update_height()
 		end
 	else
 		pick()
@@ -432,10 +665,11 @@ mouse.Button1Down:Connect(function()
 		return
 	end
 	if tool == "Add" then
-		local at = on_floor()
-		if at ~= nil then
-			boxStart = at
-			boxEnd = at
+		-- The click after the height fills the box; any other press starts one.
+		if drawing == "Height" then
+			commit_draw()
+		else
+			begin_draw()
 		end
 		redraw()
 		return
@@ -453,7 +687,9 @@ mouse.Button1Up:Connect(function()
 		return
 	end
 	if tool == "Add" then
-		apply_box()
+		if drawing == "Drawing" then
+			end_footprint()
+		end
 	elseif held then
 		held = false
 		end_stroke()

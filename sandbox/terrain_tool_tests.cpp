@@ -99,11 +99,12 @@ struct TerrainToolRig {
         FAIL("no DockWidget");
         return false;
     }
-    void mouse(engine_core::PluginMouseEvent::Kind kind, float x, float y) {
+    void mouse(engine_core::PluginMouseEvent::Kind kind, float x, float y, bool shift = false) {
         engine_core::PluginMouseEvent event;
         event.kind = kind;
         event.x = x;
         event.y = y;
+        event.shift = shift;
         // As GameView casts it: from the camera, through the point, 50 points off the middle per 5 units.
         const float dx = (x - 100.f) / 100.f, dz = (y - 100.f) / 100.f;
         const float length = std::sqrt(dx * dx + 1.f + dz * dz);
@@ -152,24 +153,48 @@ TEST_CASE("TB2 a card turns its tool on with the pane; another switches; the lit
     REQUIRE(tools.rig.runtime.plugin_ui().active() == 0);
 }
 
-TEST_CASE("TB3 Add's drag on the floor fills a box as one undo step", "[TB3]") {
+TEST_CASE("TB3 Add draws as the Brushes tool does: a footprint on the grid, then the height, then a click fills it",
+          "[TB3]") {
     TerrainToolRig tools;
     tools.click("Add");
     REQUIRE_FALSE(tools.solid(0, 2, 0));
     using Kind = engine_core::PluginMouseEvent::Kind;
+    // From (-5, 0, -5) to (5, 0, 5) on the ground, which the 4 unit grid makes -4 to 4.
     tools.mouse(Kind::Move, 50, 50);
     tools.mouse(Kind::Button1Down, 50, 50);
     tools.mouse(Kind::Move, 150, 150);
     tools.mouse(Kind::Button1Up, 150, 150);
     INFO(tools.rig.runtime.last_error());
+    // Let go: nothing filled yet, only the height to set.
+    REQUIRE_FALSE(tools.solid(0, 2, 0));
+    // Looking straight down, the height is one grid step.
+    tools.mouse(Kind::Move, 150, 150);
+    tools.mouse(Kind::Button1Down, 150, 150);
+    tools.mouse(Kind::Button1Up, 150, 150);
     REQUIRE(tools.solid(0, 2, 0));
-    REQUIRE(tools.solid(4, 6, 4));
-    REQUIRE_FALSE(tools.solid(0, 10, 0));
-    REQUIRE_FALSE(tools.solid(7, 2, 0));
+    REQUIRE(tools.solid(3, 3, 3));
+    REQUIRE_FALSE(tools.solid(0, 6, 0));
+    REQUIRE_FALSE(tools.solid(5, 2, 0));
     REQUIRE(tools.rig.game.history().can_undo().second == "Sculpt Terrain");
     tools.rig.game.history().undo();
     tools.rig.frames(1);
     REQUIRE_FALSE(tools.solid(0, 2, 0));
+}
+
+TEST_CASE("TB6 Shift while setting Add's height makes the box a cube", "[TB6]") {
+    TerrainToolRig tools;
+    tools.click("Add");
+    using Kind = engine_core::PluginMouseEvent::Kind;
+    tools.mouse(Kind::Move, 50, 50);
+    tools.mouse(Kind::Button1Down, 50, 50);
+    tools.mouse(Kind::Move, 150, 150);
+    tools.mouse(Kind::Button1Up, 150, 150);
+    tools.mouse(Kind::Move, 150, 150, true);
+    tools.mouse(Kind::Button1Down, 150, 150, true);
+    tools.mouse(Kind::Button1Up, 150, 150, true);
+    INFO(tools.rig.runtime.last_error());
+    REQUIRE(tools.solid(0, 6, 0));
+    REQUIRE_FALSE(tools.solid(0, 10, 0));
 }
 
 TEST_CASE("TB4 Play turns the terrain tools off and closes the pane", "[TB4]") {

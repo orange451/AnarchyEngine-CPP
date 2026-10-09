@@ -352,6 +352,7 @@ ANARCHY_LUA_REGISTER(register_light_lua) {
     static const std::string outer_fov = number_json(SpotLight::kDefaultOuterFov);
     static const std::string inner_fov_scale = number_json(SpotLight::kDefaultInnerFovScale);
     static const std::string shadow_distance = number_json(DirectionalLight::kDefaultShadowDistance);
+    static const std::string scale = number_json(GameObject::kDefaultScale);
     // Each class that can be made lists the fields, as FileAsset's subclasses
     // list Path: Light itself is only for IsA, and is never made.
     const LuaField point_fields[] = {
@@ -364,6 +365,9 @@ ANARCHY_LUA_REGISTER(register_light_lua) {
                    0.0, Light::kMaxRadiusSlider),
         lua_saved_property("Enabled", "boolean", read_enabled<Light>, write_enabled<Light>, "true"),
         lua_saved_property("Shadows", "boolean", read_shadows<Light>, write_shadows<Light>, "false"),
+        // GameObject's Scale does nothing to a light, so Properties leaves it out.
+        lua_hidden(lua_saved_property("Scale", "number", read_number<GameObject, &GameObject::scale>,
+                                      write_number<GameObject, &GameObject::set_scale>, scale.c_str())),
     };
     register_lua_class("Light", "GameObject", nullptr, 0);
     register_lua_class("PointLight", "Light", point_fields, static_cast<int>(std::size(point_fields)));

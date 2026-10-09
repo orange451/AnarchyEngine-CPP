@@ -246,7 +246,7 @@ public:
     static constexpr double kDefaultReflectivity = 0.5;
     static constexpr double kDefaultTransparency = 0.0;
     static constexpr double kDefaultMetalness = 0.0;
-    static constexpr double kDefaultRoughness = 0.4;
+    static constexpr double kDefaultRoughness = 0.5;
     static constexpr ColorRgb kDefaultColor{1.f, 1.f, 1.f, 1.f};
     static constexpr ColorRgb kDefaultEmissive{0.f, 0.f, 0.f, 1.f};
     static constexpr double kDefaultTextureScale = 8.0;

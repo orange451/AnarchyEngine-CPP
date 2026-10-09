@@ -21,14 +21,14 @@ namespace engine_core {
 // Latitude           number              degrees, -90 to 90: how high the sun
 //                                        climbs (90 - |Latitude| at noon). 35.
 // Brightness         number              the sun light's intensity; the moon's
-//                                        is a tenth of it. 3, 0 to kMaxBrightness.
+//                                        is a tenth of it. 2, 0 to kMaxBrightness.
 // Shadows            boolean             whether the sun or moon light casts shadows. True.
 // CloudCover         number              how much of the sky has cloud, 0 to 1. 0.3.
 // CloudDensity       number              how thick the clouds are, 0 to 1. 0.
 // WindDirection      Vector3             the clouds' drift, studs per second; Y is ignored.
 // SunTexture         Texture?            drawn in place of the sun's disc. Nil.
 // MoonTexture        Texture?            drawn in place of the moon's disc. Nil.
-// SunSize, MoonSize  number              degrees across, kMinBodySize to kMaxBodySize. 2.
+// SunSize, MoonSize  number              degrees across, kMinBodySize to kMaxBodySize. 4.
 // ReflectionQuality  Enum.EffectQuality  the size of the cube the sky's light
 //                                        and reflections are filtered from:
 //                                        Low 128, Medium 256, High 512. Medium.
@@ -40,14 +40,14 @@ public:
     static constexpr double kDefaultTimeOfDay = 14.0;
     static constexpr double kDefaultLatitude = 35.0;
     static constexpr double kMaxLatitude = 90.0;
-    static constexpr double kDefaultBrightness = 3.0;
+    static constexpr double kDefaultBrightness = 2.0;
     static constexpr double kMaxBrightness = 20.0;
     static constexpr bool kDefaultShadows = true;
     static constexpr double kDefaultCloudCover = 0.3;
     static constexpr double kDefaultCloudDensity = 0.0;
     static constexpr Vec3 kDefaultWindDirection{1.f, 0.f, 0.3f};
-    static constexpr double kDefaultSunSize = 2.0;
-    static constexpr double kDefaultMoonSize = 2.0;
+    static constexpr double kDefaultSunSize = 4.0;
+    static constexpr double kDefaultMoonSize = 4.0;
     static constexpr double kMinBodySize = 0.1;
     static constexpr double kMaxBodySize = 20.0;
     static constexpr EffectQuality kDefaultReflectionQuality = EffectQuality::Medium;

@@ -344,6 +344,43 @@ TEST_CASE("SC12 W moves the camera where it looks, and E lifts it", "[SC12]") {
     REQUIRE(rig.runtime.drain_output().lines.empty());
 }
 
+TEST_CASE("SC23 holding Shift flies the camera at a quarter of the speed", "[SC23]") {
+    CameraRig rig;
+    rig.game.input().post_key(UserInputService::key_code_from_glfw(340), true);  // LeftShift
+    rig.game.input().post_key(key('W'), true);
+    rig.frames(1, 0.5);
+    rig.render(0.5);
+    REQUIRE(std::abs(rig.position().z + 2.f) < 1e-3f);  // 4 units/s for half a second
+    REQUIRE(rig.runtime.drain_output().lines.empty());
+}
+
+TEST_CASE("SC24 the wheel jumps the camera toward the pointer, up forward and down back", "[SC24]") {
+    CameraRig rig;
+    dynamic_cast<engine_core::Camera*>(rig.game.instance(rig.camera))->set_viewport_size(engine_core::Vec2{200, 200});
+    // Up at the view's middle: straight ahead, down -Z, one step.
+    rig.game.input().post_wheel(100, 100, 1);
+    rig.frames(1);
+    rig.render(0.016);
+    INFO(rig.runtime.last_error());
+    REQUIRE(rig.position().z < -1.f);
+    REQUIRE(std::abs(rig.position().x) < 1e-3f);
+    const float forward = rig.position().z;
+    // Down at the view's right edge: back along the ray through it, so away from +X and back toward +Z.
+    rig.game.input().post_wheel(200, 100, -1);
+    rig.frames(1);
+    rig.render(0.016);
+    REQUIRE(rig.position().x < -1.f);
+    REQUIRE(rig.position().z > forward);
+    // Shift makes the jump a quarter as long.
+    const engine_core::Vec3 before = rig.position();
+    rig.game.input().post_key(UserInputService::key_code_from_glfw(340), true);
+    rig.game.input().post_wheel(100, 100, 1);
+    rig.frames(1);
+    rig.render(0.016);
+    REQUIRE(std::abs((before.z - rig.position().z) * 4.f - (0.f - forward)) < 1e-2f);
+    REQUIRE(rig.runtime.drain_output().lines.empty());
+}
+
 TEST_CASE("SC13 the right button locks the pointer and the locked motion turns the camera", "[SC13]") {
     CameraRig rig;
     rig.game.input().post_mouse_button(1, true, 50.f, 50.f);

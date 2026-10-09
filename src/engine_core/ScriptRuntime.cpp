@@ -946,11 +946,12 @@ void ScriptRuntime::start_core_scripts() {
     const InstanceId core = game_->core();
     for (InstanceId id : pending) {
         auto* script = dynamic_cast<Script*>(game_->instance(id));
-        // A Script under another Script in Core runs with that one, as a plugin's Scripts do.
+        // A Script under another Script in Core, or under a registered plugin root such as a
+        // plugin file's Folder, runs with that one, as a plugin's Scripts do.
         bool nested = false;
         for (InstanceId up = game_->parent(id); up != 0 && up != DataModel::kNoParent && up != core;
              up = game_->parent(up)) {
-            if (dynamic_cast<Script*>(game_->instance(up)) != nullptr) {
+            if (dynamic_cast<Script*>(game_->instance(up)) != nullptr || is_plugin(up)) {
                 nested = true;
                 break;
             }
@@ -1741,7 +1742,7 @@ void ScriptRuntime::reset_console() {
     close_state(console_);
 }
 
-bool ScriptRuntime::register_plugin(InstanceId root) {
+bool ScriptRuntime::register_plugin(InstanceId root, std::string name) {
     assert_lua_thread();
     if (game_ == nullptr || !game_->alive(root)) {
         return false;
@@ -1765,7 +1766,7 @@ bool ScriptRuntime::register_plugin(InstanceId root) {
     if (++plugin_serial_ == 0) {
         ++plugin_serial_;
     }
-    const Plugin plugin{root, plugin_serial_};
+    const Plugin plugin{root, plugin_serial_, name.empty() ? game_->name(root) : std::move(name)};
     plugins_.push_back(plugin);
     try {
         ensure_state(plugin_);
@@ -1813,6 +1814,24 @@ bool ScriptRuntime::unregister_plugin(InstanceId root) {
 bool ScriptRuntime::is_plugin(InstanceId root) const {
     return game_ != nullptr && game_->alive(root) &&
            std::any_of(plugins_.begin(), plugins_.end(), [&](const Plugin& plugin) { return plugin.root == root; });
+}
+
+const std::string* ScriptRuntime::plugin_name(InstanceId root) const {
+    if (game_ == nullptr || !game_->alive(root)) {
+        return nullptr;
+    }
+    const auto found =
+        std::find_if(plugins_.begin(), plugins_.end(), [&](const Plugin& plugin) { return plugin.root == root; });
+    return found != plugins_.end() ? &found->name : nullptr;
+}
+
+std::uint32_t ScriptRuntime::plugin_serial(InstanceId root) const {
+    if (game_ == nullptr || !game_->alive(root)) {
+        return 0;
+    }
+    const auto found =
+        std::find_if(plugins_.begin(), plugins_.end(), [&](const Plugin& plugin) { return plugin.root == root; });
+    return found != plugins_.end() ? found->serial : 0;
 }
 
 std::vector<InstanceId> ScriptRuntime::plugins() const {

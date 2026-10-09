@@ -377,3 +377,30 @@ TEST_CASE("CV6 a paused engine keeps the command line's time", "[CV6]") {
     engine.stop();
     REQUIRE(woke);
 }
+
+TEST_CASE("PL11 a Folder registered in Core is one plugin, and its Scripts do not register alone", "[PL11]") {
+    ScriptRig rig;
+    const InstanceId folder = add_folder(rig.game, "Tools", rig.game.core());
+    add_script(rig.game, folder, "A", "print('a')");
+    add_script(rig.game, folder, "B", "print('b')");
+    rig.runtime.drain_output();
+
+    REQUIRE(rig.runtime.register_plugin(folder, "ToolsFile"));
+    rig.runtime.start_core_scripts();
+    REQUIRE(rig.runtime.plugins() == std::vector<InstanceId>{folder});
+    REQUIRE(texts(rig.runtime.drain_output()) == std::vector<std::string>{"a\n", "b\n"});
+    REQUIRE(*rig.runtime.plugin_name(folder) == "ToolsFile");
+    REQUIRE(rig.runtime.plugin_serial(folder) != 0);
+    REQUIRE(rig.runtime.plugin_name(folder + 1000) == nullptr);
+
+    // A Script added later under the registered Folder still does not become its own plugin.
+    add_script(rig.game, folder, "C", "print('c')");
+    rig.runtime.start_core_scripts();
+    REQUIRE(rig.runtime.plugins() == std::vector<InstanceId>{folder});
+
+    // A Folder in Core that is not registered keeps today's behaviour: each Script is a plugin.
+    const InstanceId loose = add_folder(rig.game, "Loose", rig.game.core());
+    const InstanceId s = add_script(rig.game, loose, "S", "print('s')").id();
+    rig.runtime.start_core_scripts();
+    REQUIRE(rig.runtime.is_plugin(s));
+}

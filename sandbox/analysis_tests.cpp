@@ -1968,3 +1968,29 @@ TEST_CASE("A-PF debug.profilebegin and profileend are declared", "[A-PF]") {
     INFO(dump(analysis.diagnostics(script.id())));
     REQUIRE(analysis.diagnostics(script.id()).empty());
 }
+
+TEST_CASE("A60 plugin and what it makes are declared", "[A60]") {
+    ScriptRig rig;
+    engine_core::ScriptAnalysis analysis(rig.game);
+    engine_core::Script& script = add_script(rig.game, "Plugin",
+                                             "--!strict\n"
+                                             "local name: string = plugin.Name\n"
+                                             "local bar = plugin:CreateToolbar('Tools')\n"
+                                             "local button = bar:CreateButton('Go', 'Go now', 'icons/Play.png', 'Go')\n"
+                                             "button:SetActive(true)\n"
+                                             "button.Enabled = false\n"
+                                             "button.Click:Connect(function() print(name) end)\n"
+                                             "plugin.Unloading:Connect(function() end)\n"
+                                             "local w = plugin:CreateDockWidget('Panel', {Title = 'T', InitialDock = 'TopRight'})\n"
+                                             "w.Enabled = true\n"
+                                             "local t: string = w.Title\n"
+                                             "print(t)\n");
+    settle(analysis);
+    INFO(dump(analysis.diagnostics(script.id())));
+    REQUIRE(analysis.diagnostics(script.id()).empty());
+
+    script.set_source("--!strict\nplugin:CreateToolbar(5)\n");
+    settle(analysis);
+    INFO(dump(analysis.diagnostics(script.id())));
+    REQUIRE_FALSE(analysis.diagnostics(script.id()).empty());
+}

@@ -161,10 +161,12 @@ int ScriptBindings::plugin_create_dock_widget(lua_State* state) {
                     side = DockSide::Left;
                 } else if (dock == "Bottom") {
                     side = DockSide::Bottom;
+                } else if (dock == "Center") {
+                    side = DockSide::Center;
                 } else if (dock == "Float") {
                     side = DockSide::Float;
                 } else if (dock != "Right") {
-                    luaL_error(state, "InitialDock must be Left, Right, Bottom, or Float");
+                    luaL_error(state, "InitialDock must be Left, Right, Bottom, Center, or Float");
                 }
             }
             lua_pop(state, 1);

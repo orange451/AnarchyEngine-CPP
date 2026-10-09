@@ -93,7 +93,7 @@ An instance file is the clipboard saved to disk. The clipboard's in-memory copy 
 1. **API:**
    ```lua
    local widget = plugin:CreateDockWidget("Panel", {
-       Title = "Terrain Tools", InitialDock = "Right",   -- Left | Right | Bottom | Float
+       Title = "Terrain Tools", InitialDock = "Right",   -- Left | Right | Bottom | Center | Float
        Enabled = false, Width = 300, Height = 400, MinWidth = 200, MinHeight = 150,
    })
    script.Parent.Gui.Parent = widget

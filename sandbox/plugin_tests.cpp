@@ -732,3 +732,14 @@ TEST_CASE("PL24 a user plugin may not take a built-in plugin's name", "[PL24]") 
     REQUIRE(out[0].find("Plugin \"SceneTool\" failed to load: a built-in plugin has that name") != std::string::npos);
     REQUIRE(rig.runtime.plugins().size() == 1);
 }
+
+TEST_CASE("PL25 InitialDock Center opens a dock widget in the middle dock", "[PL25]") {
+    ScriptRig rig;
+    const InstanceId folder = add_folder(rig.game, "Tools", rig.game.core());
+    add_script(rig.game, folder, "Main", "plugin:CreateDockWidget('Mid', {InitialDock = 'Center'})");
+    REQUIRE(rig.runtime.register_plugin(folder, "Tools"));
+    const auto* widget =
+        dynamic_cast<const engine_core::DockWidget*>(rig.game.instance(rig.game.find_first_child(folder, "Mid")));
+    REQUIRE(widget != nullptr);
+    REQUIRE(widget->initial_dock == engine_core::DockSide::Center);
+}

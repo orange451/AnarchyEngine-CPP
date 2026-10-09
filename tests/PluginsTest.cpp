@@ -213,6 +213,16 @@ int RunPluginsTests() {
         Expect(layout.page_open_for_tests(reloaded), "a reload opens the page again");
         Expect(dockBefore != nullptr && layout.dock_of_for_tests(reloaded) == dockBefore, "in the dock it was in");
 
+        // InitialDock Center docks beside the Scene View.
+        const engine_core::InstanceId centerTool = MakeToolFolder(
+            engine, "Center Tool", "plugin:CreateDockWidget('Mid', {InitialDock = 'Center', Enabled = true})");
+        layout.save_as_plugin(centerTool);
+        frames(4);
+        ide::IdePane* mid = layout.page_named_for_tests("plugin:Center Tool/Mid");
+        Expect(mid != nullptr && layout.dock_of_for_tests(mid) != nullptr &&
+                   layout.dock_of_for_tests(mid) == layout.dock_of_for_tests(layout.page_named_for_tests("Scene View")),
+               "InitialDock Center opens the page in the Scene View's dock");
+
         // Deleting the plugin takes the page away.
         std::filesystem::remove(config / "plugins" / "Widget Tool.aeplugin");
         layout.poll_plugins(true);

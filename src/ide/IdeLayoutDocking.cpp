@@ -1776,6 +1776,11 @@ void IdeLayout::sync_plugin_widgets() {
                     return dock_beside(nullptr, DropSide::Left, width);
                 case engine_core::DockSide::Bottom:
                     return dock_beside(nullptr, DropSide::Bottom, height);
+                case engine_core::DockSide::Center:
+                    if (IdeDock* middle = editorHome()) {
+                        return middle;
+                    }
+                    break;
                 case engine_core::DockSide::Right:
                 case engine_core::DockSide::Float:
                     break;

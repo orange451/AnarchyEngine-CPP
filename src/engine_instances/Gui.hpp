@@ -258,8 +258,8 @@ public:
     void context_actions(std::vector<ContextAction>& out) const override;
 };
 
-// Where a DockWidget's pane first opens.
-enum class DockSide { Left, Right, Bottom, Float };
+// Where a DockWidget's pane first opens. Center is a tab beside the Scene View.
+enum class DockSide { Left, Right, Bottom, Center, Float };
 
 // A plugin's dockable window, which plugin:CreateDockWidget makes under the
 // plugin's root. Its GuiBase children, and a ScreenGui directly in it, draw

@@ -11,6 +11,7 @@
 #include "Matrix4.hpp"
 #include "UserInputService.hpp"
 #include "SelectionService.hpp"
+#include "Terrain.hpp"
 #include "FileBytes.hpp"
 #include "InstanceFile.hpp"
 #include "Script.hpp"
@@ -373,20 +374,25 @@ int RunPluginsTests() {
             Expect(inWorkspace("MouseDown"), "the active plugin's Button1Down fires on a click in the Scene View");
             Expect(!gameSaw, "and the game's input, where selection listens, never sees that left button");
 
-            // Turning on the view's Brush tool deactivates the plugin; the left button goes back.
+            // Turning on the view's Terrain tool deactivates the plugin; the left button goes back.
             if (view != nullptr) {
+                // The Terrain tool turns on only with a Terrain to paint.
+                engine.on_simulation([](engine_core::DataModel& game) {
+                    auto& terrain = game.create<engine_core::Terrain>();
+                    game.set_parent(terrain.id(), game.scene_service("Workspace"));
+                });
                 view->requestFocus();
-                scene->noteKey(jadefx::Key::B, true, false, 0);
-                scene->noteKey(jadefx::Key::B, false, false, 0);
+                scene->noteKey(jadefx::Key::T, true, false, 0);
+                scene->noteKey(jadefx::Key::T, false, false, 0);
                 frames(2);
                 DrainEvents(engine);
                 frames(1);
-                scene->noteKey(jadefx::Key::B, true, false, 0);
-                scene->noteKey(jadefx::Key::B, false, false, 0);
+                scene->noteKey(jadefx::Key::T, true, false, 0);
+                scene->noteKey(jadefx::Key::T, false, false, 0);
                 frames(2);
                 click(gameSaw);
             }
-            Expect(inWorkspace("MouseOff"), "turning on the Brush tool fires the plugin's Deactivation");
+            Expect(inWorkspace("MouseOff"), "turning on the Terrain tool fires the plugin's Deactivation");
             Expect(gameSaw, "and after it the game's input sees the left button again");
         }
 

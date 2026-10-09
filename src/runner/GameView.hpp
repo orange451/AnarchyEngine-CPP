@@ -6,7 +6,6 @@
 #include "MeshCache.hpp"
 #include "PluginUi.hpp"
 #include "ProfilerOverlay.hpp"
-#include "BrushTool.hpp"
 #include "TerrainBrush.hpp"
 #include "TerrainSelection.hpp"
 #include "TextureCache.hpp"
@@ -300,13 +299,8 @@ private:
     ProfilerOverlay* profilerOverlay_ = nullptr;
     // Terrain mode (T): the brush and its palette, edit mode only.
     std::unique_ptr<TerrainBrush> terrainBrush_;
-    std::unique_ptr<BrushTool> brushTool_;
-    BrushToolPalette* brushPalette_ = nullptr;
-    jadefx::Label* brushReadout_ = nullptr;
+    // Every WireframeAdornment's lines, gathered each frame for the renderer.
     std::vector<float> toolLines_;
-    // The brush tool's view and modifiers for a pointer event.
-    BrushModifiers brushMods(int mods) const;
-    void syncBrushView();
     TerrainToolPalette* terrainPalette_ = nullptr;
     bool shiftHeld_ = false;
     // The world ray through a pane point (absolute coordinates), when the view has a camera.

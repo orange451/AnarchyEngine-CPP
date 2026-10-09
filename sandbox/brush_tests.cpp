@@ -215,6 +215,9 @@ TEST_CASE("BL3 Lua splits, loop cuts, moves corners, transforms, and hulls a Bru
         b:MakeHull({Vector3.zero, Vector3.xAxis, Vector3.yAxis, Vector3.zAxis})
         print("hull", #b:GetFaces())
         print(pcall(function() b:MakeHull({Vector3.zero, Vector3.xAxis, Vector3.yAxis}) end))
+        b:SetMaterial(nil)
+        print("painted", b:GetFace(1).Material == nil)
+        print(pcall(function() b:SetMaterial(workspace) end))
     )");
     rig.frames(1);
     const auto out = rig.runtime.drain_output();
@@ -229,6 +232,8 @@ TEST_CASE("BL3 Lua splits, loop cuts, moves corners, transforms, and hulls a Bru
     REQUIRE(has_text(out, "moved\t8"));
     REQUIRE(has_text(out, "hull\t4"));
     REQUIRE(has_text(out, "span no volume"));
+    REQUIRE(has_text(out, "painted\ttrue"));
+    REQUIRE(has_text(out, "material must be a Material or nil"));
 }
 
 TEST_CASE("BP1 an anchored Brush holds things up and rays report its face", "[brush]") {

@@ -150,20 +150,6 @@ GameView::GameView(Runner& runner, std::string name, bool closable)
     terrainPalette_ = palette.get();
     getChildren().add(std::move(palette));
 
-    // Brush mode's palette (B) and the measurement beside the pointer.
-    brushTool_ = std::make_unique<BrushTool>(*engine_);
-    brushTool_->setOnUsed([this] { requestFocus(); });
-    auto brushPalette = brushTool_->makePalette();
-    brushPalette->setVisible(false);
-    brushPalette_ = brushPalette.get();
-    getChildren().add(std::move(brushPalette));
-    auto readout = jadefx::make<jadefx::Label>("");
-    readout->setStyle("font-size: 12px; padding: 2px 6px; background-color: rgba(20, 22, 26, 0.85); border-radius: 4px;");
-    readout->setTextFill(jadefx::Color::rgb8(255, 214, 120));
-    readout->setVisible(false);
-    brushReadout_ = readout.get();
-    getChildren().add(std::move(readout));
-
     // Last, so it draws over everything here and is hit first.
     auto overlay = jadefx::make<ProfilerOverlay>();
     overlay->setVisible(false);
@@ -210,27 +196,6 @@ void GameView::refreshOverlays() {
         terrainBrush_->turnOff();
     }
     terrainPalette_->setVisible(editing && !profiling && terrainBrush_->active());
-    if (!editing && brushTool_->active()) {
-        brushTool_->turnOff();
-    }
-    brushPalette_->setVisible(editing && !profiling && brushTool_->active());
-    brushPalette_->refresh();
-}
-
-BrushModifiers GameView::brushMods(int mods) const {
-    BrushModifiers out;
-    out.shift = (mods & 0x1) != 0;
-    out.control = (mods & (0x2 | 0x8)) != 0;
-    out.alt = (mods & 0x4) != 0;
-    return out;
-}
-
-void GameView::syncBrushView() {
-    engine_core::DraggerView view;
-    view.camera = viewCamera_;
-    view.fov_degrees = viewFov_;
-    view.size = engine_core::Vec2{static_cast<float>(getWidth()), static_cast<float>(getHeight())};
-    brushTool_->setView(view);
 }
 
 void GameView::linkCamera(std::string guid) {
@@ -724,19 +689,18 @@ void GameView::syncPluginTool() {
     // One tool has the left button at a time: a plugin that activates turns the
     // view's own off, and one of those turning on deactivates the plugin.
     const std::uint64_t activations = engine_->scripts().plugin_ui().activations();
-    const bool toolsOn = terrainBrush_->active() || brushTool_->active();
+    const bool toolsOn = terrainBrush_->active();
     if (activations != pluginActivations_) {
         pluginActivations_ = activations;
         if (pluginHeld() && toolsOn) {
             terrainBrush_->turnOff();
-            brushTool_->turnOff();
             refreshOverlays();
         }
     } else if (toolsOn && !toolsWereOn_ && pluginHeld()) {
         engine_core::Engine* engine = engine_;
         engine->on_simulation([engine](engine_core::DataModel&) { engine->scripts().plugin_ui().deactivate_all(); });
     }
-    toolsWereOn_ = terrainBrush_->active() || brushTool_->active();
+    toolsWereOn_ = terrainBrush_->active();
 }
 
 void GameView::layoutChildren() {
@@ -786,20 +750,6 @@ void GameView::layoutChildren() {
                                        terrainPalette_->measuredHeight(kPaletteWidth, contentHeight()));
         terrainBrush_->tick(std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count(),
                             shiftHeld_);
-    }
-    if (brushPalette_->isVisible()) {
-        constexpr double kPaletteWidth = 210.0;
-        brushPalette_->refresh();
-        brushPalette_->performLayout(contentLeft() + kMargin, contentTop() + kMargin, kPaletteWidth,
-                                     brushPalette_->measuredHeight(kPaletteWidth, contentHeight()));
-    }
-    const bool measuring = brushTool_->active() && !brushTool_->readout().empty();
-    brushReadout_->setVisible(measuring);
-    if (measuring) {
-        brushReadout_->setText(brushTool_->readout());
-        const double w = brushReadout_->measuredWidth(24.0);
-        const engine_core::Vec2 at = brushTool_->readoutAt();
-        brushReadout_->performLayout(contentLeft() + at.x + 14.0, contentTop() + at.y - 28.0, w, 22.0);
     }
     // Each frame brings a new snapshot of the game, so the view lays out again next frame.
     markLayoutDirty(LayoutDirt::Arrange);
@@ -1045,7 +995,6 @@ void GameView::collectOutlines(const engine_core::VisualSnapshot& snapshot) {
     }
     terrainBrush_->appendOutline(outlinePoints_);
     toolLines_.clear();
-    brushTool_->appendLines(toolLines_);
     toolLines_.insert(toolLines_.end(), snapshot.wire_lines.begin(), snapshot.wire_lines.end());
     renderer_.setToolLines(toolLines_.data(), static_cast<int>(toolLines_.size() / 7));
     renderer_.setOutlines(outlinePoints_.data(), static_cast<int>(outlinePoints_.size() / 3));
@@ -1078,8 +1027,8 @@ void GameView::refreshCameraList() {
 
 void GameView::collectHandles(const engine_core::VisualSnapshot& snapshot) {
     handleVertices_.clear();
-    // Brush mode moves brushes itself; the Move tool's arrows would only be in the way.
-    if (!brushTool_->active() && viewFov_ > 0.f && getWidth() > 0.0 && getHeight() > 0.0) {
+    // An active plugin tool has the left button; the Move tool's arrows would only be in the way.
+    if (!pluginHeld() && viewFov_ > 0.f && getWidth() > 0.0 && getHeight() > 0.0) {
         engine_core::DraggerView view;
         view.camera = viewCamera_;
         view.fov_degrees = viewFov_;
@@ -1266,14 +1215,6 @@ void GameView::handleMousePressed(const jadefx::MouseEvent& event) {
         IdePane::handleMousePressed(event);
         return;
     }
-    if (brushTool_->active() && event.button == 0) {
-        syncBrushView();
-        if (const auto ray = rayAt(event.x, event.y)) {
-            brushTool_->press(*ray, brushMods(event.mods), event.clickCount);
-        }
-        IdePane::handleMousePressed(event);
-        return;
-    }
     // An active plugin hears both buttons, and has the left one to itself, so
     // selection and dragging do not act on it. The camera keeps the right one.
     if (pluginHeld() && (event.button == 0 || event.button == 1)) {
@@ -1294,11 +1235,6 @@ void GameView::handleMousePressed(const jadefx::MouseEvent& event) {
 void GameView::handleMouseReleased(const jadefx::MouseEvent& event) {
     if (terrainBrush_->active() && event.button == 0) {
         terrainBrush_->release();
-        IdePane::handleMouseReleased(event);
-        return;
-    }
-    if (brushTool_->active() && event.button == 0) {
-        brushTool_->release(brushMods(event.mods));
         IdePane::handleMouseReleased(event);
         return;
     }
@@ -1324,10 +1260,6 @@ void GameView::handleMouseDragged(const jadefx::MouseEvent& event) {
         shiftHeld_ = event.shift();
         terrainBrush_->hover(rayAt(event.x, event.y));
     }
-    if (brushTool_->active() && !pointerWanted()) {
-        syncBrushView();
-        brushTool_->hover(rayAt(event.x, event.y), brushMods(event.mods));
-    }
     if (pluginHeld()) {
         postPluginMouse(engine_core::PluginMouseEvent::Kind::Move, event.x, event.y, event.mods);
     }
@@ -1342,10 +1274,6 @@ void GameView::handleMouseMoved(const jadefx::MouseEvent& event) {
     cursorY_ = event.y;
     if (terrainBrush_->active()) {
         terrainBrush_->hover(rayAt(event.x, event.y));
-    }
-    if (brushTool_->active() && !pointerWanted()) {
-        syncBrushView();
-        brushTool_->hover(rayAt(event.x, event.y), brushMods(event.mods));
     }
     if (pluginHeld()) {
         postPluginMouse(engine_core::PluginMouseEvent::Kind::Move, event.x, event.y, event.mods);
@@ -1393,19 +1321,7 @@ void GameView::handleKey(jadefx::KeyEvent& event) {
     // Terrain mode: T turns it on and off (edit mode only).
     const bool editing = !playerView_ && !runner_->testing();
     if (editing && event.pressed && !event.repeat && !event.alt && !event.meta) {
-        if (event.key == jadefx::Key::B && !event.control && !event.shift && !pointerWanted()) {
-            if (terrainBrush_->active()) {
-                terrainBrush_->turnOff();
-            }
-            brushTool_->toggle();
-            refreshOverlays();
-            event.consume();
-            return;
-        }
         if (event.key == jadefx::Key::T && !event.control && !event.shift) {
-            if (brushTool_->active()) {
-                brushTool_->turnOff();
-            }
             terrainBrush_->toggle();
             terrainPalette_->refresh();
             refreshOverlays();
@@ -1418,12 +1334,6 @@ void GameView::handleKey(jadefx::KeyEvent& event) {
             event.consume();
             return;
         }
-    }
-    // Brush mode's keys, except while the camera flies (the right button holds the pointer).
-    if (editing && brushTool_->active() && !pointerWanted() && brushTool_->key(event)) {
-        brushPalette_->refresh();
-        event.consume();
-        return;
     }
     // A held key repeats. InputBegan fires once, on the first press.
     if (game_ != nullptr && !event.repeat) {

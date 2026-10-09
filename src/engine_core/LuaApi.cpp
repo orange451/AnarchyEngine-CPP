@@ -1510,6 +1510,8 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
     add("Brush", "SetFace", "Replaces one face.", "nil", false, {P("index", "number"), P("face", "BrushFace")});
     add("Brush", "SetFaceMaterial", "Sets one face's Material.", "nil", false,
         {P("index", "number"), P("material", "Material?")});
+    add("Brush", "SetMaterial", "Sets every face's Material at once; nil is the default.", "nil", false,
+        {P("material", "Material?")});
     add("Brush", "GetFaceVertices", "One face's corners, counter-clockwise seen from outside.", "{Vector3}", false,
         {P("index", "number")});
     add("Brush", "GetVertices", "Every corner, in the Brush's space.", "{Vector3}", false, {});

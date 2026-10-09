@@ -57,6 +57,7 @@ void SceneFeed::perform(const engine_core::VisualSnapshot& front) {
     out->occlusion = front.occlusion;
     out->draggers = front.draggers;
     out->billboards = front.billboards;
+    out->wire_lines = front.wire_lines;
     // Each Terrain's chunks and look, shared by pointer.
     out->terrains = front.terrains;
     out->brushes = front.brushes;

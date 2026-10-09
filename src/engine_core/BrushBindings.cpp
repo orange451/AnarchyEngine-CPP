@@ -321,6 +321,19 @@ int brush_set_face_material(lua_State* state) {
     });
 }
 
+int brush_set_material(lua_State* state) {
+    return lua_guard(state, [&] {
+        Brush& brush = ScriptBindings::brush_self(state);
+        const std::string material = ScriptBindings::brush_material_arg(state, 2);
+        std::vector<Face> faces = brush.faces();
+        for (Face& face : faces) {
+            face.material = material;
+        }
+        raise_if(state, brush.set_faces(std::move(faces)));
+        return 0;
+    });
+}
+
 int brush_get_face_vertices(lua_State* state) {
     return lua_guard(state, [&] {
         Brush& brush = ScriptBindings::brush_self(state);
@@ -596,6 +609,7 @@ ANARCHY_LUA_REGISTER(register_brush_methods) {
         lua_method("GetFace", "BrushFace", reinterpret_cast<void*>(&brush_get_face)),
         lua_method("SetFace", "nil", reinterpret_cast<void*>(&brush_set_face)),
         lua_method("SetFaceMaterial", "nil", reinterpret_cast<void*>(&brush_set_face_material)),
+        lua_method("SetMaterial", "nil", reinterpret_cast<void*>(&brush_set_material)),
         lua_method("GetFaceVertices", "", reinterpret_cast<void*>(&brush_get_face_vertices)),
         lua_method("GetVertices", "", reinterpret_cast<void*>(&brush_get_vertices)),
         lua_method("GetBounds", nullptr, reinterpret_cast<void*>(&brush_get_bounds)),

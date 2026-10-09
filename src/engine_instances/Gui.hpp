@@ -258,8 +258,13 @@ public:
     void context_actions(std::vector<ContextAction>& out) const override;
 };
 
-// Where a DockWidget's pane first opens. Center is a tab beside the Scene View.
-enum class DockSide { Left, Right, Bottom, Center, Float };
+// Where a DockWidget's pane first opens: as a tab in the dock that sits there in the
+// main window, found by position. TopRight is the highest dock along the right edge,
+// BottomRight the lowest (the same one when only one is there); TopLeft and
+// BottomLeft likewise on the left; Bottom the widest along the bottom between the
+// sides; Center the Scene View's. With no dock there, one is made, and later
+// opens find it. Float is a window of its own.
+enum class DockSide { TopLeft, BottomLeft, TopRight, BottomRight, Bottom, Center, Float };
 
 // A plugin's dockable window, which plugin:CreateDockWidget makes under the
 // plugin's root. Its GuiBase children, and a ScreenGui directly in it, draw
@@ -285,7 +290,7 @@ public:
     void set_title(std::string title);
     void set_enabled(bool enabled);
 
-    DockSide initial_dock = DockSide::Right;
+    DockSide initial_dock = DockSide::TopRight;
     // Points. The pane's size when it first opens, and the least it shrinks to.
     double width = 300;
     double height = 400;

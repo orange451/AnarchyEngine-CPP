@@ -1662,6 +1662,86 @@ void IdeLayout::onTabDrag(IdeDock& from, const jadefx::TabDrag& drag) {
     }
 }
 
+IdeDock* IdeLayout::dock_at(engine_core::DockSide side, double width, double height) {
+    using engine_core::DockSide;
+    IdeDock* middle = editorHome();
+    if (side == DockSide::Center && middle != nullptr) {
+        return middle;
+    }
+    // The main window's docked area, whose edges the sides are.
+    const jadefx::Node* area = root_->getCenter();
+    if (area != nullptr && area->getWidth() > 0 && area->getHeight() > 0) {
+        constexpr double kSlack = 2;
+        const double left = area->getAbsoluteX();
+        const double top = area->getAbsoluteY();
+        const double right = left + area->getWidth();
+        const double bottom = top + area->getHeight();
+        IdeDock* best = nullptr;
+        double bestKey = 0;
+        for (const std::shared_ptr<IdeDock>& dock : docks_) {
+            // A floating window's docks and the Scene View's are not on a side.
+            if (!dock || dock->getParent() == nullptr || dock.get() == middle || utilityOf(dock.get()) != nullptr) {
+                continue;
+            }
+            const double x = dock->getAbsoluteX();
+            const double y = dock->getAbsoluteY();
+            const double x2 = x + dock->getWidth();
+            const double y2 = y + dock->getHeight();
+            const bool onLeft = std::abs(x - left) < kSlack;
+            const bool onRight = std::abs(x2 - right) < kSlack;
+            const bool onBottom = std::abs(y2 - bottom) < kSlack;
+            bool wanted = false;
+            double key = 0;
+            switch (side) {
+            case DockSide::TopLeft:
+                wanted = onLeft;
+                key = -y;
+                break;
+            case DockSide::BottomLeft:
+                wanted = onLeft;
+                key = y;
+                break;
+            case DockSide::TopRight:
+                wanted = onRight;
+                key = -y;
+                break;
+            case DockSide::BottomRight:
+                wanted = onRight;
+                key = y;
+                break;
+            case DockSide::Bottom:
+                wanted = onBottom && !onLeft && !onRight;
+                key = x2 - x;
+                break;
+            case DockSide::Center:
+            case DockSide::Float:
+                break;
+            }
+            if (wanted && (best == nullptr || key > bestKey)) {
+                best = dock.get();
+                bestKey = key;
+            }
+        }
+        if (best != nullptr) {
+            return best;
+        }
+    }
+    // Nothing on that side yet: one dock, which the next open finds there.
+    switch (side) {
+    case DockSide::TopLeft:
+    case DockSide::BottomLeft:
+        return dock_beside(nullptr, DropSide::Left, width);
+    case DockSide::Bottom:
+        return dock_beside(nullptr, DropSide::Bottom, height);
+    case DockSide::TopRight:
+    case DockSide::BottomRight:
+    case DockSide::Center:
+    case DockSide::Float:
+        break;
+    }
+    return dock_beside(nullptr, DropSide::Right, width);
+}
+
 bool IdeLayout::close_page(IdePane* page) {
     IdeDock* dock = dockContaining(page);
     if (dock == nullptr) {
@@ -1684,7 +1764,7 @@ void IdeLayout::sync_plugin_widgets() {
         engine_core::InstanceId id = 0;
         std::string title;
         bool enabled = false;
-        engine_core::DockSide side = engine_core::DockSide::Right;
+        engine_core::DockSide side = engine_core::DockSide::TopRight;
         double width = 0;
         double height = 0;
     };
@@ -1770,23 +1850,7 @@ void IdeLayout::sync_plugin_widgets() {
             const engine_core::DockSide side = item.side;
             const double width = item.width > 0 ? item.width : kSideWidth;
             const double height = item.height > 0 ? item.height : kConsoleHeight;
-            entry->home = [this, side, width, height]() -> IdeDock* {
-                switch (side) {
-                case engine_core::DockSide::Left:
-                    return dock_beside(nullptr, DropSide::Left, width);
-                case engine_core::DockSide::Bottom:
-                    return dock_beside(nullptr, DropSide::Bottom, height);
-                case engine_core::DockSide::Center:
-                    if (IdeDock* middle = editorHome()) {
-                        return middle;
-                    }
-                    break;
-                case engine_core::DockSide::Right:
-                case engine_core::DockSide::Float:
-                    break;
-                }
-                return dock_beside(nullptr, DropSide::Right, width);
-            };
+            entry->home = [this, side, width, height]() { return dock_at(side, width, height); };
             made.entry = entry.get();
             windows_.push_back(std::move(entry));
             found = plugin_widgets_.emplace(item.name, std::move(made)).first;

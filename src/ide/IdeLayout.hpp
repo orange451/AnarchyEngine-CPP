@@ -23,6 +23,7 @@
 
 namespace engine_core {
 class DataModel;
+enum class DockSide;
 class Engine;
 class Project;
 struct SaveConflict;
@@ -206,6 +207,9 @@ public:
     void sync_plugin_widgets();
     // Closes the tab showing page. False when none does.
     bool close_page(IdePane* page);
+    // The dock a plugin page opens in for side: the one sitting there in the main
+    // window, by position, or a new one beside the work area when none is.
+    IdeDock* dock_at(engine_core::DockSide side, double width, double height);
     // The Window menu's Plugins submenu, made again when its widgets change.
     void fill_plugins_menu();
     // The tabbed ribbon, for tests.
@@ -216,6 +220,7 @@ public:
     bool page_open_for_tests(IdePane* page) const { return page != nullptr && dockContaining(page) != nullptr; }
     void close_page_for_tests(IdePane* page) { close_page(page); }
     const void* dock_of_for_tests(IdePane* page) const { return dockContaining(page); }
+    std::size_t dock_count_for_tests() const { return docks_.size(); }
     // Writes the paused profiler's history as a page a browser shows. False, with why.
     bool save_profile_capture(const std::filesystem::path& file, std::string& error);
     // Writes the layout to layout.json in the config folder. A close request

@@ -397,7 +397,7 @@ void DockWidget::on_reuse() {
     GuiValues::on_reuse();
     plugin_.clear();
     key_.clear();
-    initial_dock = DockSide::Right;
+    initial_dock = DockSide::TopRight;
     width = 300;
     height = 400;
     min_width = 0;

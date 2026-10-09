@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <cstring>
 #include <string>
+#include <utility>
 
 namespace engine_core {
 
@@ -142,7 +143,7 @@ int ScriptBindings::plugin_create_dock_widget(lua_State* state) {
         // Read every option before anything is made, so a bad one leaves nothing behind.
         std::string title = key;
         bool enabled = false;
-        DockSide side = DockSide::Right;
+        DockSide side = DockSide::TopRight;
         double size[4] = {300, 400, 0, 0};
         if (options) {
             lua_getfield(state, 3, "Title");
@@ -157,16 +158,21 @@ int ScriptBindings::plugin_create_dock_widget(lua_State* state) {
             if (!lua_isnil(state, -1)) {
                 const char* name = lua_tostring(state, -1);
                 const std::string dock = name != nullptr ? name : "";
-                if (dock == "Left") {
-                    side = DockSide::Left;
-                } else if (dock == "Bottom") {
-                    side = DockSide::Bottom;
-                } else if (dock == "Center") {
-                    side = DockSide::Center;
-                } else if (dock == "Float") {
-                    side = DockSide::Float;
-                } else if (dock != "Right") {
-                    luaL_error(state, "InitialDock must be Left, Right, Bottom, Center, or Float");
+                static const std::pair<const char*, DockSide> kSides[] = {
+                    {"TopLeft", DockSide::TopLeft},         {"BottomLeft", DockSide::BottomLeft},
+                    {"TopRight", DockSide::TopRight},       {"BottomRight", DockSide::BottomRight},
+                    {"Bottom", DockSide::Bottom},           {"Center", DockSide::Center},
+                    {"Float", DockSide::Float}};
+                bool known = false;
+                for (const auto& [label, value] : kSides) {
+                    if (dock == label) {
+                        side = value;
+                        known = true;
+                    }
+                }
+                if (!known) {
+                    luaL_error(state,
+                               "InitialDock must be TopLeft, BottomLeft, TopRight, BottomRight, Bottom, Center, or Float");
                 }
             }
             lua_pop(state, 1);

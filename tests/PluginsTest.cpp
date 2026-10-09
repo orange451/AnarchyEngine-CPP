@@ -223,6 +223,49 @@ int RunPluginsTests() {
                    layout.dock_of_for_tests(mid) == layout.dock_of_for_tests(layout.page_named_for_tests("Scene View")),
                "InitialDock Center opens the page in the Scene View's dock");
 
+        // Each side joins the dock already there, as a tab: by where docks sit, not by window names.
+        struct SideCase {
+            const char* side;
+            const char* beside;
+        };
+        const SideCase sides[] = {{"TopRight", "Game Explorer"}, {"BottomRight", "Properties"}, {"Bottom", "Console"}};
+        for (const SideCase& side : sides) {
+            const std::string folderName = std::string("Side ") + side.side;
+            const std::string source =
+                std::string("plugin:CreateDockWidget('W', {InitialDock = '") + side.side + "', Enabled = true})";
+            layout.save_as_plugin(MakeToolFolder(engine, folderName.c_str(), source.c_str()));
+            frames(4);
+            ide::IdePane* placed = layout.page_named_for_tests("plugin:" + folderName + "/W");
+            const void* expected = layout.dock_of_for_tests(layout.page_named_for_tests(side.beside));
+            Expect(placed != nullptr && expected != nullptr && layout.dock_of_for_tests(placed) == expected,
+                   (std::string(side.side) + " joins the dock that is there, as a tab").c_str());
+        }
+
+        // Closing and opening a widget again and again splits off no docks.
+        const std::size_t docksBefore = layout.dock_count_for_tests();
+        const engine_core::InstanceId cycling = MakeToolFolder(
+            engine, "Cycling Tool", "_G.cycle = plugin:CreateDockWidget('W', {Enabled = true})");
+        layout.save_as_plugin(cycling);
+        frames(4);
+        for (int i = 0; i < 4; ++i) {
+            layout.close_page_for_tests(layout.page_named_for_tests("plugin:Cycling Tool/W"));
+            frames(3);
+            engine.on_simulation([&](engine_core::DataModel& game) {
+                for (engine_core::InstanceId id : game.get_children(game.core())) {
+                    if (game.name(id) == "Cycling Tool") {
+                        if (auto* widget = dynamic_cast<engine_core::DockWidget*>(
+                                game.instance(game.find_first_child(id, "W")))) {
+                            widget->set_enabled(true);
+                        }
+                    }
+                }
+            });
+            frames(3);
+        }
+        Expect(layout.page_open_for_tests(layout.page_named_for_tests("plugin:Cycling Tool/W")),
+               "the cycled widget ends open");
+        Expect(layout.dock_count_for_tests() == docksBefore, "opening and closing a widget makes no new docks");
+
         // Deleting the plugin takes the page away.
         std::filesystem::remove(config / "plugins" / "Widget Tool.aeplugin");
         layout.poll_plugins(true);

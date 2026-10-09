@@ -96,6 +96,7 @@ set(STUDIO_SOURCES
     src/runner/ProfilerOverlay.cpp
     src/runner/UiFrameProfile.cpp
     src/runner/GuiLayer.cpp
+    src/runner/GuiTree.cpp
     src/ide/IdePane.cpp
     src/ide/IdeDock.cpp
     src/ide/DockArrange.cpp
@@ -791,6 +792,7 @@ add_executable(studio-tests
     tests/ProfilerOverlayTest.cpp
     tests/UiFrameProfileTest.cpp
     tests/PluginsTest.cpp
+    tests/GuiTreeTest.cpp
 )
 target_link_libraries(studio-tests PRIVATE studio)
 

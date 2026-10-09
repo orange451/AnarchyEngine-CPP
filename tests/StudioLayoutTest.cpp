@@ -55,6 +55,7 @@ int RunProfilerPlayerKeyTests();
 int RunProfilerColorTests();
 int RunUiFrameProfileTests();
 int RunPluginsTests();
+int RunGuiTreeTests(ide::IdeLayout& layout);
 
 // R10: the studio's default layout builds, and its docks hold the explorers,
 // the console, and Properties. Runs headless: the threads are never started.
@@ -1076,6 +1077,7 @@ int main() {
     failures += RunBillboardLayerTests(layout, *scene);
     failures += RunStatusBarTests(layout, *scene);
     failures += RunPluginsTests();
+    failures += RunGuiTreeTests(layout);
     failures += RunProfilerOverlayTests(layout, *scene);
     failures += RunProfilerPlayerKeyTests();
     failures += RunProfilerColorTests();

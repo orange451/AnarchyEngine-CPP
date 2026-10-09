@@ -2,6 +2,7 @@
 
 #include "Matrix4.hpp"
 #include "SceneDepth.hpp"
+#include "GuiTree.hpp"
 #include "SnapshotPump.hpp"
 #include "types.hpp"
 
@@ -24,17 +25,6 @@ class GuiValues;
 }
 
 namespace runner {
-
-// What the layer tells its Scene View about the mouse on a GUI element, which
-// the game hears as processed. keepFocus is true when the element keeps the
-// keyboard, as a TextField does. The layer and a ScreenGui's own area are not
-// picked (setPickOnBounds), so the mouse anywhere else reaches the view itself.
-struct GuiInput {
-    std::function<void(const jadefx::MouseEvent&, bool keepFocus)> pressed;
-    std::function<void(const jadefx::MouseEvent&)> released;
-    std::function<void(const jadefx::MouseEvent&)> dragged;
-    std::function<void(const jadefx::MouseEvent&)> moved;
-};
 
 // What placeBillboards places the BillboardGuis by: the camera the renderer
 // draws this frame with.
@@ -136,7 +126,6 @@ protected:
     void renderChildren(jadefx::UiRenderer& renderer, float opacity) override;
 
 private:
-    struct Entry;
     // A drawn BillboardGui's node and where this frame puts it.
     struct Placement {
         engine_core::InstanceId id = 0;
@@ -160,36 +149,14 @@ private:
     // The children list changes only by the nodes that leave or arrive, since
     // taking a node out drops the focus and any press inside it.
     void restack();
-    // The node for a GuiBase, made or brought up to date, with its children.
-    std::shared_ptr<jadefx::Node> build(engine_core::InstanceId id, const engine_core::GuiValues& gui);
-    std::shared_ptr<jadefx::Node> makeNode(engine_core::InstanceId id, const std::string& className);
-    void apply(Entry& entry, const engine_core::GuiValues& gui);
-    // Fires a GuiBase's event on the simulation thread.
-    void fire(engine_core::InstanceId id, const char* event);
-    // A TextField's typed text, written back to Text.
-    void writeText(engine_core::InstanceId id, std::string text);
     // sync's work under the read lock.
     void syncTree();
-    // Gives each ImagePane's node the image its entry names. Runs without the lock.
-    void updateImages();
-    // The decoded file at path under resourcesRoot_, upside down with flipY, or null.
-    std::shared_ptr<jadefx::Image> loadImage(const std::string& path, bool flipY);
-
-    // A file an ImagePane draws, as last read.
-    struct LoadedImage {
-        std::shared_ptr<jadefx::Image> image;
-        std::filesystem::file_time_type stamp{};
-        std::chrono::steady_clock::time_point checked{};
-        bool tried = false;
-        // updateImages' pass that last wanted it. One no pass wants is let go.
-        std::uint64_t pass = 0;
-    };
 
     engine_core::Engine& engine_;
     engine_core::DataModel& game_;
     std::shared_ptr<GuiInput> input_;
-    std::unordered_map<engine_core::InstanceId, std::unique_ptr<Entry>> entries_;
-    std::uint64_t pass_ = 0;
+    // Builds and keeps the nodes for every ScreenGui and BillboardGui the layer draws.
+    std::unique_ptr<GuiTree> tree_;
     std::vector<Placement> placements_;
     std::vector<std::shared_ptr<jadefx::Node>> screens_;
     // The children in paint order, as restack last put them. Held, so a
@@ -203,13 +170,6 @@ private:
     std::string css_;
     // The root's GUID at the last sync. Another place starts the nodes over.
     std::string placeGuid_;
-    // The resources folder at the last sync, and the files read from it, by Path.
-    std::filesystem::path resourcesRoot_;
-    // The folder images_ was read from.
-    std::filesystem::path imagesRoot_;
-    // Each by flipY: [0] upright, [1] flipped.
-    std::unordered_map<std::string, LoadedImage> images_[2];
-    std::uint64_t imagePass_ = 0;
 };
 
 }  // namespace runner

@@ -83,6 +83,7 @@ public:
     void collect(std::vector<MeshResult>& chunks, std::vector<NodeResult>& nodes);
     // No job waiting or running.
     bool idle() const;
+    unsigned thread_count() const { return thread_count_; }
     // For tests: blocks until idle.
     void wait_idle();
 

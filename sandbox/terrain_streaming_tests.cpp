@@ -1,6 +1,9 @@
 // Terrain streaming: the decoded-chunk cache, first-build admission, and the
 // .alod far-mesh cache. No instances unless a test says otherwise.
 
+#include "support.hpp"
+#include "Terrain.hpp"
+#include "TerrainWorld.hpp"
 #include "terrain/AvoxFile.hpp"
 #include "terrain/ChunkCache.hpp"
 #include "terrain/ShapeDistance.hpp"
@@ -13,6 +16,7 @@
 
 #include <atomic>
 #include <thread>
+#include <unordered_set>
 #include <vector>
 
 using namespace engine_core;
@@ -188,5 +192,102 @@ TEST_CASE("CC9 a sampler reads released chunks", "[terrain]") {
     REQUIRE(VoxelSampler(volume.chunks(), 1.f).distance(Vec3{0.5f, 0.5f, 48.5f}) == inside);
     for (const auto& [coord, chunk] : volume.chunks()) {
         REQUIRE_FALSE(chunk->cells_owned());
+    }
+}
+
+// ---- First build admission (Task 3) ----
+
+namespace {
+
+Terrain& streaming_terrain(DataModel& game) {
+    auto& t = game.create<Terrain>();
+    game.set_parent(t.id(), workspace_of(game));
+    return t;
+}
+
+// The coords a first sight meshes: every stored chunk and its 26 neighbours.
+std::unordered_set<ChunkCoord, ChunkCoordHash> first_footprint(const VoxelVolume& volume) {
+    std::unordered_set<ChunkCoord, ChunkCoordHash> footprint;
+    for (const auto& [coord, chunk] : volume.chunks()) {
+        (void)chunk;
+        for (int dz = -1; dz <= 1; ++dz) {
+            for (int dy = -1; dy <= 1; ++dy) {
+                for (int dx = -1; dx <= 1; ++dx) {
+                    footprint.insert(ChunkCoord{coord.x + dx, coord.y + dy, coord.z + dz});
+                }
+            }
+        }
+    }
+    return footprint;
+}
+
+// Updates until the first build is admitted and every job has landed.
+void drain(TerrainWorld& world, DataModel& game, InstanceId id) {
+    for (int i = 0; i < 100000; ++i) {
+        world.update(game);
+        world.wait_idle();
+        if (world.first_build_remaining(id) == 0 && world.jobs_in_flight(id) == 0) {
+            break;
+        }
+    }
+    world.update(game);
+}
+
+}  // namespace
+
+TEST_CASE("TW-S1 first build never has more jobs in flight than the cap", "[terrain]") {
+    SimRole role;
+    Game game;
+    Terrain& t = streaming_terrain(game);
+    REQUIRE_FALSE(t.edit_volume([&](VoxelVolume& v) { return v.fill(ball_at(0.f, 0.f, 0.f, 60.f), 0); }));
+    const std::size_t footprint = first_footprint(t.volume()).size();
+    TerrainWorld world({}, 2);
+    const std::size_t cap = 2 * TerrainWorld::kFirstBuildJobsPerThread;
+    REQUIRE(footprint > cap);
+    world.update(game);
+    REQUIRE(world.jobs_in_flight(t.id()) <= cap);
+    REQUIRE(world.first_build_remaining(t.id()) + world.jobs_in_flight(t.id()) == footprint);
+    for (int i = 0; i < 20; ++i) {
+        world.update(game);
+        REQUIRE(world.jobs_in_flight(t.id()) <= cap);
+    }
+}
+
+TEST_CASE("TW-S2 first build meshes every surface chunk", "[terrain]") {
+    SimRole role;
+    Game game;
+    Terrain& t = streaming_terrain(game);
+    REQUIRE_FALSE(t.edit_volume([&](VoxelVolume& v) { return v.fill(ball_at(0.f, 0.f, 0.f, 60.f), 0); }));
+    std::size_t surface = 0;
+    for (const ChunkCoord& coord : first_footprint(t.volume())) {
+        if (surface_nets(mesh_input(t.volume(), coord)).render != nullptr) {
+            ++surface;
+        }
+    }
+    TerrainWorld world({}, 2);
+    drain(world, game, t.id());
+    REQUIRE(world.first_build_remaining(t.id()) == 0);
+    REQUIRE(world.views().size() == 1u);
+    REQUIRE(world.views()[0].chunks->size() == surface);
+}
+
+TEST_CASE("TW-S3 an edit during first build meshes that chunk once, with the edit", "[terrain]") {
+    SimRole role;
+    Game game;
+    Terrain& t = streaming_terrain(game);
+    REQUIRE_FALSE(t.edit_volume([&](VoxelVolume& v) { return v.fill(ball_at(0.f, 0.f, 0.f, 60.f), 0); }));
+    const std::size_t footprint = first_footprint(t.volume()).size();
+    TerrainWorld world({}, 1);
+    world.update(game);   // first sight: two chunks admitted, the rest wait
+    // Carve a dent at the ball's far rim: its chunks are queued by the edit.
+    REQUIRE_FALSE(t.edit_volume([&](VoxelVolume& v) { return v.subtract(ball_at(0.f, 0.f, -60.f, 6.f)); }));
+    drain(world, game, t.id());
+    // Each chunk is meshed once, apart from the few in flight when the edit came.
+    REQUIRE(world.meshed_count() <= footprint + TerrainWorld::kFirstBuildJobsPerThread);
+    // The dent shows: every published mesh matches the voxels as they are now.
+    for (const TerrainChunkView& chunk : *world.views()[0].chunks) {
+        const ChunkMesh now = surface_nets(mesh_input(t.volume(), chunk.coord));
+        REQUIRE(now.render != nullptr);
+        REQUIRE(chunk.mesh->vertices.size() == now.render->vertices.size());
     }
 }

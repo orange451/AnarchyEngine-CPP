@@ -135,8 +135,34 @@ public:
     // for, is no longer a live Terrain in game (nothing built), or a build threw.
     bool build_colliders_now(DataModel& game, InstanceId terrain, const std::vector<terrain::ChunkCoord>& chunks);
 
+    // A first sight queues its chunks a few at a time rather than all at
+    // once: at most this many jobs per mesher thread are in flight, so a
+    // huge Terrain's first build holds only a handful of meshes and decoded
+    // chunks at a time.
+    static constexpr std::size_t kFirstBuildJobsPerThread = 2;
+
     // For tests.
     void wait_idle() { mesher_.wait_idle(); }
+    // A first sight's chunks not handed to the mesher yet.
+    std::size_t first_build_remaining(InstanceId terrain) const {
+        const auto found = terrains_.find(terrain);
+        return found != terrains_.end() ? found->second.first_build.size() : 0;
+    }
+    // No Terrain has first-build chunks left to admit.
+    bool first_build_done() const {
+        for (const auto& [id, record] : terrains_) {
+            (void)id;
+            if (!record.first_build.empty()) {
+                return false;
+            }
+        }
+        return true;
+    }
+    // Chunk jobs queued or running for terrain.
+    std::size_t jobs_in_flight(InstanceId terrain) const {
+        const auto found = terrains_.find(terrain);
+        return found != terrains_.end() ? found->second.pending_jobs.size() : 0;
+    }
     std::uint64_t meshed_count() const { return meshed_count_; }
     // How many chunks build_colliders_now has meshed itself (off the queue).
     std::uint64_t sync_meshed_count() const { return sync_meshed_count_; }
@@ -282,6 +308,16 @@ private:
         // flight: not built again every sync until that edit lands
         // (apply_result) or a newer edit queues them again (queue_dirty).
         std::unordered_set<terrain::ChunkCoord, terrain::ChunkCoordHash> sync_built;
+        // A first sight's chunks not queued yet: admit_first_build hands
+        // them to the mesher a few at a time, nearest the camera first (the
+        // nearest at the back). The LOD tree already counts them in flight.
+        std::vector<terrain::ChunkCoord> first_build;
+        // Chunks an edit queued while first_build still held them: already
+        // meshed with the edit, so not admitted again.
+        std::unordered_set<terrain::ChunkCoord, terrain::ChunkCoordHash> first_build_skip;
+        bool first_build_sorted = false;
+        bool first_build_had_camera = false;
+        terrain::ChunkCoord first_build_camera{};
     };
 
     // A result off the pool: dropped if stale, held if its edit batch still
@@ -299,6 +335,10 @@ private:
     void expire_batches(TerrainRecord& record, double now_ms);
     void queue_dirty(InstanceId terrain_id, Terrain& terrain, TerrainRecord& record, bool first_seen, bool has_camera,
                       Vec3 camera_pos, double now_ms);
+    // Queues first_build's chunks, nearest first, while fewer than
+    // kFirstBuildJobsPerThread jobs per mesher thread are in flight.
+    void admit_first_build(InstanceId terrain_id, Terrain& terrain, TerrainRecord& record, bool has_camera,
+                           Vec3 camera_pos);
     // One Terrain's LOD work for this update: drops and re-queues chunk
     // meshes as its LodTree asks, and queues the node builds now due.
     void update_lod(InstanceId terrain_id, Terrain& terrain, TerrainRecord& record, double now_ms, bool has_camera,

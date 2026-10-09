@@ -255,9 +255,21 @@ void TerrainWorld::queue_dirty(InstanceId terrain_id, Terrain& terrain, TerrainR
                 }
             }
         }
-        dirty.assign(footprint.begin(), footprint.end());
-    } else {
-        volume.take_dirty(dirty);
+        // Not queued here: admit_first_build hands them to the mesher a few
+        // at a time. The tree counts each in flight now, so no parent
+        // builds before all of its chunks have landed.
+        record.first_build.assign(footprint.begin(), footprint.end());
+        record.first_build_skip.clear();
+        record.first_build_sorted = false;
+        for (const terrain::ChunkCoord& coord : record.first_build) {
+            record.tree->chunk_queued(coord, true);
+        }
+        return;
+    }
+    volume.take_dirty(dirty);
+    if (!record.first_build.empty()) {
+        // Meshed by this edit with its new voxels: the first build leaves them.
+        record.first_build_skip.insert(dirty.begin(), dirty.end());
     }
     const float voxel_size = static_cast<float>(volume.voxel_size());
     // R26: an edit's chunks (not a first sight's) publish together.
@@ -300,6 +312,65 @@ void TerrainWorld::queue_dirty(InstanceId terrain_id, Terrain& terrain, TerrainR
         terrain::MeshInput input = terrain::mesh_input(volume, coord);
         input.build_collider = want_collider;
         mesher_.queue(terrain_id, revision, std::move(input), job_distance);
+    }
+}
+
+void TerrainWorld::admit_first_build(InstanceId terrain_id, Terrain& terrain, TerrainRecord& record, bool has_camera,
+                                     Vec3 camera_pos) {
+    if (record.first_build.empty()) {
+        return;
+    }
+    const std::size_t cap = static_cast<std::size_t>(mesher_.thread_count()) * kFirstBuildJobsPerThread;
+    if (record.pending_jobs.size() >= cap) {
+        return;
+    }
+    terrain::VoxelVolume& volume = terrain.volume();
+    const float voxel_size = static_cast<float>(volume.voxel_size());
+    const Matrix4& transform = terrain.transform();
+    // Re-sorted only when the camera moves to another chunk: farthest
+    // first, so the nearest is popped off the back.
+    if (has_camera) {
+        const Vec3 local = matrix4_point(matrix4_inverse(transform), camera_pos);
+        const float span = terrain::kChunkSize * voxel_size;
+        const terrain::ChunkCoord camera_chunk{static_cast<int>(std::floor(local.x / span)),
+                                               static_cast<int>(std::floor(local.y / span)),
+                                               static_cast<int>(std::floor(local.z / span))};
+        if (!record.first_build_sorted || !record.first_build_had_camera ||
+            !(camera_chunk == record.first_build_camera)) {
+            std::vector<std::pair<float, terrain::ChunkCoord>> keyed;
+            keyed.reserve(record.first_build.size());
+            for (const terrain::ChunkCoord& coord : record.first_build) {
+                const Vec3 center = matrix4_point(transform, chunk_center_local(coord, voxel_size));
+                keyed.emplace_back(distance(center, camera_pos), coord);
+            }
+            std::sort(keyed.begin(), keyed.end(),
+                      [](const auto& a, const auto& b) { return a.first > b.first; });
+            for (std::size_t i = 0; i < keyed.size(); ++i) {
+                record.first_build[i] = keyed[i].second;
+            }
+            record.first_build_sorted = true;
+            record.first_build_had_camera = true;
+            record.first_build_camera = camera_chunk;
+        }
+    }
+    while (!record.first_build.empty() && record.pending_jobs.size() < cap) {
+        const terrain::ChunkCoord coord = record.first_build.back();
+        record.first_build.pop_back();
+        if (record.first_build_skip.count(coord) != 0 || record.pending_jobs.count(coord) != 0) {
+            continue;   // an edit (or another job) already meshes it with its current voxels
+        }
+        const std::uint64_t revision = ++next_job_revision_;
+        record.chunk_revisions[coord] = revision;
+        const bool want_collider = record.collider_interest.count(coord) != 0;
+        record.pending_jobs[coord] = TerrainRecord::PendingJob{true, want_collider};
+        const float job_distance =
+            has_camera ? distance(matrix4_point(transform, chunk_center_local(coord, voxel_size)), camera_pos) : 0.f;
+        terrain::MeshInput input = terrain::mesh_input(volume, coord);
+        input.build_collider = want_collider;
+        mesher_.queue(terrain_id, revision, std::move(input), job_distance);
+    }
+    if (record.first_build.empty()) {
+        record.first_build_skip.clear();
     }
 }
 
@@ -599,6 +670,7 @@ void TerrainWorld::update(DataModel& game, double now_ms) {
         {
             PROFILE_SCOPE("Terrain queue", profiler::Group::Engine);
             queue_dirty(id, *terrain, record, fresh, has_camera, camera_pos, now_ms);
+            admit_first_build(id, *terrain, record, has_camera, camera_pos);
         }
         {
             PROFILE_SCOPE("Terrain LOD", profiler::Group::Engine);

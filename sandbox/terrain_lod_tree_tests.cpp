@@ -219,12 +219,17 @@ void ask_island_colliders(TerrainWorld& world, DataModel& game, const Terrain& t
 }
 
 // Updates TerrainWorld until its workers are idle and nothing new was
-// queued, with a clock that passes the debounce window every update.
+// queued, with a clock that passes the debounce window every update. A
+// first build is admitted a few chunks per update, so the count starts once
+// it is all admitted.
 void settle_lod(TerrainWorld& world, DataModel& game, double& now) {
     for (int i = 0; i < 16; ++i) {
         world.update(game, now);
         world.wait_idle();
         now += 2.0 * kRebuildIntervalMs;
+        if (!world.first_build_done()) {
+            i = 0;
+        }
     }
     world.update(game, now);
 }

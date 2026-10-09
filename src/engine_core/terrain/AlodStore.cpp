@@ -258,9 +258,12 @@ std::optional<AlodStore> AlodStore::create(const std::filesystem::path& path, st
     store.content_key_ = content_key;
     store.voxel_size_ = voxel_size;
     store.end_ = kHeaderSize;
-    if (!store.commit()) {
+    // Content key 0 until the first commit: a store cut short before it
+    // ever settled must not open as an empty, valid one.
+    if (!write_at(*store.file_, 0, header_bytes(0, voxel_size, 0, 0, 0))) {
         return std::nullopt;
     }
+    store.file_->flush();
     return store;
 }
 

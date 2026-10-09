@@ -610,3 +610,81 @@ TEST_CASE("TW-A3 a damaged .alod is rebuilt from the voxels", "[terrain]") {
     REQUIRE(world.meshed_count() >= footprint);
     REQUIRE(AlodStore::open(alod, t.content_key(), t.volume().voxel_size()));
 }
+
+// ---- Review fixes ----
+
+TEST_CASE("AL7 a store never committed is not a store", "[terrain]") {
+    TempFile file("al7.alod");
+    {
+        std::optional<AlodStore> store = AlodStore::create(file.path, 7u, 1.f);
+        REQUIRE(store);
+        REQUIRE(store->put(NodeKey{2, 0, 0, 0}, test_mesh(1, false), 1.f, Vec3{}, Vec3{}));
+        // Not committed: Studio stopped before the first build settled.
+    }
+    REQUIRE_FALSE(AlodStore::open(file.path, 7u, 1.f));
+}
+
+TEST_CASE("TK1 a Terrain's content key holds only while its voxels match the file", "[terrain]") {
+    SimRole role;
+    TempDir dir;
+    {
+        Game game;
+        Project project = Project::create(dir.path, game);
+        auto& t = game.create<Terrain>();
+        game.set_parent(t.id(), workspace_of(game));
+        game.set_name(t.id(), "Slab");
+        REQUIRE_FALSE(t.edit_volume([&](VoxelVolume& v) { return v.fill(ball_at(0.f, 0.f, 0.f, 10.f), 1); }));
+        REQUIRE(t.content_key() == 0u);   // no file holds these voxels yet
+        project.save();
+        REQUIRE(t.content_key() != 0u);
+    }
+    Game game;
+    Project project = Project::load(dir.path, game);
+    Terrain& t = slab_named(game);
+    const std::uint64_t loaded = t.content_key();
+    REQUIRE(loaded != 0u);
+    REQUIRE_FALSE(t.edit_volume([&](VoxelVolume& v) { return v.fill(ball_at(20.f, 0.f, 0.f, 6.f), 1); }));
+    REQUIRE(t.content_key() == 0u);   // edited: the file no longer describes them
+    project.save();
+    REQUIRE(t.content_key() != 0u);
+    REQUIRE(t.content_key() != loaded);
+}
+
+TEST_CASE("TW-A4 a rewrite that cannot replace a locked .alod keeps serving the new meshes", "[terrain]") {
+    SimRole role;
+    TempDir dir;
+    make_slab_project(dir);
+    Game game;
+    Project project = Project::load(dir.path, game);
+    Terrain& t = slab_named(game);
+    const std::filesystem::path alod = t.lod_cache_path();
+    std::filesystem::path temp = alod;
+    temp += ".tmp";
+    look_from(game, Vec3{16.f, 40.f, 16.f});
+    TerrainWorld world({}, 2);
+    double now = 0.0;
+    settle_all(world, game, t.id(), now);
+    const ChunkCoord far_chunk{kSlabChunks - 2, 0, kSlabChunks - 2};
+    const float x = (static_cast<float>(far_chunk.x) + 0.5f) * kChunkSize;
+    const float z = (static_cast<float>(far_chunk.z) + 0.5f) * kChunkSize;
+    REQUIRE_FALSE(t.edit_volume([&](VoxelVolume& v) { return v.subtract(ball_at(x, 24.f, z, 14.f)); }));
+    settle_all(world, game, t.id(), now);
+    {
+        // Something else (an indexer, a virus scanner) holds the old file open.
+        std::ifstream holder(alod, std::ios::binary);
+        REQUIRE(holder.is_open());
+        project.save();
+        settle_all(world, game, t.id(), now);
+    }
+    // The old file could not be replaced: the new store lives on beside it,
+    // complete and under the saved voxels' key.
+    std::optional<AlodStore> fresh = AlodStore::open(temp, t.content_key(), t.volume().voxel_size());
+    REQUIRE(fresh);
+    REQUIRE(fresh->entries().size() > 0u);
+    // Flying to the far corner reads its new meshes back without a rebuild.
+    look_from(game, Vec3{x, 40.f, z});
+    settle_all(world, game, t.id(), now);
+    const LodTree::Node* node = world.lod_tree(t.id())->find(node_of(far_chunk, 2));
+    REQUIRE(node != nullptr);
+    REQUIRE(node->resident);
+}

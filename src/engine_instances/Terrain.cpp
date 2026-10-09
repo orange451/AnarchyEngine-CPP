@@ -375,6 +375,7 @@ void Terrain::read_data_file(std::string path) {
         return;
     }
     volume_.set_chunks(loaded.chunks());
+    content_revision_ = volume_.revision();
     saved_ = true;
     saved_path_ = data_path_;
     saved_chunks_ = volume_.chunks();
@@ -513,6 +514,11 @@ std::optional<std::string> Terrain::save_resources(const std::filesystem::path& 
     std::error_code error;
     if (saved_ && saved_path_ == path && saved_chunks_ == chunks &&
         (chunks.empty() || std::filesystem::is_regular_file(root / std::filesystem::u8path(path), error))) {
+        // Edited and then put back as saved (undo): the file still holds
+        // these voxels, so its key holds again.
+        if (!simulation_running() && content_key_ != 0) {
+            content_revision_ = volume_.revision();
+        }
         return std::nullopt;
     }
     std::uint64_t key = 0;
@@ -523,6 +529,7 @@ std::optional<std::string> Terrain::save_resources(const std::filesystem::path& 
     // shows, so the key (which the far-mesh cache follows) stays as it was.
     if (!simulation_running()) {
         content_key_ = key;
+        content_revision_ = volume_.revision();
     }
     // Every chunk now has its frame: the edited ones stop holding their
     // cells, so the ChunkCache's budget covers them too.
@@ -588,6 +595,8 @@ void Terrain::on_reuse() {
     saved_ = false;
     saved_path_.clear();
     saved_chunks_.clear();
+    content_key_ = 0;
+    content_revision_ = 0;
 }
 
 namespace {

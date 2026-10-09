@@ -150,6 +150,16 @@ public:
     // then on may leave RAM (see kFarRingNodes). Null: every node stays.
     // The store must outlive the tree or be detached first.
     void attach_store(AlodStore* store) { store_ = store; }
+    // Off while the voxels differ from the saved file (edits not yet saved):
+    // rebuilt nodes are not written to the store, and so stay in RAM, until
+    // a save rewrites the store from RAM. On by default.
+    void set_store_writes(bool on) { store_writes_ = on; }
+    // The store now holds every current level >= 2 build (it was just
+    // rewritten from them): each may leave RAM.
+    void mark_all_persisted();
+    // Nothing can be read back: every level >= 2 node stays in RAM (those
+    // already out are read from nowhere, so they rebuild when wanted).
+    void forget_persisted();
     // A warm start, on a tree with no nodes yet: every node the store holds,
     // built and current but not in RAM, a level-1 node over each of its
     // surface chunks (built, not in RAM), and a level-0 node per surface
@@ -239,6 +249,7 @@ private:
 
     float voxel_size_;
     AlodStore* store_ = nullptr;
+    bool store_writes_ = true;
     std::vector<NodeKey> loads_;
     std::uint64_t own_revisions_ = 0;
     std::uint64_t* revisions_;

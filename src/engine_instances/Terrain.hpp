@@ -61,9 +61,12 @@ public:
     // ever writes over it.
     void load_data_path(std::string path);
     // The content key (terrain::content_key_of) of the .avox bytes this
-    // Terrain last read or wrote; 0 when it has none (new, pasted, empty).
-    // SimulationThread.
-    std::uint64_t content_key() const { return content_key_; }
+    // Terrain last read or wrote, while its voxels are still exactly those;
+    // 0 once anything changed them (an edit, undo, a restore) and when no
+    // file holds them (new, pasted, empty). SimulationThread.
+    std::uint64_t content_key() const {
+        return volume_.revision() == content_revision_ ? content_key_ : 0;
+    }
     // Where the far-mesh cache (.alod) for DataPath lives: the .avox's path
     // with the .alod extension; empty without a project or DataPath.
     std::filesystem::path lod_cache_path() const;
@@ -150,6 +153,8 @@ private:
     std::string saved_path_;
     terrain::ChunkMap saved_chunks_;
     std::uint64_t content_key_ = 0;
+    // volume_.revision() when content_key_ was set.
+    std::uint64_t content_revision_ = 0;
 };
 
 }  // namespace engine_core

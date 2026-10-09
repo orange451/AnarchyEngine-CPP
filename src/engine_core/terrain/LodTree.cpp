@@ -300,7 +300,7 @@ void LodTree::node_built(const NodeResult& result) {
     node->loading = false;
     node->error = result.result.error;
     node->mesh_revision = next_revision();
-    node->persisted = store_ != nullptr && result.key.level >= 2 &&
+    node->persisted = store_ != nullptr && store_writes_ && result.key.level >= 2 &&
                       store_->put(result.key, *node->compact, node->error, node->bounds_min, node->bounds_max);
 }
 
@@ -462,6 +462,28 @@ std::size_t LodTree::compact_bytes() const {
         }
     }
     return total;
+}
+
+void LodTree::mark_all_persisted() {
+    for (auto& [key, node] : nodes_) {
+        if (key.level >= 2 && node.built && node.has_surface && !node.stale()) {
+            node.persisted = true;
+        }
+    }
+    residency_dirty_ = true;
+}
+
+void LodTree::forget_persisted() {
+    for (auto& [key, node] : nodes_) {
+        if (key.level < 2 || !node.persisted) {
+            continue;
+        }
+        node.persisted = false;
+        if (!node.resident) {
+            mark_stale(node);   // its mesh is gone with the store: built again when wanted
+        }
+    }
+    residency_dirty_ = true;
 }
 
 bool LodTree::settled() const {

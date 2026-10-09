@@ -336,6 +336,8 @@ private:
         bool edited_since_save = false;
         // The store's last commit matches saved_key's voxels.
         bool store_committed = false;
+        // The saved_key whose rewrite failed: not tried again until the next save.
+        std::uint64_t rewrite_failed_key = 0;
     };
 
     // A result off the pool: dropped if stale, held if its edit batch still

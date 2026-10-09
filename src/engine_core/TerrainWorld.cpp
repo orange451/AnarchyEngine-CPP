@@ -277,6 +277,7 @@ void TerrainWorld::queue_dirty(InstanceId terrain_id, Terrain& terrain, TerrainR
     volume.take_dirty(dirty);
     if (!dirty.empty()) {
         record.edited_since_save = true;
+        record.tree->set_store_writes(false);   // before this edit's nodes rebuild
     }
     if (!record.first_build.empty()) {
         // Meshed by this edit with its new voxels: the first build leaves them.
@@ -332,9 +333,17 @@ bool TerrainWorld::open_store(Terrain& terrain, TerrainRecord& record) {
     record.saved_key = terrain.content_key();
     record.edited_since_save = false;
     record.store_committed = false;
+    record.rewrite_failed_key = 0;
     const std::filesystem::path path = terrain.lod_cache_path();
     if (path.empty() || record.saved_key == 0) {
         return false;   // no project, or voxels no file holds yet
+    }
+    {
+        // A rewrite a previous session could not finish or rename.
+        std::filesystem::path temp = path;
+        temp += ".tmp";
+        std::error_code ignored;
+        std::filesystem::remove(temp, ignored);
     }
     const float voxel_size = terrain.volume().voxel_size();
     if (std::optional<terrain::AlodStore> store = terrain::AlodStore::open(path, record.saved_key, voxel_size)) {
@@ -367,15 +376,30 @@ void TerrainWorld::update_store(Terrain& terrain, TerrainRecord& record) {
         return;
     }
     // A save changed the voxels' key: write every far node, as the tree
-    // now has them, to a new store under it, and swap it in.
+    // now has them, to a new store under it, and swap it in. One try per
+    // key: a failure waits for the next save rather than retrying every
+    // update.
+    if (record.rewrite_failed_key == record.saved_key) {
+        return;
+    }
     PROFILE_SCOPE("Terrain far-mesh cache rewrite", profiler::Group::Engine);
-    const std::filesystem::path path = record.store->path();
+    const std::filesystem::path path = terrain.lod_cache_path();
     std::filesystem::path temp = path;
     temp += ".tmp";
     const float voxel_size = terrain.volume().voxel_size();
+    const auto give_up = [&] {
+        record.rewrite_failed_key = record.saved_key;
+        std::error_code ignored;
+        std::filesystem::remove(temp, ignored);
+    };
+    if (path.empty()) {
+        give_up();
+        return;
+    }
     {
         std::optional<terrain::AlodStore> fresh = terrain::AlodStore::create(temp, record.saved_key, voxel_size);
         if (!fresh) {
+            give_up();
             return;
         }
         for (const auto& [key, node] : record.tree->nodes()) {
@@ -387,29 +411,35 @@ void TerrainWorld::update_store(Terrain& terrain, TerrainRecord& record) {
                 mesh = record.store->load(key);
             }
             if (mesh == nullptr || !fresh->put(key, *mesh, node.error, node.bounds_min, node.bounds_max)) {
-                return;   // the old store stays; the next save tries again
+                fresh.reset();
+                give_up();   // the old store stays; the next save tries again
+                return;
             }
         }
         fresh->set_surface_chunks(record.tree->surface_chunks());
         if (!fresh->commit()) {
+            fresh.reset();
+            give_up();
             return;
         }
     }
-    const std::uint64_t old_key = record.store->content_key();
     record.tree->attach_store(nullptr);
     record.store.reset();   // closes the file so it can be replaced
     std::error_code error;
     std::filesystem::rename(temp, path, error);
-    // Renamed: the new store. Not: the old one, still on disk, still able to
-    // read back the nodes the tree has let go of.
-    const std::uint64_t key = error ? old_key : record.saved_key;
-    if (std::optional<terrain::AlodStore> store = terrain::AlodStore::open(path, key, voxel_size)) {
+    // Not renamed (something holds the old file open): the new store stays
+    // where it is for this session. It holds every node, so the tree reads
+    // back from it; the next open finds the old file stale and rebuilds.
+    if (std::optional<terrain::AlodStore> store =
+            terrain::AlodStore::open(error ? temp : path, record.saved_key, voxel_size)) {
         record.store = std::make_unique<terrain::AlodStore>(std::move(*store));
         record.tree->attach_store(record.store.get());
-        record.store_committed = !error;
-    }
-    if (error) {
-        std::filesystem::remove(temp, error);
+        record.tree->mark_all_persisted();
+        record.store_committed = true;
+    } else {
+        // Neither file opens: nothing can be read back, so nothing may leave RAM.
+        record.tree->forget_persisted();
+        record.rewrite_failed_key = record.saved_key;
     }
 }
 
@@ -774,14 +804,17 @@ void TerrainWorld::update(DataModel& game, double now_ms) {
             PROFILE_SCOPE("Terrain batches", profiler::Group::Engine);
             expire_batches(record, now_ms);
         }
-        if (!fresh && terrain->content_key() != record.saved_key) {
+        const std::uint64_t key = terrain->content_key();
+        if (!fresh && key != 0 && key != record.saved_key) {
             // Saved since the last update: the file now holds the voxels as
             // they were then. An edit queued below (made after, or not yet
-            // taken) marks them changed again.
-            record.saved_key = terrain->content_key();
+            // taken) marks them changed again. (0 means only that they
+            // changed, which edited_since_save already tracks.)
+            record.saved_key = key;
             record.edited_since_save = false;
             record.store_committed = false;
         }
+        record.tree->set_store_writes(!record.edited_since_save);
         {
             PROFILE_SCOPE("Terrain queue", profiler::Group::Engine);
             queue_dirty(id, *terrain, record, fresh, has_camera, camera_pos, now_ms);

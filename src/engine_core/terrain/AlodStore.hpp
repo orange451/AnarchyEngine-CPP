@@ -53,8 +53,8 @@ public:
     // nullopt if it is missing, damaged, or for other voxels.
     static std::optional<AlodStore> open(const std::filesystem::path& path, std::uint64_t content_key,
                                          float voxel_size);
-    // An empty, committed store at path, replacing any file there; nullopt
-    // when it cannot be written.
+    // An empty store at path, replacing any file there; nullopt when it
+    // cannot be written. open() refuses it until its first commit().
     static std::optional<AlodStore> create(const std::filesystem::path& path, std::uint64_t content_key,
                                            float voxel_size);
 

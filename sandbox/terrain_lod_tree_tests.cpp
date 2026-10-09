@@ -1615,3 +1615,20 @@ TEST_CASE("LR5 an edited region stays in RAM until rebuilt and persisted again",
     REQUIRE(rig.tree.find(far_node)->persisted);
     REQUIRE(rig.builds.at(far_node) >= 2);
 }
+
+TEST_CASE("LR6 with store writes off, a rebuilt node stays in RAM and the file does not grow", "[terrain][lod]") {
+    StoreFile file("lr6.alod");
+    std::optional<AlodStore> store = AlodStore::create(file.path, 1u, 1.f);
+    TreeRig rig;
+    build_sheet(rig, &*store);
+    const std::uint64_t bytes = store->file_bytes();
+    rig.tree.set_store_writes(false);
+    const ChunkCoord far_chunk{kSheet - 2, 0, kSheet - 2};
+    const NodeKey far_node = node_of(far_chunk, 2);
+    rig.tree.chunk_queued(far_chunk, true);
+    rig.tree.chunk_meshed(far_chunk, fake_chunk_mesh(far_chunk), true);
+    rig.settle();
+    REQUIRE(store->file_bytes() == bytes);
+    REQUIRE_FALSE(rig.tree.find(far_node)->persisted);
+    REQUIRE(rig.tree.find(far_node)->resident);
+}

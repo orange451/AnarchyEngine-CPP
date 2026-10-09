@@ -85,6 +85,11 @@ struct MeshDraw {
     // Casts shadows only, never drawn in view: terrain out of the camera's
     // view that still shadows what is in it (TerrainDraws).
     bool shadowOnly = false;
+    // Which of the mesh's LODs this draws: Brush meshes keep one Material's
+    // triangles in each LOD past 0 (engine_core::BrushVisuals).
+    std::uint8_t lod = 0;
+    // False for every Brush draw of a mesh but one, so its LOD 0 casts once.
+    bool castsShadow = true;
     // The Terrain's two texture arrays, as Renderer::terrainArrays resolves
     // them (Task 6): Surface A (color + height) and Surface B (normal +
     // roughness + metalness), full mip chains. terrainLayerCount 0 means no
@@ -353,6 +358,9 @@ public:
     // hides a line it is drawn faint, so a shape inside a mesh still shows.
     // Copied, and drawn by every draw until set again. Needs no GL context.
     void setOutlines(const float* points, int pointCount);
+    // A tool's own lines, drawn with the outlines: x, y, z, r, g, b, a per point,
+    // two points a segment, straight alpha. Kept until replaced; call before setOutlines.
+    void setToolLines(const float* points, int pointCount);
     // Dragger handles draw lays over everything after the outlines, as
     // handle_mesh builds them: world-space triangles, each corner colored,
     // drawn unlit with straight alpha and no depth test, so a handle behind a
@@ -884,6 +892,7 @@ private:
     SceneLighting lighting_;
     bool gridVisible_ = false;
     std::vector<float> outlines_;
+    std::vector<float> toolLines_;
     std::vector<engine_core::HandleVertex> handles_;
 
     // Per draw, reused.

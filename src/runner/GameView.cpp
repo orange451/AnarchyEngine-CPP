@@ -1,5 +1,7 @@
 #include "GameView.hpp"
 
+#include "Brush.hpp"
+
 #include "profiler/Profiler.hpp"
 
 #include "AssetInstances.hpp"
@@ -148,6 +150,20 @@ GameView::GameView(Runner& runner, std::string name, bool closable)
     terrainPalette_ = palette.get();
     getChildren().add(std::move(palette));
 
+    // Brush mode's palette (B) and the measurement beside the pointer.
+    brushTool_ = std::make_unique<BrushTool>(*engine_);
+    brushTool_->setOnUsed([this] { requestFocus(); });
+    auto brushPalette = brushTool_->makePalette();
+    brushPalette->setVisible(false);
+    brushPalette_ = brushPalette.get();
+    getChildren().add(std::move(brushPalette));
+    auto readout = jadefx::make<jadefx::Label>("");
+    readout->setStyle("font-size: 12px; padding: 2px 6px; background-color: rgba(20, 22, 26, 0.85); border-radius: 4px;");
+    readout->setTextFill(jadefx::Color::rgb8(255, 214, 120));
+    readout->setVisible(false);
+    brushReadout_ = readout.get();
+    getChildren().add(std::move(readout));
+
     // Last, so it draws over everything here and is hit first.
     auto overlay = jadefx::make<ProfilerOverlay>();
     overlay->setVisible(false);
@@ -194,6 +210,27 @@ void GameView::refreshOverlays() {
         terrainBrush_->turnOff();
     }
     terrainPalette_->setVisible(editing && !profiling && terrainBrush_->active());
+    if (!editing && brushTool_->active()) {
+        brushTool_->turnOff();
+    }
+    brushPalette_->setVisible(editing && !profiling && brushTool_->active());
+    brushPalette_->refresh();
+}
+
+BrushModifiers GameView::brushMods(int mods) const {
+    BrushModifiers out;
+    out.shift = (mods & 0x1) != 0;
+    out.control = (mods & (0x2 | 0x8)) != 0;
+    out.alt = (mods & 0x4) != 0;
+    return out;
+}
+
+void GameView::syncBrushView() {
+    engine_core::DraggerView view;
+    view.camera = viewCamera_;
+    view.fov_degrees = viewFov_;
+    view.size = engine_core::Vec2{static_cast<float>(getWidth()), static_cast<float>(getHeight())};
+    brushTool_->setView(view);
 }
 
 void GameView::linkCamera(std::string guid) {
@@ -432,6 +469,41 @@ void GameView::collectMeshes() {
     const double terrainNow =
         std::chrono::duration<double>(std::chrono::steady_clock::now() - terrainClockStart_).count();
     AppendTerrainDraws(snapshot.terrains, terrainCamera, terrainNow, terrainFades_, meshes_, renderer_, meshDraws_);
+    // Brushes: baked cells and single Brushes, one draw per Material.
+    for (const engine_core::VisualBrushDraw& source : snapshot.brushes) {
+        if (source.look.session == nullptr) {
+            continue;
+        }
+        const anarchy::amesh::GpuMesh* mesh = meshes_.getBrush(source.look.revision, *source.look.session);
+        if (mesh == nullptr || source.lod >= mesh->lod_count()) {
+            continue;
+        }
+        const engine_core::VisualMesh& look = source.look;
+        MeshDraw& draw = meshDraws_.emplace_back();
+        draw.mesh = mesh;
+        draw.model = source.world;
+        draw.owner = source.owner;
+        draw.texture = textures_.get(look.diffuse_texture, look.diffuse_flip_y);
+        draw.normalTexture = textures_.get(look.normal_texture, look.normal_flip_y);
+        draw.roughnessTexture = textures_.get(look.roughness_texture, look.roughness_flip_y);
+        draw.metalnessTexture = textures_.get(look.metalness_texture, look.metalness_flip_y);
+        draw.emissiveTexture = textures_.get(look.emissive_texture, look.emissive_flip_y);
+        draw.color[0] = look.color.r;
+        draw.color[1] = look.color.g;
+        draw.color[2] = look.color.b;
+        draw.color[3] = look.color.a;
+        draw.emissive[0] = look.emissive.r;
+        draw.emissive[1] = look.emissive.g;
+        draw.emissive[2] = look.emissive.b;
+        draw.metalness = look.metalness;
+        draw.roughness = look.roughness;
+        draw.reflectivity = look.reflectivity;
+        draw.transparency = 1.f - (1.f - std::clamp(look.transparency, 0.f, 1.f)) * (1.f - source.transparency);
+        draw.lod = static_cast<std::uint8_t>(std::min<std::uint32_t>(source.lod, 255));
+        draw.castsShadow = source.casts_shadow;
+        draw.slot = 0;
+    }
+    meshes_.sweepBrushes();
     SceneLighting lighting;
     lighting.ambient[0] = snapshot.lighting.ambient.r;
     lighting.ambient[1] = snapshot.lighting.ambient.g;
@@ -590,6 +662,20 @@ void GameView::layoutChildren() {
         terrainBrush_->tick(std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count(),
                             shiftHeld_);
     }
+    if (brushPalette_->isVisible()) {
+        constexpr double kPaletteWidth = 210.0;
+        brushPalette_->refresh();
+        brushPalette_->performLayout(contentLeft() + kMargin, contentTop() + kMargin, kPaletteWidth,
+                                     brushPalette_->measuredHeight(kPaletteWidth, contentHeight()));
+    }
+    const bool measuring = brushTool_->active() && !brushTool_->readout().empty();
+    brushReadout_->setVisible(measuring);
+    if (measuring) {
+        brushReadout_->setText(brushTool_->readout());
+        const double w = brushReadout_->measuredWidth(24.0);
+        const engine_core::Vec2 at = brushTool_->readoutAt();
+        brushReadout_->performLayout(contentLeft() + at.x + 14.0, contentTop() + at.y - 28.0, w, 22.0);
+    }
     // Each frame brings a new snapshot of the game, so the view lays out again next frame.
     markLayoutDirty(LayoutDirt::Arrange);
 }
@@ -709,6 +795,36 @@ void GameView::readSelectedBodies() {
             outline.transform = driven != nullptr ? driven->transform() : controller->transform();
             continue;
         }
+        if (const auto* brush = dynamic_cast<const engine_core::Brush*>(game_->instance(id))) {
+            if (!game_->in_workspace(id)) {
+                continue;
+            }
+            BodyOutline& outline = outlineScratch_.emplace_back();
+            for (BodyOutline& kept : outlines_) {
+                if (kept.id == id) {
+                    outline = std::move(kept);
+                    kept.id = 0;
+                    break;
+                }
+            }
+            // Its edges, exactly; made again only when its shape changes.
+            if (outline.id != id || outline.meshRevision != brush->shape_revision()) {
+                outline.meshRevision = brush->shape_revision();
+                outline.lines.clear();
+                const engine_core::brush::Shape& shape = brush->shape();
+                for (const auto& [a, b] : shape.edges) {
+                    const engine_core::brush::DVec3 p = shape.vertices[a];
+                    const engine_core::brush::DVec3 q = shape.vertices[b];
+                    outline.lines.push_back({static_cast<float>(p.x), static_cast<float>(p.y), static_cast<float>(p.z)});
+                    outline.lines.push_back({static_cast<float>(q.x), static_cast<float>(q.y), static_cast<float>(q.z)});
+                }
+            }
+            outline.id = id;
+            outline.shape = -2;
+            outline.driven = 0;
+            outline.transform = brush->transform();
+            continue;
+        }
         const auto* body = dynamic_cast<const engine_core::PhysicsObject*>(game_->instance(id));
         if (body == nullptr || !game_->in_workspace(id)) {
             continue;
@@ -803,6 +919,9 @@ void GameView::collectOutlines(const engine_core::VisualSnapshot& snapshot) {
         }
     }
     terrainBrush_->appendOutline(outlinePoints_);
+    toolLines_.clear();
+    brushTool_->appendLines(toolLines_);
+    renderer_.setToolLines(toolLines_.data(), static_cast<int>(toolLines_.size() / 7));
     renderer_.setOutlines(outlinePoints_.data(), static_cast<int>(outlinePoints_.size() / 3));
 }
 
@@ -833,7 +952,8 @@ void GameView::refreshCameraList() {
 
 void GameView::collectHandles(const engine_core::VisualSnapshot& snapshot) {
     handleVertices_.clear();
-    if (viewFov_ > 0.f && getWidth() > 0.0 && getHeight() > 0.0) {
+    // Brush mode moves brushes itself; the Move tool's arrows would only be in the way.
+    if (!brushTool_->active() && viewFov_ > 0.f && getWidth() > 0.0 && getHeight() > 0.0) {
         engine_core::DraggerView view;
         view.camera = viewCamera_;
         view.fov_degrees = viewFov_;
@@ -1020,6 +1140,14 @@ void GameView::handleMousePressed(const jadefx::MouseEvent& event) {
         IdePane::handleMousePressed(event);
         return;
     }
+    if (brushTool_->active() && event.button == 0) {
+        syncBrushView();
+        if (const auto ray = rayAt(event.x, event.y)) {
+            brushTool_->press(*ray, brushMods(event.mods), event.clickCount);
+        }
+        IdePane::handleMousePressed(event);
+        return;
+    }
     if (game_ != nullptr) {
         game_->input().post_mouse_button(event.button, true, localX(event.x), localY(event.y));
     }
@@ -1029,6 +1157,11 @@ void GameView::handleMousePressed(const jadefx::MouseEvent& event) {
 void GameView::handleMouseReleased(const jadefx::MouseEvent& event) {
     if (terrainBrush_->active() && event.button == 0) {
         terrainBrush_->release();
+        IdePane::handleMouseReleased(event);
+        return;
+    }
+    if (brushTool_->active() && event.button == 0) {
+        brushTool_->release(brushMods(event.mods));
         IdePane::handleMouseReleased(event);
         return;
     }
@@ -1045,6 +1178,10 @@ void GameView::handleMouseDragged(const jadefx::MouseEvent& event) {
         shiftHeld_ = event.shift();
         terrainBrush_->hover(rayAt(event.x, event.y));
     }
+    if (brushTool_->active() && !pointerWanted()) {
+        syncBrushView();
+        brushTool_->hover(rayAt(event.x, event.y), brushMods(event.mods));
+    }
     if (game_ != nullptr) {
         game_->input().post_mouse_move(localX(event.x), localY(event.y));
     }
@@ -1056,6 +1193,10 @@ void GameView::handleMouseMoved(const jadefx::MouseEvent& event) {
     cursorY_ = event.y;
     if (terrainBrush_->active()) {
         terrainBrush_->hover(rayAt(event.x, event.y));
+    }
+    if (brushTool_->active() && !pointerWanted()) {
+        syncBrushView();
+        brushTool_->hover(rayAt(event.x, event.y), brushMods(event.mods));
     }
     if (game_ != nullptr) {
         game_->input().post_mouse_move(localX(event.x), localY(event.y));
@@ -1095,13 +1236,31 @@ void GameView::handleKey(jadefx::KeyEvent& event) {
     // Terrain mode: T turns it on and off (edit mode only).
     const bool editing = !playerView_ && !runner_->testing();
     if (editing && event.pressed && !event.repeat && !event.alt && !event.meta) {
+        if (event.key == jadefx::Key::B && !event.control && !event.shift && !pointerWanted()) {
+            if (terrainBrush_->active()) {
+                terrainBrush_->turnOff();
+            }
+            brushTool_->toggle();
+            refreshOverlays();
+            event.consume();
+            return;
+        }
         if (event.key == jadefx::Key::T && !event.control && !event.shift) {
+            if (brushTool_->active()) {
+                brushTool_->turnOff();
+            }
             terrainBrush_->toggle();
             terrainPalette_->refresh();
             refreshOverlays();
             event.consume();
             return;
         }
+    }
+    // Brush mode's keys, except while the camera flies (the right button holds the pointer).
+    if (editing && brushTool_->active() && !pointerWanted() && brushTool_->key(event)) {
+        brushPalette_->refresh();
+        event.consume();
+        return;
     }
     // A held key repeats. InputBegan fires once, on the first press.
     if (game_ != nullptr && !event.repeat) {

@@ -25,6 +25,7 @@ inline int class_rank(std::string_view class_name) {
         {"PlayerController", 3},
         {"Model", 3},
         {"Terrain", 3},
+        {"Brush", 3},
         {"Skybox", 4},
         {"DynamicSky", 4},
         {"AmbientOcclusionEffect", 4},

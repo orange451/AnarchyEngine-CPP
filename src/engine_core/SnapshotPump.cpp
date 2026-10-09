@@ -358,6 +358,31 @@ void SnapshotPump::set_row_prefab(VisualInstance& inst, const std::string& guid)
     inst.prefab = next;
 }
 
+void fill_visual_material(const DataModel& game, const Material* material, VisualMesh& out) {
+    // Assigned in place, so unchanged strings keep their buffers. Empty for no Material or no Texture.
+    const auto texture_path = [&](std::size_t index, std::string& path, bool& flip_y) {
+        const Texture* texture = material != nullptr ? ReferencedAs<Texture>(game, *material, index) : nullptr;
+        if (texture != nullptr) {
+            path = texture->path();
+            flip_y = texture->flip_y();
+        } else {
+            path.clear();
+            flip_y = false;
+        }
+    };
+    texture_path(Material::kDiffuseTextureReference, out.diffuse_texture, out.diffuse_flip_y);
+    texture_path(Material::kNormalTextureReference, out.normal_texture, out.normal_flip_y);
+    texture_path(Material::kRoughnessTextureReference, out.roughness_texture, out.roughness_flip_y);
+    texture_path(Material::kMetalnessTextureReference, out.metalness_texture, out.metalness_flip_y);
+    texture_path(Material::kEmissiveTextureReference, out.emissive_texture, out.emissive_flip_y);
+    out.color = material != nullptr ? material->color() : ColorRgb{};
+    out.emissive = material != nullptr ? material->emissive() : Material::kDefaultEmissive;
+    out.metalness = unit(material != nullptr ? material->metalness() : Material::kDefaultMetalness);
+    out.roughness = unit(material != nullptr ? material->roughness() : Material::kDefaultRoughness);
+    out.reflectivity = unit(material != nullptr ? material->reflectivity() : Material::kDefaultReflectivity);
+    out.transparency = unit(material != nullptr ? material->transparency() : Material::kDefaultTransparency);
+}
+
 void SnapshotPump::resolve_prefabs(DataModel& game) {
     base_.prefabs.resize(std::max<std::size_t>(prefab_entries_.size(), 1));
     for (std::size_t index = 1; index < prefab_entries_.size(); ++index) {
@@ -401,32 +426,7 @@ void SnapshotPump::resolve_prefabs(DataModel& game) {
                         out.path = mesh->path();
                         out.session.reset();
                     }
-                    const Material* material = ReferencedAs<Material>(game, *model, Model::kMaterialReference);
-                    // Assigned in place, as above. Empty for no Material or no Texture.
-                    const auto texture_path = [&](std::size_t index, std::string& path, bool& flip_y) {
-                        const Texture* texture =
-                            material != nullptr ? ReferencedAs<Texture>(game, *material, index) : nullptr;
-                        if (texture != nullptr) {
-                            path = texture->path();
-                            flip_y = texture->flip_y();
-                        } else {
-                            path.clear();
-                            flip_y = false;
-                        }
-                    };
-                    texture_path(Material::kDiffuseTextureReference, out.diffuse_texture, out.diffuse_flip_y);
-                    texture_path(Material::kNormalTextureReference, out.normal_texture, out.normal_flip_y);
-                    texture_path(Material::kRoughnessTextureReference, out.roughness_texture, out.roughness_flip_y);
-                    texture_path(Material::kMetalnessTextureReference, out.metalness_texture, out.metalness_flip_y);
-                    texture_path(Material::kEmissiveTextureReference, out.emissive_texture, out.emissive_flip_y);
-                    out.color = material != nullptr ? material->color() : ColorRgb{};
-                    out.emissive = material != nullptr ? material->emissive() : Material::kDefaultEmissive;
-                    out.metalness = unit(material != nullptr ? material->metalness() : Material::kDefaultMetalness);
-                    out.roughness = unit(material != nullptr ? material->roughness() : Material::kDefaultRoughness);
-                    out.reflectivity =
-                        unit(material != nullptr ? material->reflectivity() : Material::kDefaultReflectivity);
-                    out.transparency =
-                        unit(material != nullptr ? material->transparency() : Material::kDefaultTransparency);
+                    fill_visual_material(game, ReferencedAs<Material>(game, *model, Model::kMaterialReference), out);
                 }
             }
         }
@@ -590,6 +590,7 @@ void SnapshotPump::blit(VisualSnapshot& dst) const {
     dst.draggers = base_.draggers;
     dst.billboards = base_.billboards;
     dst.terrains = base_.terrains;
+    dst.brushes = base_.brushes;
     dst.instances.resize(base_.instances.size());
     std::copy(base_.instances.begin(), base_.instances.end(), dst.instances.begin());
     // Element by element, so strings that did not change keep their buffers.
@@ -697,6 +698,7 @@ void SnapshotPump::take_changes(DataModel& game) {
     resolve_draggers(game);
     resolve_billboards(game);
     resolve_terrains(game);
+    brushes_.update(game, base_.brushes);
     base_.resources_root = game.resources_root();
     if (camera_pending_) {
         base_.camera = pending_camera_;

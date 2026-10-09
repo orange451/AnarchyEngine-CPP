@@ -23,6 +23,9 @@ MeshCache::~MeshCache() {
     for (auto& [mesh, entry] : sessions_) {
         entry.mesh.forget();
     }
+    for (auto& [revision, entry] : brushes_) {
+        entry.mesh.forget();
+    }
     for (auto& [key, entry] : nodes_) {
         entry.upload.mesh.forget();
     }
@@ -45,6 +48,10 @@ void MeshCache::clear() {
         entry.mesh.destroy();
     }
     sessions_.clear();
+    for (auto& [revision, entry] : brushes_) {
+        entry.mesh.destroy();
+    }
+    brushes_.clear();
     for (auto& [key, entry] : nodes_) {
         entry.upload.mesh.destroy();
     }
@@ -86,6 +93,24 @@ void MeshCache::sweepSessions() {
         if (!it->second.asked) {
             it->second.mesh.destroy();
             it = sessions_.erase(it);
+        } else {
+            it->second.asked = false;
+            ++it;
+        }
+    }
+}
+
+const anarchy::amesh::GpuMesh* MeshCache::getBrush(std::uint64_t revision, const anarchy::amesh::Data& data) {
+    SessionEntry& entry = brushes_[revision];
+    uploadOnce(entry, data, revision, false, "Brush geometry could not be drawn: ");
+    return entry.mesh.valid() ? &entry.mesh : nullptr;
+}
+
+void MeshCache::sweepBrushes() {
+    for (auto it = brushes_.begin(); it != brushes_.end();) {
+        if (!it->second.asked) {
+            it->second.mesh.destroy();
+            it = brushes_.erase(it);
         } else {
             it->second.asked = false;
             ++it;

@@ -43,6 +43,11 @@ public:
     // such as those a Stop ended. Call once a frame, after that frame's
     // getSession calls: the uploads they returned stay.
     void sweepSessions();
+    // Brush geometry (engine_core::BrushVisuals), keyed by its revision, which
+    // is unique to each mesh: an edited cell is a new key, its old upload swept.
+    const anarchy::amesh::GpuMesh* getBrush(std::uint64_t revision, const anarchy::amesh::Data& data);
+    // Deletes the Brush uploads no getBrush asked for since the last sweep.
+    void sweepBrushes();
     // The upload of one Terrain LOD node's mesh, kept per (terrain, key) and
     // uploaded again when revision (TerrainNodeView::revision) changes. A
     // level-0 node's chunk mesh (data) uploads as it is; a coarser node's
@@ -113,6 +118,7 @@ private:
     std::filesystem::path root_;
     std::unordered_map<std::string, Entry> entries_;
     std::unordered_map<engine_core::InstanceId, SessionEntry> sessions_;
+    std::unordered_map<std::uint64_t, SessionEntry> brushes_;
     std::unordered_map<NodeCacheKey, NodeEntry, NodeCacheKeyHash> nodes_;
 };
 

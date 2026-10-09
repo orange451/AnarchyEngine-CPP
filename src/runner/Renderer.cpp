@@ -524,7 +524,9 @@ bool Renderer::initialize() {
     glGenBuffers(1, &outlineVbo_);
     glBindBuffer(GL_ARRAY_BUFFER, outlineVbo_);
     glEnableVertexAttribArray(0);
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), nullptr);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 7 * sizeof(float), nullptr);
+    glEnableVertexAttribArray(1);
+    glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, 7 * sizeof(float), reinterpret_cast<void*>(3 * sizeof(float)));
     glBindVertexArray(0);
     glBindBuffer(GL_ARRAY_BUFFER, 0);
 
@@ -589,7 +591,9 @@ void Renderer::createSphere() {
     glBufferData(GL_ELEMENT_ARRAY_BUFFER, static_cast<GLsizeiptr>(indices.size() * sizeof(unsigned short)),
                  indices.data(), GL_STATIC_DRAW);
     glEnableVertexAttribArray(0);
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), nullptr);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 7 * sizeof(float), nullptr);
+    glEnableVertexAttribArray(1);
+    glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, 7 * sizeof(float), reinterpret_cast<void*>(3 * sizeof(float)));
     glBindVertexArray(0);
     glBindBuffer(GL_ARRAY_BUFFER, 0);
 }
@@ -1426,7 +1430,18 @@ void Renderer::gridPass(unsigned depth, const float* projection, const float* in
 }
 
 void Renderer::setOutlines(const float* points, int pointCount) {
-    outlines_.assign(points, points + std::max(pointCount, 0) / 2 * 2 * 3);
+    // Selection green, then the tool's own colored lines after.
+    const int count = std::max(pointCount, 0) / 2 * 2;
+    outlines_.clear();
+    outlines_.reserve(static_cast<std::size_t>(count) * 7 + toolLines_.size());
+    for (int i = 0; i < count; ++i) {
+        outlines_.insert(outlines_.end(), {points[i * 3], points[i * 3 + 1], points[i * 3 + 2], 0.35f, 1.f, 0.45f, 1.f});
+    }
+    outlines_.insert(outlines_.end(), toolLines_.begin(), toolLines_.end());
+}
+
+void Renderer::setToolLines(const float* points, int pointCount) {
+    toolLines_.assign(points, points + std::max(pointCount, 0) / 2 * 2 * 7);
 }
 
 void Renderer::outlinePass(unsigned depth, const float* projection, const float* inverseProjection) {
@@ -1449,7 +1464,7 @@ void Renderer::outlinePass(unsigned depth, const float* projection, const float*
     glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(outlines_.size() * sizeof(float)), outlines_.data(),
                  GL_DYNAMIC_DRAW);
     if (CanDraw(outline_.id)) {
-        glDrawArrays(RT_GL_LINES, 0, static_cast<GLsizei>(outlines_.size() / 3));
+        glDrawArrays(RT_GL_LINES, 0, static_cast<GLsizei>(outlines_.size() / 7));
     }
     glBindBuffer(GL_ARRAY_BUFFER, static_cast<GLuint>(arrayBuffer));
 }
@@ -1879,6 +1894,12 @@ void Renderer::findVisible(const MeshDraw* meshes, int count, const CameraView& 
             }
         }
         FindVisible(drawItems_.data(), count, camera, culling_, visibility_);
+        // A draw that names its LOD (Brush Materials) keeps it.
+        for (std::vector<VisibleDraw>* list : {&visibility_.opaque, &visibility_.transparent}) {
+            for (VisibleDraw& visible : *list) {
+                visible.lod = meshes[visible.index].lod;
+            }
+        }
         stats_.draws = count;
         stats_.visible = static_cast<int>(visibility_.opaque.size() + visibility_.transparent.size());
         stats_.culled = visibility_.culled;

@@ -4,13 +4,13 @@
 // drawn faint rather than not at all, so a shape inside a mesh still shows.
 in float vDistance;
 in vec4 vClip;
+in vec4 vColor;
 out vec4 fragColor;
 
 // The scene's depth, 1 where no opaque surface was drawn.
 uniform sampler2D uDepth;
 uniform mat4 uInverseProjection;
 
-const vec3 kColor = vec3(0.35, 1.0, 0.45);
 const float kHiddenAlpha = 0.3;
 // A line on a surface, as a collision box on its own mesh is, stays in
 // front of it: this far, or this part of its distance, whichever is more.
@@ -28,5 +28,5 @@ void main() {
             alpha = kHiddenAlpha;
         }
     }
-    fragColor = vec4(kColor, alpha);
+    fragColor = vec4(vColor.rgb, alpha * vColor.a);
 }

@@ -2,16 +2,19 @@
 // A line segment's end in world space, as Renderer::setOutlines takes it,
 // passed on with how far it is from the camera and where it lands on the pane.
 layout (location = 0) in vec3 aPosition;
+layout (location = 1) in vec4 aColor;
 
 uniform mat4 uView;
 uniform mat4 uProjection;
 
 out float vDistance;
 out vec4 vClip;
+out vec4 vColor;
 
 void main() {
     vec4 viewPosition = uView * vec4(aPosition, 1.0);
     vDistance = -viewPosition.z;
+    vColor = aColor;
     vClip = uProjection * viewPosition;
     gl_Position = vClip;
 }

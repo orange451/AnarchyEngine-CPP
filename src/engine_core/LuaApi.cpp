@@ -1442,8 +1442,66 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
     add("RaycastResult", "Position", "Where the ray hit, in world space.", "Vector3", false, {});
     add("RaycastResult", "Normal", "The hit surface's outward normal.", "Vector3", false, {});
     add("RaycastResult", "Distance", "How far along the ray the hit is, in studs.", "number", false, {});
-    add("RaycastResult", "Material", "Always nil: nothing but Terrain has one, and this engine has no Terrain yet.",
+    add("RaycastResult", "Material",
+        "The Material where the ray hit: a Terrain's material there, or the hit Brush face's. Nil for anything else, or "
+        "a face with none.",
         "Material?", false, {});
+    add("RaycastResult", "Face", "The index into the hit Brush's GetFaces(). Nil for anything but a Brush.", "number?",
+        false, {});
+
+    add("", "BrushFace",
+        "One face of a Brush: three points on its plane, counter-clockwise seen from outside, its Material, and its "
+        "texture alignment. A value, like Vector3: change one with With.",
+        nullptr, false, {});
+    add("BrushFace", "new", "A face through three points, counter-clockwise seen from outside. Collinear points raise.",
+        "BrushFace", false, {P("p1", "Vector3"), P("p2", "Vector3"), P("p3", "Vector3")});
+    add("BrushFace", "fromPlane", "A face from its outward normal and a point on it.", "BrushFace", false,
+        {P("normal", "Vector3"), P("point", "Vector3")});
+    add("BrushFace", "P1", "The first point, in the Brush's space.", "Vector3", false, {});
+    add("BrushFace", "P2", "The second point.", "Vector3", false, {});
+    add("BrushFace", "P3", "The third point.", "Vector3", false, {});
+    add("BrushFace", "Material", "The face's Material; nil draws the default.", "Material?", false, {});
+    add("BrushFace", "UAxis", "The texture's U axis, in the Brush's space.", "Vector3", false, {});
+    add("BrushFace", "VAxis", "The texture's V axis, in the Brush's space.", "Vector3", false, {});
+    add("BrushFace", "Offset", "The texture's shift, in repeats.", "Vector2", false, {});
+    add("BrushFace", "Scale", "Multiplies the Material's TextureScale.", "Vector2", false, {});
+    add("BrushFace", "Rotation", "Turns the texture about the face's normal, in degrees.", "number", false, {});
+    add("BrushFace", "Normal", "The outward unit normal, from the points.", "Vector3", false, {});
+    add("BrushFace", "With", "A copy with the named fields changed, such as {Material = m, Rotation = 90}.",
+        "BrushFace", false, {P("changes", "table")});
+
+    add("Brush", "CanCollide", "When false, nothing collides with this Brush and rays pass through it.", "boolean",
+        false, {});
+    add("Brush", "Color", "Tints every face, over its Material.", "Color3", false, {});
+    add("Brush", "Transparency", "Fades every face, over its Material.", "number", false, {});
+    add("Brush", "GetFaces", "Every face, in order.", "{BrushFace}", false, {});
+    add("Brush", "SetFaces",
+        "Replaces every face. Faces that cut nothing are dropped. Raises, changing nothing, when the faces do not "
+        "close a solid.",
+        "nil", false, {P("faces", "{BrushFace}")});
+    add("Brush", "GetFace", "One face.", "BrushFace", false, {P("index", "number")});
+    add("Brush", "SetFace", "Replaces one face.", "nil", false, {P("index", "number"), P("face", "BrushFace")});
+    add("Brush", "SetFaceMaterial", "Sets one face's Material.", "nil", false,
+        {P("index", "number"), P("material", "Material?")});
+    add("Brush", "GetFaceVertices", "One face's corners, counter-clockwise seen from outside.", "{Vector3}", false,
+        {P("index", "number")});
+    add("Brush", "GetVertices", "Every corner, in the Brush's space.", "{Vector3}", false, {});
+    add("Brush", "GetBounds", "The smallest and largest corner, in the Brush's space.", "Vector3,Vector3", false, {});
+    add("Brush", "ContainsPoint", "Whether a point in the Brush's space is inside or on it.", "boolean", false,
+        {P("point", "Vector3")});
+    add("Brush", "Clip", "Adds a face, cutting away everything in front of it.", "nil", false,
+        {P("face", "BrushFace")});
+    add("Brush", "MoveFace", "Moves a face along its normal; negative moves it in.", "nil", false,
+        {P("index", "number"), P("distance", "number")});
+    add("Brush", "Expand", "Moves every face along its normal; negative shrinks.", "nil", false,
+        {P("distance", "number")});
+    add("Brush", "MakeBox", "Becomes a box of this size around the origin.", "nil", false, {P("size", "Vector3")});
+    add("Brush", "MakeCylinder", "Becomes a cylinder along Y filling size.", "nil", false,
+        {P("size", "Vector3"), P("sides", "number")});
+    add("Brush", "MakeCone", "Becomes a cone along Y filling size, its tip at the top.", "nil", false,
+        {P("size", "Vector3"), P("sides", "number")});
+    add("Brush", "MakeSphere", "Becomes an icosphere filling size; detail 0 to 3.", "nil", false,
+        {P("size", "Vector3"), P("detail", "number?")});
 
     return docs;
 }

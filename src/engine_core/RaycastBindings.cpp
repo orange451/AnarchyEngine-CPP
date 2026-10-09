@@ -8,6 +8,7 @@
 #include "SceneService.hpp"
 #include "ScriptBindings.hpp"
 #include "ScriptRuntime.hpp"
+#include "Brush.hpp"
 #include "Terrain.hpp"
 #include "TerrainMaterial.hpp"
 
@@ -177,7 +178,28 @@ int ScriptBindings::raycast_result_index(lua_State* state) {
         lua_pushnumber(state, hit.distance);
         return 1;
     }
+    if (std::strcmp(key, "Face") == 0) {
+        if (hit.face < 0) {
+            lua_pushnil(state);
+        } else {
+            lua_pushnumber(state, hit.face + 1);
+        }
+        return 1;
+    }
     if (std::strcmp(key, "Material") == 0) {
+        // A Brush's hit names its face's Material, read now.
+        if (hit.face >= 0) {
+            ScriptRuntime* runtime = runtime_from(state);
+            const auto* brush = runtime != nullptr && runtime->game_ != nullptr
+                                    ? dynamic_cast<const Brush*>(runtime->game_->instance(hit.instance))
+                                    : nullptr;
+            if (brush == nullptr || static_cast<std::size_t>(hit.face) >= brush->faces().size()) {
+                lua_pushnil(state);
+            } else {
+                push_material_guid(state, brush->faces()[static_cast<std::size_t>(hit.face)].material);
+            }
+            return 1;
+        }
         // A Terrain's hit names the material Id of the triangle hit: the
         // Material of its TerrainMaterial with that Id, read now, or nil.
         // Nothing but Terrain has a material.
@@ -261,6 +283,7 @@ ANARCHY_LUA_REGISTER(register_raycast_lua) {
         lua_property("Normal", "Vector3", false, nullptr, nullptr),
         lua_property("Distance", "number", false, nullptr, nullptr),
         lua_property("Material", "Material?", false, nullptr, nullptr),
+        lua_property("Face", "number?", false, nullptr, nullptr),
     };
     register_lua_class("RaycastResult", nullptr, result, static_cast<int>(sizeof(result) / sizeof(result[0])));
 }

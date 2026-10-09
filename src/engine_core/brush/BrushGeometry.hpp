@@ -136,9 +136,13 @@ std::vector<Face> make_box(DVec3 size);
 std::vector<Face> make_cylinder(DVec3 size, int sides);
 std::vector<Face> make_cone(DVec3 size, int sides);
 std::vector<Face> make_sphere(DVec3 size, int detail);
-// Faces from points, each list one convex polygon counter-clockwise seen from
-// outside. A list's first three non-collinear points make the face.
-std::vector<Face> faces_from_hull(const std::vector<DVec3>& points);
+// Faces from polygons, each list one convex polygon of a convex solid. A list's
+// first three non-collinear points make the face, turned if need be so it faces
+// away from the centre of all the points (so winding does not matter).
+std::vector<Face> faces_from_hull(const std::vector<std::vector<DVec3>>& polygons);
+
+// The faces of the points' convex hull; nullopt when they span no volume.
+std::optional<std::vector<Face>> hull_faces(const std::vector<DVec3>& points);
 
 // Queries on a built shape.
 bool contains_point(const Shape& shape, DVec3 point, double tolerance = 1e-6);

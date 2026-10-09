@@ -1,6 +1,7 @@
 #include "PhysicsWorld.hpp"
 
 #include "AssetInstances.hpp"
+#include "Brush.hpp"
 #include "ConvexDecomposition.hpp"
 #include "DataModel.hpp"
 #include "GameObject.hpp"
@@ -978,6 +979,20 @@ struct PhysicsWorld::Impl {
             out.has_material = true;
             out.material = static_cast<std::uint8_t>(hits.material);
         }
+        // A Brush reports the face the point lies on, in its own space.
+        if (const auto* brush = dynamic_cast<const Brush*>(game.instance(hits.instance))) {
+            const Matrix4 inverse = matrix4_inverse(brush->transform());
+            const Vec3 scale = scale_for(game, brush->driven_game_object());
+            Vec3 local = matrix4_point(inverse, out.position);
+            Vec3 tip = matrix4_point(inverse, Vec3{out.position.x + out.normal.x, out.position.y + out.normal.y,
+                                                   out.position.z + out.normal.z});
+            const brush::DVec3 p{local.x / scale.x, local.y / scale.y, local.z / scale.z};
+            const brush::DVec3 n{(tip.x - local.x) * scale.x, (tip.y - local.y) * scale.y, (tip.z - local.z) * scale.z};
+            const double tolerance = 1e-3 * std::max(1.0, brush::length(brush->shape().max - brush->shape().min));
+            if (const std::optional<std::size_t> face = brush::face_at(brush->shape(), p, brush::normalize(n), tolerance)) {
+                out.face = static_cast<int>(*face);
+            }
+        }
         return out;
     }
 
@@ -1815,7 +1830,50 @@ struct PhysicsWorld::Impl {
             make_controller_shape(*controller, record);
         } else if (auto* body = dynamic_cast<PhysicsObject*>(&object)) {
             make_object_shape(game, *body, record);
+        } else if (auto* brush = dynamic_cast<Brush*>(&object)) {
+            make_brush_shape(game, *brush, record);
         }
+    }
+
+    // A Brush's solid, exactly: one hull, or past Box3D's hull limits, convex
+    // pieces that fill it (brush::hull_pieces), never simplified. Each piece
+    // shares the Brush's Friction, Bounciness, and one density, so Mass splits
+    // by volume. CanCollide false: no shapes.
+    void make_brush_shape(DataModel& game, Brush& brush, Body& record) {
+        drop_shape(record);
+        record.scale = scale_for(game, record.driven);
+        record.center = Vec3{};
+        if (!brush.can_collide()) {
+            record.volume = 0.f;
+            return;
+        }
+        b3ShapeDef def = b3DefaultShapeDef();
+        def.baseMaterial.friction = static_cast<float>(brush.friction());
+        def.baseMaterial.restitution = static_cast<float>(brush.bounciness());
+        def.userData = user_data(brush.id());
+        def.updateBodyMass = false;
+        const std::vector<brush::Piece> pieces = brush::hull_pieces(brush.shape(), 64, 64);  // edges = V + F - 2, so under Box3D's 128 edges too
+        std::vector<b3HullData*> hulls;
+        hulls.reserve(pieces.size());
+        record.volume = 0.f;
+        for (const brush::Piece& piece : pieces) {
+            points.clear();
+            for (const brush::DVec3& p : piece.points) {
+                points.push_back(b3Vec3{static_cast<float>(p.x) * record.scale.x, static_cast<float>(p.y) * record.scale.y,
+                                        static_cast<float>(p.z) * record.scale.z});
+            }
+            // Asked for every vertex, so nothing is simplified away.
+            if (b3HullData* hull = b3CreateHull(points.data(), static_cast<int>(points.size()), B3_MAX_HULL_VERTICES)) {
+                record.volume += b3ComputeHullMass(hull, 1.f).mass;
+                hulls.push_back(hull);
+            }
+        }
+        def.density = density(brush, record.volume);
+        for (b3HullData* hull : hulls) {
+            add_shape(record, b3CreateHullShape(record.body, &def, hull));
+            b3DestroyHull(hull);
+        }
+        b3Body_ApplyMassFromShapes(record.body);
     }
 
     // An upright cylinder of Radius from hover_gap() above the feet (the
@@ -2100,6 +2158,12 @@ struct PhysicsWorld::Impl {
                     b3Shape_SetRestitution(shape, static_cast<float>(rigid->bounciness()));
                 }
             }
+            if (auto* brush = dynamic_cast<Brush*>(&object); brush != nullptr && (dirty & PhysicsObject::kDirtyMaterial) != 0) {
+                for (const b3ShapeId shape : record.shapes) {
+                    b3Shape_SetFriction(shape, static_cast<float>(brush->friction()));
+                    b3Shape_SetRestitution(shape, static_cast<float>(brush->bounciness()));
+                }
+            }
             if ((dirty & PhysicsObject::kDirtyMass) != 0) {
                 for (const b3ShapeId shape : record.shapes) {
                     b3Shape_SetDensity(shape, density(object, record.volume), false);
@@ -2111,6 +2175,8 @@ struct PhysicsWorld::Impl {
             b3Body_SetLinearDamping(record.body, static_cast<float>(object.linear_damping()));
             if (rigid != nullptr) {
                 b3Body_SetAngularDamping(record.body, static_cast<float>(rigid->angular_damping()));
+            } else if (auto* brush = dynamic_cast<Brush*>(&object)) {
+                b3Body_SetAngularDamping(record.body, static_cast<float>(brush->angular_damping()));
             }
         }
         // Stopped, a driven body's Transform follows its GameObject, so a write

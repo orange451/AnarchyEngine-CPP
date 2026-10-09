@@ -28,6 +28,7 @@
 #include "Skybox.hpp"
 #include "Dragger.hpp"
 #include "SoundEmitter.hpp"
+#include "Brush.hpp"
 #include "Terrain.hpp"
 #include "TerrainMaterial.hpp"
 #include "UserInputService.hpp"
@@ -221,6 +222,7 @@ DataModel& create_material(DataModel& world) { return world.create<Material>(); 
 DataModel& create_model(DataModel& world) { return world.create<Model>(); }
 DataModel& create_prefab(DataModel& world) { return world.create<Prefab>(); }
 DataModel& create_terrain(DataModel& world) { return world.create<Terrain>(); }
+DataModel& create_brush(DataModel& world) { return world.create<Brush>(); }
 DataModel& create_terrain_material(DataModel& world) { return world.create<TerrainMaterial>(); }
 
 // The factories stay here, which ScriptRuntime.cpp links, so each class's
@@ -262,6 +264,7 @@ ANARCHY_LUA_REGISTER(register_creatable_instances) {
     register_lua_creatable("Model", create_model);
     register_lua_creatable("Prefab", create_prefab);
     register_lua_creatable("Terrain", create_terrain);
+    register_lua_creatable("Brush", create_brush);
     register_lua_creatable("TerrainMaterial", create_terrain_material, false);
 }
 
@@ -1570,6 +1573,7 @@ ANARCHY_LUA_REGISTER(register_script_methods) {
 
     // TerrainBindings.cpp registers Terrain's methods itself; this keeps it linked.
     ScriptBindings::link_terrain_methods();
+    ScriptBindings::link_brush_methods();
 
     // AssetInstances.cpp declares the class and its Path.
     const LuaField mesh[] = {

@@ -27,6 +27,7 @@ namespace engine_core {
 
 class ChangeHistoryService;
 class Mesh;
+class Brush;
 class SoundEmitter;
 class Terrain;
 enum class FinishRecordingOperation;
@@ -340,6 +341,13 @@ struct ScriptBindings {
     static int terrain_write_voxels(lua_State* state);
     static int terrain_cell_to_world(lua_State* state);
     static int terrain_clear(lua_State* state);
+    // Brush's methods and the BrushFace datatype, in BrushBindings.cpp.
+    static Brush& brush_self(lua_State* state);
+    static void link_brush_methods();
+    // A Material argument (or nil) as its GUID; raises for anything else.
+    static std::string brush_material_arg(lua_State* state, int index);
+    // Pushes the live Material with this GUID, or nil.
+    static void push_material_guid(lua_State* state, const std::string& guid);
     static SoundEmitter& emitter_self(lua_State* state);
     static int emitter_play(lua_State* state);
     static int emitter_stop(lua_State* state);
@@ -370,5 +378,7 @@ struct ScriptBindings {
 
 // RaycastParams and RaycastResult: their metatables and the RaycastParams global.
 void open_raycast(lua_State* state);
+// The BrushFace metatable and global, in BrushBindings.cpp.
+void open_brush_face(lua_State* state);
 
 }  // namespace engine_core

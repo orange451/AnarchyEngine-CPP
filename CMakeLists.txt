@@ -92,6 +92,7 @@ set(STUDIO_SOURCES
     src/amesh/amesh_gl.cpp
     src/runner/GameView.cpp
     src/runner/TerrainBrush.cpp
+    src/runner/BrushTool.cpp
     src/runner/ProfilerOverlay.cpp
     src/runner/UiFrameProfile.cpp
     src/runner/GuiLayer.cpp
@@ -580,6 +581,7 @@ add_library(engine_instances STATIC
     src/engine_instances/SoundEmitter.cpp
     src/engine_instances/Attachment.cpp
     src/engine_instances/Dragger.cpp
+    src/engine_instances/Brush.cpp
     src/engine_instances/Terrain.cpp
     src/engine_instances/TerrainMaterial.cpp
     src/engine_instances/Script.cpp
@@ -626,6 +628,9 @@ add_library(engine_core STATIC
     src/engine_core/Containment.cpp
     src/engine_core/Ecs.cpp
     src/engine_core/PhysicsWorld.cpp
+    src/engine_core/brush/BrushGeometry.cpp
+    src/engine_core/BrushBindings.cpp
+    src/engine_core/BrushVisuals.cpp
     src/engine_core/terrain/VoxelChunk.cpp
     src/engine_core/terrain/ShapeDistance.cpp
     src/engine_core/terrain/VoxelVolume.cpp
@@ -987,6 +992,8 @@ add_executable(sandbox
     sandbox/dragger_tests.cpp
     sandbox/move_tool_tests.cpp
     sandbox/profiler_tests.cpp
+    sandbox/brush_geometry_tests.cpp
+    sandbox/brush_tests.cpp
     sandbox/terrain_voxel_tests.cpp
     sandbox/terrain_instance_tests.cpp
     sandbox/terrain_surface_tests.cpp

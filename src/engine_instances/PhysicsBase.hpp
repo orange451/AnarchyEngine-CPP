@@ -99,6 +99,8 @@ protected:
     std::optional<std::string> set_number(const char* property, double& slot, double value, std::uint32_t dirty);
     std::optional<std::string> set_vec(const char* property, Vec3& slot, Vec3 value, std::uint32_t dirty);
     void mark_dirty(std::uint32_t dirty) { dirty_ |= dirty; }
+    // A subclass's own default, at construction and reuse only: no Changed, no history.
+    void default_anchored(bool anchored) { anchored_ = anchored; }
 
 private:
     Matrix4 transform_ = matrix4_identity();

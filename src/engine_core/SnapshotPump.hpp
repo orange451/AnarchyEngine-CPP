@@ -1,5 +1,6 @@
 #pragma once
 
+#include "BrushVisuals.hpp"
 #include "DataModel.hpp"
 #include "DenseIdSet.hpp"
 #include "DraggerMath.hpp"
@@ -211,6 +212,27 @@ struct VisualMesh {
     float transparency = 0.f;
 };
 
+// A Material's look, filled into out as resolve_prefabs fills a Model's: its
+// textures' paths and its numbers; null is the default material.
+class Material;
+void fill_visual_material(const DataModel& game, const Material* material, VisualMesh& out);
+
+// One draw of Brush geometry: one Material's triangles of a baked cell (world
+// space, world identity) or of one Brush (its own space). look.session is the
+// mesh, shared and immutable, and look.revision is unique to it; lod picks the
+// Material's triangles (LOD 0 is the whole mesh, for shadows).
+struct VisualBrushDraw {
+    VisualMesh look;
+    std::uint32_t lod = 0;
+    Matrix4 world = matrix4_identity();
+    ColorRgb tint{};
+    float transparency = 0.f;
+    // One draw of each mesh casts its whole LOD 0; the others cast nothing.
+    bool casts_shadow = false;
+    // The Brush, or 0 for a cell.
+    InstanceId owner = 0;
+};
+
 // What one Prefab draws, found again at every Prepare, so an edit to its
 // Models or their Meshes shows on the next frame.
 struct VisualPrefab {
@@ -247,6 +269,9 @@ struct VisualSnapshot {
     // Every Terrain in Workspace, as TerrainWorld shows it. Pointers only: the
     // chunk list and look are immutable and shared with the simulation.
     std::vector<TerrainView> terrains;
+    // Every Brush in Workspace (BrushVisuals): anchored opaque ones baked into
+    // cells, the rest one by one.
+    std::vector<VisualBrushDraw> brushes;
     // DataModel::resources_root as the snapshot was taken: the folder the
     // paths above are under.
     std::filesystem::path resources_root;
@@ -311,6 +336,7 @@ private:
     // into base_.terrains. TerrainWorld::update already ran on SimulationThread
     // before take_changes is called, so there is nothing more to read from game here.
     void resolve_terrains(DataModel& game);
+    BrushVisuals brushes_;
     // Points each row's anchor at its anchor_instance's row in dst, after overrides.
     void anchor_billboards(VisualSnapshot& dst) const;
     void release_prefab(std::uint32_t entry);

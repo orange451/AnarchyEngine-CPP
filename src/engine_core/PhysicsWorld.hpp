@@ -40,6 +40,8 @@ struct RayHit {
     // material Id. False for everything but Terrain.
     bool has_material = false;
     std::uint8_t material = 0;
+    // The hit Brush's face, an index into its faces; -1 for anything else.
+    int face = -1;
 };
 
 // The Box3D world behind PhysicsObject. It lives while the place is stopped

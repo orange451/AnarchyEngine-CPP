@@ -198,7 +198,7 @@ bool ShadowRenderer::draw(const std::vector<ShadowRequest>& requests, const Mesh
         // See-through surfaces cast nothing, as in the legacy engine.
         // A terrain node (terrainLook) is always opaque, so it always casts,
         // but of two levels cross-fading only the one fading in, whole.
-        if (mesh.mesh == nullptr || !mesh.mesh->valid() || (mesh.transparency > 0.f && mesh.terrainLook == 0) ||
+        if (mesh.mesh == nullptr || !mesh.mesh->valid() || !mesh.castsShadow || (mesh.transparency > 0.f && mesh.terrainLook == 0) ||
             (mesh.terrainLook != 0 && !mesh.terrainFadeIn)) {
             continue;
         }

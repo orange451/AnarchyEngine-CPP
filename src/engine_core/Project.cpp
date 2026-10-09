@@ -25,6 +25,7 @@
 #include "Skybox.hpp"
 #include "SoundEmitter.hpp"
 #include "Script.hpp"
+#include "Brush.hpp"
 #include "Terrain.hpp"
 #include "TerrainMaterial.hpp"
 #include "terrain/TerrainStash.hpp"
@@ -172,6 +173,7 @@ std::vector<ClassEntry>& class_registry() {
         out.push_back({"Model", [](DataModel& world) -> DataModel& { return world.create<Model>(); }});
         out.push_back({"Prefab", [](DataModel& world) -> DataModel& { return world.create<Prefab>(); }});
         out.push_back({"Terrain", [](DataModel& world) -> DataModel& { return world.create<Terrain>(); }});
+        out.push_back({"Brush", [](DataModel& world) -> DataModel& { return world.create<Brush>(); }});
         out.push_back(
             {"TerrainMaterial", [](DataModel& world) -> DataModel& { return world.create<TerrainMaterial>(); }});
         return out;

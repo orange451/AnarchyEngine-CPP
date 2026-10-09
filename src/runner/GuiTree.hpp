@@ -63,9 +63,14 @@ public:
     // Visible and MouseTransparent as the last build read them; false when not built.
     bool visible(engine_core::InstanceId id) const;
     bool mouseTransparent(engine_core::InstanceId id) const;
+    // For a tree drawn as a studio pane: a Label whose TextColor is still its
+    // default takes the studio theme's text color, as the studio's own labels do.
+    void setThemedText(bool themed) { themedText_ = themed; }
 
 private:
     struct Entry;
+
+    bool themedText_ = false;
 
     std::shared_ptr<jadefx::Node> makeNode(engine_core::InstanceId id, const std::string& className);
     void apply(Entry& entry, const engine_core::GuiValues& gui);

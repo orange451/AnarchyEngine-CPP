@@ -336,7 +336,11 @@ void GuiTree::apply(Entry& entry, const engine_core::GuiValues& gui) {
     }
     if (auto* label = dynamic_cast<jadefx::Label*>(&node)) {
         label->setText(gui.text(GuiProperty::Text));
-        label->setTextFill(NodeColor(gui.color(GuiProperty::TextColor)));
+        const engine_core::ColorRgb fill = gui.color(GuiProperty::TextColor);
+        const engine_core::ColorRgb unset = engine_core::GuiValues::default_value(GuiProperty::TextColor, "Label").color;
+        if (!themedText_ || fill.r != unset.r || fill.g != unset.g || fill.b != unset.b) {
+            label->setTextFill(NodeColor(fill));
+        }
         label->setFont(jadefx::Font(jadefx::Font().family(), static_cast<float>(gui.number(GuiProperty::FontSize))));
         label->setTextScaled(gui.flag(GuiProperty::TextScaled));
     } else if (auto* button = dynamic_cast<jadefx::Button*>(&node)) {

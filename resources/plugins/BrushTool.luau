@@ -1093,12 +1093,15 @@ local SELECTED_STYLE = "background-color: var(--ide-find-button-checked-color); 
 
 local root = Instance.new("VBox")
 root.Spacing = 6
+-- The pane shows through, so the studio's theme colors it.
+root.BackgroundTransparency = 1
 root.Style = "padding: 8px;"
 root.Parent = widget
 
 local function row(parent: Instance?): HBox
 	local box = Instance.new("HBox")
 	box.Spacing = 4
+	box.BackgroundTransparency = 1
 	box.Parent = parent or root
 	return box
 end

@@ -19,6 +19,7 @@ PluginWidgetPane::PluginWidgetPane(engine_core::Engine& engine, engine_core::Ins
           return find_resource("icons").parent_path();
       })) {
     getClassList().add("plugin-widget");
+    tree_->setThemedText(true);
     setIconFile("Script.png");
 }
 

@@ -207,7 +207,8 @@ scene {
 }
 .ide-ribbon-tab {
     padding: 2px 12px;
-    border-radius: 6px;
+    /* The box shader clamps a radius to half the box: a pill at any height. */
+    border-radius: 999px;
     color: var(--ide-muted-text-color);
     transition: background-color 0.12s;
 }

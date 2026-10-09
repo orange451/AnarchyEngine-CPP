@@ -1854,6 +1854,25 @@ std::uint32_t ScriptRuntime::plugin_serial(InstanceId root) const {
     return found != plugins_.end() ? found->serial : 0;
 }
 
+void ScriptRuntime::plugin_mouse_event(const PluginMouseEvent& event) {
+    using Kind = PluginMouseEvent::Kind;
+    if (game_ != nullptr && plugin_ui_.active() != 0 &&
+        (event.kind == Kind::Move || event.kind == Kind::Button1Down || event.kind == Kind::Button1Up)) {
+        InputRecord record;
+        record.position = Vec3{event.x, event.y, 0.f};
+        if (event.kind == Kind::Move) {
+            record.type = UserInputService::kMouseMovement;
+            record.state = UserInputService::kChange;
+        } else {
+            record.type = UserInputService::kMouseButton1;
+            record.state = event.kind == Kind::Button1Down ? UserInputService::kBegin : UserInputService::kEnd;
+        }
+        std::vector<InputRecord> records{record};
+        game_->dispatch_draggers(records);
+    }
+    plugin_ui_.mouse_event(event);
+}
+
 void ScriptRuntime::fire_plugin_unloading(InstanceId root) {
     const std::uint32_t serial = plugin_serial(root);
     if (serial == 0) {

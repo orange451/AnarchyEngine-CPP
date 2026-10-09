@@ -5,6 +5,7 @@
 #include "Camera.hpp"
 #include "ChangeHistoryService.hpp"
 #include "Dragger.hpp"
+#include "PluginUi.hpp"
 #include "Folder.hpp"
 #include "PhysicsObject.hpp"
 #include "SnapshotPump.hpp"
@@ -88,6 +89,18 @@ struct MoveRig {
         rig.game.history().reset_waypoints();
         REQUIRE(loader.load(rig.game, rig.runtime, {move_tool_file()}) == 1);
         rig.frames(1);
+        click_move_button();
+    }
+    // The Move button on the Home tab, as a click on it turns the tool on and off.
+    void click_move_button() {
+        bool clicked = false;
+        for (const engine_core::PluginToolbarState& bar : rig.runtime.plugin_ui().toolbars()) {
+            if (bar.name == "Move" && !bar.buttons.empty()) {
+                clicked = rig.runtime.plugin_ui().click(bar.buttons[0].id);
+            }
+        }
+        REQUIRE(clicked);
+        rig.frames(1);
     }
     InstanceId part_at(const char* name, float x, float y, float z) {
         const InstanceId id = add_part(rig.game, name);
@@ -96,14 +109,23 @@ struct MoveRig {
         return id;
     }
     float x_of(InstanceId id) { return rig.game.game_object(id)->transform().m[12]; }
+    // The Scene View's mouse, as it reaches the active Move tool: through the
+    // plugin's mouse, not the game's input, which an active plugin keeps the left
+    // button from.
+    void mouse(engine_core::PluginMouseEvent::Kind kind, float x, float y, bool shift = false) {
+        engine_core::PluginMouseEvent event;
+        event.kind = kind;
+        event.x = x;
+        event.y = y;
+        event.shift = shift;
+        rig.runtime.plugin_mouse_event(event);
+        rig.frames(1);
+    }
     void post(bool down, float x, float y) {
-        rig.game.input().post_mouse_button(0, down, x, y);
-        rig.frames(1);
+        mouse(down ? engine_core::PluginMouseEvent::Kind::Button1Down : engine_core::PluginMouseEvent::Kind::Button1Up,
+              x, y);
     }
-    void move(float x, float y) {
-        rig.game.input().post_mouse_move(x, y);
-        rig.frames(1);
-    }
+    void move(float x, float y) { mouse(engine_core::PluginMouseEvent::Kind::Move, x, y); }
 };
 
 }  // namespace
@@ -190,7 +212,7 @@ TEST_CASE("MT2 a selection with no PVInstance gets no handles", "[MT2]") {
     REQUIRE_FALSE(handles_at(move.rig.game));
 }
 
-TEST_CASE("MT3 the Move tool lets go during play and takes the selection back after Stop", "[MT3]") {
+TEST_CASE("MT3 Play turns the Move tool off; it stays off after Stop until its button is clicked", "[MT3]") {
     MoveRig move;
     const InstanceId a = move.part_at("A", 1, 0, -10);
     move.rig.game.selection().set({a});
@@ -200,8 +222,11 @@ TEST_CASE("MT3 the Move tool lets go during play and takes the selection back af
     move.rig.game.start_simulation();
     move.rig.frames(1);
     REQUIRE_FALSE(handles_at(move.rig.game));
+    REQUIRE(move.rig.runtime.plugin_ui().active() == 0);
     move.rig.game.stop_simulation();
     move.rig.frames(1);
+    REQUIRE_FALSE(handles_at(move.rig.game));
+    move.click_move_button();
     const auto at = handles_at(move.rig.game);
     REQUIRE((at && near(at->x, 1)));
 }
@@ -366,4 +391,49 @@ TEST_CASE("MT11 dragging a Camera the view does not look through is one Move ste
     move.rig.game.history().undo();
     move.rig.frames(1);
     REQUIRE(near(move.x_of(shot.id()), 0));
+}
+
+TEST_CASE("MT12 the Move tool is a button on Home; its handles show only while it is on", "[MT12]") {
+    MoveRig move;
+    bool onHome = false;
+    for (const engine_core::PluginToolbarState& bar : move.rig.runtime.plugin_ui().toolbars()) {
+        onHome = onHome || (bar.name == "Move" && bar.builtin);
+    }
+    REQUIRE(onHome);
+    REQUIRE(move.rig.runtime.plugin_ui().active() != 0);
+    const InstanceId a = move.part_at("A", 1, 0, -10);
+    move.rig.game.selection().set({a});
+    move.rig.frames(1);
+    REQUIRE(handles_at(move.rig.game));
+    // Off: the handles go, and the selection stays.
+    move.click_move_button();
+    REQUIRE(move.rig.runtime.plugin_ui().active() == 0);
+    REQUIRE_FALSE(handles_at(move.rig.game));
+    REQUIRE(move.rig.game.selection().get() == std::vector<InstanceId>{a});
+    // Another tool taking the mouse turns it off too.
+    move.click_move_button();
+    REQUIRE(handles_at(move.rig.game));
+    move.rig.runtime.plugin_ui().deactivate_all();
+    move.rig.frames(1);
+    REQUIRE_FALSE(handles_at(move.rig.game));
+}
+
+TEST_CASE("MT13 a click on nothing clears the selection; Shift keeps it; a press on a handle drags", "[MT13]") {
+    MoveRig move;
+    const InstanceId a = move.part_at("A", 0, 0, -10);
+    move.rig.game.selection().set({a});
+    move.rig.frames(1);
+    // Nothing is under (20, 20): there is no physics here, so nothing is ever hit.
+    move.mouse(engine_core::PluginMouseEvent::Kind::Button1Down, 20, 20, true);
+    move.post(false, 20, 20);
+    REQUIRE(move.rig.game.selection().get() == std::vector<InstanceId>{a});
+    // On the X arrow: a drag, not a click, so the selection stays.
+    move.post(true, 150, 100);
+    move.move(170, 100);
+    move.post(false, 170, 100);
+    REQUIRE(move.rig.game.selection().get() == std::vector<InstanceId>{a});
+    REQUIRE(near(move.x_of(a), 2));
+    move.post(true, 20, 20);
+    move.post(false, 20, 20);
+    REQUIRE(move.rig.game.selection().get().empty());
 }

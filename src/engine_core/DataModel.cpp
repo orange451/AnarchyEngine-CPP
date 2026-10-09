@@ -961,6 +961,8 @@ void DataModel::draggers(std::vector<InstanceId>& out) const {
     }
 }
 
+void DataModel::dispatch_draggers(std::vector<InputRecord>& records) { state_->draggers.dispatch(*this, records); }
+
 void DataModel::billboards(std::vector<InstanceId>& out) const {
     out.clear();
     ecs_iter_t it = ecs_query_iter(ecs_world(), state_->billboard_query.c_ptr());

@@ -191,7 +191,10 @@ public:
     const PluginUi& plugin_ui() const { return plugin_ui_; }
     // A Scene View's mouse event, for the active plugin's mouse. SimulationThread; its
     // handlers run at the next drain.
-    void plugin_mouse_event(const PluginMouseEvent& event) { plugin_ui_.mouse_event(event); }
+    // The active plugin's mouse drives the Draggers' handles too, since the game's
+    // input, which drives them otherwise, does not see its left button; the plugin's
+    // handlers run after, so a press that began a drag finds its Dragger Dragging.
+    void plugin_mouse_event(const PluginMouseEvent& event);
     // Registered roots in the order they were registered. A root that died drops out.
     std::vector<InstanceId> plugins() const;
     bool plugin_vm_open() const { return plugin_.state != nullptr; }

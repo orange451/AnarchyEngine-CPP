@@ -30,6 +30,7 @@ namespace engine_core {
 
 class DataModelLock;
 struct EcsIds;
+struct InputRecord;
 
 // What the explorer can do to an instance. Each class offers some of them;
 // the shell performs them.
@@ -451,6 +452,10 @@ public:
     // The Draggers under game (dragger()), in no set order, into out, which
     // is cleared first.
     void draggers(std::vector<InstanceId>& out) const;
+    // SimulationThread. Hands records to the Draggers' handles as the game's input
+    // does at dispatch: for the active plugin's mouse, which the game's input does
+    // not see. Each one the handles took comes back processed.
+    void dispatch_draggers(std::vector<InputRecord>& records);
     // The BillboardGuis under game (billboard_gui()), in no set order, into
     // out, which is cleared first. Whether each is drawn is BillboardGui::drawn.
     void billboards(std::vector<InstanceId>& out) const;

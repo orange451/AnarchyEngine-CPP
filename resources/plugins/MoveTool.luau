@@ -1,16 +1,20 @@
--- The studio's Move tool: translate handles at the middle of the PVInstances
--- selected or inside what is selected, while the place is not playing, so
--- selecting a Folder moves everything in it. Dragging them moves the Dragger
--- and each of those PVInstances by the same offset, as one undo step. The
--- Dragger lives in Core, so it is never saved and its own moves are never
--- undo steps.
+-- The studio's Move tool, on the Home tab. While it is on, clicking in the
+-- Scene View selects what is under the pointer (Shift or Ctrl adds it or takes
+-- it away, and clicking nothing clears the selection), and translate handles
+-- sit at the middle of the PVInstances selected or inside what is selected,
+-- while the place is not playing, so selecting a Folder moves everything in
+-- it. Dragging them moves the Dragger and each of those PVInstances by the
+-- same offset, as one undo step. The Dragger lives in Core, so it is never
+-- saved and its own moves are never undo steps. Turning on another tool, or
+-- Play, turns it off.
 local RunService = game:GetService("RunService")
 local Selection = game:GetService("Selection")
 local Core = game:GetService("Core")
 
 local SPACE = Enum.TransformSpace.World
-local INCREMENT = 1 -- studs
+local INCREMENT = 1 -- units
 
+local active = false
 local dragger
 -- Where each moved instance was when the drag began, the Dragger included.
 local starts = {}
@@ -85,17 +89,21 @@ local function make_dragger()
 	return made
 end
 
--- Puts the handles at the selection's middle, or takes them away.
+local function drop_dragger()
+	if dragger ~= nil then
+		dragger:Destroy()
+		dragger = nil
+	end
+end
+
+-- Puts the handles at the selection's middle while the tool is on, or takes them away.
 local function place()
 	if dragger ~= nil and dragger.Dragging then
 		return
 	end
-	local list = selected()
+	local list = if active then selected() else {}
 	if #list == 0 then
-		if dragger ~= nil then
-			dragger:Destroy()
-			dragger = nil
-		end
+		drop_dragger()
 		return
 	end
 	if dragger == nil or dragger.Parent == nil then
@@ -110,17 +118,87 @@ local function update()
 		connection:Disconnect()
 	end
 	watching = {}
-	for _, item in selected() do
-		table.insert(watching, item.Changed:Connect(function(property)
-			if property == "Transform" then
-				place()
-			end
-		end))
+	if active then
+		for _, item in selected() do
+			table.insert(watching, item.Changed:Connect(function(property)
+				if property == "Transform" then
+					place()
+				end
+			end))
+		end
 	end
 	place()
 end
 
+-- Clicking in the Scene View ---------------------------------------------------
+
+local mouse = plugin:GetMouse()
+
+mouse.Button1Down:Connect(function()
+	-- A press on a handle began a drag; it is not a click on the world.
+	if not active or (dragger ~= nil and dragger.Dragging) then
+		return
+	end
+	local target = mouse.Target
+	if mouse.Shift or mouse.Ctrl then
+		if target == nil then
+			return
+		end
+		local list = Selection:Get()
+		for index, item in list do
+			if item == target then
+				table.remove(list, index)
+				Selection:Set(list)
+				return
+			end
+		end
+		table.insert(list, target)
+		Selection:Set(list)
+	elseif target ~= nil then
+		Selection:Set({ target })
+	else
+		Selection:Set({})
+	end
+end)
+
+-- Turning on and off ----------------------------------------------------------
+
+local toolbar = plugin:CreateToolbar("Move")
+local toggle = toolbar:CreateButton("Move", "Select and move parts in the Scene View", "icons/Model.png", "Move")
+
+local function turn_off()
+	if not active then
+		return
+	end
+	active = false
+	toggle:SetActive(false)
+	update()
+end
+
+local function turn_on()
+	if active or RunService:IsRunning() then
+		return
+	end
+	active = true
+	toggle:SetActive(true)
+	plugin:Activate(true)
+	update()
+end
+
+toggle.Click:Connect(function()
+	if active then
+		plugin:Deactivate()
+	else
+		turn_on()
+	end
+end)
+
+plugin.Deactivation:Connect(turn_off)
 Selection.SelectionChanged:Connect(update)
-RunService.Started:Connect(update)
+-- Off at once, not when Deactivation is heard: Stop may drop events still queued.
+RunService.Started:Connect(function()
+	turn_off()
+	plugin:Deactivate()
+end)
 RunService.Stopped:Connect(update)
 update()

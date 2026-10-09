@@ -143,8 +143,12 @@ int RunPluginsTests() {
                 const double barMiddle = bar->getAbsoluteX() + bar->getWidth() / 2;
                 Expect(std::abs(middle - barMiddle) < 4, "and the tabs sit in the middle of the bar");
             }
-            Expect(ribbon->homeRow()->getElementsByClassName("ide-ribbon-button").size() == 1,
-                   "the Home row keeps only the Grid toggle when no built-in has a toolbar");
+            jadefx::Node* grid = bar->getElementById("grid-toggle");
+            Expect(grid != nullptr, "the floor grid toggle is on the tab bar");
+            Expect(grid != nullptr && grid->getAbsoluteX() + grid->getWidth() > bar->getAbsoluteX() + bar->getWidth() - 40,
+                   "at its right");
+            Expect(ribbon->homeRow()->getElementsByClassName("ide-ribbon-button").empty(),
+                   "the Home row has no buttons until a built-in plugin adds a toolbar");
         }
         Expect(ribbon->pluginsRow()->getElementsByClassName("ide-ribbon-empty").size() == 1,
                "with no plugin toolbars the Plugins tab says how to add one");

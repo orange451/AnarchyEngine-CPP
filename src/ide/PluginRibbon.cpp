@@ -41,13 +41,13 @@ bool SameShape(const std::vector<engine_core::PluginToolbarState>& a,
 
 }  // namespace
 
-PluginRibbon::PluginRibbon(std::shared_ptr<jadefx::Node> leading, std::shared_ptr<jadefx::Node> home,
-                           jadefx::Node* homeAnchor, std::function<void(std::uint32_t)> click,
+PluginRibbon::PluginRibbon(std::shared_ptr<jadefx::Node> leading, std::shared_ptr<jadefx::Node> trailing,
+                           std::shared_ptr<jadefx::Node> home, jadefx::Node* homeAnchor, std::function<void(std::uint32_t)> click,
                            std::function<void(const std::string&)> warn)
     : home_(std::move(home)), homeAnchor_(homeAnchor), click_(std::move(click)), warn_(std::move(warn)) {
     getClassList().add("ide-ribbon-area");
     setPrefWidthRatio(1);
-    // The tab bar: leading at the left, the tabs in the middle of the whole bar,
+    // The tab bar: leading at the left, trailing at the right, the tabs in the middle of the whole bar,
     // whatever leading's width. Each layer fills the bar and takes the mouse only
     // where it has something.
     auto bar = jadefx::make<jadefx::StackPane>();
@@ -61,6 +61,13 @@ PluginRibbon::PluginRibbon(std::shared_ptr<jadefx::Node> leading, std::shared_pt
     left->setPickOnBounds(false);
     if (leading) {
         left->getChildren().add(std::move(leading));
+    }
+    auto right = jadefx::make<jadefx::HBox>();
+    right->setAlignment(jadefx::Pos::CenterRight);
+    right->setPrefWidthRatio(1);
+    right->setPickOnBounds(false);
+    if (trailing) {
+        right->getChildren().add(std::move(trailing));
     }
     auto tabs = jadefx::make<jadefx::HBox>();
     tabs->setAlignment(jadefx::Pos::Center);
@@ -87,6 +94,7 @@ PluginRibbon::PluginRibbon(std::shared_ptr<jadefx::Node> leading, std::shared_pt
     plugins_->setMinSize(0, kRibbonHeight);
     plugins_->setPrefHeight(kRibbonHeight);
     bar->getChildren().add(std::move(left));
+    bar->getChildren().add(std::move(right));
     bar->getChildren().add(std::move(tabs));
     tabBar_ = bar.get();
     getChildren().add(std::move(bar));

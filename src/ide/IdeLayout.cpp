@@ -112,16 +112,11 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight, const std::filesys
     session->getChildren().add(std::move(pause));
     session->getChildren().add(std::move(resume));
     session->getChildren().add(std::move(stop));
-    auto gap = jadefx::make<jadefx::Pane>();
-    gap->setStyle("width: 100%;");
-    gap->setMouseTransparent(true);
-    ribbon->getChildren().add(gap);
-    // The Scene Views' floor grid, at the right end: lit while on.
+    // The Scene Views' floor grid, at the tab bar's right end: lit while on.
     auto grid = jadefx::make<RibbonButton>("", "Grid.png", [this] { set_grid(!grid_on_); });
     grid->setElementId("grid-toggle");
     jadefx::Tooltip::install(grid.get(), jadefx::make<jadefx::Tooltip>("Show the floor grid and the world's axes"));
     grid_button_ = grid.get();
-    ribbon->getChildren().add(std::move(grid));
     grid_on_ = preferences_.scene_grid();
     show_grid();
 
@@ -183,7 +178,7 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight, const std::filesys
     top->setPrefWidthRatio(1);
     top->getChildren().add(menuBar);
     auto tabbed = jadefx::make<PluginRibbon>(
-        session, ribbon, gap.get(),
+        session, grid, ribbon, nullptr,
         [this](std::uint32_t button) {
             runner_.simulation().on_simulation(
                 [this, button](engine_core::DataModel&) { runner_.simulation().scripts().plugin_ui().click(button); });

@@ -23,8 +23,11 @@ class PluginRibbon : public jadefx::VBox {
 public:
     // click gets a button's PluginUi id. warn gets a line for the output, once
     // per icon path that does not name a file under resources/icons.
-    // leading sits at the left of the tab bar, as the shell's Test and Stop do.
-    PluginRibbon(std::shared_ptr<jadefx::Node> leading, std::shared_ptr<jadefx::Node> home, jadefx::Node* homeAnchor,
+    // leading sits at the left of the tab bar, as the shell's Test and Stop do, and
+    // trailing at its right, as the floor grid toggle does. homeAnchor may be null:
+    // the built-in toolbars then go at the end of home.
+    PluginRibbon(std::shared_ptr<jadefx::Node> leading, std::shared_ptr<jadefx::Node> trailing,
+                 std::shared_ptr<jadefx::Node> home, jadefx::Node* homeAnchor,
                  std::function<void(std::uint32_t button)> click, std::function<void(const std::string&)> warn);
 
     // Rebuilds the Plugins row when toolbars differ from the last ones given.

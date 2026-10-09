@@ -206,8 +206,8 @@ scene {
     padding: 3px 6px;
 }
 .ide-ribbon-tab {
-    padding: 1px 10px;
-    border-radius: 4px 4px 0 0;
+    padding: 2px 12px;
+    border-radius: 6px;
     color: var(--ide-muted-text-color);
     transition: background-color 0.12s;
 }

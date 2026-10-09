@@ -2,11 +2,11 @@
 
 #include "ide/IdePane.hpp"
 #include "amesh.hpp"
+#include "DraggerMath.hpp"
 #include "GuiLayer.hpp"
 #include "MeshCache.hpp"
 #include "PluginUi.hpp"
 #include "ProfilerOverlay.hpp"
-#include "TerrainBrush.hpp"
 #include "TerrainSelection.hpp"
 #include "TextureCache.hpp"
 #include "Renderer.hpp"
@@ -113,8 +113,6 @@ public:
     }
     // Sends a mouse event, with the ray through (x, y), to the active plugin's mouse.
     void postPluginMouse(engine_core::PluginMouseEvent::Kind kind, double x, double y, int mods);
-    // Keeps the view's own tools and an active plugin from both holding the left button.
-    void syncPluginTool();
 
     // The player's view: no camera list, since a game shows only
     // itself, and the view follows the Workspace's CurrentCamera, as a script
@@ -286,10 +284,6 @@ private:
     std::string listedGuid_;
     // The engine that owns game_. Each paint tells its render thread a frame happened.
     engine_core::Engine* engine_ = nullptr;
-    // PluginUi::activations() as syncPluginTool last saw it, and whether a tool of
-    // the view's own was on then.
-    std::uint64_t pluginActivations_ = 0;
-    bool toolsWereOn_ = false;
     // Whether this view last locked its scene's pointer.
     bool pointerLocked_ = false;
     // setPlayerView: the link follows the Workspace's CurrentCamera.
@@ -297,12 +291,8 @@ private:
     // setPlayerView: no camera list or eye, and the GUIs always drawn.
     bool playerView_ = false;
     ProfilerOverlay* profilerOverlay_ = nullptr;
-    // Terrain mode (T): the brush and its palette, edit mode only.
-    std::unique_ptr<TerrainBrush> terrainBrush_;
     // Every WireframeAdornment's lines, gathered each frame for the renderer.
     std::vector<float> toolLines_;
-    TerrainToolPalette* terrainPalette_ = nullptr;
-    bool shiftHeld_ = false;
     // The world ray through a pane point (absolute coordinates), when the view has a camera.
     std::optional<engine_core::DraggerRay> rayAt(double x, double y) const;
     // The player's Cmd+F6 and Cmd+P, on its window's scene.

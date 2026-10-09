@@ -1146,6 +1146,11 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
         "Carves a wedge of size placed by transform out of the voxels. Meshes and colliders follow a frame or two "
         "later.",
         "nil", false, {P("transform", "Matrix4"), P("size", "Vector3"), P("space", "Enum.TransformSpace?")});
+    add("Terrain", "SmoothBall",
+        "Evens out the surface in a ball, strongest at its middle; strength is 0 to 1. Meshes and colliders follow a "
+        "frame or two later.",
+        "nil", false,
+        {P("center", "Vector3"), P("radius", "number"), P("strength", "number"), P("space", "Enum.TransformSpace?")});
     add("Terrain", "PaintBall",
         "Sets the material of the solid cells in a ball, keeping their shape. Meshes and colliders follow a frame or "
         "two later.",

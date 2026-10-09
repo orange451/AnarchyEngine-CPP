@@ -351,6 +351,7 @@ struct ScriptBindings {
     static int terrain_subtract_cylinder(lua_State* state);
     static int terrain_subtract_wedge(lua_State* state);
     static int terrain_paint_ball(lua_State* state);
+    static int terrain_smooth_ball(lua_State* state);
     static int terrain_paint_block(lua_State* state);
     static int terrain_replace_material(lua_State* state);
     static int terrain_add_material(lua_State* state);

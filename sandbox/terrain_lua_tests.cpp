@@ -122,6 +122,29 @@ TEST_CASE("TL6 a zero or negative radius changes nothing", "[terrain][lua]") {
     REQUIRE(has_line(rig.runtime.drain_output(), "true\n"));
 }
 
+TEST_CASE("TL11 SmoothBall rounds a corner; strength 0 changes nothing; strength is held to 0 to 1",
+          "[terrain][lua]") {
+    ScriptRig rig;
+    rig.runtime.run_chunk(R"(
+        local t = Instance.new("Terrain", workspace)
+        t:FillBlock(Matrix4.new(0, 0, 0), Vector3.new(8, 8, 8), nil)
+        local corner = Vector3.new(4, 4, 4)
+        local function at() return t:ReadVoxels(corner, corner).Distances[1][1][1] end
+        local before = at()
+        t:SmoothBall(corner, 3, 0)
+        local still = at()
+        t:SmoothBall(corner, 3, 5)
+        local after = at()
+        print(still == before, after > before)
+        print(select(2, pcall(function() t:SmoothBall(corner, 3, 0 / 0) end)))
+    )");
+    rig.frames(1);
+    const auto out = rig.runtime.drain_output();
+    INFO(all_text(out));
+    REQUIRE(has_line(out, "true\ttrue\n"));
+    REQUIRE(all_text(out).find("strength must be a finite number") != std::string::npos);
+}
+
 TEST_CASE("TL10 a box too large to count in cells raises and changes nothing", "[terrain][lua]") {
     ScriptRig rig;
     rig.runtime.run_chunk(R"(

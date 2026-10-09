@@ -142,14 +142,6 @@ GameView::GameView(Runner& runner, std::string name, bool closable)
     guiToggle_ = eye.get();
     getChildren().add(std::move(eye));
 
-    // Terrain mode's palette (T), hidden until it is turned on.
-    terrainBrush_ = std::make_unique<TerrainBrush>(*engine_);
-    terrainBrush_->setOnUsed([this] { requestFocus(); });
-    auto palette = terrainBrush_->makePalette();
-    palette->setVisible(false);
-    terrainPalette_ = palette.get();
-    getChildren().add(std::move(palette));
-
     // Last, so it draws over everything here and is hit first.
     auto overlay = jadefx::make<ProfilerOverlay>();
     overlay->setVisible(false);
@@ -192,10 +184,6 @@ void GameView::refreshOverlays() {
     cameraBox_->setVisible(editing && !profiling);
     guiToggle_->setVisible(editing && !profiling);
     guiScene_->setVisible(!editing || guiToggle_->isSelected());
-    if (!editing && terrainBrush_->active()) {
-        terrainBrush_->turnOff();
-    }
-    terrainPalette_->setVisible(editing && !profiling && terrainBrush_->active());
 }
 
 void GameView::linkCamera(std::string guid) {
@@ -682,29 +670,8 @@ void GameView::postPluginMouse(engine_core::PluginMouseEvent::Kind kind, double 
         [engine, event](engine_core::DataModel&) { engine->scripts().plugin_mouse_event(event); });
 }
 
-void GameView::syncPluginTool() {
-    if (engine_ == nullptr) {
-        return;
-    }
-    // One tool has the left button at a time: a plugin that activates turns the
-    // view's own off, and one of those turning on deactivates the plugin.
-    const std::uint64_t activations = engine_->scripts().plugin_ui().activations();
-    const bool toolsOn = terrainBrush_->active();
-    if (activations != pluginActivations_) {
-        pluginActivations_ = activations;
-        if (pluginHeld() && toolsOn) {
-            terrainBrush_->turnOff();
-            refreshOverlays();
-        }
-    } else if (toolsOn && !toolsWereOn_ && pluginHeld()) {
-        engine_core::Engine* engine = engine_;
-        engine->on_simulation([engine](engine_core::DataModel&) { engine->scripts().plugin_ui().deactivate_all(); });
-    }
-    toolsWereOn_ = terrainBrush_->active();
-}
 
 void GameView::layoutChildren() {
-    syncPluginTool();
     // Layout runs every frame, before the paint, so the list and the link are
     // current when the list lays out and when the paint follows the Camera.
     // One snapshot for this frame's layout and paint, so billboards sit where
@@ -744,13 +711,6 @@ void GameView::layoutChildren() {
     constexpr double kGap = 4.0;
     const double eyeWidth = guiToggle_->measuredWidth(height);
     guiToggle_->performLayout(listLeft - kGap - eyeWidth, contentTop() + kMargin, eyeWidth, height);
-    if (terrainPalette_->isVisible()) {
-        constexpr double kPaletteWidth = 190.0;
-        terrainPalette_->performLayout(contentLeft() + kMargin, contentTop() + kMargin, kPaletteWidth,
-                                       terrainPalette_->measuredHeight(kPaletteWidth, contentHeight()));
-        terrainBrush_->tick(std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count(),
-                            shiftHeld_);
-    }
     // Each frame brings a new snapshot of the game, so the view lays out again next frame.
     markLayoutDirty(LayoutDirt::Arrange);
 }
@@ -993,7 +953,6 @@ void GameView::collectOutlines(const engine_core::VisualSnapshot& snapshot) {
             outlinePoints_.insert(outlinePoints_.end(), {placed.x, placed.y, placed.z});
         }
     }
-    terrainBrush_->appendOutline(outlinePoints_);
     toolLines_.clear();
     toolLines_.insert(toolLines_.end(), snapshot.wire_lines.begin(), snapshot.wire_lines.end());
     renderer_.setToolLines(toolLines_.data(), static_cast<int>(toolLines_.size() / 7));
@@ -1205,16 +1164,6 @@ void GameView::handleMousePressed(const jadefx::MouseEvent& event) {
     requestFocus();
     ProfilerUi::get().owner = this;
     noteCurrentCamera();
-    // Terrain mode keeps the left button for its brush; the rest (the
-    // camera's right button) still reaches the game.
-    if (terrainBrush_->active() && event.button == 0) {
-        shiftHeld_ = event.shift();
-        if (const auto ray = rayAt(event.x, event.y)) {
-            terrainBrush_->press(*ray, event.shift());
-        }
-        IdePane::handleMousePressed(event);
-        return;
-    }
     // An active plugin hears both buttons, and has the left one to itself, so
     // selection and dragging do not act on it. The camera keeps the right one.
     if (pluginHeld() && (event.button == 0 || event.button == 1)) {
@@ -1233,11 +1182,6 @@ void GameView::handleMousePressed(const jadefx::MouseEvent& event) {
 }
 
 void GameView::handleMouseReleased(const jadefx::MouseEvent& event) {
-    if (terrainBrush_->active() && event.button == 0) {
-        terrainBrush_->release();
-        IdePane::handleMouseReleased(event);
-        return;
-    }
     if (pluginHeld() && (event.button == 0 || event.button == 1)) {
         postPluginMouse(event.button == 0 ? engine_core::PluginMouseEvent::Kind::Button1Up
                                           : engine_core::PluginMouseEvent::Kind::Button2Up,
@@ -1256,10 +1200,6 @@ void GameView::handleMouseReleased(const jadefx::MouseEvent& event) {
 void GameView::handleMouseDragged(const jadefx::MouseEvent& event) {
     cursorX_ = event.x;
     cursorY_ = event.y;
-    if (terrainBrush_->active()) {
-        shiftHeld_ = event.shift();
-        terrainBrush_->hover(rayAt(event.x, event.y));
-    }
     if (pluginHeld()) {
         postPluginMouse(engine_core::PluginMouseEvent::Kind::Move, event.x, event.y, event.mods);
     }
@@ -1272,9 +1212,6 @@ void GameView::handleMouseDragged(const jadefx::MouseEvent& event) {
 void GameView::handleMouseMoved(const jadefx::MouseEvent& event) {
     cursorX_ = event.x;
     cursorY_ = event.y;
-    if (terrainBrush_->active()) {
-        terrainBrush_->hover(rayAt(event.x, event.y));
-    }
     if (pluginHeld()) {
         postPluginMouse(engine_core::PluginMouseEvent::Kind::Move, event.x, event.y, event.mods);
     }
@@ -1315,19 +1252,8 @@ void GameView::handleKey(jadefx::KeyEvent& event) {
         }
         return;
     }
-    if (event.key == jadefx::Key::LeftShift || event.key == jadefx::Key::RightShift) {
-        shiftHeld_ = event.pressed;
-    }
-    // Terrain mode: T turns it on and off (edit mode only).
     const bool editing = !playerView_ && !runner_->testing();
     if (editing && event.pressed && !event.repeat && !event.alt && !event.meta) {
-        if (event.key == jadefx::Key::T && !event.control && !event.shift) {
-            terrainBrush_->toggle();
-            terrainPalette_->refresh();
-            refreshOverlays();
-            event.consume();
-            return;
-        }
         // F frames the selection, whatever it is.
         if (event.key == jadefx::Key::F && !event.control && !event.shift && !selected_.empty()) {
             frameSelection();

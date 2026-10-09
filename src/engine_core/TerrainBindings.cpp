@@ -327,6 +327,23 @@ int ScriptBindings::terrain_paint_ball(lua_State* state) {
     });
 }
 
+// SmoothBall(center, radius, strength, space?): strength held to 0 to 1.
+int ScriptBindings::terrain_smooth_ball(lua_State* state) {
+    return lua_guard(state, [&] {
+        Terrain& terrain = terrain_self(state);
+        const Vec3 center = vector_arg(state, 2, "center");
+        const float radius = number_arg(state, 3);
+        const double strength = luaL_checknumber(state, 4);
+        if (!std::isfinite(strength)) {
+            luaL_error(state, "strength must be a finite number");
+        }
+        const Vec3 local = to_local(terrain, center, local_space(state, 5));
+        const float held = static_cast<float>(std::clamp(strength, 0.0, 1.0));
+        raise_if(state, terrain.edit_volume([&](VoxelVolume& volume) { return volume.smooth(local, radius, held); }));
+        return 0;
+    });
+}
+
 // PaintBlock(transform, size, material, space?)
 int ScriptBindings::terrain_paint_block(lua_State* state) {
     return lua_guard(state, [&] {
@@ -602,6 +619,7 @@ ANARCHY_LUA_REGISTER(register_terrain_methods) {
         lua_method("SubtractCylinder", "nil", reinterpret_cast<void*>(&ScriptBindings::terrain_subtract_cylinder)),
         lua_method("SubtractWedge", "nil", reinterpret_cast<void*>(&ScriptBindings::terrain_subtract_wedge)),
         lua_method("PaintBall", "nil", reinterpret_cast<void*>(&ScriptBindings::terrain_paint_ball)),
+        lua_method("SmoothBall", "nil", reinterpret_cast<void*>(&ScriptBindings::terrain_smooth_ball)),
         lua_method("PaintBlock", "nil", reinterpret_cast<void*>(&ScriptBindings::terrain_paint_block)),
         lua_method("ReplaceMaterial", "nil", reinterpret_cast<void*>(&ScriptBindings::terrain_replace_material)),
         lua_method("AddMaterial", "TerrainMaterial", reinterpret_cast<void*>(&ScriptBindings::terrain_add_material)),

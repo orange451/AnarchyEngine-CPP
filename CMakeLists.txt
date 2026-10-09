@@ -91,7 +91,6 @@ set(STUDIO_SOURCES
     src/runner/TextureCache.cpp
     src/amesh/amesh_gl.cpp
     src/runner/GameView.cpp
-    src/runner/TerrainBrush.cpp
     src/runner/ProfilerOverlay.cpp
     src/runner/UiFrameProfile.cpp
     src/runner/GuiLayer.cpp
@@ -1005,6 +1004,7 @@ add_executable(sandbox
     sandbox/archivable_tests.cpp
     sandbox/dragger_tests.cpp
     sandbox/move_tool_tests.cpp
+    sandbox/terrain_tool_tests.cpp
     sandbox/profiler_tests.cpp
     sandbox/brush_geometry_tests.cpp
     sandbox/brush_tests.cpp

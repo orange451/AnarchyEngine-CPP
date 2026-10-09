@@ -181,8 +181,13 @@ int RunPluginsTests() {
             Expect(std::abs((icon->getAbsoluteX() + icon->getWidth() / 2) - (go->getAbsoluteX() + go->getWidth() / 2)) < 2,
                    "the icon sits in the middle of the card");
         }
-        Expect(std::abs(ribbon->pluginsRow()->getHeight() - 3 * ribbon->tabBar()->getHeight()) < 2,
-               "the plugins row is three times the tab bar's height");
+        Expect(std::abs(ribbon->pluginsRow()->getHeight() - 72) < 2, "the plugins row is 72 points tall");
+        if (go != nullptr) {
+            const double above = go->getAbsoluteY() - ribbon->pluginsRow()->getAbsoluteY();
+            const double below = ribbon->pluginsRow()->getAbsoluteY() + ribbon->pluginsRow()->getHeight() -
+                                 (go->getAbsoluteY() + go->getHeight());
+            Expect(above <= 8 && below <= 8, "with little room above and below a card");
+        }
         Expect(ribbon->pluginsRow()->getElementsByClassName("ide-ribbon-empty").empty(), "the hint goes");
         if (go != nullptr) {
             const double x = go->getAbsoluteX() + go->getWidth() / 2;

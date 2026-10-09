@@ -28,7 +28,6 @@ using engine_core::DataModel;
 using engine_core::InstanceId;
 using engine_core::Terrain;
 using engine_core::Vec3;
-using engine_core::terrain::CellCoord;
 using engine_core::terrain::Shape;
 using engine_core::terrain::VoxelVolume;
 
@@ -70,73 +69,6 @@ InstanceId find_terrain(DataModel& world) {
         }
     }
     return 0;
-}
-
-// Smooth: within the ball, each cell's distance moves toward the mean of its
-// 3x3x3 neighbourhood, by strength (full at the centre, fading to the rim).
-// A cell that turns solid takes its most common solid neighbour's material.
-std::optional<std::string> smooth_ball(VoxelVolume& volume, Vec3 center, float radius, float strength) {
-    const float size = volume.voxel_size();
-    const int reach = static_cast<int>(std::ceil(radius / size)) + 1;
-    const CellCoord c{static_cast<int>(std::lround(center.x / size)), static_cast<int>(std::lround(center.y / size)),
-                      static_cast<int>(std::lround(center.z / size))};
-    const CellCoord min{c.x - reach, c.y - reach, c.z - reach};
-    const CellCoord max{c.x + reach, c.y + reach, c.z + reach};
-    std::vector<float> distances;
-    std::vector<std::uint8_t> materials;
-    if (auto why = volume.read(min, max, distances, materials)) {
-        return why;
-    }
-    const int nx = max.x - min.x + 1;
-    const int ny = max.y - min.y + 1;
-    const int nz = max.z - min.z + 1;
-    auto at = [&](int x, int y, int z) { return (static_cast<std::size_t>(z) * ny + y) * nx + x; };
-    std::vector<float> out = distances;
-    std::vector<std::uint8_t> outMaterials = materials;
-    bool changed = false;
-    for (int z = 1; z < nz - 1; ++z) {
-        for (int y = 1; y < ny - 1; ++y) {
-            for (int x = 1; x < nx - 1; ++x) {
-                const Vec3 p{(min.x + x) * size, (min.y + y) * size, (min.z + z) * size};
-                const float dx = p.x - center.x, dy = p.y - center.y, dz = p.z - center.z;
-                const float d = std::sqrt(dx * dx + dy * dy + dz * dz);
-                if (d > radius) {
-                    continue;
-                }
-                float sum = 0.f;
-                std::array<int, 256> votes{};
-                int best = -1;
-                for (int k = -1; k <= 1; ++k) {
-                    for (int j = -1; j <= 1; ++j) {
-                        for (int i = -1; i <= 1; ++i) {
-                            const std::size_t n = at(x + i, y + j, z + k);
-                            sum += distances[n];
-                            if (distances[n] <= 0.f && materials[n] != 0) {
-                                const int m = materials[n];
-                                if (best < 0 || ++votes[m] > votes[best]) {
-                                    best = m;
-                                }
-                            }
-                        }
-                    }
-                }
-                const std::size_t self = at(x, y, z);
-                const float weight = strength * std::min(1.f, 2.f * (1.f - d / radius));
-                const float next = distances[self] + (sum / 27.f - distances[self]) * weight;
-                if (next != distances[self]) {
-                    out[self] = next;
-                    changed = true;
-                    if (next <= 0.f && distances[self] > 0.f && outMaterials[self] == 0 && best > 0) {
-                        outMaterials[self] = static_cast<std::uint8_t>(best);
-                    }
-                }
-            }
-        }
-    }
-    if (!changed) {
-        return std::nullopt;
-    }
-    return volume.write(min, max, out, outMaterials);
 }
 
 std::shared_ptr<jadefx::Label> small_label(const std::string& text) {
@@ -472,7 +404,7 @@ void TerrainBrush::applyBall(bool shift) {
                 return volume.fill(shape, material);
             }
             case TerrainTool::Smooth:
-                return smooth_ball(volume, local, radius, strength);
+                return volume.smooth(local, radius, strength);
             case TerrainTool::Paint:
                 shape.center = local;
                 return volume.paint(shape, shift ? 0 : material);

@@ -278,6 +278,69 @@ TEST_CASE("V11 ids_used tracks exactly through Id reassignment and removal", "[t
     REQUIRE(volume.chunks().empty());
 }
 
+namespace {
+// Two balls of Id 3 a cell apart either side of x = 0: smoothing fills the
+// crease between them, pulling cells from beyond a voxel of the surface to
+// within one, where their Id shows.
+VoxelVolume crease_of_id_3() {
+    VoxelVolume volume;
+    REQUIRE_FALSE(volume.fill(ball_at(-5.f, 0.f, 0.f, 4.f), 3));
+    REQUIRE_FALSE(volume.fill(ball_at(5.f, 0.f, 0.f, 4.f), 3));
+    return volume;
+}
+
+// Every cell near the crease that is within a voxel of the surface, or
+// inside, has Id 3.
+void require_id_3_where_it_shows(const VoxelVolume& volume) {
+    for (int z = -10; z <= 10; ++z) {
+        for (int y = -10; y <= 10; ++y) {
+            for (int x = -10; x <= 10; ++x) {
+                const Cell cell = volume.cell(CellCoord{x, y, z});
+                if (dequantize(cell.distance, 1.f) <= 1.f) {
+                    REQUIRE(cell.material == 3);
+                }
+            }
+        }
+    }
+}
+}  // namespace
+
+TEST_CASE("V12 smoothing gives a cell it brings to the surface its neighbours' Id, not the default", "[terrain]") {
+    VoxelVolume volume = crease_of_id_3();
+    REQUIRE(dequantize(volume.cell(CellCoord{0, 0, 0}).distance, 1.f) > 1.f);
+    REQUIRE(volume.cell(CellCoord{0, 0, 0}).material == 0);
+    require_id_3_where_it_shows(volume);
+    for (int i = 0; i < 8; ++i) {
+        REQUIRE_FALSE(volume.smooth(Vec3{0.f, 0.f, 0.f}, 6.f, 1.f));
+    }
+    REQUIRE(dequantize(volume.cell(CellCoord{0, 0, 0}).distance, 1.f) <= 1.f);
+    require_id_3_where_it_shows(volume);
+}
+
+TEST_CASE("V13 smoothing replaces a dug-out cell's old Id as it comes back to the surface", "[terrain]") {
+    // Id 5 dug out of the crease leaves its Id on the air cells there.
+    VoxelVolume volume;
+    REQUIRE_FALSE(volume.fill(ball_at(0.f, 0.f, 0.f, 2.f), 5));
+    REQUIRE_FALSE(volume.subtract(ball_at(0.f, 0.f, 0.f, 3.5f)));
+    REQUIRE_FALSE(volume.fill(ball_at(-5.f, 0.f, 0.f, 4.f), 3));
+    REQUIRE_FALSE(volume.fill(ball_at(5.f, 0.f, 0.f, 4.f), 3));
+    REQUIRE(volume.cell(CellCoord{0, 0, 0}).material == 5);
+    for (int i = 0; i < 8; ++i) {
+        REQUIRE_FALSE(volume.smooth(Vec3{0.f, 0.f, 0.f}, 6.f, 1.f));
+    }
+    require_id_3_where_it_shows(volume);
+}
+
+TEST_CASE("V14 smoothing with no radius changes nothing; a far-off ball is refused", "[terrain]") {
+    VoxelVolume volume = crease_of_id_3();
+    const std::uint64_t revision = volume.revision();
+    REQUIRE_FALSE(volume.smooth(Vec3{0.f, 0.f, 0.f}, 0.f, 1.f));
+    REQUIRE(volume.revision() == revision);
+    REQUIRE(volume.smooth(Vec3{1e30f, 0.f, 0.f}, 4.f, 1.f));
+    REQUIRE(volume.smooth(Vec3{std::nanf(""), 0.f, 0.f}, 4.f, 1.f));
+    REQUIRE(volume.revision() == revision);
+}
+
 TEST_CASE("VR1 replace_everywhere changes one Id across far-apart chunks", "[terrain]") {
     VoxelVolume volume;
     REQUIRE_FALSE(volume.fill(ball_at(0.f, 0.f, 0.f, 5.f), 3));

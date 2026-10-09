@@ -115,6 +115,51 @@ bool has_volume(const Shape& shape) {
     }
 }
 
+// The Id most common among the 3x3x3 cells around x, y, z (in an nx by ny
+// box, x fastest) that lie within a voxel of the surface or inside it, where
+// an Id shows. A TerrainMaterial's Id (1-255) wins over the default's (0):
+// Terrain tools never paint the default while a TerrainMaterial exists. Ties
+// go to the lower Id. fallback when no neighbour is there.
+std::uint8_t neighbour_id(const std::vector<float>& distances, const std::vector<std::uint8_t>& materials, int nx, int ny,
+                          int x, int y, int z, float voxel_size, std::uint8_t fallback) {
+    std::uint8_t ids[27];
+    int counts[27];
+    int distinct = 0;
+    for (int k = -1; k <= 1; ++k) {
+        for (int j = -1; j <= 1; ++j) {
+            for (int i = -1; i <= 1; ++i) {
+                const std::size_t n = (static_cast<std::size_t>(z + k) * ny + (y + j)) * nx + (x + i);
+                if (distances[n] > voxel_size) {
+                    continue;
+                }
+                int slot = 0;
+                while (slot < distinct && ids[slot] != materials[n]) {
+                    ++slot;
+                }
+                if (slot == distinct) {
+                    ids[distinct] = materials[n];
+                    counts[distinct++] = 0;
+                }
+                ++counts[slot];
+            }
+        }
+    }
+    if (distinct == 0) {
+        return fallback;
+    }
+    int best = 0;
+    for (int slot = 1; slot < distinct; ++slot) {
+        if ((ids[slot] != 0) != (ids[best] != 0)) {
+            if (ids[slot] != 0) {
+                best = slot;
+            }
+        } else if (counts[slot] > counts[best] || (counts[slot] == counts[best] && ids[slot] < ids[best])) {
+            best = slot;
+        }
+    }
+    return ids[best];
+}
+
 }  // namespace
 
 template <typename Change>
@@ -303,6 +348,82 @@ std::optional<std::string> VoxelVolume::paint(Shape shape, std::uint8_t material
         return out;
     });
     return std::nullopt;
+}
+
+std::optional<std::string> VoxelVolume::smooth(Vec3 center, float radius, float strength) {
+    if (!(radius > 0.f)) {
+        return std::nullopt;
+    }
+    const float vs = voxel_size_;
+    // The ball's cells, and one more on every side for their neighbourhoods.
+    const double reach = std::ceil(static_cast<double>(radius) / vs) + 1.0;
+    const double middle[3] = {std::round(static_cast<double>(center.x) / vs),
+                              std::round(static_cast<double>(center.y) / vs),
+                              std::round(static_cast<double>(center.z) / vs)};
+    for (const double m : middle) {
+        // Also refused for NaN, which fails both comparisons.
+        if (!(m - reach >= -kMaxBoundCell && m + reach <= kMaxBoundCell)) {
+            return std::string(kTooLarge);
+        }
+    }
+    const int r = static_cast<int>(reach);
+    const CellCoord c{static_cast<int>(middle[0]), static_cast<int>(middle[1]), static_cast<int>(middle[2])};
+    const CellCoord min{c.x - r, c.y - r, c.z - r};
+    const CellCoord max{c.x + r, c.y + r, c.z + r};
+    std::vector<float> distances;
+    std::vector<std::uint8_t> materials;
+    if (auto why = read(min, max, distances, materials)) {
+        return why;
+    }
+    const int nx = max.x - min.x + 1;
+    const int ny = max.y - min.y + 1;
+    const int nz = max.z - min.z + 1;
+    auto at = [&](int x, int y, int z) { return (static_cast<std::size_t>(z) * ny + y) * nx + x; };
+    std::vector<float> out = distances;
+    std::vector<std::uint8_t> out_materials = materials;
+    bool changed = false;
+    for (int z = 1; z < nz - 1; ++z) {
+        for (int y = 1; y < ny - 1; ++y) {
+            for (int x = 1; x < nx - 1; ++x) {
+                const float dx = (min.x + x) * vs - center.x;
+                const float dy = (min.y + y) * vs - center.y;
+                const float dz = (min.z + z) * vs - center.z;
+                const float d = std::sqrt(dx * dx + dy * dy + dz * dz);
+                if (d > radius) {
+                    continue;
+                }
+                float sum = 0.f;
+                for (int k = -1; k <= 1; ++k) {
+                    for (int j = -1; j <= 1; ++j) {
+                        for (int i = -1; i <= 1; ++i) {
+                            sum += distances[at(x + i, y + j, z + k)];
+                        }
+                    }
+                }
+                const std::size_t self = at(x, y, z);
+                const float weight = strength * std::min(1.f, 2.f * (1.f - d / radius));
+                const float next = distances[self] + (sum / 27.f - distances[self]) * weight;
+                if (next == distances[self]) {
+                    continue;
+                }
+                out[self] = next;
+                changed = true;
+                // A cell's Id shows once it is within a voxel of the surface
+                // (blend_weights reads such corners; a face takes its solid
+                // side's), and fill gives every cell it brings there an Id.
+                // One that comes from farther out never had an Id chosen for
+                // it (air carries the default's, a dug-out cell its old one),
+                // so it takes its neighbours'.
+                if (distances[self] > vs && next <= vs) {
+                    out_materials[self] = neighbour_id(distances, materials, nx, ny, x, y, z, vs, materials[self]);
+                }
+            }
+        }
+    }
+    if (!changed) {
+        return std::nullopt;
+    }
+    return write(min, max, out, out_materials);
 }
 
 std::optional<std::string> VoxelVolume::replace(CellCoord min, CellCoord max, std::uint8_t from, std::uint8_t to) {

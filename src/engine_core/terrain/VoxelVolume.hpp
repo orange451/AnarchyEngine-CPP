@@ -62,6 +62,12 @@ public:
     std::optional<std::string> fill(Shape shape, std::uint8_t material);
     std::optional<std::string> subtract(Shape shape);
     std::optional<std::string> paint(Shape shape, std::uint8_t material);
+    // Within a ball, each cell's distance moves toward the mean of its 3x3x3
+    // neighbourhood, by strength (full at the centre, fading to the rim). A
+    // cell it brings to within a voxel of the surface, where its Id shows,
+    // takes its neighbours' Id there (a TerrainMaterial's over the default's),
+    // as fill would have given it one.
+    std::optional<std::string> smooth(Vec3 center, float radius, float strength);
     std::optional<std::string> replace(CellCoord min, CellCoord max, std::uint8_t from, std::uint8_t to);
     // Every solid or band cell with Id from takes Id to, across every chunk,
     // with no size limit. Chunks whose Id mask lacks from are skipped

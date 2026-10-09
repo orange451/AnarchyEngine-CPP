@@ -145,6 +145,8 @@ public:
     void finish_recording(std::string id, FinishRecordingOperation op);
     // Empty id asks whether any recording is open.
     bool is_recording_in_progress(std::optional<std::string> id = std::nullopt) const;
+    // The open recording's id; empty when none is open.
+    std::string open_recording_id() const { return recording_ ? recording_->id : std::string(); }
 
     // Commits the open recording under this name. Does nothing when none is open.
     void set_waypoint(std::string name);

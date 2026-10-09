@@ -370,6 +370,7 @@ std::string Terrain::own_data_path(const std::string& avoid) const {
 std::optional<std::string> Terrain::edit_volume(
     const std::function<std::optional<std::string>(terrain::VoxelVolume&)>& edit) {
     require_thread(*this);
+    note_voxel_history();
     if (std::optional<std::string> error = edit(volume_)) {
         return error;
     }
@@ -395,11 +396,61 @@ void Terrain::replace_material_everywhere(int from, int to) {
     });
 }
 
+namespace {
+
+// One undo step's change to a Terrain's voxels. Chunks are shared and
+// immutable, so this holds chunk maps, never voxels. The chunks after the
+// step are taken when it is undone: undo runs newest first, so the Terrain
+// is then exactly as the step left it, and the step's edits pay for one map
+// copy between them, not one each.
+class VoxelChange final : public CustomChange {
+public:
+    VoxelChange(InstanceId terrain, terrain::ChunkMap before) : terrain_(terrain), before_(std::move(before)) {}
+
+    void apply(DataModel& world, bool inverse) const override {
+        auto* terrain = dynamic_cast<Terrain*>(world.instance(terrain_));
+        if (terrain == nullptr) {
+            return;
+        }
+        if (inverse) {
+            after_ = terrain->volume().chunks();
+        }
+        const terrain::ChunkMap& chunks = inverse ? before_ : after_;
+        terrain->edit_volume([&](terrain::VoxelVolume& volume) -> std::optional<std::string> {
+            volume.set_chunks(chunks);
+            return std::nullopt;
+        });
+    }
+
+private:
+    InstanceId terrain_;
+    terrain::ChunkMap before_;
+    mutable terrain::ChunkMap after_;
+};
+
+}  // namespace
+
+void Terrain::note_voxel_history() {
+    if (simulation_running()) {
+        return;   // play's edits are the session's: Stop puts the voxels back
+    }
+    ChangeHistoryService& changes = history();
+    if (!changes.wants_mutation() || open_created_place(id()) != nullptr) {
+        return;   // no step to join, or this step made the Terrain (its record takes the voxels)
+    }
+    std::string recording = changes.open_recording_id();
+    if (recording == voxel_recording_) {
+        return;   // this step already holds the chunks from before its first edit
+    }
+    voxel_recording_ = std::move(recording);
+    Mutation mutation;
+    mutation.kind = MutationKind::Custom;
+    mutation.id = id();
+    mutation.custom = std::make_shared<VoxelChange>(id(), volume_.chunks());
+    changes.note(std::move(mutation));
+}
+
 void Terrain::refresh_creation() {
-    // Known limitation: a creation committed in an earlier step keeps the
-    // record it was made with, so undo then redo of it brings the Terrain
-    // back without the edits made after it. That needs voxel undo
-    // (sub-project 2).
     const std::vector<std::byte>* before = open_created_place(id());
     if (before == nullptr) {
         return;

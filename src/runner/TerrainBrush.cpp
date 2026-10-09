@@ -361,71 +361,23 @@ void TerrainBrush::hover(const std::optional<engine_core::DraggerRay>& ray) {
 }
 
 void TerrainBrush::beginStroke() {
-    const InstanceId terrain = terrain_;
-    stroking_ = false;
+    // One undo step for the whole stroke: every edit it makes joins it
+    // (Terrain::edit_volume notes the voxels from before the first).
     engine_.on_simulation([&](DataModel& world) {
-        if (Terrain* found = terrain_of(world, terrain)) {
-            strokeBefore_ = found->volume().chunks();
-            stroking_ = true;
+        if (auto id = world.history().try_begin_recording("Sculpt Terrain")) {
+            recording_ = std::move(*id);
         }
     });
 }
 
-namespace {
-
-// One stroke in the studio's undo: the Terrain's chunks before and after.
-class TerrainVoxelChange : public engine_core::CustomChange {
-public:
-    TerrainVoxelChange(InstanceId terrain, engine_core::terrain::ChunkMap before, engine_core::terrain::ChunkMap after)
-        : terrain_(terrain), before_(std::move(before)), after_(std::move(after)) {}
-
-    void apply(DataModel& world, bool inverse) const override {
-        Terrain* found = terrain_of(world, terrain_);
-        if (found == nullptr) {
-            return;
-        }
-        const engine_core::terrain::ChunkMap& chunks = inverse ? before_ : after_;
-        found->edit_volume([&](VoxelVolume& volume) -> std::optional<std::string> {
-            volume.set_chunks(chunks);
-            return std::nullopt;
-        });
-    }
-
-private:
-    InstanceId terrain_;
-    engine_core::terrain::ChunkMap before_;
-    engine_core::terrain::ChunkMap after_;
-};
-
-}  // namespace
-
 void TerrainBrush::endStroke() {
-    if (!stroking_) {
+    if (recording_.empty()) {
         return;
     }
-    stroking_ = false;
-    const InstanceId terrain = terrain_;
-    engine_core::terrain::ChunkMap before = std::move(strokeBefore_);
-    strokeBefore_.clear();
+    std::string recording = std::move(recording_);
+    recording_.clear();
     engine_.on_simulation([&](DataModel& world) {
-        Terrain* found = terrain_of(world, terrain);
-        if (found == nullptr) {
-            return;
-        }
-        engine_core::terrain::ChunkMap after = found->volume().chunks();
-        if (after == before) {
-            return;   // the stroke changed nothing
-        }
-        engine_core::ChangeHistoryService& history = world.history();
-        const std::optional<std::string> recording = history.try_begin_recording("Sculpt Terrain");
-        engine_core::Mutation mutation;
-        mutation.kind = engine_core::MutationKind::Custom;
-        mutation.id = terrain;
-        mutation.custom = std::make_shared<TerrainVoxelChange>(terrain, std::move(before), std::move(after));
-        history.note(std::move(mutation));
-        if (recording) {
-            history.finish_recording(*recording, engine_core::FinishRecordingOperation::Commit);
-        }
+        world.history().finish_recording(recording, engine_core::FinishRecordingOperation::Commit);
     });
 }
 

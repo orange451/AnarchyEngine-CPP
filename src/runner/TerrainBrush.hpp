@@ -3,10 +3,9 @@
 // Terrain tools prototype: the Scene View's terrain mode. T toggles it; a
 // small palette picks Add, Grow, Smooth, or Paint, a size, a strength, and a
 // material. Grow, Smooth, and Paint work under a ball at the pointer; Add
-// drags a box on the grid floor. Each stroke is one step of the studio's
-// undo (ChangeHistoryService, a Custom mutation): voxel chunks are shared
-// and immutable, so a step holds the chunk maps before and after the
-// stroke, not a copy of any voxels.
+// drags a box on the grid floor. Each stroke is one recording, so one step,
+// of the studio's undo (ChangeHistoryService); Terrain::edit_volume records
+// the voxels.
 //
 // UI thread. Every voxel read or write runs on the simulation side through
 // Engine::on_simulation.
@@ -138,9 +137,8 @@ private:
     engine_core::Vec3 boxEnd_{};
     double lastApply_ = 0.0;
 
-    // The stroke in progress: its Terrain's chunks before it began.
-    bool stroking_ = false;
-    engine_core::terrain::ChunkMap strokeBefore_;
+    // The stroke in progress: its ChangeHistoryService recording.
+    std::string recording_;
     std::function<void()> onUsed_;
 };
 

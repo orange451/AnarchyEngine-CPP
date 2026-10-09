@@ -222,3 +222,92 @@ TEST_CASE("TL9 CellToWorld inverts WorldToCell; Clear empties the Terrain but ke
     REQUIRE(has_line(out, "true\n"));
     REQUIRE(has_line(out, "true\t1\n"));
 }
+
+namespace {
+
+// Prints whether the cells at the origin and at (10, 0, 0) are solid.
+std::string solids(ScriptRig& rig) {
+    rig.runtime.run_chunk(R"(
+        local t = workspace.Island
+        local function solid(x)
+            return t:ReadVoxels(Vector3.new(x, 0, 0), Vector3.new(x, 0, 0)).Distances[1][1][1] < 0
+        end
+        print(solid(0), solid(10))
+    )");
+    rig.frames(1);
+    return all_text(rig.runtime.drain_output());
+}
+
+}  // namespace
+
+TEST_CASE("TU1 terrain edits inside a ChangeHistoryService recording undo and redo as one step", "[terrain][lua][history]") {
+    ScriptRig rig;
+    rig.runtime.run_chunk(R"(
+        local t = Instance.new("Terrain", workspace)
+        t.Name = "Island"
+        t:FillBall(Vector3.new(0, 0, 0), 4, t:AddMaterial(nil))
+    )");
+    rig.frames(1);
+    REQUIRE(solids(rig) == "true\tfalse\n");
+
+    rig.runtime.run_chunk(R"(
+        local history = game:GetService("ChangeHistoryService")
+        local id = history:TryBeginRecording("Dig")
+        local t = workspace.Island
+        t:SubtractBall(Vector3.new(0, 0, 0), 2)
+        t:FillBall(Vector3.new(10, 0, 0), 3, t:GetMaterialById(1))
+        history:FinishRecording(id, Enum.FinishRecordingOperation.Commit)
+    )");
+    INFO(rig.runtime.last_error());
+    REQUIRE(rig.runtime.last_error().empty());
+    REQUIRE(solids(rig) == "false\ttrue\n");
+    REQUIRE(rig.game.history().can_undo().second == "Dig");
+
+    rig.game.history().undo();   // both edits, as one step
+    REQUIRE(solids(rig) == "true\tfalse\n");
+    rig.game.history().redo();
+    REQUIRE(solids(rig) == "false\ttrue\n");
+}
+
+TEST_CASE("TU2 a cancelled recording puts the voxels back", "[terrain][lua][history]") {
+    ScriptRig rig;
+    rig.runtime.run_chunk(R"(
+        local t = Instance.new("Terrain", workspace)
+        t.Name = "Island"
+        t:FillBall(Vector3.new(0, 0, 0), 4, t:AddMaterial(nil))
+        local history = game:GetService("ChangeHistoryService")
+        local id = history:TryBeginRecording("Dig")
+        t:SubtractBall(Vector3.new(0, 0, 0), 2)
+        history:FinishRecording(id, Enum.FinishRecordingOperation.Cancel)
+    )");
+    INFO(rig.runtime.last_error());
+    REQUIRE(rig.runtime.last_error().empty());
+    rig.frames(1);
+    REQUIRE(solids(rig) == "true\tfalse\n");
+}
+
+TEST_CASE("TU3 a Terrain made in one step and edited in the next comes back whole after undo and redo of both", "[terrain][lua][history]") {
+    ScriptRig rig;
+    rig.runtime.run_chunk(R"(
+        local history = game:GetService("ChangeHistoryService")
+        local id = history:TryBeginRecording("Make")
+        local t = Instance.new("Terrain", workspace)
+        t.Name = "Island"
+        t:FillBall(Vector3.new(0, 0, 0), 4, t:AddMaterial(nil))
+        history:FinishRecording(id, Enum.FinishRecordingOperation.Commit)
+        id = history:TryBeginRecording("Grow")
+        t:FillBall(Vector3.new(10, 0, 0), 3, t:GetMaterialById(1))
+        history:FinishRecording(id, Enum.FinishRecordingOperation.Commit)
+    )");
+    INFO(rig.runtime.last_error());
+    REQUIRE(rig.runtime.last_error().empty());
+    rig.frames(1);
+    REQUIRE(solids(rig) == "true\ttrue\n");
+    rig.game.history().undo();   // Grow
+    REQUIRE(solids(rig) == "true\tfalse\n");
+    rig.game.history().undo();   // Make
+    rig.game.history().redo();   // Make: the Terrain as it was made
+    REQUIRE(solids(rig) == "true\tfalse\n");
+    rig.game.history().redo();   // Grow
+    REQUIRE(solids(rig) == "true\ttrue\n");
+}

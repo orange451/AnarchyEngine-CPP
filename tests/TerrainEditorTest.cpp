@@ -418,7 +418,7 @@ void TE5_remove_used_asks() {
     Expect(alert != nullptr &&
                alert->getContentText() ==
                    "Replace them with another material, or keep them:\nthey draw as the default material until a "
-                   "new\nmaterial takes Id 1.\nA replacement cannot be undone yet.",
+                   "new\nmaterial takes Id 1.",
            "TE5 and says what each answer does");
     // The Alert draws that text in one Label, which cuts a line too long for it
     // short with an ellipsis. Every line must fit, or the warning goes unseen.

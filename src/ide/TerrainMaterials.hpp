@@ -57,9 +57,8 @@ std::optional<std::string> replace_unassigned(engine_core::DataModel& world, eng
 
 // SimulationThread. The writes above as the Studio's Configure Terrain tab
 // makes them, each one undo step: "Add Terrain Material", "Set Terrain
-// Material", "Remove Terrain Material", and "Replace Terrain Material" —
-// except that a replacement of voxels (Replace) cannot be undone yet (voxel
-// undo is a later sub-project).
+// Material", "Remove Terrain Material", and "Replace Terrain Material" (its
+// voxels too: Terrain::edit_volume records them in the open step).
 engine_core::InstanceId run_add(engine_core::DataModel& world, engine_core::InstanceId terrain,
                                 engine_core::InstanceId material, std::string& error);
 std::optional<std::string> run_set(engine_core::DataModel& world, engine_core::InstanceId entry,

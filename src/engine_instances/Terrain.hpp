@@ -77,9 +77,11 @@ public:
     // SimulationThread. Every voxel edit goes through here, never through
     // volume() directly: runs edit, and when it succeeds while stopped marks
     // the place unsaved and, on this Terrain's first edit, gives it its
-    // DataPath. When the open recording made this Terrain, its record takes
-    // the edit too, so redo of that creation brings the voxels back. Returns
-    // edit's refusal.
+    // DataPath. While a ChangeHistoryService recording is open, the edit is
+    // part of that undo step: the step's first edit notes the chunks as they
+    // were (note_voxel_history). When the open recording made this Terrain,
+    // its record takes the edit instead, so redo of that creation brings the
+    // voxels back. Returns edit's refusal.
     std::optional<std::string> edit_volume(
         const std::function<std::optional<std::string>(terrain::VoxelVolume&)>& edit);
     // SimulationThread. replace_everywhere through edit_volume, so it marks
@@ -115,6 +117,10 @@ private:
     // edit_volume's: when the open recording created this Terrain, its
     // record takes the voxels and DataPath as they are now.
     void refresh_creation();
+    // edit_volume's, before the edit: the open recording's first edit of this
+    // Terrain notes its chunks as they are, as one undo step for every edit
+    // the recording goes on to make.
+    void note_voxel_history();
 
     Matrix4 transform_ = matrix4_identity();
     bool can_collide_ = true;
@@ -129,6 +135,8 @@ private:
     // reuse_token_ while edit_volume refreshes the record).
     std::uint64_t refreshed_token_ = 0;
     std::uint64_t reuse_token_ = 0;
+    // The recording note_voxel_history last noted this Terrain's chunks in.
+    std::string voxel_recording_;
     // What the file at saved_path_ holds, as of the last save or load: the
     // same shared chunks, so a save compares pointers, not cells.
     bool saved_ = false;

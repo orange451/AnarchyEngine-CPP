@@ -431,7 +431,7 @@ IdeTerrainEditor::IdeTerrainEditor(engine_core::DataModel& world, engine_core::I
         });
     });
     jadefx::Tooltip::install(unassigned_replace_.get(), jadefx::make<jadefx::Tooltip>(
-                                                            "Move these voxels onto a material. This cannot be undone yet."));
+                                                            "Move these voxels onto a material."));
     unassigned_->getChildren().add(unassigned_replace_);
     unassigned_->setVisible(false);
 
@@ -889,7 +889,7 @@ void IdeTerrainEditor::requestRemove(engine_core::InstanceId entry) {
         jadefx::AlertType::Warning,
         "Replace them with another material, or keep them:\nthey draw as the default material until a new\n"
         "material takes Id " +
-            std::to_string(view->material_id) + ".\nA replacement cannot be undone yet.",
+            std::to_string(view->material_id) + ".",
         std::vector<jadefx::ButtonType>{replace, keep, jadefx::ButtonType::Cancel()});
     alert_->setTitle("Anarchy Engine");
     alert_->setHeaderText(view->name + " is used by voxels");

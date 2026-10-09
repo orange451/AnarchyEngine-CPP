@@ -17,7 +17,7 @@
 namespace ide {
 
 // What the Configure Terrain tab asks of the studio. Each write is one undo
-// step, but a replacement of voxels cannot be undone yet.
+// step, a replacement of voxels included.
 struct TerrainEditorHost {
     // Adds a TerrainMaterial to terrain holding material, or none for 0, and
     // reports the new one, or why none was made, through result.

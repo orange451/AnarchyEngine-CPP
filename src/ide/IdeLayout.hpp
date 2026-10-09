@@ -199,6 +199,10 @@ public:
     // Lists the plugins folder, at most once a second unless now, and has the
     // simulation load, unload, or reload whatever changed since the last list.
     void poll_plugins(bool now);
+    // Puts the tree in each .aeinst or .aeplugin among files into Workspace as one
+    // undo step, and selects what it made. A file that cannot be read says why in a
+    // toast. False when files holds none of them.
+    bool import_instance_files(const std::vector<std::string>& files);
     // Shows the plugins' toolbars on the Plugins tab when they changed.
     void refresh_plugin_ribbon();
     // Makes, titles, opens, closes, and drops the plugins' dock widget pages to

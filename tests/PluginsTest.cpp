@@ -7,6 +7,8 @@
 #include "Engine.hpp"
 #include "Folder.hpp"
 #include "Gui.hpp"
+#include "SelectionService.hpp"
+#include "InstanceFile.hpp"
 #include "Script.hpp"
 #include "ScriptRuntime.hpp"
 
@@ -15,6 +17,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <filesystem>
+#include <fstream>
 #include <random>
 #include <string>
 #include <system_error>
@@ -265,6 +268,38 @@ int RunPluginsTests() {
         Expect(layout.page_open_for_tests(layout.page_named_for_tests("plugin:Cycling Tool/W")),
                "the cycled widget ends open");
         Expect(layout.dock_count_for_tests() == docksBefore, "opening and closing a widget makes no new docks");
+
+        // Dropping an instance file or a plugin file puts its tree in Workspace, selected.
+        {
+            engine_core::CopiedNode tree;
+            tree.class_name = "Folder";
+            tree.name = "Dropped Tree";
+            engine_core::CopiedNode inside;
+            inside.class_name = "Script";
+            inside.name = "Inside";
+            inside.has_source = true;
+            inside.source = "print('not run: it is in Workspace while stopped')";
+            tree.children.push_back(inside);
+            std::string error;
+            const std::filesystem::path file = config / "Dropped Tree.aeinst";
+            Expect(engine_core::save_instance_file(file, {tree}, error), "the instance file to drop is written");
+            const std::filesystem::path bad = config / "Broken.aeinst";
+            { std::ofstream(bad) << "{"; }
+            Expect(layout.import_instance_files({file.u8string(), bad.u8string(), (config / "notes.txt").u8string()}),
+                   "dropped instance files are taken");
+            frames(2);
+            bool inWorkspace = false;
+            bool selected = false;
+            engine.on_simulation([&](engine_core::DataModel& game) {
+                const engine_core::InstanceId found = game.find_first_child(game.scene_service("Workspace"), "Dropped Tree");
+                inWorkspace = found != 0 && game.find_first_child(found, "Inside") != 0;
+                const std::vector<engine_core::InstanceId> now = game.selection().get();
+                selected = now.size() == 1 && now[0] == found;
+            });
+            Expect(inWorkspace, "a dropped .aeinst lands in Workspace with its children");
+            Expect(selected, "and is selected");
+            Expect(!layout.import_instance_files({(config / "notes.txt").u8string()}), "other files are not taken");
+        }
 
         // Deleting the plugin takes the page away.
         std::filesystem::remove(config / "plugins" / "Widget Tool.aeplugin");

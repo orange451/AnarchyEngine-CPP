@@ -187,3 +187,42 @@ TEST_CASE("CAM5 a camera flown outside any recording is written by the next save
     engine_core::Project loaded = engine_core::Project::load(dir.path, game);
     REQUIRE(engine_core::same_matrix4(workspace_cameras(game)[0]->transform(), flown));
 }
+
+TEST_CASE("CAM6 Lua turns view points into rays and world points into view points", "[camera]") {
+    ScriptRig rig;
+    Camera& camera = add_camera(rig.game);
+    rig.game.set_name(camera.id(), "Cam");
+    camera.set_field_of_view(90);
+    Camera& hidden = add_camera(rig.game);
+    rig.game.set_name(hidden.id(), "Hidden");
+    camera.set_viewport_size(engine_core::Vec2{200, 100});
+    rig.runtime.run_chunk(R"(
+        local cam = workspace.Cam
+        local origin, dir = cam:ViewportPointToRay(100, 50)
+        print("ray", origin.Magnitude, dir.Z, dir.Magnitude)
+        local _, corner = cam:ViewportPointToRay(200, 0)
+        print("corner", math.floor(corner.X / -corner.Z * 100 + 0.5), math.floor(corner.Y / -corner.Z * 100 + 0.5))
+        local p, on = cam:WorldToViewportPoint(Vector3.new(0, 0, -10))
+        print("mid", p.X, p.Y, p.Z, on)
+        p, on = cam:WorldToViewportPoint(Vector3.new(1, 0, -1))
+        print("side", p.X, on)
+        p, on = cam:WorldToViewportPoint(Vector3.new(0, 0, 10))
+        print("behind", p.Z, on)
+        print(pcall(function() workspace.Hidden:ViewportPointToRay(0, 0) end))
+    )");
+    rig.frames(1);
+    const auto out = rig.runtime.drain_output();
+    const auto has = [&](const std::string& text) {
+        for (const auto& line : out.lines) {
+            if (line.text.find(text) != std::string::npos) return true;
+        }
+        return false;
+    };
+    for (const auto& line : out.lines) UNSCOPED_INFO(line.text);
+    CHECK(has("ray\t0\t-1\t1"));
+    CHECK(has("corner\t200\t100"));
+    CHECK(has("mid\t100\t50\t10\ttrue"));
+    CHECK(has("side\t150\ttrue"));
+    CHECK(has("behind\t-10\tfalse"));
+    CHECK(has("not shown in a view"));
+}

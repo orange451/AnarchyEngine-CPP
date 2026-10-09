@@ -266,6 +266,10 @@ struct VisualSnapshot {
     std::vector<VisualDragger> draggers;
     // Rebuilt at every take_changes, like draggers.
     std::vector<VisualBillboard> billboards;
+    // Every drawn WireframeAdornment's lines, in world space, ready for the
+    // renderer's line pass: two points a line, x y z r g b a each. Rebuilt
+    // at every take_changes, like draggers.
+    std::vector<float> wire_lines;
     // Every Terrain in Workspace, as TerrainWorld shows it. Pointers only: the
     // chunk list and look are immutable and shared with the simulation.
     std::vector<TerrainView> terrains;
@@ -332,6 +336,7 @@ private:
     void resolve_draggers(DataModel& game);
     // The drawn, visible BillboardGuis' rows, from the live tree.
     void resolve_billboards(DataModel& game);
+    void resolve_wireframes(DataModel& game);
     // Copies terrain_world_'s views() (pointers only -- see VisualSnapshot::terrains)
     // into base_.terrains. TerrainWorld::update already ran on SimulationThread
     // before take_changes is called, so there is nothing more to read from game here.
@@ -380,6 +385,8 @@ private:
     std::vector<InstanceId> dragger_ids_;
     // The BillboardGuis resolve_billboards walks, kept so it does not allocate each frame.
     std::vector<InstanceId> billboard_ids_;
+    // The WireframeAdornments resolve_wireframes walks.
+    std::vector<InstanceId> wireframe_ids_;
 };
 
 }  // namespace engine_core

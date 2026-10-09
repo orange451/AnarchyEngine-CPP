@@ -9,6 +9,7 @@
 #include "Brush.hpp"
 #include "LuaApi.hpp"
 #include "LuaUserdata.hpp"
+#include "Matrix4.hpp"
 #include "ScriptRuntime.hpp"
 #include "Vector2.hpp"
 #include "brush/BrushGeometry.hpp"
@@ -389,6 +390,159 @@ int brush_expand(lua_State* state) {
     });
 }
 
+int make_shape(lua_State* state, std::vector<Face> faces);
+
+void push_index_list(lua_State* state, const std::vector<std::uint32_t>& indices) {
+    lua_createtable(state, static_cast<int>(indices.size()), 0);
+    for (std::size_t i = 0; i < indices.size(); ++i) {
+        lua_pushnumber(state, static_cast<double>(indices[i]) + 1.0);
+        lua_rawseti(state, -2, static_cast<int>(i + 1));
+    }
+}
+
+std::vector<DVec3> points_arg(lua_State* state, int index) {
+    luaL_checktype(state, index, LUA_TTABLE);
+    const int count = lua_objlen(state, index);
+    std::vector<DVec3> points;
+    points.reserve(static_cast<std::size_t>(count));
+    for (int i = 1; i <= count; ++i) {
+        lua_rawgeti(state, index, i);
+        if (lua_tovector(state, -1) == nullptr) {
+            luaL_error(state, "points[%d] must be a Vector3", i);
+        }
+        points.push_back(vector_arg(state, -1, "point"));
+        lua_pop(state, 1);
+    }
+    return points;
+}
+
+brush::Plane plane_args(lua_State* state, int normal_index, int point_index) {
+    const DVec3 normal = brush::normalize(vector_arg(state, normal_index, "normal"));
+    if (brush::length(normal) < 0.5) {
+        luaL_error(state, "normal must not be zero");
+    }
+    return {normal, brush::dot(normal, vector_arg(state, point_index, "point"))};
+}
+
+int brush_get_face_vertex_indices(lua_State* state) {
+    return lua_guard(state, [&] {
+        Brush& brush = ScriptBindings::brush_self(state);
+        push_index_list(state, brush.shape().polygons[face_index_arg(state, 2, brush)].vertices);
+        return 1;
+    });
+}
+
+int brush_get_edges(lua_State* state) {
+    return lua_guard(state, [&] {
+        const brush::Shape& shape = ScriptBindings::brush_self(state).shape();
+        lua_createtable(state, static_cast<int>(shape.edges.size()), 0);
+        for (std::size_t i = 0; i < shape.edges.size(); ++i) {
+            push_index_list(state, {shape.edges[i].first, shape.edges[i].second});
+            lua_rawseti(state, -2, static_cast<int>(i + 1));
+        }
+        return 1;
+    });
+}
+
+int brush_get_face_at(lua_State* state) {
+    return lua_guard(state, [&] {
+        const brush::Shape& shape = ScriptBindings::brush_self(state).shape();
+        const auto face = brush::face_at(shape, vector_arg(state, 2, "point"), vector_arg(state, 3, "normal"));
+        if (face) {
+            lua_pushnumber(state, static_cast<double>(*face) + 1.0);
+        } else {
+            lua_pushnil(state);
+        }
+        return 1;
+    });
+}
+
+int brush_split(lua_State* state) {
+    return lua_guard(state, [&] {
+        Brush& brush = ScriptBindings::brush_self(state);
+        auto halves = brush::split(brush.faces(), plane_args(state, 2, 3));
+        if (!halves) {
+            luaL_error(state, "the plane does not cut the brush");
+        }
+        std::vector<Face> front = halves->second.faces;
+        raise_if(state, brush.apply(std::move(halves->first)));
+        push_faces(state, front);
+        return 1;
+    });
+}
+
+int brush_get_loop_cut(lua_State* state) {
+    return lua_guard(state, [&] {
+        Brush& brush = ScriptBindings::brush_self(state);
+        const std::size_t face = face_index_arg(state, 2, brush);
+        const DVec3 point = vector_arg(state, 3, "point");
+        const double grid = luaL_optnumber(state, 4, 0.0);
+        if (!std::isfinite(grid) || grid < 0.0) {
+            luaL_error(state, "grid must be zero or more");
+        }
+        const bool middle = lua_toboolean(state, 5) != 0;
+        const auto cut = brush::loop_cut(brush.shape(), face, point, grid, middle);
+        if (!cut) {
+            lua_pushnil(state);
+            return 1;
+        }
+        push_dvec(state, cut->plane.normal);
+        // Where the cut crosses the edge.
+        push_dvec(state, cut->from + cut->plane.normal * (cut->plane.distance - brush::dot(cut->plane.normal, cut->from)));
+        push_dvec(state, cut->from);
+        push_dvec(state, cut->to);
+        return 4;
+    });
+}
+
+int brush_move_vertex(lua_State* state) {
+    return lua_guard(state, [&] {
+        Brush& brush = ScriptBindings::brush_self(state);
+        brush::Built built =
+            brush::move_vertex(brush.faces(), vector_arg(state, 2, "from"), vector_arg(state, 3, "to"));
+        raise_unless_ok(state, built);
+        raise_if(state, brush.apply(std::move(built)));
+        return 0;
+    });
+}
+
+int brush_transform_shape(lua_State* state) {
+    return lua_guard(state, [&] {
+        Brush& brush = ScriptBindings::brush_self(state);
+        const Matrix4* value = to_matrix4(state, 2);
+        if (value == nullptr) {
+            luaL_typeerrorL(state, 2, "Matrix4");
+        }
+        // Column-major in, row-major 3x4 out.
+        const float* m = value->m;
+        double rows[12];
+        for (int r = 0; r < 3; ++r) {
+            for (int c = 0; c < 4; ++c) {
+                rows[r * 4 + c] = m[c * 4 + r];
+            }
+        }
+        for (double v : rows) {
+            if (!std::isfinite(v)) {
+                luaL_error(state, "transform must be finite");
+            }
+        }
+        brush::Built built = brush::transform(brush.faces(), rows);
+        raise_unless_ok(state, built);
+        raise_if(state, brush.apply(std::move(built)));
+        return 0;
+    });
+}
+
+int brush_make_hull(lua_State* state) {
+    return lua_guard(state, [&] {
+        const auto faces = brush::hull_faces(points_arg(state, 2));
+        if (!faces) {
+            luaL_error(state, "the points span no volume");
+        }
+        return make_shape(state, *faces);
+    });
+}
+
 DVec3 size_arg(lua_State* state, int index) {
     const DVec3 size = vector_arg(state, index, "size");
     if (!(size.x > 0.0 && size.y > 0.0 && size.z > 0.0)) {
@@ -453,6 +607,14 @@ ANARCHY_LUA_REGISTER(register_brush_methods) {
         lua_method("MakeCylinder", "nil", reinterpret_cast<void*>(&brush_make_cylinder)),
         lua_method("MakeCone", "nil", reinterpret_cast<void*>(&brush_make_cone)),
         lua_method("MakeSphere", "nil", reinterpret_cast<void*>(&brush_make_sphere)),
+        lua_method("MakeHull", "nil", reinterpret_cast<void*>(&brush_make_hull)),
+        lua_method("GetEdges", "", reinterpret_cast<void*>(&brush_get_edges)),
+        lua_method("GetFaceVertexIndices", "", reinterpret_cast<void*>(&brush_get_face_vertex_indices)),
+        lua_method("GetFaceAt", "number", reinterpret_cast<void*>(&brush_get_face_at)),
+        lua_method("Split", "BrushFace", reinterpret_cast<void*>(&brush_split), false, false, true),
+        lua_method("GetLoopCut", nullptr, reinterpret_cast<void*>(&brush_get_loop_cut)),
+        lua_method("MoveVertex", "nil", reinterpret_cast<void*>(&brush_move_vertex)),
+        lua_method("TransformShape", "nil", reinterpret_cast<void*>(&brush_transform_shape)),
     };
     register_lua_class("Brush", nullptr, methods, static_cast<int>(sizeof(methods) / sizeof(methods[0])));
 

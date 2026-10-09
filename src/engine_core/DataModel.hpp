@@ -199,6 +199,8 @@ public:
     // True for a class runner::GuiLayer draws in the 3D world (BillboardGui).
     // Read once, when its entity is issued.
     virtual bool billboard_gui() const { return false; }
+    // True for a WireframeAdornment. Read once, when its entity is issued.
+    virtual bool wireframe() const { return false; }
 
     void set_thread_ids(std::thread::id simulation, std::thread::id render);
     void set_threads_running(bool running);
@@ -452,6 +454,9 @@ public:
     // The BillboardGuis under game (billboard_gui()), in no set order, into
     // out, which is cleared first. Whether each is drawn is BillboardGui::drawn.
     void billboards(std::vector<InstanceId>& out) const;
+    // The WireframeAdornments under game (wireframe()), in no set order, into
+    // out, which is cleared first. Whether each is drawn is WireframeAdornment::drawn.
+    void wireframes(std::vector<InstanceId>& out) const;
     // A GameObject's Transform as the physics world moved it: stored and
     // drawn, as integrate_simulated moves one, with no Changed, no history,
     // and no check. SimulationThread. A dead id or a non-GameObject does nothing.

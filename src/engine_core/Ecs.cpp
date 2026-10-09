@@ -24,6 +24,7 @@ EcsIds register_ecs(flecs::world& world) {
     ids.sound_source = world.component<ecs::SoundSource>().id();
     ids.dragger = world.component<ecs::DraggerTag>().id();
     ids.billboard = world.component<ecs::BillboardTag>().id();
+    ids.wireframe = world.component<ecs::WireframeTag>().id();
     ids.simulated = world.component<ecs::Simulated>().id();
     ids.visual_only = world.component<ecs::VisualOnly>().id();
     return ids;

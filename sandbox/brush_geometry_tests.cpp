@@ -361,3 +361,16 @@ TEST_CASE("BG15 a loop cut splits square to the nearest edge, on the grid", "[br
     CHECK_FALSE(loop_cut(box.shape, top, {1.9, 1, 2.9}, 4.0, false).has_value());
     CHECK_FALSE(split(box.faces, Plane{{1, 0, 0}, 5.0}).has_value());
 }
+
+TEST_CASE("BG16 move_vertex keeps convex edits and the textures of surviving faces", "[brush]") {
+    std::vector<Face> box = make_box({4, 4, 4});
+    for (Face& face : box) face.material = plane_of(face)->normal.y > 0.5 ? "top" : "side";
+    // Lifting a top corner tilts the top into two faces; the bottom stays.
+    const Built lifted = move_vertex(box, {2, 2, 2}, {2, 3, 2});
+    REQUIRE(lifted.ok());
+    CHECK(lifted.shape.vertices.size() == 8);
+    for (const Face& face : lifted.faces) CHECK_FALSE(face.material.empty());
+    // Pushing a corner inside the solid makes it concave.
+    CHECK_FALSE(move_vertex(box, {2, 2, 2}, {0, 0, 0}).ok());
+    CHECK_FALSE(move_vertex(box, {9, 9, 9}, {0, 0, 0}).ok());
+}

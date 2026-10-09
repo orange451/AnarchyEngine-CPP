@@ -999,6 +999,7 @@ void GameView::collectOutlines(const engine_core::VisualSnapshot& snapshot) {
     terrainBrush_->appendOutline(outlinePoints_);
     toolLines_.clear();
     brushTool_->appendLines(toolLines_);
+    toolLines_.insert(toolLines_.end(), snapshot.wire_lines.begin(), snapshot.wire_lines.end());
     renderer_.setToolLines(toolLines_.data(), static_cast<int>(toolLines_.size() / 7));
     renderer_.setOutlines(outlinePoints_.data(), static_cast<int>(outlinePoints_.size() / 3));
 }

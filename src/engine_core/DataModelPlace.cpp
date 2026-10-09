@@ -199,6 +199,9 @@ void DataModel::adopt_slot(std::uint16_t pool_index, InstanceId id) {
     if (object->billboard_gui()) {
         ecs_add_id(ecs_world(), part.entity, state_->ecs_ids.billboard);
     }
+    if (object->wireframe()) {
+        ecs_add_id(ecs_world(), part.entity, state_->ecs_ids.wireframe);
+    }
     part.pool = pool_index;
     part.storage = storage;
     part.instance = object;

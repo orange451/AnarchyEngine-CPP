@@ -43,6 +43,8 @@ struct SoundSource {};
 struct DraggerTag {};
 // A BillboardGui: its class's billboard_gui() is true.
 struct BillboardTag {};
+// A WireframeAdornment: its class's wireframe() is true.
+struct WireframeTag {};
 // Heartbeat steps it: its class's steps() is true.
 struct Steps {};
 // DataModel::set_simulated and set_visual_only.
@@ -66,6 +68,7 @@ struct EcsIds {
     ecs_id_t sound_source = 0;
     ecs_id_t dragger = 0;
     ecs_id_t billboard = 0;
+    ecs_id_t wireframe = 0;
     ecs_id_t simulated = 0;
     ecs_id_t visual_only = 0;
 };

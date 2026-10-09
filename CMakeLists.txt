@@ -584,6 +584,7 @@ add_library(engine_instances STATIC
     src/engine_instances/SoundEmitter.cpp
     src/engine_instances/Attachment.cpp
     src/engine_instances/Dragger.cpp
+    src/engine_instances/WireframeAdornment.cpp
     src/engine_instances/Brush.cpp
     src/engine_instances/Terrain.cpp
     src/engine_instances/TerrainMaterial.cpp
@@ -636,6 +637,8 @@ add_library(engine_core STATIC
     src/engine_core/PhysicsWorld.cpp
     src/engine_core/brush/BrushGeometry.cpp
     src/engine_core/BrushBindings.cpp
+    src/engine_core/CameraBindings.cpp
+    src/engine_core/WireframeBindings.cpp
     src/engine_core/BrushVisuals.cpp
     src/engine_core/terrain/VoxelChunk.cpp
     src/engine_core/terrain/ChunkCache.cpp
@@ -953,6 +956,7 @@ endif()
 
 add_executable(sandbox
     sandbox/tests.cpp
+    sandbox/wireframe_tests.cpp
     sandbox/analysis_tests.cpp
     sandbox/analysis_world_tests.cpp
     sandbox/analysis_pool_tests.cpp

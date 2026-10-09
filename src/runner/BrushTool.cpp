@@ -928,61 +928,14 @@ void BrushTool::updateVertex(const DraggerRay& ray, BrushModifiers mods) {
             if (brush == nullptr) {
                 continue;
             }
-            const geo::Built start = geo::build(item.faces);
-            if (!start.ok()) {
-                continue;
-            }
             const Matrix4 inverse = engine_core::matrix4_inverse(item.transform);
             // From where the corner was when the drag began: item.faces are the brush then.
             const geo::DVec3 from = to_d(engine_core::matrix4_point(inverse, dragOrigin_));
             const geo::DVec3 to = to_d(engine_core::matrix4_point(inverse, target));
-            std::vector<geo::DVec3> points = start.shape.vertices;
-            for (geo::DVec3& p : points) {
-                if (geo::length(p - from) < 1e-4) {
-                    p = to;
-                }
-            }
-            const auto faces = geo::hull_faces(points);
-            if (!faces) {
+            geo::Built built = geo::move_vertex(item.faces, from, to);
+            if (!built.ok()) {
                 invalid = true;
                 continue;
-            }
-            geo::Built built = geo::build(*faces);
-            // Every corner must still be a corner, or the edit made it concave.
-            bool kept = built.ok();
-            for (const geo::DVec3& p : points) {
-                bool found = false;
-                for (const geo::DVec3& q : built.shape.vertices) {
-                    if (geo::length(p - q) < 1e-4) {
-                        found = true;
-                        break;
-                    }
-                }
-                kept = kept && found;
-            }
-            if (!kept) {
-                invalid = true;
-                continue;
-            }
-            // Keep each face's Material where its plane survives.
-            for (geo::Face& face : built.faces) {
-                const auto plane = geo::plane_of(face);
-                for (const geo::Face& old : item.faces) {
-                    const auto was = geo::plane_of(old);
-                    if (plane && was && geo::dot(plane->normal, was->normal) > 0.9999 &&
-                        std::fabs(plane->distance - was->distance) < 1e-4) {
-                        face.material = old.material;
-                        face.u_axis = old.u_axis;
-                        face.v_axis = old.v_axis;
-                        face.offset_u = old.offset_u;
-                        face.offset_v = old.offset_v;
-                        face.scale_u = old.scale_u;
-                        face.scale_v = old.scale_v;
-                        face.rotation = old.rotation;
-                    } else if (face.material.empty() && !old.material.empty()) {
-                        face.material = old.material;
-                    }
-                }
             }
             brush->apply(std::move(built));
         }

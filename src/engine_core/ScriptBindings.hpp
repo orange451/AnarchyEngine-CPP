@@ -29,6 +29,8 @@ class ChangeHistoryService;
 class Mesh;
 class Brush;
 class SoundEmitter;
+class Camera;
+class WireframeAdornment;
 class Terrain;
 enum class FinishRecordingOperation;
 
@@ -362,6 +364,12 @@ struct ScriptBindings {
     // Brush's methods and the BrushFace datatype, in BrushBindings.cpp.
     static Brush& brush_self(lua_State* state);
     static void link_brush_methods();
+    // Camera's methods, in CameraBindings.cpp.
+    static void link_camera_methods();
+    static Camera& camera_self(lua_State* state);
+    // WireframeAdornment's methods, in WireframeBindings.cpp.
+    static void link_wireframe_methods();
+    static WireframeAdornment& wireframe_self(lua_State* state);
     // A Material argument (or nil) as its GUID; raises for anything else.
     static std::string brush_material_arg(lua_State* state, int index);
     // Pushes the live Material with this GUID, or nil.

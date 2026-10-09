@@ -27,6 +27,7 @@
 #include "SelectionService.hpp"
 #include "Skybox.hpp"
 #include "Dragger.hpp"
+#include "WireframeAdornment.hpp"
 #include "SoundEmitter.hpp"
 #include "Brush.hpp"
 #include "Terrain.hpp"
@@ -199,6 +200,7 @@ DataModel& create_player_controller(DataModel& world) { return world.create<Play
 DataModel& create_sound_emitter(DataModel& world) { return world.create<SoundEmitter>(); }
 DataModel& create_attachment(DataModel& world) { return world.create<Attachment>(); }
 DataModel& create_dragger(DataModel& world) { return world.create<Dragger>(); }
+DataModel& create_wireframe(DataModel& world) { return world.create<WireframeAdornment>(); }
 DataModel& create_skybox(DataModel& world) { return world.create<Skybox>(); }
 DataModel& create_dynamic_sky(DataModel& world) { return world.create<DynamicSky>(); }
 DataModel& create_bloom_effect(DataModel& world) { return world.create<BloomEffect>(); }
@@ -242,6 +244,7 @@ ANARCHY_LUA_REGISTER(register_creatable_instances) {
     register_lua_creatable("SoundEmitter", create_sound_emitter);
     register_lua_creatable("Attachment", create_attachment);
     register_lua_creatable("Dragger", create_dragger);
+    register_lua_creatable("WireframeAdornment", create_wireframe);
     register_lua_creatable("Skybox", create_skybox);
     register_lua_creatable("DynamicSky", create_dynamic_sky);
     register_lua_creatable("BloomEffect", create_bloom_effect);
@@ -1579,6 +1582,8 @@ ANARCHY_LUA_REGISTER(register_script_methods) {
     // TerrainBindings.cpp registers Terrain's methods itself; this keeps it linked.
     ScriptBindings::link_terrain_methods();
     ScriptBindings::link_brush_methods();
+    ScriptBindings::link_camera_methods();
+    ScriptBindings::link_wireframe_methods();
 
     // AssetInstances.cpp declares the class and its Path.
     const LuaField mesh[] = {

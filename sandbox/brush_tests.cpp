@@ -187,6 +187,50 @@ TEST_CASE("BL2 Changed fires for Faces", "[brush]") {
     REQUIRE(ok);
 }
 
+TEST_CASE("BL3 Lua splits, loop cuts, moves corners, transforms, and hulls a Brush", "[brush]") {
+    ScriptRig rig;
+    rig.runtime.run_chunk(R"(
+        local b = Instance.new("Brush", workspace)
+        b:MakeBox(Vector3.new(4, 2, 6))
+        print("edges", #b:GetEdges(), #b:GetEdges()[1], #b:GetFaceVertexIndices(1))
+        local top = b:GetFaceAt(Vector3.new(0, 1, 0), Vector3.yAxis)
+        print("top", b:GetFace(top).Normal.Y)
+        local n, p, from, to = b:GetLoopCut(top, Vector3.new(0.8, 1, 2.9), 1)
+        print("cut", math.abs(n.X), p.X, (to - from).Magnitude)
+        local front = b:Split(n, p)
+        local other = Instance.new("Brush", workspace)
+        other:SetFaces(front)
+        local lo, hi = b:GetBounds()
+        local olo, ohi = other:GetBounds()
+        print("halves", hi.X - lo.X + ohi.X - olo.X)
+        print(pcall(function() b:Split(Vector3.xAxis, Vector3.new(50, 0, 0)) end))
+        print("nocut", b:GetLoopCut(top, Vector3.new(0.8, 1, 2.9), 100) == nil)
+        b:MakeBox(Vector3.new(4, 4, 4))
+        b:MoveVertex(Vector3.new(2, 2, 2), Vector3.new(2, 3, 2))
+        print("lifted", #b:GetVertices())
+        print(pcall(function() b:MoveVertex(Vector3.new(-2, 2, 2), Vector3.zero) end))
+        b:TransformShape(Matrix4.new(Vector3.new(10, 0, 0)))
+        lo = b:GetBounds()
+        print("moved", lo.X)
+        b:MakeHull({Vector3.zero, Vector3.xAxis, Vector3.yAxis, Vector3.zAxis})
+        print("hull", #b:GetFaces())
+        print(pcall(function() b:MakeHull({Vector3.zero, Vector3.xAxis, Vector3.yAxis}) end))
+    )");
+    rig.frames(1);
+    const auto out = rig.runtime.drain_output();
+    REQUIRE(has_text(out, "edges\t12\t2\t4"));
+    REQUIRE(has_text(out, "top\t1"));
+    REQUIRE(has_text(out, "cut\t1\t1\t4"));
+    REQUIRE(has_text(out, "halves\t4"));
+    REQUIRE(has_text(out, "does not cut"));
+    REQUIRE(has_text(out, "nocut\ttrue"));
+    REQUIRE(has_text(out, "lifted\t8"));
+    REQUIRE(has_text(out, "concave"));
+    REQUIRE(has_text(out, "moved\t8"));
+    REQUIRE(has_text(out, "hull\t4"));
+    REQUIRE(has_text(out, "span no volume"));
+}
+
 TEST_CASE("BP1 an anchored Brush holds things up and rays report its face", "[brush]") {
     PhysicsRig rig;
     Brush& floor = rig.game.create<Brush>();

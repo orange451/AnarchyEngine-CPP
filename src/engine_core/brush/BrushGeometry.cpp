@@ -561,6 +561,67 @@ Built clip(const std::vector<Face>& faces, const Face& face) {
     return build(std::move(clipped));
 }
 
+Built move_vertex(const std::vector<Face>& faces, DVec3 from, DVec3 to, double tolerance) {
+    Built start = build(faces);
+    if (!start.ok()) return start;
+    std::vector<DVec3> points = start.shape.vertices;
+    bool moved = false;
+    for (DVec3& p : points) {
+        if (length(p - from) < tolerance) {
+            p = to;
+            moved = true;
+        }
+    }
+    Built refused;
+    if (!moved) {
+        refused.error = "no corner is at that point";
+        return refused;
+    }
+    const auto hull = hull_faces(points);
+    if (!hull) {
+        refused.error = "the corners span no volume";
+        return refused;
+    }
+    Built built = build(*hull);
+    if (!built.ok()) return built;
+    // Every corner must still be a corner, or the edit made the solid concave.
+    for (const DVec3& p : points) {
+        bool found = false;
+        for (const DVec3& q : built.shape.vertices) {
+            if (length(p - q) < tolerance) {
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            refused.error = "the corner would make the brush concave";
+            return refused;
+        }
+    }
+    // A face whose plane survives keeps its texture; one that is new takes a
+    // neighbour's Material.
+    for (Face& face : built.faces) {
+        const auto plane = plane_of(face);
+        for (const Face& old : start.faces) {
+            const auto was = plane_of(old);
+            if (plane && was && dot(plane->normal, was->normal) > 0.9999 &&
+                std::fabs(plane->distance - was->distance) < tolerance) {
+                face.material = old.material;
+                face.u_axis = old.u_axis;
+                face.v_axis = old.v_axis;
+                face.offset_u = old.offset_u;
+                face.offset_v = old.offset_v;
+                face.scale_u = old.scale_u;
+                face.scale_v = old.scale_v;
+                face.rotation = old.rotation;
+                break;
+            }
+            if (face.material.empty() && !old.material.empty()) face.material = old.material;
+        }
+    }
+    return built;
+}
+
 std::optional<std::pair<Built, Built>> split(const std::vector<Face>& faces, const Plane& plane) {
     if (length(plane.normal) < 0.5) return std::nullopt;
     const DVec3 point = plane.normal * plane.distance;

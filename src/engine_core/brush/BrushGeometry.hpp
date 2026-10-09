@@ -144,6 +144,10 @@ struct LoopCut {
     DVec3 to;
 };
 std::optional<LoopCut> loop_cut(const Shape& shape, std::size_t face, DVec3 point, double grid, bool middle);
+// The solid with its corner at from moved to to: the hull of the corners, each
+// face keeping its texture where its plane survives. Refused when no corner is
+// at from, or when a corner would stop being one (the solid would be concave).
+Built move_vertex(const std::vector<Face>& faces, DVec3 from, DVec3 to, double tolerance = 1e-4);
 // Every face's points moved by the matrix (row-major 3x4: rotation/scale then
 // translation), axes turned with it. Mirroring matrices keep faces outward.
 Built transform(const std::vector<Face>& faces, const double matrix[12]);

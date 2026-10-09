@@ -998,6 +998,33 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
     add("Camera", "FieldOfView",
         "How many degrees this camera sees from bottom to top, from 1 to 120. A Scene View linked to it draws with it.",
         "number", false, {});
+    add("Camera", "ViewportPointToRay",
+        "The ray from this camera through a point in its view: its origin (the camera's position) and unit "
+        "direction. The point is in ViewportSize's units from the view's top-left corner. Errors until a view shows "
+        "the camera.",
+        "Vector3,Vector3", false, {P("x", "number"), P("y", "number")});
+    add("Camera", "WorldToViewportPoint",
+        "Where a world point falls in this camera's view: X and Y in ViewportSize's units from the top-left corner, "
+        "Z its depth along the look (negative behind the camera), then whether it is in front and inside the view. "
+        "Errors until a view shows the camera.",
+        "Vector3,boolean", false, {P("point", "Vector3")});
+    add("WireframeAdornment", "Adornee",
+        "The PVInstance whose space the lines are in, so they follow it. nil draws them in world space.",
+        "PVInstance?", false, {});
+    add("WireframeAdornment", "Color3", "The color of every line added without its own.", "Color3", false, {});
+    add("WireframeAdornment", "Transparency", "From 0 (solid) to 1 (unseen), for every line.", "number", false, {});
+    add("WireframeAdornment", "Visible", "Whether the lines are drawn. They draw only in Workspace or Core.",
+        "boolean", false, {});
+    add("WireframeAdornment", "AddLine",
+        "Adds a line between two points in the Adornee's space, drawn over the scene and faint where something "
+        "nearer hides it. With color, the line keeps that color; without, it follows Color3. Lines are not saved.",
+        "nil", false, {P("from", "Vector3"), P("to", "Vector3"), P("color", "Color3?")});
+    add("WireframeAdornment", "AddLines", "Adds a line for each pair of points: 1 to 2, 3 to 4, and so on.", "nil",
+        false, {P("points", "{Vector3}"), P("color", "Color3?")});
+    add("WireframeAdornment", "AddPath", "Adds lines joining the points in order, and the last back to the first "
+        "when closed is true.", "nil", false, {P("points", "{Vector3}"), P("closed", "boolean?"), P("color", "Color3?")});
+    add("WireframeAdornment", "Clear", "Removes every line.", "nil", false, {});
+    add("WireframeAdornment", "GetLineCount", "How many lines it holds, up to 65536.", "number", false, {});
     add("Light", "Color", "The color of the light this gives.", "Color3", false, {});
     add("Light", "Intensity", "How bright this light is. 0 gives none.", "number", false, {});
     add("Light", "Radius", "How many studs this light reaches. It fades to nothing there.", "number", false, {});
@@ -1503,6 +1530,27 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
         {P("size", "Vector3"), P("sides", "number")});
     add("Brush", "MakeSphere", "Becomes an icosphere filling size; detail 0 to 3.", "nil", false,
         {P("size", "Vector3"), P("detail", "number?")});
+    add("Brush", "MakeHull", "Becomes the convex hull of points in the Brush's space. No Materials.", "nil", false,
+        {P("points", "{Vector3}")});
+    add("Brush", "GetEdges", "Every edge once, as two indices into GetVertices().", "{{number}}", false, {});
+    add("Brush", "GetFaceVertexIndices", "One face's corners as indices into GetVertices(), counter-clockwise seen "
+        "from outside.", "{number}", false, {P("index", "number")});
+    add("Brush", "GetFaceAt", "The face whose plane holds a point in the Brush's space, with the normal nearest "
+        "the one given; nil when none does.", "number?", false, {P("point", "Vector3"), P("normal", "Vector3")});
+    add("Brush", "Split", "Cuts the Brush in two along a plane in its space. It keeps the half behind the normal "
+        "and returns the faces of the half in front, for SetFaces on another Brush. Errors when the plane misses.",
+        "{BrushFace}", false, {P("normal", "Vector3"), P("point", "Vector3")});
+    add("Brush", "GetLoopCut", "A loop cut across one face's edge nearest point: the plane square to that edge, at "
+        "a whole number of grid steps from its start (no snapping when grid is 0 or nil), or at its middle. Returns "
+        "the plane's normal and where it crosses the edge, then the edge's two ends; nil when the cut lands on an "
+        "end. Pass the first two to Split.", "Vector3?,Vector3?,Vector3?,Vector3?", false,
+        {P("index", "number"), P("point", "Vector3"), P("grid", "number?"), P("middle", "boolean?")});
+    add("Brush", "MoveVertex", "Moves the corner at from to to, in the Brush's space. Faces keep their texture "
+        "where their plane survives. Errors when no corner is at from or the Brush would not stay convex.", "nil",
+        false, {P("from", "Vector3"), P("to", "Vector3")});
+    add("Brush", "TransformShape", "Moves every face by a Matrix4 in the Brush's space, turning texture axes with "
+        "them. Mirroring keeps faces facing out. Transform is untouched.", "nil", false,
+        {P("transform", "Matrix4")});
 
     return docs;
 }

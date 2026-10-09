@@ -11,9 +11,11 @@
 #include "Light.hpp"
 #include "Lighting.hpp"
 #include "LuaApi.hpp"
+#include "PVInstance.hpp"
 #include "ScreenSpaceReflections.hpp"
 #include "Skybox.hpp"
 #include "TerrainWorld.hpp"
+#include "WireframeAdornment.hpp"
 
 #include <algorithm>
 
@@ -589,6 +591,7 @@ void SnapshotPump::blit(VisualSnapshot& dst) const {
     dst.resources_root = base_.resources_root;
     dst.draggers = base_.draggers;
     dst.billboards = base_.billboards;
+    dst.wire_lines = base_.wire_lines;
     dst.terrains = base_.terrains;
     dst.brushes = base_.brushes;
     dst.instances.resize(base_.instances.size());
@@ -656,6 +659,36 @@ void SnapshotPump::resolve_billboards(DataModel& game) {
     }
 }
 
+void SnapshotPump::resolve_wireframes(DataModel& game) {
+    std::vector<float>& out = base_.wire_lines;
+    out.clear();
+    game.wireframes(wireframe_ids_);
+    // In id order, so the lines keep one order from frame to frame.
+    std::sort(wireframe_ids_.begin(), wireframe_ids_.end());
+    for (InstanceId id : wireframe_ids_) {
+        const auto* wire = dynamic_cast<const WireframeAdornment*>(game.instance(id));
+        if (wire == nullptr || !wire->drawn() || wire->lines().empty()) {
+            continue;
+        }
+        Matrix4 space = matrix4_identity();
+        if (const InstanceId adornee = wire->adornee_id(); adornee != 0) {
+            if (const auto* placed = dynamic_cast<const PVInstance*>(game.instance(adornee))) {
+                space = placed->transform();
+            }
+        }
+        const float alpha = 1.f - static_cast<float>(wire->transparency());
+        const ColorRgb shared = wire->color();
+        out.reserve(out.size() + wire->lines().size() * 14);
+        for (const WireframeAdornment::Line& line : wire->lines()) {
+            const ColorRgb c = line.own_color ? line.color : shared;
+            for (const Vec3 local : {line.from, line.to}) {
+                const Vec3 p = matrix4_point(space, local);
+                out.insert(out.end(), {p.x, p.y, p.z, c.r, c.g, c.b, alpha});
+            }
+        }
+    }
+}
+
 void SnapshotPump::resolve_terrains(DataModel& game) {
     (void)game;  // Called from RenderThread's snapshot copy, under the DataModel write
     // lock; views() is read under that same write lock that TerrainWorld::update also
@@ -697,6 +730,7 @@ void SnapshotPump::take_changes(DataModel& game) {
     resolve_lighting(game);
     resolve_draggers(game);
     resolve_billboards(game);
+    resolve_wireframes(game);
     resolve_terrains(game);
     brushes_.update(game, base_.brushes);
     base_.resources_root = game.resources_root();

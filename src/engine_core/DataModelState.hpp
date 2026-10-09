@@ -113,6 +113,8 @@ struct DataModel::State {
     flecs::query<> dragger_query;
     // BillboardGuis under game: Instance (in), with BillboardTag and InGame.
     flecs::query<> billboard_query;
+    // WireframeAdornments under game: Instance (in), with WireframeTag and InGame.
+    flecs::query<> wireframe_query;
 
     // Guards slots, free lists, invalidation, and resync.
     // SimulationThread may hold Write across a whole step and may re-enter

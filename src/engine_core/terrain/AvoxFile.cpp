@@ -107,25 +107,10 @@ int predict_ptr(const Cell* cells, int i, bool x0, bool y0, bool z0) {
     return dx + dy + dz - dxy - dxz - dyz + dxyz;
 }
 
-// The same predictor, reading a chunk already being decoded through its
-// dense_at() accessor (a plain inlined array read) instead of a raw
-// pointer, since a decoding chunk has no pointer of its own to hand out.
-int predict_chunk(const ChunkData& chunk, int i, bool x0, bool y0, bool z0) {
-    const int dx = x0 ? 0 : chunk.dense_at(i - 1).distance;
-    const int dy = y0 ? 0 : chunk.dense_at(i - kChunkSize).distance;
-    const int dz = z0 ? 0 : chunk.dense_at(i - kChunkSize * kChunkSize).distance;
-    const int dxy = (x0 || y0) ? 0 : chunk.dense_at(i - 1 - kChunkSize).distance;
-    const int dxz = (x0 || z0) ? 0 : chunk.dense_at(i - 1 - kChunkSize * kChunkSize).distance;
-    const int dyz = (y0 || z0) ? 0 : chunk.dense_at(i - kChunkSize - kChunkSize * kChunkSize).distance;
-    const int dxyz = (x0 || y0 || z0) ? 0 : chunk.dense_at(i - 1 - kChunkSize - kChunkSize * kChunkSize).distance;
-    return dx + dy + dz - dxy - dxz - dyz + dxyz;
-}
-
-// Decodes one dense chunk's frame straight into chunk (already a dense
-// clone): false on any damage (wrong content size, a zstd checksum failure,
-// or short output). Any thread: chunk belongs only to the caller until it
-// joins and publishes it.
-bool decode_chunk_frame(const std::byte* frame, std::size_t frame_size, ChunkData& chunk) {
+// Decodes one dense chunk's frame straight into cells (32,768 of them):
+// false on any damage (wrong content size, a zstd checksum failure, or short
+// output). Any thread: cells belong only to the caller.
+bool decode_frame_into(const std::byte* frame, std::size_t frame_size, Cell* cells) {
     if (ZSTD_getFrameContentSize(frame, frame_size) != static_cast<unsigned long long>(kFrameContentSize)) {
         return false;
     }
@@ -141,28 +126,22 @@ bool decode_chunk_frame(const std::byte* frame, std::size_t frame_size, ChunkDat
     }
     // Residuals first, in the same z,y,x order they were predicted in: each
     // cell's prediction only reads neighbors already restored this way.
-    // Reading and writing chunk through dense_at()/set_dense_at() (plain
-    // array accessors) rather than through a separate scratch buffer that
-    // would need copying into the chunk afterward.
     for (int z = 0; z < kChunkSize; ++z) {
         const bool z0 = (z == 0);
         for (int y = 0; y < kChunkSize; ++y) {
             const bool y0 = (y == 0);
             int i = cell_index(0, y, z);
             for (int x = 0; x < kChunkSize; ++x, ++i) {
-                const int p = predict_chunk(chunk, i, x == 0, y0, z0);
+                const int p = predict_ptr(cells, i, x == 0, y0, z0);
                 const std::uint8_t residual = payload[static_cast<std::size_t>(i)];
                 // The 8-bit wrap happens through std::uint8_t then a cast to
                 // std::int8_t, so it is exact regardless of p's sign.
-                chunk.set_dense_at(
-                    i, Cell{static_cast<std::int8_t>(static_cast<std::uint8_t>(p + residual)), 0});
+                cells[i] = Cell{static_cast<std::int8_t>(static_cast<std::uint8_t>(p + residual)), 0};
             }
         }
     }
     for (int i = 0; i < kChunkCells; ++i) {
-        Cell c = chunk.dense_at(i);
-        c.material = payload[static_cast<std::size_t>(kChunkCells + i)];
-        chunk.set_dense_at(i, c);
+        cells[i].material = payload[static_cast<std::size_t>(kChunkCells + i)];
     }
     return true;
 }
@@ -206,6 +185,10 @@ struct JoiningThreads {
 };
 
 }  // namespace
+
+bool decode_chunk_frame(const std::byte* frame, std::size_t frame_size, Cell* cells) {
+    return decode_frame_into(frame, frame_size, cells);
+}
 
 // ChunkFrame.hpp's declaration: the only part of the frame codec visible
 // outside this file, so ChunkData::encoded() (in VoxelChunk.cpp) can call it
@@ -425,7 +408,7 @@ std::optional<std::string> decode_avox(const std::byte* data, std::size_t size, 
                 try {
                     const IndexEntry& entry = entries[dense_indices[j]];
                     std::shared_ptr<ChunkData> chunk = ChunkData::air()->clone_dense();
-                    if (!decode_chunk_frame(data + entry.offset, entry.size, *chunk)) {
+                    if (!decode_frame_into(data + entry.offset, entry.size, chunk->dense_data())) {
                         damaged.store(true, std::memory_order_relaxed);
                         continue;
                     }
@@ -445,6 +428,10 @@ std::optional<std::string> decode_avox(const std::byte* data, std::size_t size, 
                         std::vector<std::byte> frame(entry.size);
                         std::memcpy(frame.data(), data + entry.offset, entry.size);
                         chunk->adopt_encoded(std::move(frame));
+                        // Only the frame stays resident: the cache keeps
+                        // the cells while it has room, then they are
+                        // decoded again on demand.
+                        chunk->release_cells();
                     }
                     built[j] = std::move(chunk);
                 } catch (...) {

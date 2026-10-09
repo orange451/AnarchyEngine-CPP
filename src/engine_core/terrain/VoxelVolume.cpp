@@ -190,6 +190,9 @@ void VoxelVolume::edit(CellCoord min, CellCoord max, Change change) {
                 // array is empty (collapsed away by finish()), so dense_at
                 // is only ever valid on a chunk known non-uniform.
                 const Cell old_value = old_uniform ? old->cell(0) : Cell{};
+                // A shared chunk's cells, pinned once for the whole chunk
+                // (they may live only in the ChunkCache).
+                const CellsPtr old_cells = old->cells();
                 // Tracks whether this chunk's Id usage mask can be computed
                 // without finish()'s full rescan: written_mask is every Id
                 // this edit actually wrote to a solid/band cell (safe to OR
@@ -211,7 +214,7 @@ void VoxelVolume::edit(CellCoord min, CellCoord max, Change change) {
                         // cell_index()'s multiply-add on every cell.
                         int index = zbase + (y - by) * kChunkSize + (x0 - bx);
                         for (int x = x0; x <= x1; ++x, ++index) {
-                            const Cell before = copy ? copy->dense_at(index) : (old_uniform ? old_value : old->dense_at(index));
+                            const Cell before = copy ? copy->dense_at(index) : (old_uniform ? old_value : (*old_cells)[static_cast<std::size_t>(index)]);
                             const Cell after = normalized(change(x, y, z, before));
                             if (after == before) {
                                 continue;

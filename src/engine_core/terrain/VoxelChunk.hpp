@@ -64,23 +64,49 @@ inline Cell normalized(Cell cell) {
     return cell;
 }
 
+// A dense chunk's 32,768 cells, x fastest.
+using CellArray = std::vector<Cell>;
+using CellsPtr = std::shared_ptr<const CellArray>;
+
+// A dense chunk's cells need not stay decoded: once it has its zstd frame
+// (encoded()), release_cells() hands its cells to the ChunkCache, which may
+// evict them, and cells() decodes them again from the frame when asked.
+// Readers pin what cells() returns for as long as they read.
 class ChunkData {
 public:
+    ChunkData() = default;
+    ~ChunkData();
+    ChunkData(const ChunkData&) = delete;
+    ChunkData& operator=(const ChunkData&) = delete;
+
     static std::shared_ptr<const ChunkData> uniform(Cell value);
     static const std::shared_ptr<const ChunkData>& air();
     bool is_uniform() const { return uniform_; }
-    Cell cell(int index) const { return uniform_ ? value_ : cells_[static_cast<std::size_t>(index)]; }
+    // One cell. A dense chunk pins its cells for the call, so a reader of
+    // many cells should hold cells() instead.
+    Cell cell(int index) const { return uniform_ ? value_ : (*cells())[static_cast<std::size_t>(index)]; }
+    // A dense chunk's cells, decoded from its frame if the cache let them
+    // go; null for a uniform chunk. Any thread.
+    CellsPtr cells() const;
+    // Hands a dense chunk's own cells to the ChunkCache (encoding its frame
+    // first if it has none), so they can be evicted. Any thread; only once
+    // the chunk is shared, i.e. no longer being edited.
+    void release_cells() const;
+    // The chunk holds its cells itself: dense and not released.
+    bool cells_owned() const;
     // A dense copy to edit before it is shared.
     std::shared_ptr<ChunkData> clone_dense() const;
     // only on a copy no one else holds
-    void set(int index, Cell value) { cells_[static_cast<std::size_t>(index)] = normalized(value); }
+    void set(int index, Cell value) { (*owned_)[static_cast<std::size_t>(index)] = normalized(value); }
     // Direct access to a dense chunk's own array: valid only when the chunk
     // is known dense already (e.g. right after clone_dense(), or any chunk
     // that is_uniform() says false for). Skips the is_uniform() branch that
     // cell()/set() pay on every call, for callers (VoxelVolume's edit loop)
     // that have already cloned and so know which case applies.
-    Cell dense_at(int index) const { return cells_[static_cast<std::size_t>(index)]; }
-    void set_dense_at(int index, Cell value) { cells_[static_cast<std::size_t>(index)] = value; }
+    Cell dense_at(int index) const { return (*owned_)[static_cast<std::size_t>(index)]; }
+    void set_dense_at(int index, Cell value) { (*owned_)[static_cast<std::size_t>(index)] = value; }
+    // The array itself, under the same rule as dense_at().
+    Cell* dense_data() { return owned_->data(); }
     // Recomputes the Id usage mask; uniform when every cell is equal.
     void finish();
     // Same collapse-to-uniform check as finish(), but the Id usage mask is
@@ -103,8 +129,12 @@ private:
     bool uniform_ = true;
     Cell value_{};
     // One array of 32,768 cells rather than parallel distance/material
-    // arrays: half the allocations per clone_dense().
-    std::vector<Cell> cells_;
+    // arrays: half the allocations per clone_dense(). owned_ holds them
+    // while the chunk is edited and until release_cells(); after that only
+    // cached_ refers to them, and the ChunkCache owns them.
+    mutable std::mutex cells_mutex_;
+    mutable std::shared_ptr<CellArray> owned_;
+    mutable std::weak_ptr<const CellArray> cached_;
     std::array<std::uint64_t, 4> used_{};
     // clone_dense() builds its copy field by field rather than copying *this,
     // so a clone starts with its own unset flag and never inherits a frame

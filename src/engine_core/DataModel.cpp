@@ -1571,6 +1571,8 @@ const char* action_label(InstanceAction action) {
         return "Rename";
     case InstanceAction::Delete:
         return "Delete";
+    case InstanceAction::SaveAsPlugin:
+        return "Save as Plugin";
     }
     return "";
 }

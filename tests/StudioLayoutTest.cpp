@@ -54,6 +54,8 @@ int RunProfilerOverlayTests(ide::IdeLayout& layout, jadefx::Scene& scene);
 int RunProfilerPlayerKeyTests();
 int RunProfilerColorTests();
 int RunUiFrameProfileTests();
+int RunPluginsTests();
+int RunGuiTreeTests(ide::IdeLayout& layout);
 
 // R10: the studio's default layout builds, and its docks hold the explorers,
 // the console, and Properties. Runs headless: the threads are never started.
@@ -343,10 +345,10 @@ int main() {
         for (const std::shared_ptr<jadefx::MenuItem>& item : windows->getItems().items()) {
             labels.push_back(item ? item->getText() : std::string());
         }
-        expect(labels == std::vector<std::string>{"Game Explorer", "Current Scene", "Properties", "Console", "Search", "Conflicts", "Problems", "Assets", "",
+        expect(labels == std::vector<std::string>{"Game Explorer", "Current Scene", "Properties", "Console", "Search", "Conflicts", "Problems", "Assets", "Plugins", "",
                                                   "New Scene View", "New Terminal", "Welcome Page", "", "Save Layout as Default", "Reset to Default Layout",
                                                   "Restore Built-in Default"},
-               "Window lists the explorers, Properties, Console, Search, Conflicts, Problems, and Assets, then New Scene View, New Terminal, Welcome Page, and the default layout's items");
+               "Window lists the explorers, Properties, Console, Search, Conflicts, Problems, Assets, and the Plugins submenu, then New Scene View, New Terminal, Welcome Page, and the default layout's items");
         double time = 1.1;
         auto frame = [&] {
             scene->layout(1280, 800, time);
@@ -1074,6 +1076,8 @@ int main() {
     failures += RunGuiImageTests(layout, *scene);
     failures += RunBillboardLayerTests(layout, *scene);
     failures += RunStatusBarTests(layout, *scene);
+    failures += RunPluginsTests();
+    failures += RunGuiTreeTests(layout);
     failures += RunProfilerOverlayTests(layout, *scene);
     failures += RunProfilerPlayerKeyTests();
     failures += RunProfilerColorTests();

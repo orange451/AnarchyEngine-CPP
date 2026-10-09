@@ -9,6 +9,7 @@
 #include "IdeAssets.hpp"
 #include "IdeLayoutInternal.hpp"
 #include "McpSetup.hpp"
+#include "PluginRibbon.hpp"
 #include "ScratchResources.hpp"
 
 #include "EditorFont.hpp"
@@ -22,6 +23,19 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight, const std::filesys
     if (!config.empty()) {
         layout_file_ = config / "layout.json";
         default_layout_file_ = config / "default-layout.json";
+        plugins_dir_ = config / "plugins";
+        plugin_spots_file_ = config / "plugin-docks.json";
+        std::string text;
+        std::string error;
+        engine_core::JsonValue spots;
+        if (engine_core::read_file(plugin_spots_file_, text, error) && engine_core::parse_json(text, spots, error) &&
+            spots.is_object()) {
+            for (const engine_core::JsonValue::Member& member : spots.members()) {
+                if (member.second.is_object()) {
+                    plugin_spots_[member.first] = member.second;
+                }
+            }
+        }
     }
     runner_.prepare();
     // Before any widget reads a color.
@@ -52,6 +66,14 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight, const std::filesys
         ->setOnAction([this](jadefx::ActionEvent&) { save_project_as(); });
     file->getItems().add(jadefx::make<jadefx::SeparatorMenuItem>());
     AddItem(*file, "Export Game…", "Export.png", 0, 0)->setOnAction([this](jadefx::ActionEvent&) { export_game(); });
+    AddItem(*file, "Open Plugins Folder", "AssetFolder.png", 0, 0)->setOnAction([this](jadefx::ActionEvent&) {
+        if (plugins_dir_.empty()) {
+            return;
+        }
+        std::error_code made;
+        std::filesystem::create_directories(plugins_dir_, made);
+        reveal_folder(plugins_dir_);
+    });
     file->getItems().add(jadefx::make<jadefx::SeparatorMenuItem>());
     AddItem(*file, "Preferences\u2026", nullptr, jadefx::Key::Comma, jadefx::Key::ModControl)
         ->setOnAction([this](jadefx::ActionEvent&) { open_preferences(); });
@@ -155,7 +177,17 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight, const std::filesys
     auto top = jadefx::make<jadefx::VBox>();
     top->setPrefWidthRatio(1);
     top->getChildren().add(menuBar);
-    top->getChildren().add(ribbon);
+    auto tabbed = jadefx::make<PluginRibbon>(
+        ribbon,
+        [this](std::uint32_t button) {
+            runner_.simulation().on_simulation(
+                [this, button](engine_core::DataModel&) { runner_.simulation().scripts().plugin_ui().click(button); });
+        },
+        [this](const std::string& text) {
+            runner_.simulation().scripts().append_output(engine_core::ScriptRuntime::OutputKind::Error, text);
+        });
+    plugin_ribbon_ = tabbed.get();
+    top->getChildren().add(std::move(tabbed));
 
     engine_core::DataModel& game = runner_.simulation().datamodel();
     ExplorerHost host;
@@ -407,6 +439,7 @@ void IdeLayout::load_plugins() {
         scripts.append_output(engine_core::ScriptRuntime::OutputKind::Error, "Plugin: " + error);
     }
     run_now([&](engine_core::DataModel& game) { plugins_.load(game, scripts, files); });
+    poll_plugins(true);
 }
 
 void IdeLayout::mount(jadefx::Scene& scene) {
@@ -509,6 +542,23 @@ void GrowToFit(const jadefx::Node* area, jadefx::Scene* scene, const std::functi
 }
 }  // namespace
 
+void IdeLayout::refresh_plugin_ribbon() {
+    if (plugin_ribbon_ == nullptr) {
+        return;
+    }
+    engine_core::Engine& engine = runner_.simulation();
+    // The simulation may be inside a step. Skip this frame rather than wait.
+    engine_core::DataModelLock lock(engine.datamodel(), engine_core::DataModelLock::Read, std::chrono::milliseconds(1));
+    if (!lock.owns()) {
+        return;
+    }
+    const engine_core::PluginUi& ui = engine.scripts().plugin_ui();
+    if (ui.revision() != plugin_ui_revision_) {
+        plugin_ui_revision_ = ui.revision();
+        plugin_ribbon_->setToolbars(ui.toolbars());
+    }
+}
+
 void IdeLayout::flushFrame() {
     ++frames_;
     noteScriptFocus();
@@ -516,6 +566,8 @@ void IdeLayout::flushFrame() {
     // notes that changes wait; after it, or once an edit ends, it runs.
     const bool focused = scene_ != nullptr && scene_->isWindowFocused();
     if (focused && !was_focused_) {
+        // A plugin file saved in another program loads as soon as the studio is back.
+        plugin_poll_at_ = 0;
         if (in_test()) {
             check_disk();
         } else {
@@ -526,6 +578,9 @@ void IdeLayout::flushFrame() {
     if (check_pending_ && !in_test() && !editing_field()) {
         check_disk();
     }
+    poll_plugins(false);
+    refresh_plugin_ribbon();
+    sync_plugin_widgets();
     refresh_modified();
     // A tab that is not showing, or a closed page kept for reopening, is not
     // laid out, so Problems would stop counting. Its tick keeps the list and

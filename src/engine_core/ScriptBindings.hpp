@@ -65,6 +65,21 @@ inline constexpr const char* kConnectionMeta = "AE.Connection";
 inline constexpr const char* kThreadMeta = "AE.Thread";
 inline constexpr const char* kServiceMeta = "AE.Service";
 inline constexpr const char* kInputObjectMeta = "AE.InputObject";
+inline constexpr const char* kPluginMeta = "AE.Plugin";
+// Registry table: plugin serial -> its one Plugin userdata in this state, weak values.
+inline constexpr const char* kPluginCache = "AE.PluginCache";
+inline constexpr const char* kPluginToolbarMeta = "AE.PluginToolbar";
+inline constexpr const char* kPluginButtonMeta = "AE.PluginToolbarButton";
+
+// The plugin global: which plugin, by the serial that owns its threads.
+struct PluginUd {
+    std::uint32_t serial = 0;
+};
+
+// A plugin's toolbar or toolbar button, by its PluginUi id.
+struct PluginObjectUd {
+    std::uint32_t id = 0;
+};
 
 // Which service a GetService userdata stands for. The name is also its class.
 struct ServiceUd {
@@ -84,6 +99,9 @@ constexpr int kSignalEvent = 3;
 // A service's own signal, found by its HostSignal tag in phase through
 // ScriptRuntime::host_signal; its handlers get whatever values the event carries.
 constexpr int kSignalHost = 4;
+// A PluginUi signal, a plugin's Unloading or a button's Click, found by its key in id;
+// event_name is its name. Its handlers get the values the event carries, as a host signal's do.
+constexpr int kSignalPlugin = 5;
 constexpr int kServiceKinds = static_cast<int>(sizeof(kServiceClasses) / sizeof(kServiceClasses[0]));
 
 inline int service_kind(const char* name) {
@@ -374,11 +392,26 @@ struct ScriptBindings {
     static int input_object_index(lua_State* state);
     static int input_object_tostring(lua_State* state);
     static int thread_index(lua_State* state);
+
+    // The plugin global, its toolbars, and their buttons, in PluginBindings.cpp.
+    static int plugin_index(lua_State* state);
+    static int plugin_create_toolbar(lua_State* state);
+    static int plugin_create_dock_widget(lua_State* state);
+    static int toolbar_index(lua_State* state);
+    static int toolbar_create_button(lua_State* state);
+    static int button_index(lua_State* state);
+    static int button_newindex(lua_State* state);
+    static int button_set_active(lua_State* state);
 };
 
 // RaycastParams and RaycastResult: their metatables and the RaycastParams global.
 void open_raycast(lua_State* state);
 // The BrushFace metatable and global, in BrushBindings.cpp.
 void open_brush_face(lua_State* state);
+// The Plugin, PluginToolbar, and PluginToolbarButton metatables and the plugin
+// cache, in PluginBindings.cpp. The plugin global itself is set per thread.
+void open_plugin_api(lua_State* state);
+// A signal object for a PluginUi signal key. cause must outlive the state: a literal.
+void push_plugin_signal(lua_State* state, std::uint32_t key, const char* cause);
 
 }  // namespace engine_core

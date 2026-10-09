@@ -2,6 +2,7 @@
 
 #include "Events.hpp"
 #include "LuaApi.hpp"
+#include "PluginUi.hpp"
 #include "RunService.hpp"
 #include "ScriptHost.hpp"
 #include "TableSnapshot.hpp"
@@ -161,7 +162,8 @@ public:
     // join the log. Plugins share the plugin VM's _G and shared. It closes when the
     // last plugin goes. The caller is the simulation thread, or a paused edit. False
     // when root is not a live instance or is registered already; nothing runs then.
-    bool register_plugin(InstanceId root);
+    // name is what plugin.Name reads: the plugin file's name; empty takes the root's Name.
+    bool register_plugin(InstanceId root, std::string name = {});
     // Selection.SelectionChanged, RunService.Started, and RunService.Stopped.
     // Null before attach.
     Signal* host_signal(HostSignal which);
@@ -174,6 +176,19 @@ public:
     // Stops the plugin's threads and connections. False when root is not registered.
     bool unregister_plugin(InstanceId root);
     bool is_plugin(InstanceId root) const;
+    // The registered root's name, or null when root is not a plugin.
+    const std::string* plugin_name(InstanceId root) const;
+    // The serial that owns the registered root's threads and connections, or 0.
+    std::uint32_t plugin_serial(InstanceId root) const;
+    // Fires the plugin's Unloading and runs its handlers now, before it is
+    // unregistered. SimulationThread, outside any Lua call. Nothing for a root
+    // that is not a plugin.
+    void fire_plugin_unloading(InstanceId root);
+    // The registered root a serial owns, or 0.
+    InstanceId plugin_root(std::uint32_t serial) const;
+    // The plugins' toolbars, buttons, and signals.
+    PluginUi& plugin_ui() { return plugin_ui_; }
+    const PluginUi& plugin_ui() const { return plugin_ui_; }
     // Registered roots in the order they were registered. A root that died drops out.
     std::vector<InstanceId> plugins() const;
     bool plugin_vm_open() const { return plugin_.state != nullptr; }
@@ -305,6 +320,7 @@ private:
     struct Plugin {
         InstanceId root = 0;
         std::uint32_t serial = 0;
+        std::string name;
     };
 
     // Interrupts, loop back-edges and calls, one resume may take before it is
@@ -430,6 +446,9 @@ private:
     bool thread_ok(const Thread& thread) const;
     Thread& new_thread(Vm& vm, InstanceId script, std::uint32_t generation);
     void set_script_global(lua_State* co, InstanceId script);
+    // A plugin VM thread's `plugin`: the Plugin object of the plugin whose serial owns it,
+    // or nil. Defined in PluginBindings.cpp.
+    void set_plugin_global(lua_State* co, std::uint32_t serial);
     void remember_error(lua_State* state);
     // remember_error plus a console line. require uses remember_error alone so a caught
     // failure is not logged twice when the caller resumes.
@@ -496,6 +515,7 @@ private:
     // step_tools fires it, and Started and Stopped, for what changed since
     // the step before.
     Signal selection_changed_;
+    PluginUi plugin_ui_;
     std::uint64_t selection_revision_ = 0;
     bool was_running_ = false;
     // ChangeHistoryService's OnUndo, OnRedo, OnRecordingStarted, and

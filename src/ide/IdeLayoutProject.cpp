@@ -14,8 +14,11 @@
 #include "ModelImport.hpp"
 #include "PropertySheet.hpp"
 #include "ScratchResources.hpp"
+#include "IdeResources.hpp"
+#include "InstanceFile.hpp"
 #include "TextureImport.hpp"
 
+#include <cctype>
 #include <sstream>
 #include <fstream>
 #include <ctime>
@@ -135,8 +138,17 @@ std::vector<std::string> SoundFiles(const std::vector<std::string>& files) {
     return sounds;
 }
 
+// An instance file or a plugin file, which a drop puts in Workspace.
+bool IsInstanceFile(const std::string& file) {
+    std::string extension = path_from_utf8(file).extension().u8string();
+    std::transform(extension.begin(), extension.end(), extension.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return extension == ".aeinst" || extension == kPluginExtension;
+}
+
 bool HasImports(const std::vector<std::string>& files) {
-    return std::any_of(files.begin(), files.end(), is_importable_file);
+    return std::any_of(files.begin(), files.end(),
+                       [](const std::string& file) { return is_importable_file(file) || IsInstanceFile(file); });
 }
 
 // "1 model", "3 textures".
@@ -198,10 +210,46 @@ void IdeLayout::accept_file_drops(jadefx::Node& node) {
             return;
         }
         // Taken even when it asks nothing: the reason shows as a toast.
+        import_instance_files(event.getDragboard().getFiles());
         import_files(event.getDragboard().getFiles());
         event.setDropCompleted(true);
         event.consume();
     });
+}
+
+bool IdeLayout::import_instance_files(const std::vector<std::string>& files) {
+    std::vector<engine_core::CopiedNode> roots;
+    bool any = false;
+    for (const std::string& file : files) {
+        if (!IsInstanceFile(file)) {
+            continue;
+        }
+        any = true;
+        std::vector<engine_core::CopiedNode> read;
+        std::string error;
+        if (!engine_core::load_instance_file(path_from_utf8(file), read, error)) {
+            show_toast(path_from_utf8(file).filename().u8string() + " could not be read: " + error);
+            continue;
+        }
+        roots.insert(roots.end(), std::make_move_iterator(read.begin()), std::make_move_iterator(read.end()));
+    }
+    if (roots.empty()) {
+        return any;
+    }
+    runner_.simulation().on_simulation([this, alive = std::weak_ptr<int>(alive_),
+                                        roots = std::move(roots)](engine_core::DataModel& world) {
+        ScopedRecording step(world, "Insert");
+        std::vector<engine_core::InstanceId> made;
+        std::string refused;
+        paste_copies(world, roots, world.scene_service("Workspace"), &made, &refused);
+        if (!made.empty()) {
+            world.selection().set(made);
+        }
+        if (!refused.empty()) {
+            toast_later(this, alive, std::move(refused));
+        }
+    });
+    return true;
 }
 
 void IdeLayout::choose_import(engine_core::InstanceId folder, const std::string& kind) {

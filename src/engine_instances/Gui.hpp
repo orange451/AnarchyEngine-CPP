@@ -98,6 +98,8 @@ enum class GuiProperty : int {
     AlwaysOnTop,
     ImageTransparency,
     TextScaled,
+    Title,
+    WidgetEnabled,
     Count
 };
 
@@ -254,6 +256,53 @@ public:
     const std::string& source() const { return text(GuiProperty::Source); }
     // Edit, then the actions every instance has. Edit is the double-click and opens the CSS editor.
     void context_actions(std::vector<ContextAction>& out) const override;
+};
+
+// Where a DockWidget's pane first opens: as a tab in the dock that sits there in the
+// main window, found by position. TopRight is the highest dock along the right edge,
+// BottomRight the lowest (the same one when only one is there); TopLeft and
+// BottomLeft likewise on the left; Bottom the widest along the bottom between the
+// sides; Center the Scene View's. With no dock there, one is made, and later
+// opens find it. Float is a window of its own.
+enum class DockSide { TopLeft, BottomLeft, TopRight, BottomRight, Bottom, Center, Float };
+
+// A plugin's dockable window, which plugin:CreateDockWidget makes under the
+// plugin's root. Its GuiBase children, and a ScreenGui directly in it, draw
+// in a studio pane as a ScreenGui's draw over the view; CSS in it styles
+// them. Title and Enabled are its Lua properties: Enabled opens and closes
+// the pane, and closing the pane clears it. The rest is fixed when it is
+// made. Instance.new cannot make one, and it is never saved: it lives in Core.
+class DockWidget : public GuiBase {
+public:
+    DockWidget(DataModel::ChildTag tag, DataModel::State& state, InstanceId id);
+    const char* class_name() const override;
+
+    // The plugin's name and the id it gave, which name its pane.
+    void set_origin(std::string plugin, std::string key);
+    const std::string& plugin() const { return plugin_; }
+    const std::string& key() const { return key_; }
+    // "plugin:<plugin>/<key>", what layout.json and the Window menu know its pane by.
+    std::string pane_name() const;
+
+    const std::string& title() const { return text(GuiProperty::Title); }
+    bool enabled() const { return flag(GuiProperty::WidgetEnabled); }
+    // SimulationThread, as set_value.
+    void set_title(std::string title);
+    void set_enabled(bool enabled);
+
+    DockSide initial_dock = DockSide::TopRight;
+    // Points. The pane's size when it first opens, and the least it shrinks to.
+    double width = 300;
+    double height = 400;
+    double min_width = 0;
+    double min_height = 0;
+
+protected:
+    void on_reuse() override;
+
+private:
+    std::string plugin_;
+    std::string key_;
 };
 
 // The events every GuiBase has, and the one a Button and a TextField add.

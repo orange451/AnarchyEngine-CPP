@@ -52,7 +52,7 @@ struct KeyEvent;
 
 namespace runner {
 
-enum class BrushMode { Draw, Vertex, Clip };
+enum class BrushMode { Draw, Vertex, Clip, Loop };
 
 struct BrushModifiers {
     bool shift = false;
@@ -157,6 +157,7 @@ private:
     void extrude();
     void clickClip(const engine_core::DraggerRay& ray);
     void applyClip();
+    void applyLoop(const engine_core::DraggerRay& ray, BrushModifiers mods);
     void nudge(engine_core::Vec3 delta, bool copy);
     void turn(int axis, int quarterTurns);
     void flip(int axis);

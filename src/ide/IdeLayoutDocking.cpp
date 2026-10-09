@@ -3,6 +3,9 @@
 #include "IdeLayout.hpp"
 
 #include "IdeLayoutInternal.hpp"
+#include "PluginWidgetPane.hpp"
+
+#include "Gui.hpp"
 #include "Strings.hpp"
 
 namespace ide {
@@ -229,6 +232,11 @@ bool IdeLayout::apply_layout(const engine_core::JsonValue& saved) {
     LayoutHost host = layout_host();
     host.dock_page = [this, &old_docks, placed](IdeDock& dock, const std::string& name) {
         const std::shared_ptr<IdePane> page = page_named(name);
+        if (!page && name.rfind("plugin:", 0) == 0) {
+            // Its plugin has not loaded yet. It docks here when it does.
+            plugin_docks_[name] = &dock;
+            return false;
+        }
         if (!page || placed->count(page.get()) != 0) {
             return false;
         }
@@ -393,6 +401,11 @@ void IdeLayout::fill_window_menu(jadefx::Menu& menu) {
                 });
             });
     }
+    // The plugins' dock widgets, filled as they come and go.
+    auto plugins = jadefx::make<jadefx::Menu>("Plugins");
+    plugins_menu_ = plugins.get();
+    menu.getItems().add(std::move(plugins));
+    fill_plugins_menu();
     menu.getItems().add(jadefx::make<jadefx::SeparatorMenuItem>());
     add("New Scene View", "CameraPlus.png", nullptr)->setOnAction([this](jadefx::ActionEvent&) { new_scene_view(); });
     add("New Terminal", "ConsolePlus.png", nullptr)->setOnAction([this](jadefx::ActionEvent&) { new_terminal(); });
@@ -748,6 +761,11 @@ LayoutHost IdeLayout::layout_host() {
     };
     host.dock_page = [this, placed](IdeDock& dock, const std::string& name) {
         const std::shared_ptr<IdePane> page = page_named(name);
+        if (!page && name.rfind("plugin:", 0) == 0) {
+            // Its plugin has not loaded yet. It docks here when it does.
+            plugin_docks_[name] = &dock;
+            return false;
+        }
         if (!page || placed->count(page.get()) != 0 || dockContaining(page.get()) != nullptr) {
             return false;
         }
@@ -1641,6 +1659,463 @@ void IdeLayout::onTabDrag(IdeDock& from, const jadefx::TabDrag& drag) {
     hideDropMark();
     if (drag.outside) {
         applyDrag(from, drag);
+    }
+}
+
+IdeDock* IdeLayout::dock_at(engine_core::DockSide side, double width, double height) {
+    using engine_core::DockSide;
+    IdeDock* middle = editorHome();
+    if (side == DockSide::Center && middle != nullptr) {
+        return middle;
+    }
+    // The main window's docked area, whose edges the sides are.
+    const jadefx::Node* area = root_->getCenter();
+    if (area != nullptr && area->getWidth() > 0 && area->getHeight() > 0) {
+        constexpr double kSlack = 2;
+        const double left = area->getAbsoluteX();
+        const double top = area->getAbsoluteY();
+        const double right = left + area->getWidth();
+        const double bottom = top + area->getHeight();
+        IdeDock* best = nullptr;
+        double bestKey = 0;
+        for (const std::shared_ptr<IdeDock>& dock : docks_) {
+            // A floating window's docks and the Scene View's are not on a side.
+            if (!dock || dock->getParent() == nullptr || dock.get() == middle || utilityOf(dock.get()) != nullptr) {
+                continue;
+            }
+            const double x = dock->getAbsoluteX();
+            const double y = dock->getAbsoluteY();
+            const double x2 = x + dock->getWidth();
+            const double y2 = y + dock->getHeight();
+            const bool onLeft = std::abs(x - left) < kSlack;
+            const bool onRight = std::abs(x2 - right) < kSlack;
+            const bool onBottom = std::abs(y2 - bottom) < kSlack;
+            bool wanted = false;
+            double key = 0;
+            switch (side) {
+            case DockSide::TopLeft:
+                wanted = onLeft;
+                key = -y;
+                break;
+            case DockSide::BottomLeft:
+                wanted = onLeft;
+                key = y;
+                break;
+            case DockSide::TopRight:
+                wanted = onRight;
+                key = -y;
+                break;
+            case DockSide::BottomRight:
+                wanted = onRight;
+                key = y;
+                break;
+            case DockSide::Bottom:
+                wanted = onBottom && !onLeft && !onRight;
+                key = x2 - x;
+                break;
+            case DockSide::Center:
+            case DockSide::Float:
+                break;
+            }
+            if (wanted && (best == nullptr || key > bestKey)) {
+                best = dock.get();
+                bestKey = key;
+            }
+        }
+        if (best != nullptr) {
+            return best;
+        }
+    }
+    // Nothing on that side yet: one dock, which the next open finds there.
+    switch (side) {
+    case DockSide::TopLeft:
+    case DockSide::BottomLeft:
+        return dock_beside(nullptr, DropSide::Left, width);
+    case DockSide::Bottom:
+        return dock_beside(nullptr, DropSide::Bottom, height);
+    case DockSide::TopRight:
+    case DockSide::BottomRight:
+    case DockSide::Center:
+    case DockSide::Float:
+        break;
+    }
+    return dock_beside(nullptr, DropSide::Right, width);
+}
+
+std::string IdeLayout::saved_page_name(const IdePane* page) const {
+    if (page == nullptr) {
+        return {};
+    }
+    if (page == scene_view_.get()) {
+        return page->name();
+    }
+    for (const std::unique_ptr<WindowEntry>& entry : windows_) {
+        if (entry->pane.get() == page) {
+            return entry->name;
+        }
+    }
+    return {};
+}
+
+engine_core::JsonValue IdeLayout::page_spot(IdePane* page) {
+    IdeDock* dock = dockContaining(page);
+    if (dock == nullptr || utilityOf(dock) != nullptr || dock->getWidth() <= 0 || dock->getHeight() <= 0) {
+        return {};
+    }
+    // The first other page in a dock that a name finds again, or empty.
+    auto named = [this, page](IdeDock& holder) -> std::string {
+        for (const std::shared_ptr<jadefx::Tab>& tab : holder.tabs()->getTabs().items()) {
+            const auto* other = tab ? dynamic_cast<const IdePane*>(tab->getContent()) : nullptr;
+            if (other != nullptr && other != page) {
+                std::string name = saved_page_name(other);
+                if (!name.empty()) {
+                    return name;
+                }
+            }
+        }
+        return {};
+    };
+    engine_core::JsonValue spot = engine_core::JsonValue::object();
+    if (std::string with = named(*dock); !with.empty()) {
+        spot.set("tab", engine_core::JsonValue::string(std::move(with)));
+        return spot;
+    }
+    // Alone in its dock: the neighbor it shares the longest edge with, and which side of it.
+    // Neighbors are a split's divider apart, not touching.
+    constexpr double kSlack = 12;
+    const double x = dock->getAbsoluteX();
+    const double y = dock->getAbsoluteY();
+    const double x2 = x + dock->getWidth();
+    const double y2 = y + dock->getHeight();
+    std::string best;
+    const char* bestSide = nullptr;
+    double bestOverlap = 0;
+    for (const std::shared_ptr<IdeDock>& other : docks_) {
+        if (!other || other.get() == dock || other->getParent() == nullptr || utilityOf(other.get()) != nullptr) {
+            continue;
+        }
+        const double tx = other->getAbsoluteX();
+        const double ty = other->getAbsoluteY();
+        const double tx2 = tx + other->getWidth();
+        const double ty2 = ty + other->getHeight();
+        const double across = std::min(y2, ty2) - std::max(y, ty);
+        const double down = std::min(x2, tx2) - std::max(x, tx);
+        const char* side = nullptr;
+        double overlap = 0;
+        if (std::abs(x - tx2) < kSlack && across > 0) {
+            side = "Right";
+            overlap = across;
+        } else if (std::abs(x2 - tx) < kSlack && across > 0) {
+            side = "Left";
+            overlap = across;
+        } else if (std::abs(y - ty2) < kSlack && down > 0) {
+            side = "Bottom";
+            overlap = down;
+        } else if (std::abs(y2 - ty) < kSlack && down > 0) {
+            side = "Top";
+            overlap = down;
+        }
+        if (side == nullptr || overlap <= bestOverlap) {
+            continue;
+        }
+        std::string name = named(*other);
+        if (!name.empty()) {
+            best = std::move(name);
+            bestSide = side;
+            bestOverlap = overlap;
+        }
+    }
+    if (bestSide == nullptr) {
+        return {};
+    }
+    const bool across = std::strcmp(bestSide, "Left") == 0 || std::strcmp(bestSide, "Right") == 0;
+    spot.set("beside", engine_core::JsonValue::string(std::move(best)));
+    spot.set("side", engine_core::JsonValue::string(bestSide));
+    spot.set("size", engine_core::JsonValue::number(std::round(across ? dock->getWidth() : dock->getHeight())));
+    return spot;
+}
+
+IdeDock* IdeLayout::dock_for_spot(const engine_core::JsonValue& spot, const IdePane* self) {
+    auto holder = [this, self](const engine_core::JsonValue* name) -> IdeDock* {
+        if (name == nullptr || !name->is_string()) {
+            return nullptr;
+        }
+        const std::shared_ptr<IdePane> page = page_named(name->as_string());
+        if (!page || page.get() == self) {
+            return nullptr;
+        }
+        IdeDock* dock = dockContaining(page.get());
+        return dock != nullptr && utilityOf(dock) == nullptr ? dock : nullptr;
+    };
+    if (IdeDock* dock = holder(spot.find("tab"))) {
+        return dock;
+    }
+    IdeDock* neighbor = holder(spot.find("beside"));
+    const engine_core::JsonValue* side = spot.find("side");
+    const engine_core::JsonValue* size = spot.find("size");
+    if (neighbor == nullptr || side == nullptr || size == nullptr) {
+        return nullptr;
+    }
+    const std::string& name = side->as_string();
+    const DropSide drop = name == "Left"     ? DropSide::Left
+                          : name == "Right"  ? DropSide::Right
+                          : name == "Top"    ? DropSide::Top
+                                             : DropSide::Bottom;
+    return dock_beside(neighbor, drop, std::max(size->as_number(), 80.0));
+}
+
+void IdeLayout::save_plugin_spots() {
+    if (plugin_spots_file_.empty()) {
+        return;
+    }
+    engine_core::JsonValue root = engine_core::JsonValue::object();
+    for (const auto& [name, spot] : plugin_spots_) {
+        root.set(name, spot);
+    }
+    std::string error;
+    engine_core::write_file(plugin_spots_file_, engine_core::write_json(root), error);
+}
+
+void IdeLayout::move_page_for_tests(IdePane* page, IdePane* beside, int side) {
+    IdeDock* from = dockContaining(page);
+    IdeDock* target = dockContaining(beside);
+    const std::shared_ptr<jadefx::Tab> tab = TabShowing(docks_, page);
+    if (from == nullptr || target == nullptr || !tab) {
+        return;
+    }
+    if (side != 0) {
+        const DropSide sides[] = {DropSide::Left, DropSide::Right, DropSide::Top, DropSide::Bottom};
+        target = dock_beside(target, sides[std::min(std::max(side, 1), 4) - 1], 220);
+        if (target == nullptr) {
+            return;
+        }
+    }
+    from->tabs()->getTabs().removeIf([&tab](const std::shared_ptr<jadefx::Tab>& item) { return item == tab; });
+    target->take(tab);
+}
+
+bool IdeLayout::close_page(IdePane* page) {
+    IdeDock* dock = dockContaining(page);
+    if (dock == nullptr) {
+        return false;
+    }
+    const std::vector<std::shared_ptr<jadefx::Tab>> tabs = dock->tabs()->getTabs().items();
+    for (const std::shared_ptr<jadefx::Tab>& tab : tabs) {
+        if (tab && tab->getContent() == page) {
+            dock->tabs()->close(tab);
+            return true;
+        }
+    }
+    return false;
+}
+
+void IdeLayout::sync_plugin_widgets() {
+    // What Core's plugins hold now: each DockWidget directly under a plugin's root.
+    struct Seen {
+        std::string name;
+        engine_core::InstanceId id = 0;
+        std::string title;
+        bool enabled = false;
+        engine_core::DockSide side = engine_core::DockSide::TopRight;
+        double width = 0;
+        double height = 0;
+    };
+    std::vector<Seen> seen;
+    {
+        engine_core::Engine& engine = runner_.simulation();
+        engine_core::DataModel& game = engine.datamodel();
+        // The simulation may be inside a step. Skip this frame rather than wait.
+        engine_core::DataModelLock lock(game, engine_core::DataModelLock::Read, std::chrono::milliseconds(1));
+        if (!lock.owns()) {
+            return;
+        }
+        const engine_core::InstanceId core = game.core();
+        for (engine_core::InstanceId root = core != 0 ? game.first_child(core) : 0; root != 0;
+             root = game.next_sibling(root)) {
+            for (engine_core::InstanceId child = game.first_child(root); child != 0; child = game.next_sibling(child)) {
+                const auto* widget = dynamic_cast<const engine_core::DockWidget*>(game.instance(child));
+                if (widget == nullptr || widget->key().empty()) {
+                    continue;
+                }
+                Seen item;
+                item.name = widget->pane_name();
+                item.id = child;
+                item.title = widget->title().empty() ? widget->key() : widget->title();
+                item.enabled = widget->enabled();
+                item.side = widget->initial_dock;
+                item.width = widget->width;
+                item.height = widget->height;
+                seen.push_back(std::move(item));
+            }
+        }
+    }
+    auto liveDock = [this](IdeDock* dock) -> std::shared_ptr<IdeDock> {
+        for (const std::shared_ptr<IdeDock>& candidate : docks_) {
+            if (candidate.get() == dock && candidate->getParent() != nullptr) {
+                return candidate;
+            }
+        }
+        return nullptr;
+    };
+    auto setEnabled = [this](engine_core::InstanceId id, bool enabled) {
+        runner_.simulation().on_simulation([id, enabled](engine_core::DataModel& game) {
+            if (auto* widget = dynamic_cast<engine_core::DockWidget*>(game.instance(id))) {
+                widget->set_enabled(enabled);
+            }
+        });
+    };
+    bool changed = false;
+    bool spots_changed = false;
+
+    // A widget that went: its plugin unloaded, or it was destroyed. Where it was
+    // docked is kept, so a reload puts it back there.
+    for (auto it = plugin_widgets_.begin(); it != plugin_widgets_.end();) {
+        const bool kept = std::any_of(seen.begin(), seen.end(), [&](const Seen& item) {
+            return item.name == it->first && item.id == it->second.id;
+        });
+        if (kept) {
+            ++it;
+            continue;
+        }
+        if (IdeDock* dock = dockContaining(it->second.pane.get())) {
+            plugin_docks_[it->first] = dock;
+            close_page(it->second.pane.get());
+        }
+        WindowEntry* entry = it->second.entry;
+        windows_.erase(std::remove_if(windows_.begin(), windows_.end(),
+                                      [entry](const std::unique_ptr<WindowEntry>& item) { return item.get() == entry; }),
+                       windows_.end());
+        it = plugin_widgets_.erase(it);
+        changed = true;
+    }
+
+    for (const Seen& item : seen) {
+        auto found = plugin_widgets_.find(item.name);
+        if (found == plugin_widgets_.end()) {
+            PluginWidget made;
+            made.id = item.id;
+            made.pane = std::make_shared<PluginWidgetPane>(runner_.simulation(), item.id, item.name);
+            auto entry = std::make_unique<WindowEntry>();
+            entry->name = item.name;
+            entry->icon = made.pane->iconFile();
+            entry->pane = made.pane;
+            entry->starts_closed = true;
+            const engine_core::DockSide side = item.side;
+            const double width = item.width > 0 ? item.width : kSideWidth;
+            const double height = item.height > 0 ? item.height : kConsoleHeight;
+            // Where the user last left it, then its InitialDock the first time.
+            entry->home = [this, name = item.name, page = made.pane.get(), side, width, height]() {
+                const auto spot = plugin_spots_.find(name);
+                if (spot != plugin_spots_.end()) {
+                    if (IdeDock* dock = dock_for_spot(spot->second, page)) {
+                        return dock;
+                    }
+                }
+                return dock_at(side, width, height);
+            };
+            made.entry = entry.get();
+            windows_.push_back(std::move(entry));
+            found = plugin_widgets_.emplace(item.name, std::move(made)).first;
+            changed = true;
+            // Docked where layout.json or its last load had it: open there, whatever Enabled says.
+            const auto recorded = plugin_docks_.find(item.name);
+            if (recorded != plugin_docks_.end()) {
+                if (const std::shared_ptr<IdeDock> dock = liveDock(recorded->second)) {
+                    dock->dock(found->second.pane);
+                    if (!item.enabled) {
+                        setEnabled(item.id, true);
+                        found->second.asked = true;
+                    }
+                    found->second.docked = true;
+                }
+                plugin_docks_.erase(recorded);
+            }
+        }
+        PluginWidget& widget = found->second;
+        if (widget.title != item.title) {
+            widget.title = item.title;
+            widget.pane->setTitle(item.title);
+            changed = true;
+        }
+        IdeDock* dock = dockContaining(widget.pane.get());
+        if (dock != nullptr) {
+            // Where it opens again after the user closes it.
+            widget.entry->last = liveDock(dock);
+            // Where it opens next time, this run or a later one: how it sits among the other pages.
+            engine_core::JsonValue spot = page_spot(widget.pane.get());
+            if (!spot.is_null()) {
+                engine_core::JsonValue& kept = plugin_spots_[item.name];
+                if (kept != spot) {
+                    kept = std::move(spot);
+                    spots_changed = true;
+                }
+            }
+        }
+        // Enabled as the studio last asked for it waits for the simulation to set it.
+        if (widget.asked && *widget.asked != item.enabled) {
+            continue;
+        }
+        widget.asked.reset();
+        if (widget.docked && dock == nullptr && item.enabled) {
+            // The user closed it.
+            setEnabled(item.id, false);
+            widget.asked = false;
+            widget.docked = false;
+            changed = true;
+            continue;
+        }
+        const bool wanted = item.enabled;
+        if (wanted && dock == nullptr) {
+            show_window(*widget.entry);
+            if (item.side == engine_core::DockSide::Float && !widget.entry->last.lock()) {
+                if (const std::shared_ptr<jadefx::Tab> tab = TabShowing(docks_, widget.pane.get())) {
+                    floatTab(tab, 200, 200);
+                }
+            }
+        } else if (!wanted && dock != nullptr) {
+            close_page(widget.pane.get());
+        }
+        widget.docked = dockContaining(widget.pane.get()) != nullptr;
+        if (widget.enabled != item.enabled) {
+            widget.enabled = item.enabled;
+            changed = true;
+        }
+    }
+    if (changed) {
+        fill_plugins_menu();
+    }
+    if (spots_changed) {
+        save_plugin_spots();
+    }
+}
+
+void IdeLayout::fill_plugins_menu() {
+    if (plugins_menu_ == nullptr) {
+        return;
+    }
+    plugins_menu_->getItems().clear();
+    if (plugin_widgets_.empty()) {
+        auto none = jadefx::make<jadefx::MenuItem>("No plugin windows");
+        none->setDisable(true);
+        plugins_menu_->getItems().add(std::move(none));
+        return;
+    }
+    for (const auto& [name, widget] : plugin_widgets_) {
+        auto item = jadefx::make<jadefx::MenuItem>(widget.title);
+        IdePane* page = widget.pane.get();
+        item->setGraphic(jadefx::make<WindowGraphic>(page->iconFile(), [this, page] {
+            return dockContaining(page) != nullptr;
+        }));
+        const engine_core::InstanceId id = widget.id;
+        item->setOnAction([this, page, id](jadefx::ActionEvent&) {
+            const bool open = dockContaining(page) != nullptr;
+            runner_.simulation().on_simulation([id, open](engine_core::DataModel& game) {
+                if (auto* found = dynamic_cast<engine_core::DockWidget*>(game.instance(id))) {
+                    found->set_enabled(!open);
+                }
+            });
+        });
+        plugins_menu_->getItems().add(std::move(item));
     }
 }
 

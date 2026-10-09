@@ -184,6 +184,7 @@ void ScriptRuntime::attach(DataModel& game, TaskScheduler& scheduler) {
     game.events().set_script_gate(&ScriptRuntime::gate, this);
     run_service_.bind(game.events());
     game.events().host_signal(&selection_changed_);
+    plugin_ui_.attach(game.events());
     for (Signal* signal : {&history_undo_, &history_redo_, &history_started_, &history_finished_}) {
         game.events().host_signal(signal);
     }
@@ -227,6 +228,7 @@ void ScriptRuntime::detach() {
     if (game_ != nullptr) {
         run_service_.release(game_->events());
         game_->events().release_signal(selection_changed_);
+        plugin_ui_.detach();
         ChangeHistoryService& history = game_->history();
         history.on_undo.disconnect(history_links_[0]);
         history.on_redo.disconnect(history_links_[1]);
@@ -766,6 +768,7 @@ void open_host_libraries(lua_State* state) {
     open_matrix4(state);
     open_raycast(state);
     open_brush_face(state);
+    open_plugin_api(state);
 }
 
 lua_State* ScriptRuntime::create_state(Vm& vm) {
@@ -946,11 +949,12 @@ void ScriptRuntime::start_core_scripts() {
     const InstanceId core = game_->core();
     for (InstanceId id : pending) {
         auto* script = dynamic_cast<Script*>(game_->instance(id));
-        // A Script under another Script in Core runs with that one, as a plugin's Scripts do.
+        // A Script under another Script in Core, or under a registered plugin root such as a
+        // plugin file's Folder, runs with that one, as a plugin's Scripts do.
         bool nested = false;
         for (InstanceId up = game_->parent(id); up != 0 && up != DataModel::kNoParent && up != core;
              up = game_->parent(up)) {
-            if (dynamic_cast<Script*>(game_->instance(up)) != nullptr) {
+            if (dynamic_cast<Script*>(game_->instance(up)) != nullptr || is_plugin(up)) {
                 nested = true;
                 break;
             }
@@ -1616,6 +1620,9 @@ ScriptRuntime::Thread& ScriptRuntime::new_thread(Vm& vm, InstanceId script, std:
         lua_setthreaddata(co, serial_data(thread.serial));
         luaL_sandboxthread(co);
         set_script_global(co, script);
+        if (vm.kind == VmKind::Plugin) {
+            set_plugin_global(co, generation);
+        }
     } catch (...) {
         // Half made: never run, and released with the other dead threads.
         thread.dead = true;
@@ -1741,7 +1748,7 @@ void ScriptRuntime::reset_console() {
     close_state(console_);
 }
 
-bool ScriptRuntime::register_plugin(InstanceId root) {
+bool ScriptRuntime::register_plugin(InstanceId root, std::string name) {
     assert_lua_thread();
     if (game_ == nullptr || !game_->alive(root)) {
         return false;
@@ -1755,6 +1762,7 @@ bool ScriptRuntime::register_plugin(InstanceId root) {
         const std::uint32_t serial = it->serial;
         it = plugins_.erase(it);
         kill_owned(plugin_, 0, serial);
+        plugin_ui_.remove_plugin(serial);
     }
     const bool registered = std::any_of(plugins_.begin(), plugins_.end(),
                                         [&](const Plugin& plugin) { return plugin.root == root; });
@@ -1765,8 +1773,11 @@ bool ScriptRuntime::register_plugin(InstanceId root) {
     if (++plugin_serial_ == 0) {
         ++plugin_serial_;
     }
-    const Plugin plugin{root, plugin_serial_};
+    const Plugin plugin{root, plugin_serial_, name.empty() ? game_->name(root) : std::move(name)};
     plugins_.push_back(plugin);
+    // A Script root in Core is a built-in, which the Plugins tab lists first.
+    plugin_ui_.add_plugin(plugin.serial, plugin.name,
+                          game_->core_holds(root) && dynamic_cast<Script*>(game_->instance(root)) != nullptr);
     try {
         ensure_state(plugin_);
     } catch (const std::exception& ex) {
@@ -1791,6 +1802,7 @@ bool ScriptRuntime::unregister_plugin(InstanceId root) {
     const std::uint32_t serial = found->serial;
     plugins_.erase(found);
     kill_owned(plugin_, 0, serial);
+    plugin_ui_.remove_plugin(serial);
     if (game_ != nullptr) {
         for (auto it = plugins_.begin(); it != plugins_.end();) {
             if (game_->alive(it->root)) {
@@ -1800,6 +1812,7 @@ bool ScriptRuntime::unregister_plugin(InstanceId root) {
             const std::uint32_t dead = it->serial;
             it = plugins_.erase(it);
             kill_owned(plugin_, 0, dead);
+            plugin_ui_.remove_plugin(dead);
         }
     }
     if (plugins_.empty()) {
@@ -1813,6 +1826,57 @@ bool ScriptRuntime::unregister_plugin(InstanceId root) {
 bool ScriptRuntime::is_plugin(InstanceId root) const {
     return game_ != nullptr && game_->alive(root) &&
            std::any_of(plugins_.begin(), plugins_.end(), [&](const Plugin& plugin) { return plugin.root == root; });
+}
+
+const std::string* ScriptRuntime::plugin_name(InstanceId root) const {
+    if (game_ == nullptr || !game_->alive(root)) {
+        return nullptr;
+    }
+    const auto found =
+        std::find_if(plugins_.begin(), plugins_.end(), [&](const Plugin& plugin) { return plugin.root == root; });
+    return found != plugins_.end() ? &found->name : nullptr;
+}
+
+std::uint32_t ScriptRuntime::plugin_serial(InstanceId root) const {
+    if (game_ == nullptr || !game_->alive(root)) {
+        return 0;
+    }
+    const auto found =
+        std::find_if(plugins_.begin(), plugins_.end(), [&](const Plugin& plugin) { return plugin.root == root; });
+    return found != plugins_.end() ? found->serial : 0;
+}
+
+void ScriptRuntime::fire_plugin_unloading(InstanceId root) {
+    const std::uint32_t serial = plugin_serial(root);
+    if (serial == 0) {
+        return;
+    }
+    plugin_ui_.fire_unloading(serial);
+    // Its handlers run now, before the plugin stops. A paused edit runs here on the
+    // caller's thread while the simulation waits for it, so it drains as the
+    // simulation would; any other thread may not drain at all.
+    if (!game_->on_gameplay_thread()) {
+        return;
+    }
+    const ThreadRole role = thread_role();
+    set_thread_role(ThreadRole::Simulation);
+    struct Restore {
+        ThreadRole role;
+        ~Restore() { set_thread_role(role); }
+    } restore{role};
+    game_->events().drain();
+}
+
+InstanceId ScriptRuntime::plugin_root(std::uint32_t serial) const {
+    if (game_ == nullptr) {
+        return 0;
+    }
+    for (const Plugin& plugin : plugins_) {
+        if (plugin.serial == serial && game_->alive(plugin.root)) {
+            return plugin.root;
+        }
+    }
+    return 0;
 }
 
 std::vector<InstanceId> ScriptRuntime::plugins() const {

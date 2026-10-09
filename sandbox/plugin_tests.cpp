@@ -1,16 +1,22 @@
-// Plugins, whose Scripts run in the plugin VM, and the scheduler the console and plugin
 // VMs share with the play VM: waits, tasks, and connections that go on while stopped.
 
 #include "support.hpp"
 
 #include "Engine.hpp"
 #include "Folder.hpp"
+#include "Gui.hpp"
+#include "InstanceFile.hpp"
 #include "ModuleScript.hpp"
+#include "PluginUi.hpp"
+#include "ide/PluginLoader.hpp"
 #include "ScriptRuntime.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <chrono>
+#include <filesystem>
+#include <fstream>
 #include <string>
 #include <thread>
 #include <vector>
@@ -37,6 +43,25 @@ std::vector<std::string> texts(const ScriptRuntime::OutputBatch& batch) {
         out.push_back(line.text);
     }
     return out;
+}
+
+// Writes a plugin file holding a Folder named name with one Script per source.
+void write_plugin(const std::filesystem::path& folder, const std::string& name,
+                  const std::vector<std::string>& sources) {
+    engine_core::CopiedNode root;
+    root.class_name = "Folder";
+    root.name = name;
+    for (std::size_t i = 0; i < sources.size(); ++i) {
+        engine_core::CopiedNode script;
+        script.class_name = "Script";
+        script.name = "S" + std::to_string(i);
+        script.has_source = true;
+        script.source = sources[i];
+        root.children.push_back(std::move(script));
+    }
+    std::filesystem::create_directories(folder);
+    std::string error;
+    REQUIRE(engine_core::save_instance_file(folder / (name + ide::kPluginExtension), {root}, error));
 }
 
 }  // namespace
@@ -376,4 +401,345 @@ TEST_CASE("CV6 a paused engine keeps the command line's time", "[CV6]") {
     }
     engine.stop();
     REQUIRE(woke);
+}
+
+TEST_CASE("PL11 a Folder registered in Core is one plugin, and its Scripts do not register alone", "[PL11]") {
+    ScriptRig rig;
+    const InstanceId folder = add_folder(rig.game, "Tools", rig.game.core());
+    add_script(rig.game, folder, "A", "print('a')");
+    add_script(rig.game, folder, "B", "print('b')");
+    rig.runtime.drain_output();
+
+    REQUIRE(rig.runtime.register_plugin(folder, "ToolsFile"));
+    rig.runtime.start_core_scripts();
+    REQUIRE(rig.runtime.plugins() == std::vector<InstanceId>{folder});
+    REQUIRE(texts(rig.runtime.drain_output()) == std::vector<std::string>{"a\n", "b\n"});
+    REQUIRE(*rig.runtime.plugin_name(folder) == "ToolsFile");
+    REQUIRE(rig.runtime.plugin_serial(folder) != 0);
+    REQUIRE(rig.runtime.plugin_name(folder + 1000) == nullptr);
+
+    // A Script added later under the registered Folder still does not become its own plugin.
+    add_script(rig.game, folder, "C", "print('c')");
+    rig.runtime.start_core_scripts();
+    REQUIRE(rig.runtime.plugins() == std::vector<InstanceId>{folder});
+
+    // A Folder in Core that is not registered keeps today's behaviour: each Script is a plugin.
+    const InstanceId loose = add_folder(rig.game, "Loose", rig.game.core());
+    const InstanceId s = add_script(rig.game, loose, "S", "print('s')").id();
+    rig.runtime.start_core_scripts();
+    REQUIRE(rig.runtime.is_plugin(s));
+}
+
+TEST_CASE("PL12 user plugins load, unload, and reload with their files", "[PL12]") {
+    ScriptRig rig;
+    TempDir dir;
+    ide::PluginLoader loader;
+    write_plugin(dir.path, "Alpha", {"print('alpha 1')", "task.wait(100) print('never')"});
+    rig.runtime.drain_output();
+
+    loader.sync_user(rig.game, rig.runtime, ide::scan_plugins(dir.path));
+    REQUIRE(loader.user().size() == 1);
+    const InstanceId root = loader.user()[0].root;
+    REQUIRE(rig.game.parent(root) == rig.game.core());
+    REQUIRE(rig.runtime.is_plugin(root));
+    REQUIRE(*rig.runtime.plugin_name(root) == "Alpha");
+    REQUIRE(rig.runtime.plugins() == std::vector<InstanceId>{root});
+    REQUIRE(texts(rig.runtime.drain_output()) == std::vector<std::string>{"alpha 1\n"});
+
+    // Unchanged files do nothing.
+    loader.sync_user(rig.game, rig.runtime, ide::scan_plugins(dir.path));
+    REQUIRE(loader.user()[0].root == root);
+    REQUIRE(rig.runtime.drain_output().lines.empty());
+
+    // A changed file reloads with the new source; the old waiting thread is gone.
+    write_plugin(dir.path, "Alpha", {"print('alpha 2, longer')"});
+    loader.sync_user(rig.game, rig.runtime, ide::scan_plugins(dir.path));
+    REQUIRE_FALSE(rig.game.alive(root));
+    REQUIRE(texts(rig.runtime.drain_output()) == std::vector<std::string>{"alpha 2, longer\n"});
+    rig.frames(2, 200.0);
+    REQUIRE(rig.runtime.drain_output().lines.empty());
+
+    // A removed file unloads.
+    std::filesystem::remove(dir.path / "Alpha.aeplugin");
+    loader.sync_user(rig.game, rig.runtime, ide::scan_plugins(dir.path));
+    REQUIRE(loader.user().empty());
+    REQUIRE(rig.game.get_children(rig.game.core()).empty());
+    REQUIRE(rig.runtime.plugins().empty());
+}
+
+TEST_CASE("PL13 a bad plugin file logs once, leaves Core clean, and loads once fixed", "[PL13]") {
+    ScriptRig rig;
+    TempDir dir;
+    std::filesystem::create_directories(dir.path);
+    std::ofstream(dir.path / "Broken.aeplugin") << R"({"format":"aeinst","vers)";
+    ide::PluginLoader loader;
+    rig.runtime.drain_output();
+
+    loader.sync_user(rig.game, rig.runtime, ide::scan_plugins(dir.path));
+    std::vector<std::string> out = texts(rig.runtime.drain_output());
+    REQUIRE(out.size() == 1);
+    REQUIRE(out[0].find("Plugin \"Broken\" failed to load") != std::string::npos);
+    REQUIRE(rig.game.get_children(rig.game.core()).empty());
+    // Polling again with the same stamp does not repeat the error.
+    loader.sync_user(rig.game, rig.runtime, ide::scan_plugins(dir.path));
+    REQUIRE(rig.runtime.drain_output().lines.empty());
+
+    // A root that is not a Folder is refused too.
+    engine_core::CopiedNode script;
+    script.class_name = "Script";
+    script.name = "Lonely";
+    std::string error;
+    REQUIRE(engine_core::save_instance_file(dir.path / "Lonely.aeplugin", {script}, error));
+    loader.sync_user(rig.game, rig.runtime, ide::scan_plugins(dir.path));
+    out = texts(rig.runtime.drain_output());
+    REQUIRE(out.size() == 1);
+    REQUIRE(out[0].find("Plugin \"Lonely\" failed to load: its root must be one Folder") != std::string::npos);
+    REQUIRE(rig.game.get_children(rig.game.core()).empty());
+
+    // Fixed: it loads.
+    write_plugin(dir.path, "Broken", {"print('fixed')"});
+    loader.sync_user(rig.game, rig.runtime, ide::scan_plugins(dir.path));
+    REQUIRE(texts(rig.runtime.drain_output()) == std::vector<std::string>{"fixed\n"});
+}
+
+TEST_CASE("PL14 plugin file names and the scan order", "[PL14]") {
+    REQUIRE(ide::plugin_file_name("Terrain Tools") == "Terrain Tools");
+    REQUIRE(ide::plugin_file_name("a/b:c*?") == "a_b_c__");
+    REQUIRE(ide::plugin_file_name("trailing. ") == "trailing");
+    REQUIRE(ide::plugin_file_name("") == "Plugin");
+    TempDir dir;
+    write_plugin(dir.path, "Zed", {});
+    write_plugin(dir.path, "Apple", {});
+    std::ofstream(dir.path / "notes.txt") << "x";
+    const std::vector<ide::PluginStamp> stamps = ide::scan_plugins(dir.path);
+    REQUIRE(stamps.size() == 2);
+    REQUIRE(stamps[0].name == "Apple");
+    REQUIRE(stamps[1].name == "Zed");
+    REQUIRE(ide::scan_plugins(dir.path / "missing").empty());
+}
+
+TEST_CASE("PL15 a plugin with no enabled Script still loads, and its tree survives the round trip", "[PL15]") {
+    ScriptRig rig;
+    TempDir dir;
+    engine_core::Folder& source = rig.game.create<engine_core::Folder>();
+    rig.game.set_name(source.id(), "Quiet");
+    rig.game.set_parent(source.id(), workspace_of(rig.game));
+    engine_core::Script& off = add_script(rig.game, source.id(), "Off", "print('off')");
+    off.set_enabled(false);
+    add_folder(rig.game, "Empty", source.id());
+    std::filesystem::create_directories(dir.path);
+    std::string error;
+    REQUIRE(engine_core::save_instance_file(dir.path / "Quiet.aeplugin", {engine_core::copy_tree(rig.game, source.id())},
+                                            error));
+    rig.runtime.drain_output();
+    ide::PluginLoader loader;
+    loader.sync_user(rig.game, rig.runtime, ide::scan_plugins(dir.path));
+    REQUIRE(loader.user().size() == 1);
+    const InstanceId root = loader.user()[0].root;
+    REQUIRE(rig.runtime.is_plugin(root));
+    REQUIRE(rig.runtime.drain_output().lines.empty());
+    REQUIRE(rig.game.find_first_child(root, "Empty") != 0);
+    const auto* loaded = dynamic_cast<engine_core::Script*>(rig.game.instance(rig.game.find_first_child(root, "Off")));
+    REQUIRE(loaded != nullptr);
+    REQUIRE_FALSE(loaded->enabled());
+}
+
+TEST_CASE("PL16 a Folder offers Save as Plugin; other classes do not", "[PL16]") {
+    ScriptRig rig;
+    const InstanceId folder = add_folder(rig.game, "F", workspace_of(rig.game));
+    auto offers = [&](InstanceId id) {
+        std::vector<engine_core::ContextAction> actions;
+        rig.game.instance(id)->context_actions(actions);
+        return std::any_of(actions.begin(), actions.end(), [](const engine_core::ContextAction& action) {
+            return action.action == engine_core::InstanceAction::SaveAsPlugin;
+        });
+    };
+    REQUIRE(offers(folder));
+    REQUIRE(std::string(engine_core::action_label(engine_core::InstanceAction::SaveAsPlugin)) == "Save as Plugin");
+    REQUIRE_FALSE(offers(add_script(rig.game, folder, "S", "").id()));
+}
+
+TEST_CASE("PL17 plugin is one object per plugin, with its Name; Play and Console have none", "[PL17]") {
+    ScriptRig rig;
+    const InstanceId folder = add_folder(rig.game, "Tools", rig.game.core());
+    engine_core::ModuleScript& lib = rig.game.create<engine_core::ModuleScript>();
+    rig.game.set_name(lib.id(), "Lib");
+    lib.set_source("return function() return plugin end");
+    rig.game.set_parent(lib.id(), folder);
+    add_script(rig.game, folder, "A", "_G.pa = plugin print(plugin.Name, tostring(plugin))");
+    add_script(rig.game, folder, "B",
+               "print(plugin == _G.pa, require(script.Parent.Lib)() == plugin)\n"
+               "task.spawn(function() print('spawned', plugin == _G.pa) end)\n"
+               "print(pcall(function() plugin.Name = 'x' end))");
+    rig.runtime.drain_output();
+    REQUIRE(rig.runtime.register_plugin(folder, "ToolsFile"));
+    std::vector<std::string> out = texts(rig.runtime.drain_output());
+    REQUIRE(out.size() == 4);
+    REQUIRE(out[0] == "ToolsFile\tPlugin\n");
+    REQUIRE(out[1] == "true\ttrue\n");
+    REQUIRE(out[2].rfind("false\t", 0) == 0);
+    // What a Script spawns runs after it, as in one pass of a play step.
+    REQUIRE(out[3] == "spawned\ttrue\n");
+
+    rig.runtime.run_chunk("print(plugin)");
+    REQUIRE(texts(rig.runtime.drain_output()) == std::vector<std::string>{"nil\n"});
+    add_script(rig.game, "Play", "print('play', plugin)");
+    rig.game.start_simulation();
+    rig.frames(1);
+    REQUIRE(texts(rig.runtime.drain_output()) == std::vector<std::string>{"play\tnil\n"});
+    rig.game.stop_simulation();
+}
+
+TEST_CASE("PL18 Unloading runs before the plugin's threads stop", "[PL18]") {
+    ScriptRig rig;
+    TempDir dir;
+    write_plugin(dir.path, "Bye", {"plugin.Unloading:Connect(function() print('unloading', plugin.Name) end)"});
+    ide::PluginLoader loader;
+    loader.sync_user(rig.game, rig.runtime, ide::scan_plugins(dir.path));
+    rig.runtime.drain_output();
+    std::filesystem::remove(dir.path / "Bye.aeplugin");
+    loader.sync_user(rig.game, rig.runtime, ide::scan_plugins(dir.path));
+    REQUIRE(texts(rig.runtime.drain_output()) == std::vector<std::string>{"unloading\tBye\n"});
+    REQUIRE(rig.runtime.plugins().empty());
+}
+
+TEST_CASE("PL19 icon paths stay inside icons/", "[PL19]") {
+    REQUIRE(engine_core::plugin_icon_path_ok("icons/Brush.png"));
+    REQUIRE_FALSE(engine_core::plugin_icon_path_ok("Brush.png"));
+    REQUIRE_FALSE(engine_core::plugin_icon_path_ok("icons/../shaders/x.png"));
+    REQUIRE_FALSE(engine_core::plugin_icon_path_ok("icons/"));
+    REQUIRE_FALSE(engine_core::plugin_icon_path_ok("icons\\x.png"));
+}
+
+TEST_CASE("PL20 toolbars and buttons show in PluginUi, and a click fires Click", "[PL20]") {
+    ScriptRig rig;
+    const InstanceId folder = add_folder(rig.game, "Tools", rig.game.core());
+    add_script(rig.game, folder, "Main",
+               "local tb = plugin:CreateToolbar('Terrain Tools')\n"
+               "local b = tb:CreateButton('Smooth', 'Smooth it', 'icons/Brush.png', 'Smooth')\n"
+               "b.Click:Connect(function() print('clicked', b.Name) b:SetActive(true) end)\n"
+               "local ok, err = pcall(function() tb:CreateButton('Smooth', '', '', 'Again') end)\n"
+               "print(ok, string.find(err, 'already') ~= nil)\n"
+               "ok, err = pcall(function() tb:CreateButton('Bad', '', '../x.png', 'Bad') end)\n"
+               "print(ok, string.find(err, 'icons/') ~= nil)\n"
+               "local off = tb:CreateButton('Off', '', '', 'Off') off.Enabled = false\n"
+               "off.Click:Connect(function() print('never') end)\n"
+               "print(off.Enabled, b.Enabled)");
+    rig.runtime.drain_output();
+    const std::uint64_t before = rig.runtime.plugin_ui().revision();
+    REQUIRE(rig.runtime.register_plugin(folder, "Tools"));
+    REQUIRE(texts(rig.runtime.drain_output()) ==
+            std::vector<std::string>{"false\ttrue\n", "false\ttrue\n", "false\ttrue\n"});
+    REQUIRE(rig.runtime.plugin_ui().revision() != before);
+
+    std::vector<engine_core::PluginToolbarState> bars = rig.runtime.plugin_ui().toolbars();
+    REQUIRE(bars.size() == 1);
+    REQUIRE(bars[0].name == "Terrain Tools");
+    REQUIRE(bars[0].plugin == "Tools");
+    REQUIRE(bars[0].buttons.size() == 2);
+    REQUIRE(bars[0].buttons[0].icon == "icons/Brush.png");
+    REQUIRE(bars[0].buttons[0].tooltip == "Smooth it");
+    REQUIRE_FALSE(bars[0].buttons[1].enabled);
+
+    REQUIRE(rig.runtime.plugin_ui().click(bars[0].buttons[0].id));
+    REQUIRE_FALSE(rig.runtime.plugin_ui().click(bars[0].buttons[1].id));
+    rig.game.events().drain();
+    REQUIRE(texts(rig.runtime.drain_output()) == std::vector<std::string>{"clicked\tSmooth\n"});
+    REQUIRE(rig.runtime.plugin_ui().toolbars()[0].buttons[0].active);
+
+    REQUIRE(rig.runtime.unregister_plugin(folder));
+    REQUIRE(rig.runtime.plugin_ui().toolbars().empty());
+}
+
+TEST_CASE("PL21 two plugins with one toolbar name keep two groups, each going with its plugin", "[PL21]") {
+    ScriptRig rig;
+    const InstanceId a = add_folder(rig.game, "A", rig.game.core());
+    add_script(rig.game, a, "M", "plugin:CreateToolbar('Tools'):CreateButton('x', '', '', 'X')");
+    const InstanceId b = add_folder(rig.game, "B", rig.game.core());
+    add_script(rig.game, b, "M", "plugin:CreateToolbar('Tools'):CreateButton('y', '', '', 'Y')");
+    REQUIRE(rig.runtime.register_plugin(b, "B"));
+    REQUIRE(rig.runtime.register_plugin(a, "A"));
+    std::vector<engine_core::PluginToolbarState> bars = rig.runtime.plugin_ui().toolbars();
+    REQUIRE(bars.size() == 2);
+    // By plugin name, not by the order they registered.
+    REQUIRE(bars[0].plugin == "A");
+    REQUIRE(rig.runtime.unregister_plugin(a));
+    bars = rig.runtime.plugin_ui().toolbars();
+    REQUIRE(bars.size() == 1);
+    REQUIRE(bars[0].plugin == "B");
+}
+
+TEST_CASE("PL22 CreateDockWidget makes a DockWidget under the plugin, once per id", "[PL22]") {
+    ScriptRig rig;
+    const InstanceId folder = add_folder(rig.game, "Tools", rig.game.core());
+    add_script(rig.game, folder, "Main",
+               "local w = plugin:CreateDockWidget('Panel', {Title = 'Terrain', InitialDock = 'Bottom', Enabled = true,"
+               " Width = 250, Height = 120})\n"
+               "print(w.ClassName, w.Parent == script.Parent, w.Title, w.Enabled)\n"
+               "local d = plugin:CreateDockWidget('Plain')\n"
+               "print(d.Title, d.Enabled)\n"
+               "print(pcall(function() plugin:CreateDockWidget('Panel') end))\n"
+               "print(pcall(function() plugin:CreateDockWidget('X', {InitialDock = 'Up'}) end))\n"
+               "print(pcall(function() Instance.new('DockWidget') end))\n"
+               "w.Enabled = false print(w.Enabled)");
+    rig.runtime.drain_output();
+    REQUIRE(rig.runtime.register_plugin(folder, "Tools"));
+    const std::vector<std::string> out = texts(rig.runtime.drain_output());
+    REQUIRE(out.size() == 6);
+    REQUIRE(out[0] == "DockWidget\ttrue\tTerrain\ttrue\n");
+    REQUIRE(out[1] == "Plain\tfalse\n");
+    REQUIRE(out[2].rfind("false\t", 0) == 0);
+    REQUIRE(out[2].find("already") != std::string::npos);
+    REQUIRE(out[3].find("InitialDock") != std::string::npos);
+    REQUIRE(out[4].rfind("false\t", 0) == 0);
+    REQUIRE(out[5] == "false\n");
+    // The refused InitialDock left nothing behind.
+    REQUIRE(rig.game.find_first_child(folder, "X") == 0);
+
+    const InstanceId panel = rig.game.find_first_child(folder, "Panel");
+    const auto* widget = dynamic_cast<const engine_core::DockWidget*>(rig.game.instance(panel));
+    REQUIRE(widget != nullptr);
+    REQUIRE(widget->pane_name() == "plugin:Tools/Panel");
+    REQUIRE(widget->initial_dock == engine_core::DockSide::Bottom);
+    REQUIRE(widget->width == 250);
+    REQUIRE(widget->height == 120);
+    REQUIRE_FALSE(widget->enabled());
+}
+
+TEST_CASE("PL23 a BillboardGui inside a DockWidget is not drawn in the world", "[PL23]") {
+    ScriptRig rig;
+    const InstanceId folder = add_folder(rig.game, "Tools", rig.game.core());
+    add_script(rig.game, folder, "Main",
+               "local w = plugin:CreateDockWidget('Panel')\n"
+               "local b = Instance.new('BillboardGui') b.Name = 'Board' b.Parent = w");
+    REQUIRE(rig.runtime.register_plugin(folder, "Tools"));
+    const InstanceId board = rig.game.find_first_child(rig.game.find_first_child(folder, "Panel"), "Board");
+    const auto* gui = dynamic_cast<const engine_core::BillboardGui*>(rig.game.instance(board));
+    REQUIRE(gui != nullptr);
+    REQUIRE_FALSE(gui->drawn());
+}
+
+TEST_CASE("PL24 a user plugin may not take a built-in plugin's name", "[PL24]") {
+    ScriptRig rig;
+    ide::PluginLoader loader;
+    loader.load(rig.game, rig.runtime, {ide::PluginFile{"SceneTool", "print('built-in')"}});
+    TempDir dir;
+    write_plugin(dir.path, "SceneTool", {"print('user copy')"});
+    rig.runtime.drain_output();
+    loader.sync_user(rig.game, rig.runtime, ide::scan_plugins(dir.path));
+    const std::vector<std::string> out = texts(rig.runtime.drain_output());
+    REQUIRE(out.size() == 1);
+    REQUIRE(out[0].find("Plugin \"SceneTool\" failed to load: a built-in plugin has that name") != std::string::npos);
+    REQUIRE(rig.runtime.plugins().size() == 1);
+}
+
+TEST_CASE("PL25 InitialDock Center opens a dock widget in the middle dock", "[PL25]") {
+    ScriptRig rig;
+    const InstanceId folder = add_folder(rig.game, "Tools", rig.game.core());
+    add_script(rig.game, folder, "Main", "plugin:CreateDockWidget('Mid', {InitialDock = 'Center'})");
+    REQUIRE(rig.runtime.register_plugin(folder, "Tools"));
+    const auto* widget =
+        dynamic_cast<const engine_core::DockWidget*>(rig.game.instance(rig.game.find_first_child(folder, "Mid")));
+    REQUIRE(widget != nullptr);
+    REQUIRE(widget->initial_dock == engine_core::DockSide::Center);
 }

@@ -96,6 +96,7 @@ set(STUDIO_SOURCES
     src/runner/ProfilerOverlay.cpp
     src/runner/UiFrameProfile.cpp
     src/runner/GuiLayer.cpp
+    src/runner/GuiTree.cpp
     src/ide/IdePane.cpp
     src/ide/IdeDock.cpp
     src/ide/DockArrange.cpp
@@ -127,6 +128,8 @@ set(STUDIO_SOURCES
     src/ide/IdeTheme.cpp
     src/ide/EditorFont.cpp
     src/ide/IdeLayout.cpp
+    src/ide/PluginRibbon.cpp
+    src/ide/PluginWidgetPane.cpp
     src/ide/IdeLayoutDocking.cpp
     src/ide/IdeLayoutEditing.cpp
     src/ide/IdeLayoutMcp.cpp
@@ -609,11 +612,14 @@ add_library(engine_core STATIC
     src/engine_core/Engine.cpp
     src/engine_core/LuaEngine.cpp
     src/engine_core/LuaApi.cpp
+    src/engine_core/InstanceFile.cpp
     src/engine_core/PropertyReflection.cpp
     src/engine_core/InstanceRef.cpp
     src/engine_core/LuaReflect.cpp
     src/engine_core/ScriptBindings.cpp
     src/engine_core/RaycastBindings.cpp
+    src/engine_core/PluginBindings.cpp
+    src/engine_core/PluginUi.cpp
     src/engine_core/TerrainBindings.cpp
     src/engine_core/ScriptRuntime.cpp
     src/engine_core/TableSnapshot.cpp
@@ -788,6 +794,8 @@ add_executable(studio-tests
     tests/BillboardLayerTest.cpp
     tests/ProfilerOverlayTest.cpp
     tests/UiFrameProfileTest.cpp
+    tests/PluginsTest.cpp
+    tests/GuiTreeTest.cpp
 )
 target_link_libraries(studio-tests PRIVATE studio)
 
@@ -959,6 +967,7 @@ add_executable(sandbox
     sandbox/mesh_shapes_tests.cpp
     sandbox/matrix4_tests.cpp
     sandbox/plugin_tests.cpp
+    sandbox/instance_file_tests.cpp
     sandbox/camera_tests.cpp
     sandbox/light_tests.cpp
     sandbox/skybox_tests.cpp

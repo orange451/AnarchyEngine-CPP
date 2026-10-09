@@ -219,6 +219,39 @@ void emit_signal_types(std::ostringstream& out, const std::vector<SignalType>& s
     }
 }
 
+// The plugin global and what it makes, which are host objects, not registered
+// classes (PluginBindings.cpp). Only a plugin's scripts have plugin at run time,
+// but the checker cannot tell a plugin's Script from another, so it is declared
+// for every script, as Roblox's is.
+void emit_plugin(std::ostringstream& out) {
+    if (!lua_class_known("Signal") || !lua_class_known("Connection") || !lua_class_known("DockWidget")) {
+        return;
+    }
+    out << "declare extern type Signal_Plugin with\n"
+           "    function Connect(self, callback: () -> ()): Connection\n"
+           "    function Wait(self): ()\n"
+           "end\n\n"
+           "declare extern type PluginToolbarButton with\n"
+           "    Name: string\n"
+           "    Enabled: boolean\n"
+           "    Click: Signal_Plugin\n"
+           "    function SetActive(self, active: boolean): ()\n"
+           "end\n\n"
+           "declare extern type PluginToolbar with\n"
+           "    function CreateButton(self, id: string, tooltip: string?, icon: string?, text: string?): "
+           "PluginToolbarButton\n"
+           "end\n\n"
+           "declare extern type Plugin with\n"
+           "    Name: string\n"
+           "    Unloading: Signal_Plugin\n"
+           "    function CreateToolbar(self, name: string): PluginToolbar\n"
+           "    function CreateDockWidget(self, id: string, options: {Title: string?, InitialDock: string?, "
+           "Enabled: boolean?, Width: number?, Height: number?, MinWidth: number?, MinHeight: number?}?): "
+           "DockWidget\n"
+           "end\n\n"
+           "declare plugin: Plugin\n";
+}
+
 void emit_class(std::ostringstream& out, const std::string& name, std::vector<SignalType>& signals) {
     if (name == "Vector3" || !identifier(name)) {
         return;
@@ -402,6 +435,7 @@ std::string lua_analysis_definitions() {
     if (lua_class_known("Script") && lua_class_known("ModuleScript")) {
         out << "declare script: Script | ModuleScript\n";
     }
+    emit_plugin(out);
     out << "\n";
 
     for (const std::string& name : names) {

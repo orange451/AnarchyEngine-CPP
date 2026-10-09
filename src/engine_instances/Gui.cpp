@@ -49,6 +49,8 @@ constexpr GuiSpec kSpecs[] = {
     {"AlwaysOnTop", "boolean", LuaSlot::Kind::Bool, 0, 0},
     {"ImageTransparency", "number", LuaSlot::Kind::Number, 0, 1},
     {"TextScaled", "boolean", LuaSlot::Kind::Bool, 0, 0},
+    {"Title", "string", LuaSlot::Kind::String, 0, 0},
+    {"Enabled", "boolean", LuaSlot::Kind::Bool, 0, 0},
 };
 static_assert(std::size(kSpecs) == static_cast<std::size_t>(GuiProperty::Count), "a GuiProperty has no spec");
 
@@ -139,8 +141,11 @@ LuaSlot GuiValues::default_value(GuiProperty property, const char* class_name) {
         return string_slot("Prompt");
     case GuiProperty::Source:
         return string_slot(kDefaultCss);
+    case GuiProperty::Title:
+        return string_slot("");
     case GuiProperty::AlwaysOnTop:
     case GuiProperty::TextScaled:
+    case GuiProperty::WidgetEnabled:
         return bool_slot(false);
     case GuiProperty::Count:
         break;
@@ -371,6 +376,34 @@ Css::Css(DataModel::ChildTag tag, DataModel::State& state, InstanceId id) : GuiV
 
 const char* Css::class_name() const { return "CSS"; }
 
+DockWidget::DockWidget(DataModel::ChildTag tag, DataModel::State& state, InstanceId id) : GuiBase(tag, state, id) {
+    reset_values();
+}
+
+const char* DockWidget::class_name() const { return "DockWidget"; }
+
+void DockWidget::set_origin(std::string plugin, std::string key) {
+    plugin_ = std::move(plugin);
+    key_ = std::move(key);
+}
+
+std::string DockWidget::pane_name() const { return "plugin:" + plugin_ + "/" + key_; }
+
+void DockWidget::set_title(std::string title) { set_value(GuiProperty::Title, string_slot(std::move(title))); }
+
+void DockWidget::set_enabled(bool enabled) { set_value(GuiProperty::WidgetEnabled, bool_slot(enabled)); }
+
+void DockWidget::on_reuse() {
+    GuiValues::on_reuse();
+    plugin_.clear();
+    key_.clear();
+    initial_dock = DockSide::TopRight;
+    width = 300;
+    height = 400;
+    min_width = 0;
+    min_height = 0;
+}
+
 void Css::context_actions(std::vector<ContextAction>& out) const {
     out.push_back(ContextAction{InstanceAction::Edit, true});
     DataModel::context_actions(out);
@@ -536,14 +569,19 @@ ANARCHY_LUA_REGISTER(register_gui_lua) {
     const LuaField css[] = {gui_field<GuiProperty::Source>("CSS")};
     add_class("CSS", "Instance", css);
 
+    // Made only by plugin:CreateDockWidget, never by Instance.new.
+    const LuaField dock[] = {gui_field<GuiProperty::Title>("DockWidget"),
+                             gui_field<GuiProperty::WidgetEnabled>("DockWidget")};
+    add_class("DockWidget", "GuiBase", dock);
+
     // A ScreenGui goes only in Gui, a BillboardGui in Workspace or on a
     // PVInstance. Panes and controls go in either, or a pane; a control holds
     // no GUI of its own. CSS styles Gui or any GUI.
     register_suited_parents("ScreenGui", {"Gui"});
     register_suited_parents("BillboardGui", {"Workspace", "PVInstance"});
-    register_suited_parents("GuiBasePane", {"ScreenGui", "BillboardGui", "GuiBasePane"});
+    register_suited_parents("GuiBasePane", {"ScreenGui", "BillboardGui", "GuiBasePane", "DockWidget"});
     for (const char* control : {"Label", "Button", "TextField"}) {
-        register_suited_parents(control, {"ScreenGui", "BillboardGui", "GuiBasePane"});
+        register_suited_parents(control, {"ScreenGui", "BillboardGui", "GuiBasePane", "DockWidget"});
     }
     register_suited_parents("CSS", {"Gui", "GuiBase"});
 }

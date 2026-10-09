@@ -714,6 +714,8 @@ Signal& ScriptBindings::signal_of(lua_State* state, ScriptRuntime& runtime, cons
         signal = runtime.game_->input().signal(static_cast<UserInputService::Kind>(ud.phase));
     } else if (ud.kind == kSignalHost) {
         signal = runtime.host_signal(static_cast<HostSignal>(ud.phase));
+    } else if (ud.kind == kSignalPlugin) {
+        signal = runtime.plugin_ui().signal(ud.id);
     } else {
         signal = runtime.run_service_.signal(static_cast<Phase>(ud.phase));
     }
@@ -740,6 +742,9 @@ const char* ScriptBindings::signal_cause(const SignalUd& ud) {
     }
     if (ud.kind == kSignalHost) {
         return ud.phase >= 0 && ud.phase < 7 ? kHost[ud.phase] : "event";
+    }
+    if (ud.kind == kSignalPlugin) {
+        return ud.event_name != nullptr ? ud.event_name : "event";
     }
     return ud.phase >= 0 && ud.phase < kPhaseCount ? kPhases[ud.phase] : "event";
 }
@@ -783,7 +788,7 @@ int ScriptBindings::signal_connect(lua_State* state) {
             if (kind == kSignalChanged) {
                 runtime->invoke_listener(owner, held->ref, script, generation, cause,
                                          changed_name(field, runtime->game_->events().payload()), false, 0);
-            } else if (kind == kSignalInput || kind == kSignalEvent || kind == kSignalHost) {
+            } else if (kind == kSignalInput || kind == kSignalEvent || kind == kSignalHost || kind == kSignalPlugin) {
                 runtime->invoke_listener_args(owner, held->ref, script, generation, cause,
                                               runtime->game_->events().current_args());
             } else {
@@ -849,7 +854,7 @@ int ScriptBindings::signal_wait(lua_State* state) {
             runtime->guarded(*waiting->vm, [&] {
                 if (kind == kSignalChanged) {
                     runtime->make_ready(*waiting, changed_name(field, runtime->game_->events().payload()));
-                } else if (kind == kSignalInput || kind == kSignalEvent || kind == kSignalHost) {
+                } else if (kind == kSignalInput || kind == kSignalEvent || kind == kSignalHost || kind == kSignalPlugin) {
                     runtime->make_ready_args(*waiting, runtime->game_->events().current_args());
                 } else if (runtime->in_render_window_) {
                     runtime->resume_waiting_now(*waiting, runtime->run_service_.dt(phase));

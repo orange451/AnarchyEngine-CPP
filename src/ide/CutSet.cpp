@@ -126,99 +126,12 @@ engine_core::InstanceId add_prefab_instance(engine_core::DataModel& world, engin
     return object.id();
 }
 
-namespace {
-
-CopiedNode copy_node(const engine_core::DataModel& game, engine_core::InstanceId id) {
-    CopiedNode node;
-    const engine_core::DataModel* object = game.instance(id);
-    if (object == nullptr) {
-        return node;
-    }
-    node.class_name = object->class_name();
-    node.name = game.name(id);
-    object->save_properties(node.properties);
-    for (const engine_core::JsonValue::Member& member : game.extra_properties(id)) {
-        engine_core::bag_set(node.properties, member.first, member.second);
-    }
-    if (const auto* lua = dynamic_cast<const engine_core::LuaSource*>(object)) {
-        node.has_source = true;
-        node.source = lua->source();
-    }
-    for (engine_core::InstanceId child = game.first_child(id); child != 0; child = game.next_sibling(child)) {
-        node.children.push_back(copy_node(game, child));
-    }
-    return node;
-}
-
-engine_core::InstanceId build_copy(engine_core::DataModel& world, const CopiedNode& node, engine_core::InstanceId parent,
-                                   std::string* refused) {
-    const auto refuse = [refused](std::string reason) {
-        if (refused != nullptr && refused->empty()) {
-            *refused = std::move(reason);
-        }
-    };
-    if (world.room_left() == 0) {
-        refuse(engine_core::InstanceCapacityError().what());
-        return 0;
-    }
-    engine_core::DataModel* made = engine_core::lua_create_instance(world, node.class_name.c_str());
-    if (made == nullptr) {
-        refuse(node.class_name + " can't be copied.");
-        return 0;
-    }
-    const engine_core::InstanceId id = made->id();
-    for (const engine_core::JsonValue::Member& member : node.properties) {
-        std::string error;
-        if (!made->load_property(member.first, member.second, error) && error.empty()) {
-            world.set_extra_property(id, member.first, member.second);
-        }
-    }
-    if (node.has_source) {
-        if (auto* lua = dynamic_cast<engine_core::LuaSource*>(made)) {
-            lua->set_source(node.source);
-        }
-    }
-    if (!world.rename_error(id, node.name)) {
-        world.set_name(id, node.name);
-    }
-    if (std::optional<std::string> error = world.parent_error(id, parent)) {
-        refuse(std::move(*error));
-        world.destroy_tree(id);
-        return 0;
-    }
-    world.set_parent(id, parent);
-    for (const CopiedNode& child : node.children) {
-        build_copy(world, child, id, refused);
-    }
-    return id;
-}
-
-}  // namespace
-
 std::vector<CopiedNode> copy_set(const engine_core::DataModel& game, const std::vector<engine_core::InstanceId>& ids) {
     std::vector<CopiedNode> out;
     for (engine_core::InstanceId id : cut_set(game, ids)) {
-        out.push_back(copy_node(game, id));
+        out.push_back(engine_core::copy_tree(game, id));
     }
     return out;
-}
-
-bool paste_copies(engine_core::DataModel& world, const std::vector<CopiedNode>& roots, engine_core::InstanceId parent,
-                  std::vector<engine_core::InstanceId>* made, std::string* refused) {
-    if (parent == engine_core::DataModel::kNoParent || (parent != 0 && !world.alive(parent))) {
-        return false;
-    }
-    bool any = false;
-    for (const CopiedNode& root : roots) {
-        const engine_core::InstanceId id = build_copy(world, root, parent, refused);
-        if (id != 0) {
-            any = true;
-            if (made != nullptr) {
-                made->push_back(id);
-            }
-        }
-    }
-    return any;
 }
 
 }  // namespace ide

@@ -11,6 +11,7 @@
 #include "Terrain.hpp"
 #include "TerrainWorld.hpp"
 #include "amesh.hpp"
+#include "terrain/AlodStore.hpp"
 #include "terrain/LodBuilder.hpp"
 #include "terrain/LodNode.hpp"
 #include "terrain/LodTree.hpp"
@@ -26,6 +27,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <filesystem>
 #include <functional>
 #include <memory>
 #include <stdexcept>
@@ -113,6 +115,8 @@ struct TreeRig {
     std::unordered_map<NodeKey, int, NodeKeyHash> builds;   // accepted builds per node
     int chunk_jobs = 0;                                     // residency re-meshes asked for
     int drops = 0;
+    AlodStore* store = nullptr;   // where step() reads the nodes the tree asks to load
+    int loads = 0;
 
     explicit TreeRig(float voxel_size = 1.f, MeshChunk mesher = fake_chunk_mesh, BuildNode builder = fake_build)
         : tree(voxel_size), mesh_chunk(std::move(mesher)), build(std::move(builder)) {}
@@ -136,6 +140,10 @@ struct TreeRig {
         chunk_jobs += static_cast<int>(needed.size());
         for (const ChunkCoord& c : needed) tree.chunk_queued(c, false);
         for (const ChunkCoord& c : needed) tree.chunk_meshed(c, mesh_chunk(c), false);
+        std::vector<NodeKey> to_load;
+        tree.take_loads(to_load);
+        for (const NodeKey& key : to_load) tree.node_loaded(key, store != nullptr ? store->load(key) : nullptr);
+        loads += static_cast<int>(to_load.size());
         std::vector<NodeBuildRequest> requests;
         tree.next_builds(now, camera, requests);
         for (NodeBuildRequest& request : requests) {
@@ -146,7 +154,7 @@ struct TreeRig {
             tree.node_built(result);
             ++builds[request.input.key];
         }
-        return !dropped.empty() || !needed.empty() || !requests.empty();
+        return !dropped.empty() || !needed.empty() || !requests.empty() || !to_load.empty();
     }
 
     // Steps until nothing more is asked for, advancing the clock past the
@@ -1470,4 +1478,140 @@ TEST_CASE("LB12 one edit's chunks landing in a settled 16,384-chunk tree take we
                                                        << " ms at worst");
     REQUIRE(rig.tree.top_level() == 7);
     REQUIRE(total_ms / kEdits < 0.5);
+}
+
+// ---- Terrain streaming, Task 5: far nodes persist, evict, reload ----
+
+namespace {
+
+constexpr int kSheet = 64;   // a 64 x 1 x 64 chunk sheet
+
+struct StoreFile {
+    std::filesystem::path path;
+    explicit StoreFile(const char* name) : path(std::filesystem::temp_directory_path() / name) {
+        std::error_code error;
+        std::filesystem::remove(path, error);
+    }
+    ~StoreFile() {
+        std::error_code error;
+        std::filesystem::remove(path, error);
+    }
+};
+
+// A sheet built with the camera at its corner, persisted to store.
+void build_sheet(TreeRig& rig, AlodStore* store) {
+    rig.store = store;
+    rig.tree.attach_store(store);
+    rig.look_from(ChunkCoord{0, 0, 0});
+    rig.edit(island_chunks(kSheet));
+    rig.settle();
+}
+
+bool has_resident_ancestor(const LodTree& tree, NodeKey key, int top) {
+    while (key.level < top) {
+        key = parent_of(key);
+        const LodTree::Node* node = tree.find(key);
+        if (node != nullptr && node->resident) return true;
+    }
+    return false;
+}
+
+}  // namespace
+
+TEST_CASE("LR1 far nodes leave RAM once persisted", "[terrain][lod]") {
+    StoreFile file("lr1.alod");
+    std::optional<AlodStore> store = AlodStore::create(file.path, 1u, 1.f);
+    REQUIRE(store);
+    TreeRig streamed;
+    build_sheet(streamed, &*store);
+    TreeRig resident;
+    build_sheet(resident, nullptr);
+    REQUIRE(streamed.tree.compact_bytes() < resident.tree.compact_bytes());
+    int evicted = 0;
+    for (const auto& [key, node] : streamed.tree.nodes()) {
+        if (key.level >= 2 && node.built && !node.resident) ++evicted;
+    }
+    REQUIRE(evicted > 0);
+    // Nothing is evicted without a store to read it back from.
+    for (const auto& [key, node] : resident.tree.nodes()) {
+        if (key.level >= 2) REQUIRE(node.resident);
+    }
+}
+
+TEST_CASE("LR2 an evicted node always has a resident ancestor, and the top never leaves", "[terrain][lod]") {
+    StoreFile file("lr2.alod");
+    std::optional<AlodStore> store = AlodStore::create(file.path, 1u, 1.f);
+    TreeRig rig;
+    build_sheet(rig, &*store);
+    const int top = rig.tree.top_level();
+    for (const auto& [key, node] : rig.tree.nodes()) {
+        if (key.level == top) REQUIRE(node.resident);
+        if (key.level >= 2 && node.built && !node.resident) REQUIRE(has_resident_ancestor(rig.tree, key, top));
+    }
+}
+
+TEST_CASE("LR3 flying to the far corner reloads the nodes there", "[terrain][lod]") {
+    StoreFile file("lr3.alod");
+    std::optional<AlodStore> store = AlodStore::create(file.path, 1u, 1.f);
+    TreeRig rig;
+    build_sheet(rig, &*store);
+    const NodeKey far_corner = node_of(ChunkCoord{kSheet - 1, 0, kSheet - 1}, 2);
+    REQUIRE_FALSE(rig.tree.find(far_corner)->resident);
+    const int builds_before = static_cast<int>(rig.builds.size());
+    rig.look_from(ChunkCoord{kSheet - 1, 0, kSheet - 1});
+    rig.settle();
+    REQUIRE(rig.loads > 0);
+    REQUIRE(rig.tree.find(far_corner)->resident);
+    REQUIRE(find_view(rig.tree.nodes_for_view(), far_corner) != nullptr);
+    // Read back, not rebuilt.
+    REQUIRE(static_cast<int>(rig.builds.size()) == builds_before);
+    // And the corner it left is out of RAM again.
+    REQUIRE_FALSE(rig.tree.find(node_of(ChunkCoord{0, 0, 0}, 2))->resident);
+}
+
+TEST_CASE("LR4 a tree adopted from a store meshes only the chunks near the camera", "[terrain][lod]") {
+    StoreFile file("lr4.alod");
+    {
+        std::optional<AlodStore> store = AlodStore::create(file.path, 1u, 1.f);
+        TreeRig rig;
+        build_sheet(rig, &*store);
+        store->set_surface_chunks(rig.tree.surface_chunks());
+        REQUIRE(store->commit());
+    }
+    std::optional<AlodStore> store = AlodStore::open(file.path, 1u, 1.f);
+    REQUIRE(store);
+    TreeRig rig;
+    rig.store = &*store;
+    rig.tree.attach_store(&*store);
+    rig.tree.adopt_store();
+    rig.look_from(ChunkCoord{0, 0, 0});
+    rig.settle();
+    // Chunks within kNearChunks, rounded out to whole level-1 nodes.
+    const int reach = 2 * (kNearChunks + 2) + 1;
+    REQUIRE(rig.chunk_jobs > 0);
+    REQUIRE(rig.chunk_jobs <= reach * reach);
+    const std::vector<TerrainNodeView> views = rig.tree.nodes_for_view();
+    REQUIRE(count_level(views, rig.tree.top_level()) > 0);
+    REQUIRE(count_level(views, 0) > 0);
+    // No level >= 2 node was rebuilt: they all came from the store.
+    for (const auto& [key, count] : rig.builds) {
+        (void)count;
+        REQUIRE(key.level < 2);
+    }
+}
+
+TEST_CASE("LR5 an edited region stays in RAM until rebuilt and persisted again", "[terrain][lod]") {
+    StoreFile file("lr5.alod");
+    std::optional<AlodStore> store = AlodStore::create(file.path, 1u, 1.f);
+    TreeRig rig;
+    build_sheet(rig, &*store);
+    const ChunkCoord far_chunk{kSheet - 2, 0, kSheet - 2};
+    const NodeKey far_node = node_of(far_chunk, 2);
+    REQUIRE(rig.tree.find(far_node)->persisted);
+    rig.tree.chunk_queued(far_chunk, true);
+    REQUIRE_FALSE(rig.tree.find(far_node)->persisted);
+    rig.tree.chunk_meshed(far_chunk, fake_chunk_mesh(far_chunk), true);
+    rig.settle();
+    REQUIRE(rig.tree.find(far_node)->persisted);
+    REQUIRE(rig.builds.at(far_node) >= 2);
 }

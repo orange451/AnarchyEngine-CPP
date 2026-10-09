@@ -71,6 +71,14 @@ inline constexpr int kNearChunks = 6;
 inline constexpr int kFarChunks = 8;
 // A stale node is queued for a rebuild at most once per this many ms.
 inline constexpr double kRebuildIntervalMs = 100.0;
+// With a store attached, a level >= 2 node is kept in RAM within this many
+// nodes of the camera at its own level (L-infinity, in that level's node
+// spans), and dropped beyond kFarRingNodes + 2 once the store holds its
+// current build. Nodes per level stay about constant however big the
+// Terrain is. The top level never leaves.
+inline constexpr int kFarRingNodes = 4;
+
+class AlodStore;
 
 // A node build next_builds asks for. input.voxels is left null: the caller
 // fills in its chunk-map snapshot (spec decision 4). revision goes back with
@@ -138,6 +146,25 @@ public:
     // camera_chunk first within a level. Marks each queued.
     void next_builds(double now_ms, const ChunkCoord* camera_chunk, std::vector<NodeBuildRequest>& out);
 
+    // Far nodes (level >= 2) are written to store as they build, and from
+    // then on may leave RAM (see kFarRingNodes). Null: every node stays.
+    // The store must outlive the tree or be detached first.
+    void attach_store(AlodStore* store) { store_ = store; }
+    // A warm start, on a tree with no nodes yet: every node the store holds,
+    // built and current but not in RAM, a level-1 node over each of its
+    // surface chunks (built, not in RAM), and a level-0 node per surface
+    // chunk with no mesh. update_residency then asks for what is near.
+    void adopt_store();
+    // Level >= 2 nodes update_residency wants read back from the store;
+    // the caller reads each and hands it to node_loaded.
+    void take_loads(std::vector<NodeKey>& out);
+    // key's mesh as the store had it (null: unreadable, so it is rebuilt).
+    void node_loaded(const NodeKey& key, std::shared_ptr<const CompactMesh> mesh);
+    // Bytes of the level >= 1 meshes in RAM.
+    std::size_t compact_bytes() const;
+    // Every level-0 chunk with surface, for the store's next commit.
+    std::vector<ChunkCoord> surface_chunks() const;
+
     // Every resident node with a mesh: level 0 with its chunk mesh, levels
     // >= 1 with their shared compact mesh (R12: nothing is unpacked here).
     std::vector<TerrainNodeView> nodes_for_view();
@@ -170,6 +197,10 @@ public:
         double last_build_ms = -std::numeric_limits<double>::infinity();
         bool built = false;
         bool resident = false;   // compact holds the mesh
+        // Level >= 2: the store holds this build, so compact may be dropped
+        // and read back. Cleared when the node goes stale.
+        bool persisted = false;
+        bool loading = false;    // asked for through take_loads, not landed
         std::shared_ptr<const CompactMesh> compact;   // shared with each TerrainNodeView of this build
         float error = 0.f;
         bool stale() const { return built_revision != revision; }
@@ -199,7 +230,13 @@ private:
     // erased node's mesh was part of it).
     void prune_up(const NodeKey& key, bool had_surface);
 
+    // update_residency's pass over levels >= 2: evicts persisted far nodes
+    // and asks for wanted ones back.
+    void update_far_residency(const ChunkCoord* camera_chunk);
+
     float voxel_size_;
+    AlodStore* store_ = nullptr;
+    std::vector<NodeKey> loads_;
     std::uint64_t own_revisions_ = 0;
     std::uint64_t* revisions_;
     std::unordered_map<NodeKey, Node, NodeKeyHash> nodes_;   // every level, level 0 included

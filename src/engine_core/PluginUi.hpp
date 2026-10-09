@@ -118,7 +118,7 @@ public:
     Signal* signal(std::uint32_t key);
     // Moves at every change to what toolbars() returns.
     std::uint64_t revision() const { return revision_; }
-    // The built-ins' toolbars, then the user plugins', by plugin name, each
+    // The built-ins' toolbars in the order they loaded, then the user plugins' by plugin name, each
     // plugin's in the order it made them.
     std::vector<PluginToolbarState> toolbars() const;
 

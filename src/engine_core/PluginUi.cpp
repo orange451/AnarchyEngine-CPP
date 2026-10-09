@@ -278,7 +278,10 @@ std::vector<PluginToolbarState> PluginUi::toolbars() const {
     auto rank = [this](const Toolbar* toolbar) {
         const auto plugin = plugins_.find(toolbar->serial);
         const bool builtin = plugin != plugins_.end() && plugin->second.builtin;
-        return std::make_tuple(builtin ? 0 : 1, toolbar->state.plugin, toolbar->serial, toolbar->state.id);
+        // The built-ins in the order they loaded, which is the studio's own list; the
+        // user's plugins by name, so a reload keeps a plugin's place.
+        return std::make_tuple(builtin ? 0 : 1, builtin ? std::string() : toolbar->state.plugin, toolbar->serial,
+                               toolbar->state.id);
     };
     std::stable_sort(order.begin(), order.end(),
                      [&](const Toolbar* a, const Toolbar* b) { return rank(a) < rank(b); });

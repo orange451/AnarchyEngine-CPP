@@ -834,3 +834,22 @@ TEST_CASE("PL27 the active plugin's mouse hears the Scene View", "[PL27]") {
             std::vector<std::string>{"down\t40\t30\ttrue\tfalse\tfalse\t-1\t-1000\tnil\n", "move\t41\n", "up\n",
                                      "wheel\n"});
 }
+
+TEST_CASE("PL28 built-in toolbars keep the order the built-ins load in; user plugins' go by name", "[PL28]") {
+    ScriptRig rig;
+    ide::PluginLoader loader;
+    loader.load(rig.game, rig.runtime,
+                {ide::PluginFile{"Zebra", "plugin:CreateToolbar('Z'):CreateButton('z', '', '', 'Z')"},
+                 ide::PluginFile{"Apple", "plugin:CreateToolbar('A'):CreateButton('a', '', '', 'A')"}});
+    const InstanceId later = add_folder(rig.game, "User B", rig.game.core());
+    add_script(rig.game, later, "M", "plugin:CreateToolbar('UB'):CreateButton('b', '', '', 'B')");
+    const InstanceId first = add_folder(rig.game, "User A", rig.game.core());
+    add_script(rig.game, first, "M", "plugin:CreateToolbar('UA'):CreateButton('a', '', '', 'A')");
+    REQUIRE(rig.runtime.register_plugin(later, "User B"));
+    REQUIRE(rig.runtime.register_plugin(first, "User A"));
+    std::vector<std::string> names;
+    for (const engine_core::PluginToolbarState& bar : rig.runtime.plugin_ui().toolbars()) {
+        names.push_back(bar.name);
+    }
+    REQUIRE(names == std::vector<std::string>{"Z", "A", "UA", "UB"});
+}

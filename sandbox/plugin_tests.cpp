@@ -609,3 +609,61 @@ TEST_CASE("PL19 icon paths stay inside icons/", "[PL19]") {
     REQUIRE_FALSE(engine_core::plugin_icon_path_ok("icons/"));
     REQUIRE_FALSE(engine_core::plugin_icon_path_ok("icons\\x.png"));
 }
+
+TEST_CASE("PL20 toolbars and buttons show in PluginUi, and a click fires Click", "[PL20]") {
+    ScriptRig rig;
+    const InstanceId folder = add_folder(rig.game, "Tools", rig.game.core());
+    add_script(rig.game, folder, "Main",
+               "local tb = plugin:CreateToolbar('Terrain Tools')\n"
+               "local b = tb:CreateButton('Smooth', 'Smooth it', 'icons/Brush.png', 'Smooth')\n"
+               "b.Click:Connect(function() print('clicked', b.Name) b:SetActive(true) end)\n"
+               "local ok, err = pcall(function() tb:CreateButton('Smooth', '', '', 'Again') end)\n"
+               "print(ok, string.find(err, 'already') ~= nil)\n"
+               "ok, err = pcall(function() tb:CreateButton('Bad', '', '../x.png', 'Bad') end)\n"
+               "print(ok, string.find(err, 'icons/') ~= nil)\n"
+               "local off = tb:CreateButton('Off', '', '', 'Off') off.Enabled = false\n"
+               "off.Click:Connect(function() print('never') end)\n"
+               "print(off.Enabled, b.Enabled)");
+    rig.runtime.drain_output();
+    const std::uint64_t before = rig.runtime.plugin_ui().revision();
+    REQUIRE(rig.runtime.register_plugin(folder, "Tools"));
+    REQUIRE(texts(rig.runtime.drain_output()) ==
+            std::vector<std::string>{"false\ttrue\n", "false\ttrue\n", "false\ttrue\n"});
+    REQUIRE(rig.runtime.plugin_ui().revision() != before);
+
+    std::vector<engine_core::PluginToolbarState> bars = rig.runtime.plugin_ui().toolbars();
+    REQUIRE(bars.size() == 1);
+    REQUIRE(bars[0].name == "Terrain Tools");
+    REQUIRE(bars[0].plugin == "Tools");
+    REQUIRE(bars[0].buttons.size() == 2);
+    REQUIRE(bars[0].buttons[0].icon == "icons/Brush.png");
+    REQUIRE(bars[0].buttons[0].tooltip == "Smooth it");
+    REQUIRE_FALSE(bars[0].buttons[1].enabled);
+
+    REQUIRE(rig.runtime.plugin_ui().click(bars[0].buttons[0].id));
+    REQUIRE_FALSE(rig.runtime.plugin_ui().click(bars[0].buttons[1].id));
+    rig.game.events().drain();
+    REQUIRE(texts(rig.runtime.drain_output()) == std::vector<std::string>{"clicked\tSmooth\n"});
+    REQUIRE(rig.runtime.plugin_ui().toolbars()[0].buttons[0].active);
+
+    REQUIRE(rig.runtime.unregister_plugin(folder));
+    REQUIRE(rig.runtime.plugin_ui().toolbars().empty());
+}
+
+TEST_CASE("PL21 two plugins with one toolbar name keep two groups, each going with its plugin", "[PL21]") {
+    ScriptRig rig;
+    const InstanceId a = add_folder(rig.game, "A", rig.game.core());
+    add_script(rig.game, a, "M", "plugin:CreateToolbar('Tools'):CreateButton('x', '', '', 'X')");
+    const InstanceId b = add_folder(rig.game, "B", rig.game.core());
+    add_script(rig.game, b, "M", "plugin:CreateToolbar('Tools'):CreateButton('y', '', '', 'Y')");
+    REQUIRE(rig.runtime.register_plugin(b, "B"));
+    REQUIRE(rig.runtime.register_plugin(a, "A"));
+    std::vector<engine_core::PluginToolbarState> bars = rig.runtime.plugin_ui().toolbars();
+    REQUIRE(bars.size() == 2);
+    // By plugin name, not by the order they registered.
+    REQUIRE(bars[0].plugin == "A");
+    REQUIRE(rig.runtime.unregister_plugin(a));
+    bars = rig.runtime.plugin_ui().toolbars();
+    REQUIRE(bars.size() == 1);
+    REQUIRE(bars[0].plugin == "B");
+}

@@ -1538,6 +1538,8 @@ void BrushTool::refreshHover(const DraggerRay& ray, BrushModifiers mods) {
         return;
     }
 
+    // Picked out here: pick takes the simulation itself, which cannot be taken twice.
+    const std::optional<Hit> clipHover = mode_ == BrushMode::Clip ? pick(ray, false) : std::nullopt;
     engine_.on_simulation([&](DataModel& world) {
         // The selection's faces and corners, and what the pointer is over.
         std::vector<InstanceId> ids;
@@ -1608,7 +1610,7 @@ void BrushTool::refreshHover(const DraggerRay& ray, BrushModifiers mods) {
                     draw(front, clipSide_ == 0 ? kInvalid : kKeep);
                 }
             }
-            if (const auto hit = pick(ray, false)) {
+            if (const auto& hit = clipHover) {
                 cross_lines(lines_, snapVec(hit->position), engine_core::handle_scale(view_, hit->position) * 4.f,
                             Rgba{kClipPoint.r, kClipPoint.g, kClipPoint.b, 0.5f});
             }

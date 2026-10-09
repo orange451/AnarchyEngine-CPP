@@ -20,6 +20,7 @@
 #include <limits>
 #include <memory>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace engine_core {
@@ -176,7 +177,7 @@ public:
     std::vector<ChunkCoord> surface_chunks() const;
     // No chunk job in flight and no level >= 1 node stale: every built node
     // shows the voxels as they are.
-    bool settled() const;
+    bool settled();
 
     // Every resident node with a mesh: level 0 with its chunk mesh, levels
     // >= 1 with their shared compact mesh (R12: nothing is unpacked here).
@@ -230,7 +231,10 @@ private:
     // Creates coord's missing ancestors up to top_ (created ones are stale);
     // with mark, also marks the existing ones stale.
     void ensure_ancestors(ChunkCoord coord, bool mark);
-    void mark_stale(Node& node);
+    void mark_stale(const NodeKey& key, Node& node);
+    // key's parent goes on build_check_: key changed in a way that may make
+    // its parent ready to build.
+    void touch_parent(const NodeKey& key);
     bool has_children(const NodeKey& key) const;
     bool surfaced(const NodeKey& key, const Node& node) const;
     bool child_ready(const NodeKey& key, const Node& node) const;
@@ -244,12 +248,32 @@ private:
     void prune_up(const NodeKey& key, bool had_surface);
 
     // update_residency's pass over levels >= 2: evicts persisted far nodes
-    // and asks for wanted ones back.
-    void update_far_residency(const ChunkCoord* camera_chunk);
+    // and asks for wanted ones back. near null: every node; else only
+    // residency_candidates around near.
+    void update_far_residency(const ChunkCoord* camera_chunk, const ChunkCoord* near);
+    // Cleans published_ and stale_ and buckets them by level for
+    // residency_candidates.
+    void sort_residency_sets();
+    // The level's nodes a residency pass can change: in RAM, children of a
+    // stale node, within reach_nodes of camera's node, or at the top.
+    std::vector<NodeKey> residency_candidates(int level, ChunkCoord camera, int reach_nodes) const;
 
     float voxel_size_;
     AlodStore* store_ = nullptr;
     bool store_writes_ = true;
+    // Level >= 1 nodes next_builds should look at: those marked stale or
+    // created since, and parents of nodes that landed, built, loaded, or
+    // left. Everything else is either current or still waiting on a child.
+    std::unordered_set<NodeKey, NodeKeyHash> build_check_;
+    // Supersets, cleaned lazily, so that per-update work follows what is in
+    // RAM and what is changing rather than the size of the Terrain: nodes
+    // with a mesh in RAM, level >= 1 nodes that went stale, and level-0
+    // nodes put in flight.
+    std::unordered_set<NodeKey, NodeKeyHash> published_;
+    std::unordered_set<NodeKey, NodeKeyHash> stale_;
+    std::unordered_set<NodeKey, NodeKeyHash> in_flight_;
+    std::vector<std::vector<NodeKey>> published_by_level_;
+    std::vector<std::vector<NodeKey>> stale_by_level_;
     std::vector<NodeKey> loads_;
     std::uint64_t own_revisions_ = 0;
     std::uint64_t* revisions_;

@@ -520,7 +520,28 @@ void TerrainWorld::update_lod(InstanceId terrain_id, Terrain& terrain, TerrainRe
 
     std::vector<terrain::ChunkCoord> drops;
     std::vector<terrain::ChunkCoord> needs;
-    tree.update_residency(camera, drops, needs);
+    // A residency pass walks every node, so while the camera stays in its
+    // chunk it runs at most every kResidencyIntervalMs, however many chunks
+    // land meanwhile (a huge Terrain's first build lands some every update,
+    // and play's collider jobs keep landing). Without a camera it always
+    // runs: everything is wanted, and nothing waits on distance.
+    const bool camera_moved = has_camera != record.residency_had_camera ||
+                              (has_camera && !(camera_chunk == record.residency_camera));
+    // With no camera every node is wanted. A Terrain with a far-mesh store
+    // (one in a project, possibly huge, warm-opened with every far node out
+    // of RAM) waits for the camera instead: wanting everything there means
+    // meshing every chunk and reading every node at once, which is exactly
+    // what the store is there to avoid. Studio's first updates after an
+    // open come before Workspace has a camera.
+    const bool wait_for_camera = !has_camera && record.store != nullptr;
+    if (!wait_for_camera &&
+        (!has_camera || camera_moved || now_ms - record.residency_ms >= kResidencyIntervalMs)) {
+        PROFILE_SCOPE("Terrain residency", profiler::Group::Engine);
+        tree.update_residency(camera, drops, needs);
+        record.residency_ms = now_ms;
+        record.residency_had_camera = has_camera;
+        record.residency_camera = camera_chunk;
+    }
     if (record.store != nullptr) {
         // Far nodes the tree wants back: a few KB to a few MB each, read
         // here rather than on a worker since the store is not thread-safe.
@@ -563,13 +584,23 @@ void TerrainWorld::update_lod(InstanceId terrain_id, Terrain& terrain, TerrainRe
     }
 
     std::vector<terrain::NodeBuildRequest> builds;
-    tree.next_builds(now_ms, camera, builds);
+    {
+        PROFILE_SCOPE("Terrain next builds", profiler::Group::Engine);
+        tree.next_builds(now_ms, camera, builds);
+    }
     if (builds.empty()) {
         return;
     }
-    // Spec decision 4: one snapshot of the chunk map (a copy of pointers to
-    // immutable chunks) per update, and only when a node job is queued.
-    const auto voxels = std::make_shared<const terrain::ChunkMap>(volume.chunks());
+    // Spec decision 4: a snapshot of the chunk map (a copy of pointers to
+    // immutable chunks) for the node jobs, taken only when one is queued and
+    // kept until the voxels change: copying a huge Terrain's map (tens of
+    // thousands of entries) every update was most of an update.
+    if (record.voxels_snapshot == nullptr || record.voxels_snapshot_revision != volume.revision()) {
+        PROFILE_SCOPE("Terrain voxel snapshot", profiler::Group::Engine);
+        record.voxels_snapshot = std::make_shared<const terrain::ChunkMap>(volume.chunks());
+        record.voxels_snapshot_revision = volume.revision();
+    }
+    const std::shared_ptr<const terrain::ChunkMap>& voxels = record.voxels_snapshot;
     for (terrain::NodeBuildRequest& build : builds) {
         float job_distance = 0.f;
         if (has_camera) {
@@ -823,7 +854,10 @@ void TerrainWorld::update(DataModel& game, double now_ms) {
         {
             PROFILE_SCOPE("Terrain LOD", profiler::Group::Engine);
             update_lod(id, *terrain, record, now_ms, has_camera, camera_pos);
-            update_store(*terrain, record);
+            if (!has_camera || now_ms - record.store_ms >= kStoreCheckIntervalMs) {
+                record.store_ms = now_ms;
+                update_store(*terrain, record);
+            }
         }
         if (!terrain->can_collide()) {
             // Nothing to show through it: let any collider interest lapse
@@ -840,10 +874,17 @@ void TerrainWorld::update(DataModel& game, double now_ms) {
         if (record.chunks_dirty || first_seen) {
             publish_chunks(record);
         }
-        if (record.tree->take_changed() || fresh) {
+        // Rebuilt at most every kNodeListIntervalMs (the tree's changed flag
+        // waits until then), since the list covers every node.
+        const bool list_due = !has_camera || now_ms - record.nodes_ms >= kNodeListIntervalMs;
+        if (fresh || (list_due && record.tree->take_changed())) {
             PROFILE_SCOPE("Terrain node list", profiler::Group::Engine);
+            if (fresh) {
+                record.tree->take_changed();
+            }
             record.nodes = std::make_shared<const std::vector<TerrainNodeView>>(record.tree->nodes_for_view());
             record.nodes_revision = ++next_nodes_set_revision_;
+            record.nodes_ms = now_ms;
         }
 
         TerrainView view;

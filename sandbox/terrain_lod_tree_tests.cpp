@@ -1632,3 +1632,24 @@ TEST_CASE("LR6 with store writes off, a rebuilt node stays in RAM and the file d
     REQUIRE_FALSE(rig.tree.find(far_node)->persisted);
     REQUIRE(rig.tree.find(far_node)->resident);
 }
+
+TEST_CASE("LR7 a tree adopted from a store survives a residency pass with no camera", "[terrain][lod]") {
+    // Studio's first update can come before a camera exists: every adopted
+    // level-1 node is then wanted, not in RAM, and marked stale.
+    StoreFile file("lr7.alod");
+    {
+        std::optional<AlodStore> store = AlodStore::create(file.path, 1u, 1.f);
+        TreeRig rig;
+        build_sheet(rig, &*store);
+        store->set_surface_chunks(rig.tree.surface_chunks());
+        REQUIRE(store->commit());
+    }
+    std::optional<AlodStore> store = AlodStore::open(file.path, 1u, 1.f);
+    REQUIRE(store);
+    TreeRig rig;
+    rig.store = &*store;
+    rig.tree.attach_store(&*store);
+    rig.tree.adopt_store();
+    rig.settle();   // no camera: everything wanted
+    REQUIRE(count_level(rig.tree.nodes_for_view(), 0) == kSheet * kSheet);
+}

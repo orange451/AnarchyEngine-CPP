@@ -540,7 +540,9 @@ TEST_CASE("TW-A1 a reopened Terrain shows its far nodes from the .alod and meshe
     TerrainWorld world({}, 2);
     double now = 0.0;
     settle_all(world, game, t.id(), now);
-    REQUIRE(world.meshed_count() < footprint / 2);
+    // Only chunks near the camera (in a corner of the slab), not the slab.
+    REQUIRE(world.meshed_count() < static_cast<std::uint64_t>(kSlabChunks * kSlabChunks / 2));
+    (void)footprint;
     REQUIRE(world.views().size() == 1u);
     REQUIRE(world.views()[0].nodes != nullptr);
     const LodTree* tree = world.lod_tree(t.id());
@@ -687,4 +689,29 @@ TEST_CASE("TW-A4 a rewrite that cannot replace a locked .alod keeps serving the 
     const LodTree::Node* node = world.lod_tree(t.id())->find(node_of(far_chunk, 2));
     REQUIRE(node != nullptr);
     REQUIRE(node->resident);
+}
+
+TEST_CASE("TW-A5 a warm open's updates before a camera exists mesh nothing", "[terrain]") {
+    // Studio's first updates after opening a project come before Workspace
+    // has a camera. With no camera everything is wanted, which on a warm
+    // open means every chunk and every far node at once.
+    SimRole role;
+    TempDir dir;
+    make_slab_project(dir);
+    Game game;
+    Project project = Project::load(dir.path, game);
+    Terrain& t = slab_named(game);
+    const std::size_t footprint = first_footprint(t.volume()).size();
+    TerrainWorld world({}, 2);
+    double now = 0.0;
+    for (int i = 0; i < 10; ++i) {
+        world.update(game, now);
+        world.wait_idle();
+        now += 2.0 * kRebuildIntervalMs;
+    }
+    look_from(game, Vec3{16.f, 40.f, 16.f});
+    settle_all(world, game, t.id(), now);
+    // Only chunks near the camera (in a corner of the slab), not the slab.
+    REQUIRE(world.meshed_count() < static_cast<std::uint64_t>(kSlabChunks * kSlabChunks / 2));
+    (void)footprint;
 }

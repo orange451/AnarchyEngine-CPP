@@ -142,6 +142,12 @@ public:
     // kMemoryRefreshUpdates). Any thread.
     TerrainMemory memory(InstanceId terrain) const;
     static constexpr int kMemoryRefreshUpdates = 30;
+    // With a camera in the same chunk, the LOD residency pass, the published
+    // node list, and the far-mesh cache's commit check each run at most this
+    // often: each walks every node, which on a huge Terrain is milliseconds.
+    static constexpr double kResidencyIntervalMs = 250.0;
+    static constexpr double kNodeListIntervalMs = 100.0;
+    static constexpr double kStoreCheckIntervalMs = 500.0;
 
     // A first sight queues its chunks a few at a time rather than all at
     // once: at most this many jobs per mesher thread are in flight, so a
@@ -338,6 +344,17 @@ private:
         bool store_committed = false;
         // The saved_key whose rewrite failed: not tried again until the next save.
         std::uint64_t rewrite_failed_key = 0;
+        // update_lod's chunk-map snapshot for node jobs, and the volume
+        // revision it was taken at.
+        std::shared_ptr<const terrain::ChunkMap> voxels_snapshot;
+        std::uint64_t voxels_snapshot_revision = 0;
+        // The last LOD residency pass: when, and the camera chunk it used.
+        double residency_ms = -1e300;
+        bool residency_had_camera = false;
+        terrain::ChunkCoord residency_camera{};
+        // When the node list was last rebuilt, and update_store last ran.
+        double nodes_ms = -1e300;
+        double store_ms = -1e300;
     };
 
     // A result off the pool: dropped if stale, held if its edit batch still

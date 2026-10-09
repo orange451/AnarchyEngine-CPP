@@ -22,8 +22,9 @@ struct BlendIds {
 
 // From one Surface Nets cell's 8 corners (distance[8]/id[8], in
 // SurfaceNets.cpp's kCorner order -- though the rule below does not depend
-// on that order): every corner within voxel_size of the surface
-// (|distance| <= voxel_size) counts one vote for its Id; votes are
+// on that order): every solid corner within voxel_size of the surface
+// (-voxel_size <= distance <= 0) counts one vote for its Id (air corners'
+// Ids mean nothing and never vote); votes are
 // normalized into weights, the top 4 Ids kept (ties broken by lower Id) and
 // renormalized to sum to 1, sorted by descending weight. When no corner
 // qualifies (every corner deep in solid or air), the lowest-distance

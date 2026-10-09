@@ -129,7 +129,11 @@ BlendIds blend_weights(const float distance[8], const std::uint8_t id[8], float 
     int distinct = 0;
     int total = 0;
     for (int c = 0; c < 8; ++c) {
-        if (std::fabs(distance[c]) > voxel_size) {
+        // Only solid corners near the surface vote: a material belongs to
+        // solid ground, and an air cell's Id means nothing (WriteVoxels
+        // callers write 0 there, which would blend in as the default
+        // material; a fill's leftover Id on air would show on a dug wall).
+        if (distance[c] > 0.f || distance[c] < -voxel_size) {
             continue;
         }
         const std::uint8_t corner_id = id[c];

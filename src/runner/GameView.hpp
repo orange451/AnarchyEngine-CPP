@@ -5,6 +5,7 @@
 #include "GuiLayer.hpp"
 #include "MeshCache.hpp"
 #include "ProfilerOverlay.hpp"
+#include "TerrainBrush.hpp"
 #include "TerrainSelection.hpp"
 #include "TextureCache.hpp"
 #include "Renderer.hpp"
@@ -15,6 +16,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -98,6 +100,19 @@ public:
     // The profiler over this view. It shows while ProfilerUi is shown and this
     // view is its owner: the Scene View last clicked or focused.
     ProfilerOverlay& profilerOverlay() { return *profilerOverlay_; }
+    // Ctrl+Z / Ctrl+Y while terrain mode is on: steps through its strokes.
+    // False when terrain mode is off (the place's undo takes the chord).
+    bool terrainUndo(bool redo) {
+        if (!terrainBrush_ || !terrainBrush_->active()) {
+            return false;
+        }
+        if (redo) {
+            terrainBrush_->redo();
+        } else {
+            terrainBrush_->undo();
+        }
+        return true;
+    }
     // A script's MouseBehavior asks for a lock and the profiler is not showing.
     bool pointerWanted() const;
 
@@ -276,6 +291,12 @@ private:
     // setPlayerView: no camera list or eye, and the GUIs always drawn.
     bool playerView_ = false;
     ProfilerOverlay* profilerOverlay_ = nullptr;
+    // Terrain mode (T): the brush and its palette, edit mode only.
+    std::unique_ptr<TerrainBrush> terrainBrush_;
+    TerrainToolPalette* terrainPalette_ = nullptr;
+    bool shiftHeld_ = false;
+    // The world ray through a pane point (absolute coordinates), when the view has a camera.
+    std::optional<engine_core::DraggerRay> rayAt(double x, double y) const;
     // The player's Cmd+F6 and Cmd+P, on its window's scene.
     jadefx::Scene* hookedScene_ = nullptr;
     int keyHook_ = 0;

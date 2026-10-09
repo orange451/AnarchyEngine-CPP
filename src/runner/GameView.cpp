@@ -140,6 +140,14 @@ GameView::GameView(Runner& runner, std::string name, bool closable)
     guiToggle_ = eye.get();
     getChildren().add(std::move(eye));
 
+    // Terrain mode's palette (T), hidden until it is turned on.
+    terrainBrush_ = std::make_unique<TerrainBrush>(*engine_);
+    terrainBrush_->setOnUsed([this] { requestFocus(); });
+    auto palette = terrainBrush_->makePalette();
+    palette->setVisible(false);
+    terrainPalette_ = palette.get();
+    getChildren().add(std::move(palette));
+
     // Last, so it draws over everything here and is hit first.
     auto overlay = jadefx::make<ProfilerOverlay>();
     overlay->setVisible(false);
@@ -182,6 +190,10 @@ void GameView::refreshOverlays() {
     cameraBox_->setVisible(editing && !profiling);
     guiToggle_->setVisible(editing && !profiling);
     guiScene_->setVisible(!editing || guiToggle_->isSelected());
+    if (!editing && terrainBrush_->active()) {
+        terrainBrush_->turnOff();
+    }
+    terrainPalette_->setVisible(editing && !profiling && terrainBrush_->active());
 }
 
 void GameView::linkCamera(std::string guid) {
@@ -571,6 +583,13 @@ void GameView::layoutChildren() {
     constexpr double kGap = 4.0;
     const double eyeWidth = guiToggle_->measuredWidth(height);
     guiToggle_->performLayout(listLeft - kGap - eyeWidth, contentTop() + kMargin, eyeWidth, height);
+    if (terrainPalette_->isVisible()) {
+        constexpr double kPaletteWidth = 190.0;
+        terrainPalette_->performLayout(contentLeft() + kMargin, contentTop() + kMargin, kPaletteWidth,
+                                       terrainPalette_->measuredHeight(kPaletteWidth, contentHeight()));
+        terrainBrush_->tick(std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count(),
+                            shiftHeld_);
+    }
     // Each frame brings a new snapshot of the game, so the view lays out again next frame.
     markLayoutDirty(LayoutDirt::Arrange);
 }
@@ -783,6 +802,7 @@ void GameView::collectOutlines(const engine_core::VisualSnapshot& snapshot) {
             outlinePoints_.insert(outlinePoints_.end(), {placed.x, placed.y, placed.z});
         }
     }
+    terrainBrush_->appendOutline(outlinePoints_);
     renderer_.setOutlines(outlinePoints_.data(), static_cast<int>(outlinePoints_.size() / 3));
 }
 
@@ -970,6 +990,17 @@ void GameView::sceneChanged(jadefx::Scene* previous) {
     graphicsTries_ = 0;
 }
 
+std::optional<engine_core::DraggerRay> GameView::rayAt(double x, double y) const {
+    if (viewFov_ <= 0.f || getWidth() <= 0.0 || getHeight() <= 0.0) {
+        return std::nullopt;
+    }
+    engine_core::DraggerView view;
+    view.camera = viewCamera_;
+    view.fov_degrees = viewFov_;
+    view.size = engine_core::Vec2{static_cast<float>(getWidth()), static_cast<float>(getHeight())};
+    return engine_core::viewport_ray(view, engine_core::Vec2{localX(x), localY(y)});
+}
+
 float GameView::localX(double x) const { return static_cast<float>(x - getAbsoluteX()); }
 
 float GameView::localY(double y) const { return static_cast<float>(y - getAbsoluteY()); }
@@ -979,6 +1010,16 @@ void GameView::handleMousePressed(const jadefx::MouseEvent& event) {
     requestFocus();
     ProfilerUi::get().owner = this;
     noteCurrentCamera();
+    // Terrain mode keeps the left button for its brush; the rest (the
+    // camera's right button) still reaches the game.
+    if (terrainBrush_->active() && event.button == 0) {
+        shiftHeld_ = event.shift();
+        if (const auto ray = rayAt(event.x, event.y)) {
+            terrainBrush_->press(*ray, event.shift());
+        }
+        IdePane::handleMousePressed(event);
+        return;
+    }
     if (game_ != nullptr) {
         game_->input().post_mouse_button(event.button, true, localX(event.x), localY(event.y));
     }
@@ -986,6 +1027,11 @@ void GameView::handleMousePressed(const jadefx::MouseEvent& event) {
 }
 
 void GameView::handleMouseReleased(const jadefx::MouseEvent& event) {
+    if (terrainBrush_->active() && event.button == 0) {
+        terrainBrush_->release();
+        IdePane::handleMouseReleased(event);
+        return;
+    }
     if (game_ != nullptr) {
         game_->input().post_mouse_button(event.button, false, localX(event.x), localY(event.y));
     }
@@ -995,6 +1041,10 @@ void GameView::handleMouseReleased(const jadefx::MouseEvent& event) {
 void GameView::handleMouseDragged(const jadefx::MouseEvent& event) {
     cursorX_ = event.x;
     cursorY_ = event.y;
+    if (terrainBrush_->active()) {
+        shiftHeld_ = event.shift();
+        terrainBrush_->hover(rayAt(event.x, event.y));
+    }
     if (game_ != nullptr) {
         game_->input().post_mouse_move(localX(event.x), localY(event.y));
     }
@@ -1004,6 +1054,9 @@ void GameView::handleMouseDragged(const jadefx::MouseEvent& event) {
 void GameView::handleMouseMoved(const jadefx::MouseEvent& event) {
     cursorX_ = event.x;
     cursorY_ = event.y;
+    if (terrainBrush_->active()) {
+        terrainBrush_->hover(rayAt(event.x, event.y));
+    }
     if (game_ != nullptr) {
         game_->input().post_mouse_move(localX(event.x), localY(event.y));
     }
@@ -1035,6 +1088,30 @@ void GameView::handleKey(jadefx::KeyEvent& event) {
             scene->releaseFocus(this);
         }
         return;
+    }
+    if (event.key == jadefx::Key::LeftShift || event.key == jadefx::Key::RightShift) {
+        shiftHeld_ = event.pressed;
+    }
+    // Terrain mode: T turns it on and off (edit mode only); Ctrl+Z and
+    // Ctrl+Y step through its strokes while it is on.
+    const bool editing = !playerView_ && !runner_->testing();
+    if (editing && event.pressed && !event.repeat && !event.alt && !event.meta) {
+        if (event.key == jadefx::Key::T && !event.control && !event.shift) {
+            terrainBrush_->toggle();
+            terrainPalette_->refresh();
+            refreshOverlays();
+            event.consume();
+            return;
+        }
+        if (terrainBrush_->active() && event.control && (event.key == jadefx::Key::Z || event.key == jadefx::Key::Y)) {
+            if (event.key == jadefx::Key::Z && !event.shift) {
+                terrainBrush_->undo();
+            } else {
+                terrainBrush_->redo();
+            }
+            event.consume();
+            return;
+        }
     }
     // A held key repeats. InputBegan fires once, on the first press.
     if (game_ != nullptr && !event.repeat) {

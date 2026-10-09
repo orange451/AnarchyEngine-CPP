@@ -129,6 +129,21 @@ Built expand(const std::vector<Face>& faces, double distance);
 // A face with no Material takes the Material, scale, and rotation of the face
 // whose normal is nearest its own.
 Built clip(const std::vector<Face>& faces, const Face& face);
+// Both halves of the solid either side of the plane: first behind it (normal .
+// x <= distance), then in front. nullopt when the plane misses the solid.
+std::optional<std::pair<Built, Built>> split(const std::vector<Face>& faces, const Plane& plane);
+
+// A loop cut, as Blender's: square to the face's edge nearest the point, so the
+// cut runs around the brush through every face that edge's direction crosses.
+// Along the edge it sits a whole number of grid steps from the edge's start, or
+// at its middle; nullopt when that lands on an end.
+struct LoopCut {
+    Plane plane;
+    // The edge crossed.
+    DVec3 from;
+    DVec3 to;
+};
+std::optional<LoopCut> loop_cut(const Shape& shape, std::size_t face, DVec3 point, double grid, bool middle);
 // Every face's points moved by the matrix (row-major 3x4: rotation/scale then
 // translation), axes turned with it. Mirroring matrices keep faces outward.
 Built transform(const std::vector<Face>& faces, const double matrix[12]);

@@ -561,6 +561,46 @@ Built clip(const std::vector<Face>& faces, const Face& face) {
     return build(std::move(clipped));
 }
 
+std::optional<std::pair<Built, Built>> split(const std::vector<Face>& faces, const Plane& plane) {
+    if (length(plane.normal) < 0.5) return std::nullopt;
+    const DVec3 point = plane.normal * plane.distance;
+    Built back = clip(faces, face_from_plane(plane.normal, point));
+    Built front = clip(faces, face_from_plane(-plane.normal, point));
+    // A plane that misses leaves one side nothing.
+    if (!back.ok() || !front.ok()) return std::nullopt;
+    constexpr double kThin = 1e-9;
+    if (volume(back.shape) < kThin || volume(front.shape) < kThin) return std::nullopt;
+    return std::make_pair(std::move(back), std::move(front));
+}
+
+std::optional<LoopCut> loop_cut(const Shape& shape, std::size_t face, DVec3 point, double grid, bool middle) {
+    if (face >= shape.polygons.size()) return std::nullopt;
+    const auto& loop = shape.polygons[face].vertices;
+    double best = 0.0;
+    std::optional<std::pair<DVec3, DVec3>> edge;
+    for (std::size_t i = 0; i < loop.size(); ++i) {
+        const DVec3 a = shape.vertices[loop[i]];
+        const DVec3 ab = shape.vertices[loop[(i + 1) % loop.size()]] - a;
+        const double len2 = dot(ab, ab);
+        if (len2 < 1e-12) continue;
+        const double t = std::clamp(dot(point - a, ab) / len2, 0.0, 1.0);
+        const double d = length(point - (a + ab * t));
+        if (!edge || d < best) {
+            best = d;
+            edge = std::make_pair(a, a + ab);
+        }
+    }
+    if (!edge) return std::nullopt;
+    const auto [a, b] = *edge;
+    const double len = length(b - a);
+    const DVec3 along = (b - a) / len;
+    double t = middle ? len * 0.5 : dot(point - a, along);
+    if (!middle && grid > 0.0) t = std::round(t / grid) * grid;
+    constexpr double kEnd = 1e-6;
+    if (t <= kEnd || t >= len - kEnd) return std::nullopt;
+    return LoopCut{{along, dot(along, a + along * t)}, a, b};
+}
+
 Built transform(const std::vector<Face>& faces, const double m[12]) {
     auto point = [&](DVec3 p) {
         return DVec3{m[0] * p.x + m[1] * p.y + m[2] * p.z + m[3], m[4] * p.x + m[5] * p.y + m[6] * p.z + m[7],

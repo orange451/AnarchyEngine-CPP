@@ -72,6 +72,15 @@ Vec3 axis_vec(int axis, float s = 1.f) {
 geo::DVec3 to_d(Vec3 v) { return {v.x, v.y, v.z}; }
 Vec3 to_f(geo::DVec3 v) { return {static_cast<float>(v.x), static_cast<float>(v.y), static_cast<float>(v.z)}; }
 
+// The loop cut through a brush's face at a world point, in the brush's space.
+std::optional<geo::LoopCut> loop_of(const Brush& brush, int face, Vec3 at, double grid, bool middle) {
+    if (face < 0) {
+        return std::nullopt;
+    }
+    const Vec3 local = engine_core::matrix4_point(engine_core::matrix4_inverse(brush.transform()), at);
+    return geo::loop_cut(brush.shape(), static_cast<std::size_t>(face), to_d(local), grid, middle);
+}
+
 // Where the ray meets the plane through point with normal; nullopt when parallel or behind.
 std::optional<Vec3> ray_plane(const DraggerRay& ray, Vec3 point, Vec3 normal) {
     const float denom = dot3(ray.direction, normal);
@@ -218,8 +227,8 @@ BrushToolPalette::BrushToolPalette(BrushTool& tool) : tool_(tool) {
 
     auto modes = jadefx::make<jadefx::HBox>();
     modes->setSpacing(4.0);
-    const std::array<std::pair<const char*, BrushMode>, 3> list{
-        {{"Draw", BrushMode::Draw}, {"Vertex  V", BrushMode::Vertex}, {"Clip  C", BrushMode::Clip}}};
+    const std::array<std::pair<const char*, BrushMode>, 4> list{
+        {{"Draw", BrushMode::Draw}, {"Vertex  V", BrushMode::Vertex}, {"Clip  C", BrushMode::Clip}, {"Loop  K", BrushMode::Loop}}};
     for (const auto& [name, mode] : list) {
         auto button = jadefx::make<jadefx::ToggleButton>(name);
         button->setStyle("font-size: 11px; padding: 3px 6px;");
@@ -351,6 +360,9 @@ void BrushTool::setMode(BrushMode mode) {
         break;
     case BrushMode::Clip:
         hint_ = "Click 2 or 3 points\nEnter: cut   Ctrl+Enter: side\nBackspace: undo a point";
+        break;
+    case BrushMode::Loop:
+        hint_ = "Point near an edge, click: cut\nacross it, on the grid\nShift: at the middle   K: back";
         break;
     }
 }
@@ -533,6 +545,11 @@ void BrushTool::press(const DraggerRay& ray, BrushModifiers mods, int clicks) {
     }
     if (mode_ == BrushMode::Clip) {
         clickClip(ray);
+        refreshHover(ray, mods);
+        return;
+    }
+    if (mode_ == BrushMode::Loop) {
+        applyLoop(ray, mods);
         refreshHover(ray, mods);
         return;
     }
@@ -1112,6 +1129,48 @@ void BrushTool::applyClip() {
     }
 }
 
+void BrushTool::applyLoop(const DraggerRay& ray, BrushModifiers mods) {
+    const std::optional<Hit> hit = pick(ray, true);
+    if (!hit) {
+        return;
+    }
+    const double grid = grid_;
+    std::vector<InstanceId> halves;
+    beginStep("Loop Cut");
+    engine_.on_simulation([&](DataModel& world) {
+        Brush* brush = brush_of(world, hit->instance);
+        if (brush == nullptr) {
+            return;
+        }
+        const auto cut = loop_of(*brush, hit->face, hit->position, grid, mods.shift);
+        if (!cut) {
+            return;
+        }
+        auto parts = geo::split(brush->faces(), cut->plane);
+        if (!parts) {
+            return;
+        }
+        // The far half is a new brush like this one.
+        Brush& other = world.create<Brush>();
+        world.set_name(other.id(), world.name(brush->id()));
+        other.set_transform(brush->transform());
+        other.apply(std::move(parts->second));
+        other.set_anchored(brush->anchored());
+        other.set_color(brush->color());
+        other.set_transparency(brush->transparency());
+        other.set_can_collide(brush->can_collide());
+        other.set_friction(brush->friction());
+        other.set_bounciness(brush->bounciness());
+        world.set_parent(other.id(), world.parent(brush->id()));
+        brush->apply(std::move(parts->first));
+        halves = {brush->id(), other.id()};
+    });
+    endStep(!halves.empty());
+    if (!halves.empty()) {
+        select(std::move(halves));
+    }
+}
+
 void BrushTool::duplicate() {
     const std::vector<InstanceId> ids = selection();
     std::vector<InstanceId> copies;
@@ -1418,6 +1477,10 @@ bool BrushTool::key(const jadefx::KeyEvent& event) {
             setMode(mode_ == BrushMode::Clip ? BrushMode::Draw : BrushMode::Clip);
             return done();
         }
+        if (key == jadefx::Key::K && !shift) {
+            setMode(mode_ == BrushMode::Loop ? BrushMode::Draw : BrushMode::Loop);
+            return done();
+        }
         if (key == jadefx::Key::Delete || key == jadefx::Key::Backspace) {
             deleteSelection();
             return done();
@@ -1540,7 +1603,45 @@ void BrushTool::refreshHover(const DraggerRay& ray, BrushModifiers mods) {
 
     // Picked out here: pick takes the simulation itself, which cannot be taken twice.
     const std::optional<Hit> clipHover = mode_ == BrushMode::Clip ? pick(ray, false) : std::nullopt;
+    const std::optional<Hit> loopHover = mode_ == BrushMode::Loop ? pick(ray, true) : std::nullopt;
     engine_.on_simulation([&](DataModel& world) {
+        if (mode_ == BrushMode::Loop) {
+            const Brush* brush = loopHover ? brush_of(world, loopHover->instance) : nullptr;
+            if (brush == nullptr) {
+                return;
+            }
+            brush_lines(lines_, *brush, kKeep);
+            const auto cut = loop_of(*brush, loopHover->face, loopHover->position, grid_, mods.shift);
+            const auto parts = cut ? geo::split(brush->faces(), cut->plane) : std::nullopt;
+            if (!parts) {
+                return;
+            }
+            const Matrix4 m = brush->transform();
+            const Vec3 from = engine_core::matrix4_point(m, to_f(cut->from));
+            const Vec3 to = engine_core::matrix4_point(m, to_f(cut->to));
+            segment(lines_, from, to, kFace);
+            // The new face: the back half's polygon on the cut plane.
+            const geo::Shape& shape = parts->first.shape;
+            Vec3 at{};
+            for (std::size_t i = 0; i < shape.polygons.size(); ++i) {
+                if (geo::dot(shape.planes[i].normal, cut->plane.normal) < 0.9999 ||
+                    std::fabs(shape.planes[i].distance - cut->plane.distance) > 1e-6) {
+                    continue;
+                }
+                const auto& loop = shape.polygons[i].vertices;
+                for (std::size_t k = 0; k < loop.size(); ++k) {
+                    const Vec3 a = engine_core::matrix4_point(m, to_f(shape.vertices[loop[k]]));
+                    const Vec3 b = engine_core::matrix4_point(m, to_f(shape.vertices[loop[(k + 1) % loop.size()]]));
+                    segment(lines_, a, b, kClipPoint);
+                }
+            }
+            const double t = cut->plane.distance - geo::dot(cut->plane.normal, cut->from);
+            const double len = geo::length(cut->to - cut->from);
+            at = add(from, mul(unit3(sub(to, from)), static_cast<float>(t)));
+            cross_lines(lines_, at, engine_core::handle_scale(view_, at) * 5.f, kClipPoint);
+            label(at, number(t) + " | " + number(len - t));
+            return;
+        }
         // The selection's faces and corners, and what the pointer is over.
         std::vector<InstanceId> ids;
         for (InstanceId id : world.selection().get()) {

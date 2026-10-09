@@ -5,6 +5,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -335,4 +336,28 @@ TEST_CASE("BG13 a moved corner rebuilds as the hull of the corners", "[brush]") 
     INFO(built.error);
     REQUIRE(built.ok());
     REQUIRE(built.shape.vertices.size() == 8);
+}
+
+TEST_CASE("BG15 a loop cut splits square to the nearest edge, on the grid", "[brush]") {
+    const Built box = build(make_box({4, 2, 6}));
+    REQUIRE(box.ok());
+    // The top face (+Y), pointer near its x-running edge at z = 3, at x = 0.8.
+    std::size_t top = 0;
+    for (std::size_t i = 0; i < box.shape.planes.size(); ++i) {
+        if (box.shape.planes[i].normal.y > 0.5) top = i;
+    }
+    const auto cut = loop_cut(box.shape, top, {0.8, 1, 2.9}, 1.0, false);
+    REQUIRE(cut.has_value());
+    CHECK(near(std::fabs(cut->plane.normal.x), 1.0));
+    CHECK(near(cut->plane.normal.x * cut->plane.distance, 1.0));
+    const auto halves = split(box.faces, cut->plane);
+    REQUIRE(halves.has_value());
+    CHECK(near(volume(halves->first.shape) + volume(halves->second.shape), 48.0, 1e-6));
+    CHECK(near(std::min(volume(halves->first.shape), volume(halves->second.shape)), 12.0, 1e-6));
+    // Middle ignores the grid; ends cut nothing; a plane outside splits nothing.
+    const auto middle = loop_cut(box.shape, top, {0.8, 1, 2.9}, 1.0, true);
+    REQUIRE(middle.has_value());
+    CHECK(near(middle->plane.distance, 0.0));
+    CHECK_FALSE(loop_cut(box.shape, top, {1.9, 1, 2.9}, 4.0, false).has_value());
+    CHECK_FALSE(split(box.faces, Plane{{1, 0, 0}, 5.0}).has_value());
 }

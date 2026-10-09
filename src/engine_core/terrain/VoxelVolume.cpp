@@ -115,13 +115,13 @@ bool has_volume(const Shape& shape) {
     }
 }
 
-// The Id most common among the 3x3x3 cells around x, y, z (in an nx by ny
-// box, x fastest) that lie within a voxel of the surface or inside it, where
-// an Id shows. A TerrainMaterial's Id (1-255) wins over the default's (0):
-// Terrain tools never paint the default while a TerrainMaterial exists. Ties
-// go to the lower Id. fallback when no neighbour is there.
-std::uint8_t neighbour_id(const std::vector<float>& distances, const std::vector<std::uint8_t>& materials, int nx, int ny,
-                          int x, int y, int z, float voxel_size, std::uint8_t fallback) {
+// The Id most common among the solid cells of the 3x3x3 around x, y, z (in
+// an nx by ny box, x fastest). A TerrainMaterial's Id (1-255) wins over the
+// default's (0): Terrain tools never paint the default while a
+// TerrainMaterial exists. Ties go to the lower Id. fallback when no
+// neighbour is solid.
+std::uint8_t solid_neighbour_id(const std::vector<float>& distances, const std::vector<std::uint8_t>& materials, int nx,
+                                int ny, int x, int y, int z, std::uint8_t fallback) {
     std::uint8_t ids[27];
     int counts[27];
     int distinct = 0;
@@ -129,7 +129,7 @@ std::uint8_t neighbour_id(const std::vector<float>& distances, const std::vector
         for (int j = -1; j <= 1; ++j) {
             for (int i = -1; i <= 1; ++i) {
                 const std::size_t n = (static_cast<std::size_t>(z + k) * ny + (y + j)) * nx + (x + i);
-                if (distances[n] > voxel_size) {
+                if (distances[n] > 0.f) {
                     continue;
                 }
                 int slot = 0;
@@ -408,14 +408,15 @@ std::optional<std::string> VoxelVolume::smooth(Vec3 center, float radius, float 
                 }
                 out[self] = next;
                 changed = true;
-                // A cell's Id shows once it is within a voxel of the surface
-                // (blend_weights reads such corners; a face takes its solid
-                // side's), and fill gives every cell it brings there an Id.
-                // One that comes from farther out never had an Id chosen for
-                // it (air carries the default's, a dug-out cell its old one),
-                // so it takes its neighbours'.
-                if (distances[self] > vs && next <= vs) {
-                    out_materials[self] = neighbour_id(distances, materials, nx, ny, x, y, z, vs, materials[self]);
+                // Only a solid cell's Id shows (blend_weights reads solid
+                // corners; a face takes its solid side's), and an air cell's
+                // means nothing: air far from the surface holds the
+                // default's, WriteVoxels writes 0, a dig leaves the old one.
+                // So a cell this turns solid takes its solid neighbours' Id.
+                // Judged on the distance as stored: one just above 0 rounds
+                // to 0, which counts as solid.
+                if (distances[self] > 0.f && quantize(next, vs) <= 0) {
+                    out_materials[self] = solid_neighbour_id(distances, materials, nx, ny, x, y, z, materials[self]);
                 }
             }
         }

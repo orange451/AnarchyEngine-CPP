@@ -11,6 +11,7 @@
 
 #include <chrono>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 
 using namespace engine_core;
@@ -279,60 +280,93 @@ TEST_CASE("V11 ids_used tracks exactly through Id reassignment and removal", "[t
 }
 
 namespace {
-// Two balls of Id 3 a cell apart either side of x = 0: smoothing fills the
-// crease between them, pulling cells from beyond a voxel of the surface to
-// within one, where their Id shows.
-VoxelVolume crease_of_id_3() {
+Shape block_at(float x, float y, float z, Vec3 size) {
+    Shape s;
+    s.kind = Shape::Kind::Block;
+    s.frame = matrix4_translation(x, y, z);
+    s.size = size;
+    return s;
+}
+
+// Id 3 ground with a slot three cells wide down x = 0: two walls on a floor
+// whose top is y = 0. The cells down the middle of the slot are air holding
+// Id 0, and smoothing fills the slot, turning them solid.
+VoxelVolume slot_of_id_3() {
     VoxelVolume volume;
-    REQUIRE_FALSE(volume.fill(ball_at(-5.f, 0.f, 0.f, 4.f), 3));
-    REQUIRE_FALSE(volume.fill(ball_at(5.f, 0.f, 0.f, 4.f), 3));
+    REQUIRE_FALSE(volume.fill(block_at(0.f, -4.f, 0.f, Vec3{24.f, 8.f, 24.f}), 3));
+    REQUIRE_FALSE(volume.fill(block_at(-6.5f, 4.f, 0.f, Vec3{10.f, 8.f, 24.f}), 3));
+    REQUIRE_FALSE(volume.fill(block_at(6.5f, 4.f, 0.f, Vec3{10.f, 8.f, 24.f}), 3));
     return volume;
 }
 
-// Every cell near the crease that is within a voxel of the surface, or
-// inside, has Id 3.
-void require_id_3_where_it_shows(const VoxelVolume& volume) {
+// A cell at the origin, stored 1 step above 0 and holding air_id, on Id 3
+// ground: solid below (-20 steps) and level with it (0, solid too), air
+// holding air_id above (+20). Its neighbours' mean is 1/27 of a step, so
+// smoothing it fully lands just above 0, which is stored as 0: solid.
+VoxelVolume ledge_of_id_3(std::uint8_t air_id) {
+    const CellCoord min{-2, -2, -2}, max{2, 2, 2};
+    std::vector<float> distances;
+    std::vector<std::uint8_t> materials;
+    for (int z = min.z; z <= max.z; ++z) {
+        for (int y = min.y; y <= max.y; ++y) {
+            for (int x = min.x; x <= max.x; ++x) {
+                std::int8_t stored = kAirDistance;
+                std::uint8_t id = 0;
+                if (std::abs(x) <= 1 && std::abs(z) <= 1 && std::abs(y) <= 1) {
+                    stored = y < 0 ? -20 : y > 0 ? 20 : x == 0 && z == 0 ? 1 : 0;
+                    id = stored > 0 ? air_id : 3;
+                }
+                distances.push_back(dequantize(stored, 1.f));
+                materials.push_back(id);
+            }
+        }
+    }
+    VoxelVolume volume;
+    REQUIRE_FALSE(volume.write(min, max, distances, materials));
+    return volume;
+}
+}  // namespace
+
+TEST_CASE("V12 cells smoothing turns solid take their solid neighbours' Id, not air's default", "[terrain]") {
+    VoxelVolume volume = slot_of_id_3();
+    for (int y = 1; y <= 6; ++y) {
+        REQUIRE(volume.cell(CellCoord{0, y, 0}).distance > 0);
+        REQUIRE(volume.cell(CellCoord{0, y, 0}).material == 0);
+    }
+    for (int i = 0; i < 20; ++i) {
+        REQUIRE_FALSE(volume.smooth(Vec3{0.f, 3.f, 0.f}, 5.f, 1.f));
+    }
+    for (int y = 1; y <= 6; ++y) {
+        REQUIRE(volume.cell(CellCoord{0, y, 0}).distance <= 0);
+    }
     for (int z = -10; z <= 10; ++z) {
-        for (int y = -10; y <= 10; ++y) {
+        for (int y = -6; y <= 10; ++y) {
             for (int x = -10; x <= 10; ++x) {
                 const Cell cell = volume.cell(CellCoord{x, y, z});
-                if (dequantize(cell.distance, 1.f) <= 1.f) {
+                if (cell.distance <= 0) {
                     REQUIRE(cell.material == 3);
                 }
             }
         }
     }
 }
-}  // namespace
 
-TEST_CASE("V12 smoothing gives a cell it brings to the surface its neighbours' Id, not the default", "[terrain]") {
-    VoxelVolume volume = crease_of_id_3();
-    REQUIRE(dequantize(volume.cell(CellCoord{0, 0, 0}).distance, 1.f) > 1.f);
-    REQUIRE(volume.cell(CellCoord{0, 0, 0}).material == 0);
-    require_id_3_where_it_shows(volume);
-    for (int i = 0; i < 8; ++i) {
-        REQUIRE_FALSE(volume.smooth(Vec3{0.f, 0.f, 0.f}, 6.f, 1.f));
-    }
-    REQUIRE(dequantize(volume.cell(CellCoord{0, 0, 0}).distance, 1.f) <= 1.f);
-    require_id_3_where_it_shows(volume);
+TEST_CASE("V13 a cell smoothing leaves just above 0 is stored solid, and takes its neighbours' Id", "[terrain]") {
+    VoxelVolume volume = ledge_of_id_3(0);
+    REQUIRE_FALSE(volume.smooth(Vec3{0.f, 0.f, 0.f}, 0.5f, 1.f));
+    REQUIRE(volume.cell(CellCoord{0, 0, 0}).distance == 0);
+    REQUIRE(volume.cell(CellCoord{0, 0, 0}).material == 3);
 }
 
-TEST_CASE("V13 smoothing replaces a dug-out cell's old Id as it comes back to the surface", "[terrain]") {
-    // Id 5 dug out of the crease leaves its Id on the air cells there.
-    VoxelVolume volume;
-    REQUIRE_FALSE(volume.fill(ball_at(0.f, 0.f, 0.f, 2.f), 5));
-    REQUIRE_FALSE(volume.subtract(ball_at(0.f, 0.f, 0.f, 3.5f)));
-    REQUIRE_FALSE(volume.fill(ball_at(-5.f, 0.f, 0.f, 4.f), 3));
-    REQUIRE_FALSE(volume.fill(ball_at(5.f, 0.f, 0.f, 4.f), 3));
-    REQUIRE(volume.cell(CellCoord{0, 0, 0}).material == 5);
-    for (int i = 0; i < 8; ++i) {
-        REQUIRE_FALSE(volume.smooth(Vec3{0.f, 0.f, 0.f}, 6.f, 1.f));
-    }
-    require_id_3_where_it_shows(volume);
+TEST_CASE("V14 a cell smoothing turns solid drops the Id a dig left on it", "[terrain]") {
+    VoxelVolume volume = ledge_of_id_3(7);
+    REQUIRE_FALSE(volume.smooth(Vec3{0.f, 0.f, 0.f}, 0.5f, 1.f));
+    REQUIRE(volume.cell(CellCoord{0, 0, 0}).distance <= 0);
+    REQUIRE(volume.cell(CellCoord{0, 0, 0}).material == 3);
 }
 
-TEST_CASE("V14 smoothing with no radius changes nothing; a far-off ball is refused", "[terrain]") {
-    VoxelVolume volume = crease_of_id_3();
+TEST_CASE("V15 smoothing with no radius changes nothing; a far-off ball is refused", "[terrain]") {
+    VoxelVolume volume = slot_of_id_3();
     const std::uint64_t revision = volume.revision();
     REQUIRE_FALSE(volume.smooth(Vec3{0.f, 0.f, 0.f}, 0.f, 1.f));
     REQUIRE(volume.revision() == revision);

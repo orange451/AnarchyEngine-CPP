@@ -126,7 +126,14 @@ void PluginLoader::unload_user(engine_core::DataModel& game, engine_core::Script
 void PluginLoader::load_user(engine_core::DataModel& game, engine_core::ScriptRuntime& scripts, UserPlugin& plugin) {
     std::vector<engine_core::CopiedNode> roots;
     std::string error;
-    if (engine_core::load_instance_file(plugin.stamp.path, roots, error) &&
+    // A plugin's name names its dock widgets' pages, so two plugins may not share one.
+    const bool builtin_name = std::any_of(loaded_.begin(), loaded_.end(), [&](engine_core::InstanceId id) {
+        const std::string* name = scripts.plugin_name(id);
+        return name != nullptr && *name == plugin.stamp.name;
+    });
+    if (builtin_name) {
+        error = "a built-in plugin has that name";
+    } else if (engine_core::load_instance_file(plugin.stamp.path, roots, error) &&
         (roots.size() != 1 || roots[0].class_name != "Folder")) {
         error = "its root must be one Folder";
     }

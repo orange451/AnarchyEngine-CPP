@@ -718,3 +718,17 @@ TEST_CASE("PL23 a BillboardGui inside a DockWidget is not drawn in the world", "
     REQUIRE(gui != nullptr);
     REQUIRE_FALSE(gui->drawn());
 }
+
+TEST_CASE("PL24 a user plugin may not take a built-in plugin's name", "[PL24]") {
+    ScriptRig rig;
+    ide::PluginLoader loader;
+    loader.load(rig.game, rig.runtime, {ide::PluginFile{"SceneTool", "print('built-in')"}});
+    TempDir dir;
+    write_plugin(dir.path, "SceneTool", {"print('user copy')"});
+    rig.runtime.drain_output();
+    loader.sync_user(rig.game, rig.runtime, ide::scan_plugins(dir.path));
+    const std::vector<std::string> out = texts(rig.runtime.drain_output());
+    REQUIRE(out.size() == 1);
+    REQUIRE(out[0].find("Plugin \"SceneTool\" failed to load: a built-in plugin has that name") != std::string::npos);
+    REQUIRE(rig.runtime.plugins().size() == 1);
+}

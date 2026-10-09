@@ -11,6 +11,7 @@
 
 #include <chrono>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 
 using namespace engine_core;
@@ -276,6 +277,102 @@ TEST_CASE("V11 ids_used tracks exactly through Id reassignment and removal", "[t
     REQUIRE_FALSE(volume.subtract(ball_at(0.f, 0.f, 0.f, 20.f)));
     REQUIRE(volume.ids_used() == std::array<std::uint64_t, 4>{});
     REQUIRE(volume.chunks().empty());
+}
+
+namespace {
+Shape block_at(float x, float y, float z, Vec3 size) {
+    Shape s;
+    s.kind = Shape::Kind::Block;
+    s.frame = matrix4_translation(x, y, z);
+    s.size = size;
+    return s;
+}
+
+// Id 3 ground with a slot three cells wide down x = 0: two walls on a floor
+// whose top is y = 0. The cells down the middle of the slot are air holding
+// Id 0, and smoothing fills the slot, turning them solid.
+VoxelVolume slot_of_id_3() {
+    VoxelVolume volume;
+    REQUIRE_FALSE(volume.fill(block_at(0.f, -4.f, 0.f, Vec3{24.f, 8.f, 24.f}), 3));
+    REQUIRE_FALSE(volume.fill(block_at(-6.5f, 4.f, 0.f, Vec3{10.f, 8.f, 24.f}), 3));
+    REQUIRE_FALSE(volume.fill(block_at(6.5f, 4.f, 0.f, Vec3{10.f, 8.f, 24.f}), 3));
+    return volume;
+}
+
+// A cell at the origin, stored 1 step above 0 and holding air_id, on Id 3
+// ground: solid below (-20 steps) and level with it (0, solid too), air
+// holding air_id above (+20). Its neighbours' mean is 1/27 of a step, so
+// smoothing it fully lands just above 0, which is stored as 0: solid.
+VoxelVolume ledge_of_id_3(std::uint8_t air_id) {
+    const CellCoord min{-2, -2, -2}, max{2, 2, 2};
+    std::vector<float> distances;
+    std::vector<std::uint8_t> materials;
+    for (int z = min.z; z <= max.z; ++z) {
+        for (int y = min.y; y <= max.y; ++y) {
+            for (int x = min.x; x <= max.x; ++x) {
+                std::int8_t stored = kAirDistance;
+                std::uint8_t id = 0;
+                if (std::abs(x) <= 1 && std::abs(z) <= 1 && std::abs(y) <= 1) {
+                    stored = y < 0 ? -20 : y > 0 ? 20 : x == 0 && z == 0 ? 1 : 0;
+                    id = stored > 0 ? air_id : 3;
+                }
+                distances.push_back(dequantize(stored, 1.f));
+                materials.push_back(id);
+            }
+        }
+    }
+    VoxelVolume volume;
+    REQUIRE_FALSE(volume.write(min, max, distances, materials));
+    return volume;
+}
+}  // namespace
+
+TEST_CASE("V12 cells smoothing turns solid take their solid neighbours' Id, not air's default", "[terrain]") {
+    VoxelVolume volume = slot_of_id_3();
+    for (int y = 1; y <= 6; ++y) {
+        REQUIRE(volume.cell(CellCoord{0, y, 0}).distance > 0);
+        REQUIRE(volume.cell(CellCoord{0, y, 0}).material == 0);
+    }
+    for (int i = 0; i < 20; ++i) {
+        REQUIRE_FALSE(volume.smooth(Vec3{0.f, 3.f, 0.f}, 5.f, 1.f));
+    }
+    for (int y = 1; y <= 6; ++y) {
+        REQUIRE(volume.cell(CellCoord{0, y, 0}).distance <= 0);
+    }
+    for (int z = -10; z <= 10; ++z) {
+        for (int y = -6; y <= 10; ++y) {
+            for (int x = -10; x <= 10; ++x) {
+                const Cell cell = volume.cell(CellCoord{x, y, z});
+                if (cell.distance <= 0) {
+                    REQUIRE(cell.material == 3);
+                }
+            }
+        }
+    }
+}
+
+TEST_CASE("V13 a cell smoothing leaves just above 0 is stored solid, and takes its neighbours' Id", "[terrain]") {
+    VoxelVolume volume = ledge_of_id_3(0);
+    REQUIRE_FALSE(volume.smooth(Vec3{0.f, 0.f, 0.f}, 0.5f, 1.f));
+    REQUIRE(volume.cell(CellCoord{0, 0, 0}).distance == 0);
+    REQUIRE(volume.cell(CellCoord{0, 0, 0}).material == 3);
+}
+
+TEST_CASE("V14 a cell smoothing turns solid drops the Id a dig left on it", "[terrain]") {
+    VoxelVolume volume = ledge_of_id_3(7);
+    REQUIRE_FALSE(volume.smooth(Vec3{0.f, 0.f, 0.f}, 0.5f, 1.f));
+    REQUIRE(volume.cell(CellCoord{0, 0, 0}).distance <= 0);
+    REQUIRE(volume.cell(CellCoord{0, 0, 0}).material == 3);
+}
+
+TEST_CASE("V15 smoothing with no radius changes nothing; a far-off ball is refused", "[terrain]") {
+    VoxelVolume volume = slot_of_id_3();
+    const std::uint64_t revision = volume.revision();
+    REQUIRE_FALSE(volume.smooth(Vec3{0.f, 0.f, 0.f}, 0.f, 1.f));
+    REQUIRE(volume.revision() == revision);
+    REQUIRE(volume.smooth(Vec3{1e30f, 0.f, 0.f}, 4.f, 1.f));
+    REQUIRE(volume.smooth(Vec3{std::nanf(""), 0.f, 0.f}, 4.f, 1.f));
+    REQUIRE(volume.revision() == revision);
 }
 
 TEST_CASE("VR1 replace_everywhere changes one Id across far-apart chunks", "[terrain]") {

@@ -4,6 +4,7 @@
 #include "support.hpp"
 
 #include "Camera.hpp"
+#include "Light.hpp"
 #include "ChangeHistoryService.hpp"
 #include "Project.hpp"
 #include "PropertyBag.hpp"
@@ -225,4 +226,28 @@ TEST_CASE("CAM6 Lua turns view points into rays and world points into view point
     CHECK(has("side\t150\ttrue"));
     CHECK(has("behind\t-10\tfalse"));
     CHECK(has("not shown in a view"));
+}
+
+TEST_CASE("CAM7 a new place and a new project start with a DirectionalLight in Lighting", "[camera][project]") {
+    SimRole role;
+    TempDir dir;
+    const auto suns = [](engine_core::DataModel& game) {
+        int count = 0;
+        for (InstanceId id : game.get_children(game.scene_service("Lighting"))) {
+            count += dynamic_cast<engine_core::DirectionalLight*>(game.instance(id)) != nullptr ? 1 : 0;
+        }
+        return count;
+    };
+    {
+        engine_core::Project project = engine_core::Project::create(dir.path);
+        REQUIRE(suns(project.datamodel()) == 1);
+        REQUIRE_FALSE(project.unsaved());
+        project.save();
+    }
+    engine_core::Game game;
+    engine_core::Project loaded = engine_core::Project::load(dir.path, game);
+    REQUIRE(suns(game) == 1);
+    engine_core::Project::reset_place(game);
+    REQUIRE(suns(game) == 1);
+    REQUIRE_FALSE(game.history().can_undo().first);
 }

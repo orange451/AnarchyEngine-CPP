@@ -1316,6 +1316,7 @@ Project Project::create(const fs::path& root, DataModel& into) {
         clear_world(into);
         into.set_name(0, project.name_);
         add_default_camera(into);
+        add_default_light(into);
         project.save_tree(true);
         rebuild.finish();
     }
@@ -1532,6 +1533,7 @@ void Project::reset_place(DataModel& game) {
     game.set_guid(0, make_guid());
     game.set_resources_root({});
     add_default_camera(game);
+    add_default_light(game);
     rebuild.finish();
 }
 
@@ -1541,6 +1543,12 @@ InstanceId Project::add_default_camera(DataModel& game) {
     camera.set_field_of_view(Camera::kNewPlaceFieldOfView);
     game.set_parent(camera.id(), game.scene_service("Workspace"));
     return camera.id();
+}
+
+InstanceId Project::add_default_light(DataModel& game) {
+    DirectionalLight& sun = game.create<DirectionalLight>();
+    game.set_parent(sun.id(), game.scene_service("Lighting"));
+    return sun.id();
 }
 
 std::vector<SaveConflict> Project::outside_changes(const std::vector<AuthoredNode>& tree,

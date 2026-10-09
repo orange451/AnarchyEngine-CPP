@@ -31,6 +31,8 @@ struct PluginToolbarState {
     // The plugin's name.
     std::string plugin;
     std::string name;
+    // A studio plugin's toolbar, which the Home tab shows; a user plugin's goes on Plugins.
+    bool builtin = false;
     std::vector<PluginButtonState> buttons;
 };
 

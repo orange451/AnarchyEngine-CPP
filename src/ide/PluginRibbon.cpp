@@ -41,9 +41,9 @@ bool SameShape(const std::vector<engine_core::PluginToolbarState>& a,
 
 }  // namespace
 
-PluginRibbon::PluginRibbon(std::shared_ptr<jadefx::Node> home, std::function<void(std::uint32_t)> click,
-                           std::function<void(const std::string&)> warn)
-    : home_(std::move(home)), click_(std::move(click)), warn_(std::move(warn)) {
+PluginRibbon::PluginRibbon(std::shared_ptr<jadefx::Node> home, jadefx::Node* homeAnchor,
+                           std::function<void(std::uint32_t)> click, std::function<void(const std::string&)> warn)
+    : home_(std::move(home)), homeAnchor_(homeAnchor), click_(std::move(click)), warn_(std::move(warn)) {
     getClassList().add("ide-ribbon-area");
     setPrefWidthRatio(1);
     auto tabs = jadefx::make<jadefx::HBox>();
@@ -110,55 +110,96 @@ jadefx::Node* PluginRibbon::buttonNode(std::uint32_t id) const {
     return found != buttons_.end() ? found->second : nullptr;
 }
 
+std::shared_ptr<jadefx::Node> PluginRibbon::makeGroup(const engine_core::PluginToolbarState& toolbar) {
+    auto group = jadefx::make<jadefx::HBox>();
+    group->getClassList().add("ide-ribbon-group");
+    group->setSpacing(2);
+    group->setAlignment(jadefx::Pos::CenterLeft);
+    for (const engine_core::PluginButtonState& state : toolbar.buttons) {
+        std::string icon;
+        if (state.icon.rfind(kIconPrefix, 0) == 0) {
+            icon = state.icon.substr(std::char_traits<char>::length(kIconPrefix));
+            if (!icon_graphic(icon) && warned_.insert(state.icon).second && warn_) {
+                warn_("Plugin icon " + state.icon + " was not found in resources/icons");
+            }
+        }
+        const std::uint32_t id = state.id;
+        auto button = jadefx::make<RibbonButton>(state.text.c_str(), icon.c_str(), [this, id] {
+            if (click_) {
+                click_(id);
+            }
+        });
+        SetStyleClass(*button, "on", state.active);
+        button->setDisable(!state.enabled);
+        if (!state.tooltip.empty()) {
+            jadefx::Tooltip::install(button.get(), jadefx::make<jadefx::Tooltip>(state.tooltip));
+        }
+        buttons_[id] = button.get();
+        group->getChildren().add(std::move(button));
+    }
+    auto caption = jadefx::make<jadefx::Label>(toolbar.name);
+    caption->getClassList().add("ide-ribbon-caption");
+    group->getChildren().add(std::move(caption));
+    return group;
+}
+
+namespace {
+
+std::shared_ptr<jadefx::Node> MakeSeparator() {
+    auto separator = jadefx::make<jadefx::Pane>();
+    separator->getClassList().add("ide-ribbon-separator");
+    separator->setMouseTransparent(true);
+    separator->setPrefSize(9, 20);
+    return separator;
+}
+
+}  // namespace
+
 void PluginRibbon::rebuild() {
     buttons_.clear();
+    // The user's plugins on the Plugins tab, a separator between each.
     std::vector<std::shared_ptr<jadefx::Node>> groups;
-    if (toolbars_.empty()) {
+    for (const engine_core::PluginToolbarState& toolbar : toolbars_) {
+        if (toolbar.builtin) {
+            continue;
+        }
+        if (!groups.empty()) {
+            groups.push_back(MakeSeparator());
+        }
+        groups.push_back(makeGroup(toolbar));
+    }
+    if (groups.empty()) {
         auto hint = jadefx::make<jadefx::Label>("No plugins installed — right-click a Folder → Save as Plugin");
         hint->getClassList().add("ide-ribbon-empty");
         groups.push_back(std::move(hint));
     }
-    for (std::size_t i = 0; i < toolbars_.size(); ++i) {
-        const engine_core::PluginToolbarState& toolbar = toolbars_[i];
-        auto group = jadefx::make<jadefx::HBox>();
-        group->getClassList().add("ide-ribbon-group");
-        group->setSpacing(2);
-        group->setAlignment(jadefx::Pos::CenterLeft);
-        for (const engine_core::PluginButtonState& state : toolbar.buttons) {
-            std::string icon;
-            if (state.icon.rfind(kIconPrefix, 0) == 0) {
-                icon = state.icon.substr(std::char_traits<char>::length(kIconPrefix));
-                if (!icon_graphic(icon) && warned_.insert(state.icon).second && warn_) {
-                    warn_("Plugin icon " + state.icon + " was not found in resources/icons");
-                }
-            }
-            const std::uint32_t id = state.id;
-            auto button = jadefx::make<RibbonButton>(state.text.c_str(), icon.c_str(), [this, id] {
-                if (click_) {
-                    click_(id);
-                }
-            });
-            SetStyleClass(*button, "on", state.active);
-            button->setDisable(!state.enabled);
-            if (!state.tooltip.empty()) {
-                jadefx::Tooltip::install(button.get(), jadefx::make<jadefx::Tooltip>(state.tooltip));
-            }
-            buttons_[id] = button.get();
-            group->getChildren().add(std::move(button));
-        }
-        auto caption = jadefx::make<jadefx::Label>(toolbar.name);
-        caption->getClassList().add("ide-ribbon-caption");
-        group->getChildren().add(std::move(caption));
-        groups.push_back(std::move(group));
-        if (i + 1 < toolbars_.size()) {
-            auto separator = jadefx::make<jadefx::Pane>();
-            separator->getClassList().add("ide-ribbon-separator");
-            separator->setMouseTransparent(true);
-            separator->setPrefSize(9, 20);
-            groups.push_back(std::move(separator));
+    plugins_->getChildren().setAll(std::move(groups));
+
+    // The studio's own plugins on Home, after the shell's buttons, each after a separator.
+    auto* home = dynamic_cast<jadefx::Pane*>(home_.get());
+    if (home == nullptr) {
+        return;
+    }
+    auto& children = home->getChildren();
+    for (const std::shared_ptr<jadefx::Node>& placed : homeGroups_) {
+        children.removeIf([&placed](const std::shared_ptr<jadefx::Node>& item) { return item == placed; });
+    }
+    homeGroups_.clear();
+    for (const engine_core::PluginToolbarState& toolbar : toolbars_) {
+        if (toolbar.builtin) {
+            homeGroups_.push_back(MakeSeparator());
+            homeGroups_.push_back(makeGroup(toolbar));
         }
     }
-    plugins_->getChildren().setAll(std::move(groups));
+    std::size_t at = children.size();
+    for (std::size_t i = 0; i < children.size(); ++i) {
+        if (children[i].get() == homeAnchor_) {
+            at = i;
+        }
+    }
+    for (const std::shared_ptr<jadefx::Node>& group : homeGroups_) {
+        children.insert(at++, group);
+    }
 }
 
 }  // namespace ide

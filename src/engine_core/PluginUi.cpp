@@ -286,6 +286,8 @@ std::vector<PluginToolbarState> PluginUi::toolbars() const {
     out.reserve(order.size());
     for (const Toolbar* toolbar : order) {
         out.push_back(toolbar->state);
+        const auto plugin = plugins_.find(toolbar->serial);
+        out.back().builtin = plugin != plugins_.end() && plugin->second.builtin;
     }
     return out;
 }

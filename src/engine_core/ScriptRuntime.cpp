@@ -460,6 +460,14 @@ void ScriptRuntime::on_script_destroyed(Script& script) {
     if (plugin_.state != nullptr && !plugin_.closing) {
         kill_owned(plugin_, script.id(), 0);
     }
+    // A plugin whose root Script goes loses its toolbars and the mouse now; the
+    // rest of its record goes at the next sweep of dead roots, outside any Lua call.
+    for (const Plugin& plugin : plugins_) {
+        if (plugin.root == script.id()) {
+            kill_owned(plugin_, 0, plugin.serial);
+            plugin_ui_.remove_plugin(plugin.serial);
+        }
+    }
 }
 
 ScriptRuntime::Thread* ScriptRuntime::thread_from(lua_State* state) {

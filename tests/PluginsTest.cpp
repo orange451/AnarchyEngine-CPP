@@ -162,6 +162,45 @@ int RunPluginsTests() {
         frames(2);
         Expect(ribbon->buttonNode(buttonId) == nullptr, "unloading the plugin takes its toolbar away");
 
+        // A built-in plugin's toolbar goes on Home, beside Test and Stop; a user plugin's stays on Plugins.
+        engine_core::InstanceId builtin = 0;
+        engine.on_simulation([&](engine_core::DataModel& game) {
+            engine_core::Script& script = game.create<engine_core::Script>();
+            game.set_name(script.id(), "BuiltinTool");
+            script.set_source("plugin:CreateToolbar('Built In'):CreateButton('Bi', '', 'icons/Grid.png', 'Bi')");
+            game.set_parent(script.id(), game.core());
+            engine.scripts().start_core_scripts();
+            builtin = script.id();
+        });
+        frames(3);
+        std::uint32_t builtinButton = 0;
+        engine.on_simulation([&](engine_core::DataModel&) {
+            for (const auto& bar : engine.scripts().plugin_ui().toolbars()) {
+                if (bar.name == "Built In" && !bar.buttons.empty()) {
+                    builtinButton = bar.buttons[0].id;
+                }
+            }
+        });
+        auto inside = [](const jadefx::Node* node, const jadefx::Node* holder) {
+            for (; node != nullptr; node = node->getParent()) {
+                if (node == holder) {
+                    return true;
+                }
+            }
+            return false;
+        };
+        jadefx::Node* bi = ribbon->buttonNode(builtinButton);
+        Expect(bi != nullptr && inside(bi, ribbon->homeRow()), "a built-in plugin's button is on the Home tab");
+        Expect(!inside(bi, ribbon->pluginsRow()), "and not on the Plugins tab");
+        Expect(ribbon->pluginsRow()->getElementsByClassName("ide-ribbon-empty").size() == 1,
+               "the Plugins tab still says no plugins are installed");
+        engine.on_simulation([&](engine_core::DataModel& game) {
+            game.destroy(builtin);
+            engine.scripts().start_core_scripts();
+        });
+        frames(3);
+        Expect(ribbon->buttonNode(builtinButton) == nullptr, "a built-in plugin that goes takes its button off Home");
+
         // A dock widget is a studio page drawing the plugin's GUI, and closing it clears Enabled.
         const engine_core::InstanceId widgetTool =
             MakeToolFolder(engine, "Widget Tool",

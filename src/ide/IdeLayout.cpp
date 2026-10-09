@@ -178,7 +178,7 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight, const std::filesys
     top->setPrefWidthRatio(1);
     top->getChildren().add(menuBar);
     auto tabbed = jadefx::make<PluginRibbon>(
-        ribbon,
+        ribbon, gap.get(),
         [this](std::uint32_t button) {
             runner_.simulation().on_simulation(
                 [this, button](engine_core::DataModel&) { runner_.simulation().scripts().plugin_ui().click(button); });

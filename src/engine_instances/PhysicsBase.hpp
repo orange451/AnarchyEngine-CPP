@@ -26,7 +26,7 @@ namespace engine_core {
 // Transform        Matrix4   where the body is. Identity.
 // Velocity         Vector3   world units per second. (0, 0, 0).
 // Anchored         boolean   a static body, which nothing moves. false.
-// Mass             number    1. Below kMinMass, as 0 is, is taken as kMinMass.
+// Mass             number    50. Below kMinMass, as 0 is, is taken as kMinMass.
 // LinearDamping    number    0, not below 0.
 // GameObject       GameObject?  what the body moves. Nil: the parent, if it
 //                               is a GameObject.
@@ -48,7 +48,7 @@ public:
         kDirtyAll = 0x7fu,
     };
 
-    static constexpr double kDefaultMass = 1.0;
+    static constexpr double kDefaultMass = 50.0;
     static constexpr double kMinMass = 0.001;
     static constexpr float kMinSize = 0.01f;
 

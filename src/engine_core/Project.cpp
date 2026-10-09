@@ -1546,9 +1546,9 @@ InstanceId Project::add_default_camera(DataModel& game) {
 }
 
 InstanceId Project::add_default_light(DataModel& game) {
-    DirectionalLight& sun = game.create<DirectionalLight>();
-    game.set_parent(sun.id(), game.scene_service("Lighting"));
-    return sun.id();
+    DynamicSky& sky = game.create<DynamicSky>();
+    game.set_parent(sky.id(), game.scene_service("Lighting"));
+    return sky.id();
 }
 
 std::vector<SaveConflict> Project::outside_changes(const std::vector<AuthoredNode>& tree,

@@ -173,7 +173,7 @@ public:
     // the origin, looking at it, 60 degrees high: the view the Scene View had
     // before there were Cameras. create and reset_place add it. Returns its id.
     static InstanceId add_default_camera(DataModel& game);
-    // The DirectionalLight a new place starts with, in Lighting, as it is made.
+    // The DynamicSky a new place starts with, in Lighting, as it is made.
     // create and reset_place add it. Returns its id.
     static InstanceId add_default_light(DataModel& game);
 

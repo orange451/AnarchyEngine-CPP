@@ -378,6 +378,16 @@ void main() {
     }
     vec3 nLocalOut = length(normalLocalOut) > 1.0e-6 ? normalize(normalLocalOut) : n;
     vec3 Nview = normalize(vNormalToView * nLocalOut);
+    // At grazing view angles a normal-mapped normal can tip away from the
+    // camera, which lighting and reflections were never meant to see (the
+    // faint bands seen looking along the ground). Tip it back just enough to
+    // face the camera.
+    vec3 toCamera = normalize(-vViewPosition);
+    float facing = dot(Nview, toCamera);
+    const float kMinFacing = 0.05;
+    if (facing < kMinFacing) {
+        Nview = normalize(Nview + (kMinFacing - facing) * toCamera);
+    }
 
     gAlbedo = vec4(toLinear(albedo), 1.0);
     gNormal = vec4(Nview, 1.0);

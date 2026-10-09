@@ -4,6 +4,7 @@
 #include "support.hpp"
 #include "Terrain.hpp"
 #include "TerrainWorld.hpp"
+#include "terrain/AlodStore.hpp"
 #include "terrain/AvoxFile.hpp"
 #include "terrain/ChunkCache.hpp"
 #include "terrain/ShapeDistance.hpp"
@@ -15,6 +16,9 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <atomic>
+#include <filesystem>
+#include <fstream>
+#include <optional>
 #include <thread>
 #include <unordered_set>
 #include <vector>
@@ -290,4 +294,168 @@ TEST_CASE("TW-S3 an edit during first build meshes that chunk once, with the edi
         REQUIRE(now.render != nullptr);
         REQUIRE(chunk.mesh->vertices.size() == now.render->vertices.size());
     }
+}
+
+// ---- The .alod store (Task 4) ----
+
+namespace {
+
+CompactMesh test_mesh(int seed, bool wide_indices) {
+    CompactMesh mesh;
+    mesh.origin = Vec3{static_cast<float>(seed), 2.f, 3.f};
+    mesh.scale = Vec3{10.f, 20.f, 30.f + static_cast<float>(seed)};
+    const int vertices = 4 + seed;
+    for (int v = 0; v < vertices; ++v) {
+        mesh.positions.insert(mesh.positions.end(), {static_cast<std::uint16_t>(v * 7 + seed),
+                                                     static_cast<std::uint16_t>(v * 11), static_cast<std::uint16_t>(v)});
+        mesh.normals.insert(mesh.normals.end(), {static_cast<std::uint8_t>(v), static_cast<std::uint8_t>(255 - v)});
+        mesh.ids.insert(mesh.ids.end(), {1, static_cast<std::uint8_t>(seed), 0, 0});
+        mesh.weights.insert(mesh.weights.end(), {255, 0, 0, static_cast<std::uint8_t>(v)});
+    }
+    for (int t = 0; t + 2 < vertices; ++t) {
+        if (wide_indices) {
+            mesh.indices32.insert(mesh.indices32.end(),
+                                  {0u, static_cast<std::uint32_t>(t + 1), static_cast<std::uint32_t>(t + 2)});
+        } else {
+            mesh.indices.insert(mesh.indices.end(),
+                                {0, static_cast<std::uint16_t>(t + 1), static_cast<std::uint16_t>(t + 2)});
+        }
+    }
+    mesh.surface_index_count = 3;
+    return mesh;
+}
+
+bool same_mesh(const CompactMesh& a, const CompactMesh& b) {
+    return a.origin.x == b.origin.x && a.origin.y == b.origin.y && a.origin.z == b.origin.z &&
+           a.scale.x == b.scale.x && a.scale.y == b.scale.y && a.scale.z == b.scale.z &&
+           a.positions == b.positions && a.normals == b.normals && a.ids == b.ids && a.weights == b.weights &&
+           a.indices == b.indices && a.indices32 == b.indices32 && a.surface_index_count == b.surface_index_count;
+}
+
+// A fresh path in the temp folder, removed when the test ends.
+struct TempFile {
+    std::filesystem::path path;
+    explicit TempFile(const char* name) : path(std::filesystem::temp_directory_path() / name) {
+        std::error_code error;
+        std::filesystem::remove(path, error);
+    }
+    ~TempFile() {
+        std::error_code error;
+        std::filesystem::remove(path, error);
+    }
+};
+
+}  // namespace
+
+TEST_CASE("AL1 committed nodes round-trip through a reopen", "[terrain]") {
+    TempFile file("al1.alod");
+    {
+        std::optional<AlodStore> store = AlodStore::create(file.path, 0x1234u, 2.f);
+        REQUIRE(store);
+        REQUIRE(store->put(NodeKey{2, 0, 0, 0}, test_mesh(1, false), 1.5f, Vec3{0, 0, 0}, Vec3{256, 64, 256}));
+        REQUIRE(store->put(NodeKey{3, -1, 0, 2}, test_mesh(2, true), 4.f, Vec3{-512, 0, 1024}, Vec3{0, 64, 1536}));
+        REQUIRE(store->put(NodeKey{2, 5, 1, -3}, test_mesh(3, false), 2.f, Vec3{1, 2, 3}, Vec3{4, 5, 6}));
+        store->set_surface_chunks({ChunkCoord{0, 0, 0}, ChunkCoord{-4, 1, 7}});
+        REQUIRE(store->commit());
+    }
+    std::optional<AlodStore> store = AlodStore::open(file.path, 0x1234u, 2.f);
+    REQUIRE(store);
+    REQUIRE(store->entries().size() == 3u);
+    const AlodEntry& entry = store->entries().at(NodeKey{3, -1, 0, 2});
+    REQUIRE(entry.error == 4.f);
+    REQUIRE(entry.bounds_min.x == -512.f);
+    REQUIRE(entry.bounds_max.z == 1536.f);
+    REQUIRE(same_mesh(*store->load(NodeKey{2, 0, 0, 0}), test_mesh(1, false)));
+    REQUIRE(same_mesh(*store->load(NodeKey{3, -1, 0, 2}), test_mesh(2, true)));
+    REQUIRE(same_mesh(*store->load(NodeKey{2, 5, 1, -3}), test_mesh(3, false)));
+    REQUIRE(store->load(NodeKey{2, 9, 9, 9}) == nullptr);
+    REQUIRE(store->surface_chunks().size() == 2u);
+    REQUIRE(store->surface_chunks()[1] == ChunkCoord{-4, 1, 7});
+}
+
+TEST_CASE("AL2 a node put twice reads back its newest mesh", "[terrain]") {
+    TempFile file("al2.alod");
+    {
+        std::optional<AlodStore> store = AlodStore::create(file.path, 7u, 1.f);
+        REQUIRE(store->put(NodeKey{2, 0, 0, 0}, test_mesh(1, false), 1.f, Vec3{}, Vec3{}));
+        REQUIRE(store->commit());
+        REQUIRE(store->put(NodeKey{2, 0, 0, 0}, test_mesh(5, false), 3.f, Vec3{}, Vec3{}));
+        REQUIRE(same_mesh(*store->load(NodeKey{2, 0, 0, 0}), test_mesh(5, false)));   // before commit too
+        REQUIRE(store->commit());
+    }
+    std::optional<AlodStore> store = AlodStore::open(file.path, 7u, 1.f);
+    REQUIRE(store);
+    REQUIRE(store->entries().size() == 1u);
+    REQUIRE(store->entries().at(NodeKey{2, 0, 0, 0}).error == 3.f);
+    REQUIRE(same_mesh(*store->load(NodeKey{2, 0, 0, 0}), test_mesh(5, false)));
+}
+
+TEST_CASE("AL3 a damaged file is not a store", "[terrain]") {
+    TempFile file("al3.alod");
+    {
+        std::optional<AlodStore> store = AlodStore::create(file.path, 7u, 1.f);
+        REQUIRE(store->put(NodeKey{2, 0, 0, 0}, test_mesh(1, false), 1.f, Vec3{}, Vec3{}));
+        REQUIRE(store->commit());
+    }
+    const std::uintmax_t size = std::filesystem::file_size(file.path);
+    SECTION("truncated") {
+        std::filesystem::resize_file(file.path, size - 1);
+        REQUIRE_FALSE(AlodStore::open(file.path, 7u, 1.f));
+    }
+    SECTION("a footer byte flipped") {
+        std::fstream io(file.path, std::ios::in | std::ios::out | std::ios::binary);
+        io.seekg(static_cast<std::streamoff>(size - 2));
+        char c = 0;
+        io.read(&c, 1);
+        c = static_cast<char>(c ^ 0x5a);
+        io.seekp(static_cast<std::streamoff>(size - 2));
+        io.write(&c, 1);
+        io.close();
+        REQUIRE_FALSE(AlodStore::open(file.path, 7u, 1.f));
+    }
+    SECTION("not a store at all") {
+        std::ofstream out(file.path, std::ios::binary | std::ios::trunc);
+        out << "hello";
+        out.close();
+        REQUIRE_FALSE(AlodStore::open(file.path, 7u, 1.f));
+    }
+    SECTION("missing") {
+        std::filesystem::remove(file.path);
+        REQUIRE_FALSE(AlodStore::open(file.path, 7u, 1.f));
+    }
+}
+
+TEST_CASE("AL4 a store for other voxels is not opened", "[terrain]") {
+    TempFile file("al4.alod");
+    {
+        std::optional<AlodStore> store = AlodStore::create(file.path, 7u, 1.f);
+        REQUIRE(store->commit());
+    }
+    REQUIRE(AlodStore::open(file.path, 7u, 1.f));
+    REQUIRE_FALSE(AlodStore::open(file.path, 8u, 1.f));
+    REQUIRE_FALSE(AlodStore::open(file.path, 7u, 2.f));
+}
+
+TEST_CASE("AL5 nodes put after the last commit are not seen by a reopen", "[terrain]") {
+    TempFile file("al5.alod");
+    {
+        std::optional<AlodStore> store = AlodStore::create(file.path, 7u, 1.f);
+        REQUIRE(store->put(NodeKey{2, 0, 0, 0}, test_mesh(1, false), 1.f, Vec3{}, Vec3{}));
+        REQUIRE(store->commit());
+        REQUIRE(store->put(NodeKey{2, 1, 0, 0}, test_mesh(2, false), 1.f, Vec3{}, Vec3{}));
+        REQUIRE(store->put(NodeKey{2, 0, 0, 0}, test_mesh(3, false), 1.f, Vec3{}, Vec3{}));
+        // No commit: as if Studio stopped here.
+    }
+    std::optional<AlodStore> store = AlodStore::open(file.path, 7u, 1.f);
+    REQUIRE(store);
+    REQUIRE(store->entries().size() == 1u);
+    REQUIRE(same_mesh(*store->load(NodeKey{2, 0, 0, 0}), test_mesh(1, false)));
+}
+
+TEST_CASE("AL6 content keys differ when the bytes do", "[terrain]") {
+    const std::vector<std::byte> a{std::byte{1}, std::byte{2}, std::byte{3}};
+    const std::vector<std::byte> b{std::byte{1}, std::byte{2}, std::byte{4}};
+    REQUIRE(content_key_of(a.data(), a.size()) == content_key_of(a.data(), a.size()));
+    REQUIRE(content_key_of(a.data(), a.size()) != content_key_of(b.data(), b.size()));
+    REQUIRE(content_key_of(a.data(), a.size()) != 0u);
 }

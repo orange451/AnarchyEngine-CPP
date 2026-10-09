@@ -643,6 +643,7 @@ add_library(engine_core STATIC
     src/engine_core/terrain/VoxelSampler.cpp
     src/engine_core/terrain/LodBuilder.cpp
     src/engine_core/terrain/LodTree.cpp
+    src/engine_core/terrain/AlodStore.cpp
     src/engine_core/terrain/HeightDerive.cpp
     src/engine_core/terrain/LayerBuilder.cpp
     src/engine_core/TerrainWorld.cpp

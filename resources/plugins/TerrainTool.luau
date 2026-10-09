@@ -52,7 +52,7 @@ local recording: string? = nil
 -- of the surface pressed (or the ground), let go, move to set its height,
 -- and click to fill it. All on the grid.
 local GRIDS = { 1, 2, 4, 8, 16 }
-local grid = 4
+local grid = 1
 -- nil, "Drawing" (the footprint), or "Height".
 local drawing: string? = nil
 -- The plane drawn on: its axis (1 X, 2 Y, 3 Z), which way it faces, and a point on it.

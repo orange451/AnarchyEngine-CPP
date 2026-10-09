@@ -142,6 +142,8 @@ private:
     // Tells this view's camera the view's size, when either changed.
     void reportViewportSize();
     void noteCurrentCamera(bool onlyIfNone = false);
+    // F: moves this view's Camera back along its facing until the selection fills the view.
+    void frameSelection();
     // Locks or frees the scene's pointer to match MouseBehavior, and hands the
     // scene's pointer motion to UserInputService while locked. Two views can
     // share one Scene, so only the focused view locks it or reads it as let

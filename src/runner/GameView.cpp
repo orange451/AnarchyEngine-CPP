@@ -283,6 +283,84 @@ void GameView::noteCurrentCamera(bool onlyIfNone) {
     });
 }
 
+void GameView::frameSelection() {
+    if (engine_ == nullptr || cameraId_ == 0) {
+        return;
+    }
+    engine_->on_simulation([camera = cameraId_, ids = selected_](engine_core::DataModel& game) {
+        auto* view = dynamic_cast<engine_core::Camera*>(game.instance(camera));
+        if (view == nullptr) {
+            return;
+        }
+        engine_core::Vec3 lo{1e30f, 1e30f, 1e30f};
+        engine_core::Vec3 hi{-1e30f, -1e30f, -1e30f};
+        bool any = false;
+        const auto add = [&](engine_core::Vec3 p) {
+            lo = {std::min(lo.x, p.x), std::min(lo.y, p.y), std::min(lo.z, p.z)};
+            hi = {std::max(hi.x, p.x), std::max(hi.y, p.y), std::max(hi.z, p.z)};
+            any = true;
+        };
+        // Every corner of a local box, placed by m.
+        const auto addBox = [&](const engine_core::Matrix4& m, engine_core::Vec3 a, engine_core::Vec3 b) {
+            for (int i = 0; i < 8; ++i) {
+                add(engine_core::matrix4_point(m, {(i & 1) ? b.x : a.x, (i & 2) ? b.y : a.y, (i & 4) ? b.z : a.z}));
+            }
+        };
+        // The selected instances and everything under them.
+        std::vector<engine_core::InstanceId> stack = ids;
+        while (!stack.empty()) {
+            const engine_core::InstanceId id = stack.back();
+            stack.pop_back();
+            if (id == camera) {
+                continue;
+            }
+            for (const engine_core::InstanceId child : game.get_children(id)) {
+                stack.push_back(child);
+            }
+            const auto* instance = game.instance(id);
+            if (const auto* brush = dynamic_cast<const engine_core::Brush*>(instance)) {
+                const engine_core::Matrix4 m = brush->transform();
+                for (const engine_core::brush::DVec3& v : brush->shape().vertices) {
+                    add(engine_core::matrix4_point(m, {static_cast<float>(v.x), static_cast<float>(v.y),
+                                                       static_cast<float>(v.z)}));
+                }
+            } else if (const auto* body = dynamic_cast<const engine_core::PhysicsObject*>(instance)) {
+                const engine_core::Vec3 h{body->size().x * 0.5f, body->size().y * 0.5f, body->size().z * 0.5f};
+                addBox(body->transform(), {-h.x, -h.y, -h.z}, h);
+            } else if (const auto* controller = dynamic_cast<const engine_core::PlayerController*>(instance)) {
+                const float r = static_cast<float>(controller->radius());
+                const float h = static_cast<float>(controller->height()) * 0.5f;
+                addBox(controller->transform(), {-r, -h, -r}, {r, h, r});
+            } else if (const auto* placed = dynamic_cast<const engine_core::PVInstance*>(instance)) {
+                add(engine_core::matrix4_position(placed->transform()));
+            }
+        }
+        if (!any) {
+            return;
+        }
+        const engine_core::Vec3 center{(lo.x + hi.x) * 0.5f, (lo.y + hi.y) * 0.5f, (lo.z + hi.z) * 0.5f};
+        const float dx = hi.x - lo.x, dy = hi.y - lo.y, dz = hi.z - lo.z;
+        const double radius = std::max(0.5 * std::sqrt(double(dx) * dx + double(dy) * dy + double(dz) * dz), 1.0);
+        // Far enough that the bounding sphere fits the narrower field of view, with a margin.
+        const engine_core::Vec2 size = view->viewport_size();
+        const double aspect = size.x > 0 && size.y > 0 ? double(size.x) / size.y : 16.0 / 9.0;
+        const double half = view->field_of_view() * 0.5 * 3.14159265358979 / 180.0;
+        const double narrow = std::min(half, std::atan(std::tan(half) * aspect));
+        const double distance = radius / std::sin(narrow) * 1.15;
+        // Keep the camera's facing; it looks down its -Z.
+        const engine_core::Matrix4 from = view->transform();
+        engine_core::Vec3 look = engine_core::matrix4_vector(from, {0.f, 0.f, -1.f});
+        const float length = std::sqrt(look.x * look.x + look.y * look.y + look.z * look.z);
+        look = length > 0 ? engine_core::Vec3{look.x / length, look.y / length, look.z / length}
+                          : engine_core::Vec3{0.f, 0.f, -1.f};
+        engine_core::Matrix4 to = from;
+        to.m[12] = center.x - look.x * static_cast<float>(distance);
+        to.m[13] = center.y - look.y * static_cast<float>(distance);
+        to.m[14] = center.z - look.z * static_cast<float>(distance);
+        view->set_transform(to);
+    });
+}
+
 void GameView::syncPointerLock() {
     jadefx::Scene* scene = getScene();
     if (game_ == nullptr || scene == nullptr) {
@@ -1252,6 +1330,12 @@ void GameView::handleKey(jadefx::KeyEvent& event) {
             terrainBrush_->toggle();
             terrainPalette_->refresh();
             refreshOverlays();
+            event.consume();
+            return;
+        }
+        // F frames the selection, whatever it is.
+        if (event.key == jadefx::Key::F && !event.control && !event.shift && !selected_.empty()) {
+            frameSelection();
             event.consume();
             return;
         }

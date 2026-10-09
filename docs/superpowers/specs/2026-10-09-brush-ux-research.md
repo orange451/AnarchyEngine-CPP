@@ -168,7 +168,7 @@ CSG in TB: **Ctrl+J** convex merge (hull, so it can fill voids), **Ctrl+K** subt
 | Action | Key | Precedent |
 |---|---|---|
 | Fly | RMB + W/A/S/D, E/Q up/down, Shift fast, **RMB+wheel = speed** | TB uses Q/X for up/down; ours keeps engine E/Q |
-| Orbit / pan / frame | **Alt+RMB** orbit about the clicked point; MMB pan; **F** frame selection (Unity), plus **Ctrl+U** alias (TB) | TB, Unity |
+| Orbit / pan / frame | **Alt+RMB** orbit about the clicked point; MMB pan; **F** frame selection for any instance (Unity); no Ctrl+U alias | TB, Unity |
 | Select / toggle / drill | LMB / **Ctrl+LMB**; click again = tunnel cycle; **Ctrl+wheel** drill; Esc or click void = deselect; Ctrl+A all, Ctrl+Shift+A none, Ctrl+Alt+A invert | TB, NRC |
 | Face select | **Shift+LMB**; Ctrl+Shift+LMB add; Shift+dbl = all faces; Shift+Alt+dbl = coplanar flood; Ctrl+Shift+drag = paint | TB |
 | Tools | **B** brush/hull, **C** clip, **V** vertex, **G** edge (TB uses E, which is our fly-down), **H** face (TB uses F, which we keep for frame), **R** rotate, **T** scale, **Y** sweep; **Shift+Esc** exit tool | TB (E remapped) |

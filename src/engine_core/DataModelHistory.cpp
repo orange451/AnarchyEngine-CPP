@@ -503,6 +503,11 @@ void DataModel::apply_history(const Mutation& mutation, bool inverse) {
             destroy(mutation.record.id);
         }
         break;
+    case MutationKind::Custom:
+        if (mutation.custom) {
+            mutation.custom->apply(*this, inverse);
+        }
+        break;
     }
 }
 

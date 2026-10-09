@@ -1092,23 +1092,13 @@ void GameView::handleKey(jadefx::KeyEvent& event) {
     if (event.key == jadefx::Key::LeftShift || event.key == jadefx::Key::RightShift) {
         shiftHeld_ = event.pressed;
     }
-    // Terrain mode: T turns it on and off (edit mode only); Ctrl+Z and
-    // Ctrl+Y step through its strokes while it is on.
+    // Terrain mode: T turns it on and off (edit mode only).
     const bool editing = !playerView_ && !runner_->testing();
     if (editing && event.pressed && !event.repeat && !event.alt && !event.meta) {
         if (event.key == jadefx::Key::T && !event.control && !event.shift) {
             terrainBrush_->toggle();
             terrainPalette_->refresh();
             refreshOverlays();
-            event.consume();
-            return;
-        }
-        if (terrainBrush_->active() && event.control && (event.key == jadefx::Key::Z || event.key == jadefx::Key::Y)) {
-            if (event.key == jadefx::Key::Z && !event.shift) {
-                terrainBrush_->undo();
-            } else {
-                terrainBrush_->redo();
-            }
             event.consume();
             return;
         }

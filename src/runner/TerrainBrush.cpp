@@ -1,5 +1,6 @@
 #include "TerrainBrush.hpp"
 
+#include "ChangeHistoryService.hpp"
 #include "Engine.hpp"
 #include "PhysicsWorld.hpp"
 #include "SceneService.hpp"
@@ -273,16 +274,15 @@ bool TerrainBrush::toggle() {
     if (found == 0) {
         return false;
     }
-    if (found != terrain_) {
-        undo_.clear();
-        redo_.clear();
-    }
     terrain_ = found;
     active_ = true;
     return true;
 }
 
 void TerrainBrush::turnOff() {
+    if (held_) {
+        endStroke();
+    }
     active_ = false;
     held_ = false;
     boxing_ = false;
@@ -362,16 +362,71 @@ void TerrainBrush::hover(const std::optional<engine_core::DraggerRay>& ray) {
 
 void TerrainBrush::beginStroke() {
     const InstanceId terrain = terrain_;
+    stroking_ = false;
     engine_.on_simulation([&](DataModel& world) {
         if (Terrain* found = terrain_of(world, terrain)) {
-            undo_.push_back(Step{terrain, found->volume().chunks()});
+            strokeBefore_ = found->volume().chunks();
+            stroking_ = true;
         }
     });
-    constexpr std::size_t kSteps = 64;
-    if (undo_.size() > kSteps) {
-        undo_.erase(undo_.begin());
+}
+
+namespace {
+
+// One stroke in the studio's undo: the Terrain's chunks before and after.
+class TerrainVoxelChange : public engine_core::CustomChange {
+public:
+    TerrainVoxelChange(InstanceId terrain, engine_core::terrain::ChunkMap before, engine_core::terrain::ChunkMap after)
+        : terrain_(terrain), before_(std::move(before)), after_(std::move(after)) {}
+
+    void apply(DataModel& world, bool inverse) const override {
+        Terrain* found = terrain_of(world, terrain_);
+        if (found == nullptr) {
+            return;
+        }
+        const engine_core::terrain::ChunkMap& chunks = inverse ? before_ : after_;
+        found->edit_volume([&](VoxelVolume& volume) -> std::optional<std::string> {
+            volume.set_chunks(chunks);
+            return std::nullopt;
+        });
     }
-    redo_.clear();
+
+private:
+    InstanceId terrain_;
+    engine_core::terrain::ChunkMap before_;
+    engine_core::terrain::ChunkMap after_;
+};
+
+}  // namespace
+
+void TerrainBrush::endStroke() {
+    if (!stroking_) {
+        return;
+    }
+    stroking_ = false;
+    const InstanceId terrain = terrain_;
+    engine_core::terrain::ChunkMap before = std::move(strokeBefore_);
+    strokeBefore_.clear();
+    engine_.on_simulation([&](DataModel& world) {
+        Terrain* found = terrain_of(world, terrain);
+        if (found == nullptr) {
+            return;
+        }
+        engine_core::terrain::ChunkMap after = found->volume().chunks();
+        if (after == before) {
+            return;   // the stroke changed nothing
+        }
+        engine_core::ChangeHistoryService& history = world.history();
+        const std::optional<std::string> recording = history.try_begin_recording("Sculpt Terrain");
+        engine_core::Mutation mutation;
+        mutation.kind = engine_core::MutationKind::Custom;
+        mutation.id = terrain;
+        mutation.custom = std::make_shared<TerrainVoxelChange>(terrain, std::move(before), std::move(after));
+        history.note(std::move(mutation));
+        if (recording) {
+            history.finish_recording(*recording, engine_core::FinishRecordingOperation::Commit);
+        }
+    });
 }
 
 void TerrainBrush::press(const engine_core::DraggerRay& ray, bool shift) {
@@ -404,7 +459,10 @@ void TerrainBrush::release() {
         boxing_ = false;
         applyBox();
     }
-    held_ = false;
+    if (held_) {
+        held_ = false;
+        endStroke();
+    }
 }
 
 void TerrainBrush::tick(double now_seconds, bool shift) {
@@ -501,53 +559,22 @@ void TerrainBrush::applyBox() {
             return volume.fill(shape, material);
         });
     });
+    endStroke();
 }
-
-namespace {
-
-bool swap_chunks(engine_core::Engine& engine, InstanceId terrain, engine_core::terrain::ChunkMap& chunks) {
-    bool done = false;
-    engine.on_simulation([&](DataModel& world) {
-        Terrain* found = terrain_of(world, terrain);
-        if (found == nullptr) {
-            return;
-        }
-        engine_core::terrain::ChunkMap current = found->volume().chunks();
-        found->edit_volume([&](VoxelVolume& volume) -> std::optional<std::string> {
-            volume.set_chunks(chunks);
-            return std::nullopt;
-        });
-        chunks = std::move(current);
-        done = true;
-    });
-    return done;
-}
-
-}  // namespace
 
 bool TerrainBrush::undo() {
-    if (undo_.empty() || !engine_.paused()) {
+    if (!engine_.paused()) {
         return false;
     }
-    Step step = std::move(undo_.back());
-    undo_.pop_back();
-    if (!swap_chunks(engine_, step.terrain, step.chunks)) {
-        return false;
-    }
-    redo_.push_back(std::move(step));
+    engine_.on_simulation([](DataModel& world) { world.history().undo(); });
     return true;
 }
 
 bool TerrainBrush::redo() {
-    if (redo_.empty() || !engine_.paused()) {
+    if (!engine_.paused()) {
         return false;
     }
-    Step step = std::move(redo_.back());
-    redo_.pop_back();
-    if (!swap_chunks(engine_, step.terrain, step.chunks)) {
-        return false;
-    }
-    undo_.push_back(std::move(step));
+    engine_.on_simulation([](DataModel& world) { world.history().redo(); });
     return true;
 }
 

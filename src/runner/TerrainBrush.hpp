@@ -3,10 +3,10 @@
 // Terrain tools prototype: the Scene View's terrain mode. T toggles it; a
 // small palette picks Add, Grow, Smooth, or Paint, a size, a strength, and a
 // material. Grow, Smooth, and Paint work under a ball at the pointer; Add
-// drags a box on the grid floor. Each stroke is one step of its own undo
-// (Ctrl+Z / Ctrl+Y while terrain mode is on): voxel chunks are shared and
-// immutable, so a step is the chunk map before the stroke, not a copy of
-// any voxels.
+// drags a box on the grid floor. Each stroke is one step of the studio's
+// undo (ChangeHistoryService, a Custom mutation): voxel chunks are shared
+// and immutable, so a step holds the chunk maps before and after the
+// stroke, not a copy of any voxels.
 //
 // UI thread. Every voxel read or write runs on the simulation side through
 // Engine::on_simulation.
@@ -108,16 +108,13 @@ private:
         int id = 0;
         std::string name;
     };
-    struct Step {
-        engine_core::InstanceId terrain = 0;
-        engine_core::terrain::ChunkMap chunks;
-    };
 
     void refreshMaterials(engine_core::DataModel& world);
     void pick(const engine_core::DraggerRay& ray);
     void applyBall(bool shift);
     void applyBox();
     void beginStroke();
+    void endStroke();
 
     engine_core::Engine& engine_;
     bool active_ = false;
@@ -141,8 +138,9 @@ private:
     engine_core::Vec3 boxEnd_{};
     double lastApply_ = 0.0;
 
-    std::vector<Step> undo_;
-    std::vector<Step> redo_;
+    // The stroke in progress: its Terrain's chunks before it began.
+    bool stroking_ = false;
+    engine_core::terrain::ChunkMap strokeBefore_;
     std::function<void()> onUsed_;
 };
 

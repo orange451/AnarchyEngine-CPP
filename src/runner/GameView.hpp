@@ -100,19 +100,6 @@ public:
     // The profiler over this view. It shows while ProfilerUi is shown and this
     // view is its owner: the Scene View last clicked or focused.
     ProfilerOverlay& profilerOverlay() { return *profilerOverlay_; }
-    // Ctrl+Z / Ctrl+Y while terrain mode is on: steps through its strokes.
-    // False when terrain mode is off (the place's undo takes the chord).
-    bool terrainUndo(bool redo) {
-        if (!terrainBrush_ || !terrainBrush_->active()) {
-            return false;
-        }
-        if (redo) {
-            terrainBrush_->redo();
-        } else {
-            terrainBrush_->undo();
-        }
-        return true;
-    }
     // A script's MouseBehavior asks for a lock and the profiler is not showing.
     bool pointerWanted() const;
 

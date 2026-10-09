@@ -805,13 +805,6 @@ void IdeLayout::routeUndo(jadefx::KeyEvent& event, jadefx::Scene& scene) {
     if (!properties && InTextWidget(focused)) {
         return;
     }
-    // A Scene View in terrain mode steps through its own brush strokes.
-    if (runner::GameView* view = Owning<runner::GameView>(focused)) {
-        if (view->terrainUndo(is_redo(chord))) {
-            event.consume();
-            return;
-        }
-    }
     Focus target;
     if (properties) {
         target.kind = FocusKind::Properties;

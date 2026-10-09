@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <string>
 #include <unordered_set>
@@ -37,7 +38,15 @@ enum class HistoryProp : std::uint8_t {
     Reflected
 };
 
-enum class MutationKind : std::uint8_t { SetProperty, SetParent, CreateInstance, DestroyInstance };
+enum class MutationKind : std::uint8_t { SetProperty, SetParent, CreateInstance, DestroyInstance, Custom };
+
+// A change that knows how to put itself back, for state the other kinds do
+// not cover (a Terrain's voxels). apply(world, true) undoes it; false redoes.
+class CustomChange {
+public:
+    virtual ~CustomChange() = default;
+    virtual void apply(DataModel& world, bool inverse) const = 0;
+};
 
 struct PropertyValue {
     HistoryProp prop = HistoryProp::Name;
@@ -83,6 +92,8 @@ struct Mutation {
     InstanceId new_parent = kHistoryNoParent;
     int old_sibling_index = -1;
     AuthoredRecord record;
+    // Custom only.
+    std::shared_ptr<const CustomChange> custom;
 };
 
 // Listeners run after the history operation that fired them, not inside a setter.

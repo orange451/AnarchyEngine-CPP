@@ -322,6 +322,24 @@ bool write_can_collide(DataModel&, DataModel& object, LuaSlot& in) {
     return body != nullptr && refuse(in, body->set_can_collide(in.flag));
 }
 
+bool read_anchored(DataModel&, DataModel& object, LuaSlot& out) {
+    const auto* body = dynamic_cast<const Brush*>(&object);
+    if (body == nullptr) {
+        return false;
+    }
+    out = bool_slot(body->anchored());
+    return true;
+}
+
+bool write_anchored(DataModel&, DataModel& object, LuaSlot& in) {
+    auto* body = dynamic_cast<Brush*>(&object);
+    if (body == nullptr) {
+        return false;
+    }
+    body->set_anchored(in.flag);
+    return true;
+}
+
 bool read_color(DataModel&, DataModel& object, LuaSlot& out) {
     const auto* body = dynamic_cast<const Brush*>(&object);
     if (body == nullptr) {
@@ -371,6 +389,8 @@ ANARCHY_LUA_REGISTER(register_brush_lua) {
                    0.0, 1.0),
         lua_saved_property("AngularDamping", "number", read_number<Brush, &Brush::angular_damping>,
                            write_number<Brush, &Brush::set_angular_damping>, "0"),
+        // A Brush starts anchored, so its saved default is true where PhysicsBase's is false.
+        lua_saved_property("Anchored", "boolean", read_anchored, write_anchored, "true"),
         lua_saved_property("CanCollide", "boolean", read_can_collide, write_can_collide, "true"),
         lua_saved_property("Color", "Color3", read_color, write_color, "[1,1,1]"),
         lua_slider(lua_saved_property("Transparency", "number", read_number<Brush, &Brush::transparency>,

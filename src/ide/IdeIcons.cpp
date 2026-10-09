@@ -72,6 +72,9 @@ const char* IconFileOverride(const std::string& class_name) {
     if (class_name == "Button") {
         return "TextButton.png";
     }
+    if (class_name == "Brush") {
+        return "Box.png";
+    }
     // The default icon, named so no PhysicsObject.png or PlayerController.png is looked for first.
     if (class_name == "PhysicsObject" || class_name == "PlayerController") {
         return "wat.gif";

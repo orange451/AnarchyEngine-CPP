@@ -1527,8 +1527,14 @@ void BrushTool::refreshHover(const DraggerRay& ray, BrushModifiers mods) {
         grid_patch(drawEnd_, planeAxis_);
         box_lines(lines_, lo, hi, kDraw);
         const Vec3 size = sub(hi, lo);
-        label(hi, number(size.x) + " x " + number(size.y) + " x " + number(size.z) +
-                      (drag_ == Drag::Height ? "   click to place" : ""));
+        if (drag_ == Drag::Height) {
+            label(hi, number(size.x) + " x " + number(size.y) + " x " + number(size.z) + "   click to place");
+        } else {
+            // Only the footprint so far: its two sides on the plane.
+            const int u = (planeAxis_ + 1) % 3;
+            const int v = (planeAxis_ + 2) % 3;
+            label(hi, number(axis_of(size, u)) + " x " + number(axis_of(size, v)));
+        }
         return;
     }
 

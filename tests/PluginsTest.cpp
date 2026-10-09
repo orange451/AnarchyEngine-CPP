@@ -168,6 +168,21 @@ int RunPluginsTests() {
         });
         jadefx::Node* go = ribbon->buttonNode(buttonId);
         Expect(go != nullptr, "the plugin's button is on the Plugins tab");
+        // A card: its icon above its name, in a row three times the tab bar's height.
+        Expect(HasClass(go, "ide-ribbon-card"), "a plugin's button is a card");
+        Expect(go != nullptr && !go->getElementsByClassName("ide-ribbon-card-icon").empty() &&
+                   !go->getElementsByClassName("ide-ribbon-card-name").empty(),
+               "with an icon and a nameplate");
+        if (go != nullptr && !go->getElementsByClassName("ide-ribbon-card-icon").empty() &&
+            !go->getElementsByClassName("ide-ribbon-card-name").empty()) {
+            const jadefx::Node* icon = go->getElementsByClassName("ide-ribbon-card-icon")[0];
+            const jadefx::Node* name = go->getElementsByClassName("ide-ribbon-card-name")[0];
+            Expect(icon->getAbsoluteY() + icon->getHeight() <= name->getAbsoluteY() + 1, "the name is under the icon");
+            Expect(std::abs((icon->getAbsoluteX() + icon->getWidth() / 2) - (go->getAbsoluteX() + go->getWidth() / 2)) < 2,
+                   "the icon sits in the middle of the card");
+        }
+        Expect(std::abs(ribbon->pluginsRow()->getHeight() - 3 * ribbon->tabBar()->getHeight()) < 2,
+               "the plugins row is three times the tab bar's height");
         Expect(ribbon->pluginsRow()->getElementsByClassName("ide-ribbon-empty").empty(), "the hint goes");
         if (go != nullptr) {
             const double x = go->getAbsoluteX() + go->getWidth() / 2;

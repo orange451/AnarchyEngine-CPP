@@ -92,8 +92,8 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight, const std::filesys
     ribbon->setSpacing(2);
     ribbon->setAlignment(jadefx::Pos::CenterLeft);
     ribbon->setPrefWidthRatio(1);
-    ribbon->setMinSize(0, kRibbonHeight);
-    ribbon->setPrefHeight(kRibbonHeight);
+    ribbon->setMinSize(0, kToolRowHeight);
+    ribbon->setPrefHeight(kToolRowHeight);
     auto test = jadefx::make<RibbonButton>("Test", "Play.png", [this] { start_test(); });
     auto pause = jadefx::make<RibbonButton>("Pause", "Pause.png", [this] { pause_test(); });
     auto resume = jadefx::make<RibbonButton>("Resume", "Resume.png", [this] { resume_test(); });

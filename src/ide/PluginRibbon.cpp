@@ -8,6 +8,46 @@
 namespace ide {
 namespace {
 
+// A plugin's button as a card on a tool row: its icon in the middle, its name
+// under it. A left click runs action; a disabled card is dimmed and takes none.
+class ToolCard : public jadefx::VBox {
+public:
+    ToolCard(const std::string& name, const std::string& icon, std::function<void()> action)
+        : action_(std::move(action)) {
+        getClassList().add("ide-ribbon-card");
+        setAlignment(jadefx::Pos::Center);
+        setSpacing(4);
+        setCursor(jadefx::Cursor::Pointer);
+        auto slot = jadefx::make<jadefx::StackPane>();
+        slot->getClassList().add("ide-ribbon-card-icon");
+        slot->setMouseTransparent(true);
+        slot->setMinSize(kCardIcon, kCardIcon);
+        slot->setPrefSize(kCardIcon, kCardIcon);
+        slot->setMaxSize(kCardIcon, kCardIcon);
+        if (std::shared_ptr<jadefx::ImageView> view = icon.empty() ? nullptr : icon_file(icon)) {
+            view->setMouseTransparent(true);
+            view->setPrefSize(kCardIcon, kCardIcon);
+            view->setMinSize(kCardIcon, kCardIcon);
+            slot->getChildren().add(std::move(view));
+        }
+        getChildren().add(std::move(slot));
+        auto label = jadefx::make<jadefx::Label>(name);
+        label->getClassList().add("ide-ribbon-card-name");
+        label->setMouseTransparent(true);
+        getChildren().add(std::move(label));
+        setOnMouseClicked([this](const jadefx::MouseEvent& event) {
+            if (event.button == 0 && action_) {
+                action_();
+            }
+        });
+    }
+
+private:
+    // Points: the icon is drawn at twice the 16 of a list row, as the 2x Fugue icons are made.
+    static constexpr double kCardIcon = 32;
+    std::function<void()> action_;
+};
+
 constexpr const char* kIconPrefix = "icons/";
 
 bool SameButton(const engine_core::PluginButtonState& a, const engine_core::PluginButtonState& b) {
@@ -91,8 +131,8 @@ PluginRibbon::PluginRibbon(std::shared_ptr<jadefx::Node> leading, std::shared_pt
     plugins_->setSpacing(2);
     plugins_->setAlignment(jadefx::Pos::CenterLeft);
     plugins_->setPrefWidthRatio(1);
-    plugins_->setMinSize(0, kRibbonHeight);
-    plugins_->setPrefHeight(kRibbonHeight);
+    plugins_->setMinSize(0, kToolRowHeight);
+    plugins_->setPrefHeight(kToolRowHeight);
     bar->getChildren().add(std::move(left));
     bar->getChildren().add(std::move(right));
     bar->getChildren().add(std::move(tabs));
@@ -151,7 +191,7 @@ std::shared_ptr<jadefx::Node> PluginRibbon::makeGroup(const engine_core::PluginT
             }
         }
         const std::uint32_t id = state.id;
-        auto button = jadefx::make<RibbonButton>(state.text.c_str(), icon.c_str(), [this, id] {
+        auto button = jadefx::make<ToolCard>(state.text, icon, [this, id] {
             if (click_) {
                 click_(id);
             }
@@ -164,9 +204,6 @@ std::shared_ptr<jadefx::Node> PluginRibbon::makeGroup(const engine_core::PluginT
         buttons_[id] = button.get();
         group->getChildren().add(std::move(button));
     }
-    auto caption = jadefx::make<jadefx::Label>(toolbar.name);
-    caption->getClassList().add("ide-ribbon-caption");
-    group->getChildren().add(std::move(caption));
     return group;
 }
 

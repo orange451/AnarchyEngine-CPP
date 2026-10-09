@@ -62,6 +62,8 @@ local drawStart = Vector3.zero
 local drawEnd = Vector3.zero
 local height = 0
 local lastHeight = 4
+-- The pane's labels again; defined with the pane, below.
+local redraw_pane: () -> ()
 
 local wire = Instance.new("WireframeAdornment")
 wire.Name = "TerrainToolCursor"
@@ -323,15 +325,23 @@ end
 local function commit_draw()
 	local lo, hi = box()
 	drawing = nil
-	local t = terrain()
 	local extent = hi - lo
-	if t == nil or extent.X < 1e-4 or extent.Y < 1e-4 or extent.Z < 1e-4 then
+	if extent.X < 1e-4 or extent.Y < 1e-4 or extent.Z < 1e-4 then
 		return
 	end
 	lastHeight = math.abs(height)
 	begin_stroke()
+	-- A place with no Terrain gets one, in the same undo step as the box.
+	local t = terrain()
+	if t == nil then
+		local made = Instance.new("Terrain")
+		made.Name = "Terrain"
+		made.Parent = workspace
+		t = made
+	end
 	t:FillBlock(Matrix4.new((lo + hi) / 2), extent, material(t))
 	end_stroke()
+	redraw_pane()
 end
 
 -- The grid around the pointer, on the plane drawn on.
@@ -492,7 +502,6 @@ local gridLabel: Label
 local strengthLabel: Label
 local materialButton: Button
 local hintLabel = label("", root)
-local redraw_pane: () -> ()
 
 -- The next value of list from now, steps along, held to its ends.
 local function stepped(list: { number }, now: number, steps: number): number
@@ -550,7 +559,7 @@ end)
 
 function redraw_pane()
 	local t = terrain()
-	terrainLabel.Text = if t ~= nil then "Terrain: " .. t.Name else "No Terrain: add one to Workspace"
+	terrainLabel.Text = if t ~= nil then "Terrain: " .. t.Name else "No Terrain yet: Add makes one"
 	sizeLabel.Text = string.format("Size %d units", size)
 	strengthLabel.Text = string.format("Strength %d%%", math.floor(strength * 100 + 0.5))
 	gridLabel.Text = string.format("Grid %d units", grid)

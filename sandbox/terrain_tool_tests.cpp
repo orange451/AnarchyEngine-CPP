@@ -40,7 +40,7 @@ struct TerrainToolRig {
     ide::PluginLoader loader;
     InstanceId terrain = 0;
 
-    TerrainToolRig() {
+    explicit TerrainToolRig(bool withTerrain = true) {
         const InstanceId workspace = rig.game.scene_service("Workspace");
         engine_core::Camera& camera = rig.game.create<engine_core::Camera>();
         rig.game.set_parent(camera.id(), workspace);
@@ -49,9 +49,11 @@ struct TerrainToolRig {
         camera.set_transform(engine_core::matrix4_look_at(
             engine_core::Vec3{0.f, 10.f, 0.f}, engine_core::Vec3{0.f, 0.f, 0.f}, engine_core::Vec3{0.f, 0.f, -1.f}));
         dynamic_cast<engine_core::Workspace*>(rig.game.instance(workspace))->set_current_camera(camera.id());
-        engine_core::Terrain& made = rig.game.create<engine_core::Terrain>();
-        rig.game.set_parent(made.id(), workspace);
-        terrain = made.id();
+        if (withTerrain) {
+            engine_core::Terrain& made = rig.game.create<engine_core::Terrain>();
+            rig.game.set_parent(made.id(), workspace);
+            terrain = made.id();
+        }
         rig.game.history().reset_waypoints();
         REQUIRE(loader.load(rig.game, rig.runtime, {terrain_tool_file()}) == 1);
         rig.frames(1);
@@ -195,6 +197,25 @@ TEST_CASE("TB6 Shift while setting Add's height makes the box a cube", "[TB6]") 
     INFO(tools.rig.runtime.last_error());
     REQUIRE(tools.solid(0, 6, 0));
     REQUIRE_FALSE(tools.solid(0, 10, 0));
+}
+
+TEST_CASE("TB7 Add in a place with no Terrain makes one, in the same undo step", "[TB7]") {
+    TerrainToolRig tools(false);
+    tools.click("Add");
+    using Kind = engine_core::PluginMouseEvent::Kind;
+    tools.mouse(Kind::Move, 50, 50);
+    tools.mouse(Kind::Button1Down, 50, 50);
+    tools.mouse(Kind::Move, 150, 150);
+    tools.mouse(Kind::Button1Up, 150, 150);
+    tools.mouse(Kind::Button1Down, 150, 150);
+    tools.mouse(Kind::Button1Up, 150, 150);
+    INFO(tools.rig.runtime.last_error());
+    const InstanceId workspace = tools.rig.game.scene_service("Workspace");
+    REQUIRE(tools.rig.game.find_first_child(workspace, "Terrain") != 0);
+    REQUIRE(tools.solid(0, 2, 0));
+    tools.rig.game.history().undo();
+    tools.rig.frames(1);
+    REQUIRE(tools.rig.game.find_first_child(workspace, "Terrain") == 0);
 }
 
 TEST_CASE("TB4 Play turns the terrain tools off and closes the pane", "[TB4]") {

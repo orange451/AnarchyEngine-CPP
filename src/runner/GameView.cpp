@@ -18,6 +18,7 @@
 #include "SceneFeed.hpp"
 #include "SceneService.hpp"
 #include "SkyMath.hpp"
+#include "Terrain.hpp"
 #include "TerrainDraws.hpp"
 #include "ScriptRuntime.hpp"
 #include "UiFrameProfile.hpp"
@@ -284,6 +285,15 @@ void GameView::frameSelection() {
                 const float r = static_cast<float>(controller->radius());
                 const float h = static_cast<float>(controller->height()) * 0.5f;
                 addBox(controller->transform(), {-r, -h, -r}, {r, h, r});
+            } else if (const auto* terrain = dynamic_cast<const engine_core::Terrain*>(instance)) {
+                // Every stored chunk, in Terrain-local space; nothing stored frames the origin.
+                engine_core::terrain::ChunkCoord a, b;
+                if (terrain->volume().chunk_extent(a, b)) {
+                    const float s = static_cast<float>(terrain->voxel_size()) * engine_core::terrain::kChunkSize;
+                    addBox(terrain->transform(), {a.x * s, a.y * s, a.z * s}, {(b.x + 1) * s, (b.y + 1) * s, (b.z + 1) * s});
+                } else {
+                    add(engine_core::matrix4_position(terrain->transform()));
+                }
             } else if (const auto* placed = dynamic_cast<const engine_core::PVInstance*>(instance)) {
                 add(engine_core::matrix4_position(placed->transform()));
             }
@@ -292,20 +302,32 @@ void GameView::frameSelection() {
             return;
         }
         const engine_core::Vec3 center{(lo.x + hi.x) * 0.5f, (lo.y + hi.y) * 0.5f, (lo.z + hi.z) * 0.5f};
-        const float dx = hi.x - lo.x, dy = hi.y - lo.y, dz = hi.z - lo.z;
-        const double radius = std::max(0.5 * std::sqrt(double(dx) * dx + double(dy) * dy + double(dz) * dz), 1.0);
-        // Far enough that the bounding sphere fits the narrower field of view, with a margin.
-        const engine_core::Vec2 size = view->viewport_size();
-        const double aspect = size.x > 0 && size.y > 0 ? double(size.x) / size.y : 16.0 / 9.0;
-        const double half = view->field_of_view() * 0.5 * 3.14159265358979 / 180.0;
-        const double narrow = std::min(half, std::atan(std::tan(half) * aspect));
-        const double distance = radius / std::sin(narrow) * 1.15;
         // Keep the camera's facing; it looks down its -Z.
         const engine_core::Matrix4 from = view->transform();
-        engine_core::Vec3 look = engine_core::matrix4_vector(from, {0.f, 0.f, -1.f});
-        const float length = std::sqrt(look.x * look.x + look.y * look.y + look.z * look.z);
-        look = length > 0 ? engine_core::Vec3{look.x / length, look.y / length, look.z / length}
-                          : engine_core::Vec3{0.f, 0.f, -1.f};
+        const auto unit = [](engine_core::Vec3 v, engine_core::Vec3 fallback) {
+            const float length = std::sqrt(v.x * v.x + v.y * v.y + v.z * v.z);
+            return length > 0 ? engine_core::Vec3{v.x / length, v.y / length, v.z / length} : fallback;
+        };
+        const engine_core::Vec3 look = unit(engine_core::matrix4_vector(from, {0.f, 0.f, -1.f}), {0.f, 0.f, -1.f});
+        const engine_core::Vec3 right = unit(engine_core::matrix4_vector(from, {1.f, 0.f, 0.f}), {1.f, 0.f, 0.f});
+        const engine_core::Vec3 up = unit(engine_core::matrix4_vector(from, {0.f, 1.f, 0.f}), {0.f, 1.f, 0.f});
+        // Back off along the facing until every corner of the box is inside the frustum, with a margin.
+        const engine_core::Vec2 size = view->viewport_size();
+        const double aspect = size.x > 0 && size.y > 0 ? double(size.x) / size.y : 16.0 / 9.0;
+        const double tanV = std::tan(view->field_of_view() * 0.5 * 3.14159265358979 / 180.0) / 1.1;
+        const double tanH = tanV * aspect;
+        const auto dot = [](engine_core::Vec3 a, engine_core::Vec3 b) {
+            return double(a.x) * b.x + double(a.y) * b.y + double(a.z) * b.z;
+        };
+        double distance = 1.0;
+        for (int i = 0; i < 8; ++i) {
+            const engine_core::Vec3 o{((i & 1) ? hi.x : lo.x) - center.x, ((i & 2) ? hi.y : lo.y) - center.y,
+                                      ((i & 4) ? hi.z : lo.z) - center.z};
+            const double depth = dot(o, look);
+            distance = std::max(distance, std::abs(dot(o, right)) / tanH - depth);
+            distance = std::max(distance, std::abs(dot(o, up)) / tanV - depth);
+            distance = std::max(distance, 0.5 - depth); // keep the near corner in front of the camera
+        }
         engine_core::Matrix4 to = from;
         to.m[12] = center.x - look.x * static_cast<float>(distance);
         to.m[13] = center.y - look.y * static_cast<float>(distance);

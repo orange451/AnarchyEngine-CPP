@@ -49,7 +49,7 @@ An instance file is the clipboard saved to disk. The clipboard's in-memory copy 
    - `bool save_instance_file(const std::filesystem::path& path, const std::vector<CopiedNode>& roots, std::string& error);` writes `<path>.tmp` and renames it over `path`, so a reader never sees half a file.
    - `bool load_instance_file(const std::filesystem::path& path, std::vector<CopiedNode>& roots, std::string& error);`
 4. Reading is strict. A `format` other than `aeinst`, a `version` other than 1, a node missing `class` or `name`, an unregistered class, or a wrong JSON kind fails the whole file, with an error naming the JSON path (`roots[0].children[2].class`). Unknown property keys are kept in the bag, as the project reader keeps them. A failed read builds nothing.
-5. Instance references (such as `GameObject.Prefab`) follow copy and paste: one into the saved tree is remapped, one outside it is written as is and resolves only if that instance exists at load.
+5. Instance references (such as `GameObject.Prefab`) follow copy and paste, which does not remap them. A reference is written as its target's GUID and resolves only if an instance with that GUID exists when the file loads. Plugins rarely hold references, so remapping can come later.
 
 ### 2. Plugin loading (`ide/PluginLoader`, `engine_core/ScriptRuntime`)
 
@@ -61,8 +61,8 @@ An instance file is the clipboard saved to disk. The clipboard's in-memory copy 
    - **Changed:** unload, then load.
 
    The plugins folder is created when missing.
-4. **Unloading,** in this order: fire `plugin.Unloading` (section 3), `unregister_plugin` (kills threads and connections, commits an open recording), destroy the root Folder. Its toolbars and widgets go with it (sections 3 and 4).
-5. **Errors.** A file that fails to load writes `Plugin "X" failed to load: <reason>` to Console and leaves nothing in Core. If a changed file fails, the old copy stays unloaded. A half-written file fails to parse and is retried when its modification time changes again. Runtime errors from a plugin's Scripts are prefixed with the plugin's name.
+4. **Unloading,** in this order: fire `plugin.Unloading` (section 3) and run its handlers, `unregister_plugin` (kills threads and connections, commits an open recording), destroy the root Folder. Its toolbars and widgets go with it (sections 3 and 4).
+5. **Errors.** A file that fails to load writes `Plugin "X" failed to load: <reason>` to Console and leaves nothing in Core. If a changed file fails, the old copy stays unloaded. A half-written file fails to parse and is retried when its modification time changes again. Runtime errors keep today's prefix, the Script's name.
 6. **Save as Plugin.** `InstanceAction` gains `SaveAsPlugin` (label "Save as Plugin"). `Folder` overrides `context_actions` to offer it, and only Folders offer it. The handler runs `copy_set` on the folder on the simulation thread, then on the UI thread:
    1. If `plugins/<name>.aeplugin` exists, it asks "Replace plugin "<name>"?" and stops on No.
    2. It writes the file with `save_instance_file`.
@@ -85,7 +85,7 @@ An instance file is the clipboard saved to disk. The clipboard's in-memory copy 
    ```
    `Plugin`, `PluginToolbar`, and `PluginToolbarButton` are host userdata, not instances: never in the tree, never reparented.
 3. **Rules.** `CreateButton` with an id already used in that toolbar raises a Lua error. An icon path must start with `icons/` and contain no `..`; anything else raises an error. It resolves against `resources/icons/` through `icon_file`. A missing file gives a text-only button and one Console warning.
-4. **Threading.** A new `engine_core::PluginUiHost` interface takes `toolbar_created`, `button_created`, `button_changed`, and `plugin_removed`, with ids and plain data. `ScriptRuntime` holds an optional pointer to it. The IDE's implementation posts each call to the UI thread. A click is posted back to the simulation thread and fires `Click` in the plugin VM. With no host (headless tests) the objects still work and the calls are dropped.
+4. **Threading.** `ScriptRuntime` owns a `PluginUi` registry (`engine_core/PluginUi`) of plugins, toolbars, and buttons, whose `revision()` moves on every change. Once a frame, under the short read lock it already takes, the IDE reads `PluginUi::toolbars()` if the revision has moved. A click is posted to the simulation thread as `PluginUi::click(button)`, which fires `Click` in the plugin VM. There is no host interface, so headless tests drive `PluginUi` directly.
 5. **Ribbon tabs.** A thin tab row above the ribbon: **Home** and **Plugins**. Home holds today's buttons unchanged. Plugins holds one group per toolbar, in plugin load order (by file name, built-ins first). Each group is a caption with its toolbar's name, its buttons, then a separator. An empty Plugins tab shows a dim "No plugins installed — right-click a Folder → Save as Plugin". Styles go in `kStylesheet` using `--ide-*` variables. When a plugin unloads, its groups are removed; a reload puts them back in the same place, because the order comes from the file name.
 
 ### 4. Dock widgets
@@ -104,17 +104,17 @@ An instance file is the clipboard saved to disk. The clipboard's in-memory copy 
    - `runner::GuiLayer` does two jobs today: building nodes for the GUI tree, and handling ScreenGuis and billboards over the viewport.
    - The first job moves into a new `runner::GuiTree`. It builds and diffs the nodes for one root instance, joins CSS, fires instance events, writes TextField text back, and loads ImagePane images.
    - `GuiLayer` keeps viewport placement, billboards, and `GuiInput`, using `GuiTree` internally. Game behaviour is unchanged.
-   - `collectBillboards` skips everything inside a `DockWidget`.
+   - `DockWidget` is a `GuiBase`, so `BillboardGui::drawn()` already skips a billboard inside one. A test pins this.
 4. **The pane.**
    - `ide::PluginWidgetPane` is an `IdePane` that holds a `GuiTree` rooted at its `DockWidget`, placed directly in the IDE scene with no `SubScene`. The IDE theme, `--ide-*` variables, and the shell stylesheet reach it as they reach Explorer. Plugin CSS layers on top.
    - Mouse and keyboard stay in the pane and never reach `UserInputService`.
    - An ImagePane's Texture path inside a widget resolves against the IDE's `resources/`.
 5. **IDE integration.** The pane's name is `plugin:<PluginName>/<id>`: stable across reloads and unable to collide with built-in panes. The Window menu gains a **Plugins** submenu listing every live widget by `Title`. A new widget opens in its `InitialDock`'s home dock, or floating at `Width`×`Height`.
 6. **Saved layout.**
-   - When `layout.json` names a `plugin:` pane that does not exist yet, the restore records where it was: the name of a pane next to it in the same dock and its tab index, or its floating rectangle, and whether it was open.
-   - When the widget is created, it goes there, and that wins over `InitialDock` and `Enabled`.
-   - When a plugin unloads, each of its widgets' places is recorded the same way first, so a reload puts it back exactly where it was.
-   - A record whose widget never appears is dropped when the layout is next saved.
+   - A widget's pane is saved in `layout.json` under its name, as any window is.
+   - When a restore meets a `plugin:` name that has no pane yet, it records which dock that name was in. When the widget is made, it docks there and opens if that dock still exists; otherwise it uses `InitialDock` and `Enabled`.
+   - When a plugin unloads, each of its open widgets records its dock the same way first, so a reload puts it back in the same dock.
+   - A restore does not rebuild a dock that held only plugin widgets, so those widgets fall back to `InitialDock`. A record whose widget never appears is dropped when the layout is next saved.
 7. **Teardown.** Destroying the plugin's Folder destroys the `DockWidget`, which closes its pane, removes its Window menu entry, and releases the `GuiTree`.
 
 ## Testing
@@ -131,7 +131,7 @@ An instance file is the clipboard saved to disk. The clipboard's in-memory copy 
   - A malformed file logs an error and leaves Core clean.
   - Save as Plugin, then load: the plugin runs the same way.
   - `plugin` is `nil` in Play and Console, and is one object across a plugin's Scripts and their modules.
-  - Toolbar and button calls reach a recording fake `PluginUiHost`, including the duplicate-id error.
+  - Toolbar and button calls show up in `PluginUi::toolbars()` and move its revision; a duplicate button id raises an error.
   - A posted click fires `Click`.
   - `Unloading` fires before teardown.
 - **Widgets:**
@@ -139,7 +139,7 @@ An instance file is the clipboard saved to disk. The clipboard's in-memory copy 
   - Duplicate widget ids give an error.
   - `Enabled` is linked both ways.
   - BillboardGuis inside a DockWidget are excluded from the viewport.
-  - Placement records restore after a layout load and after a reload.
+  - A widget docks back into its recorded dock after a layout load and after a reload.
 - **Live check through the studio MCP (Release build):**
   1. Build a sample plugin Folder: one toolbar button that toggles a widget holding a Button and a Label.
   2. Save it as a plugin and confirm the Plugins tab and the docked widget.

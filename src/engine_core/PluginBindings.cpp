@@ -4,6 +4,9 @@
 
 #include "ScriptBindings.hpp"
 
+#include "Gui.hpp"
+
+#include <algorithm>
 #include <cstring>
 #include <string>
 
@@ -93,6 +96,10 @@ int ScriptBindings::plugin_index(lua_State* state) {
             lua_pushcfunction(state, &ScriptBindings::plugin_create_toolbar, "CreateToolbar");
             return 1;
         }
+        if (std::strcmp(key, "CreateDockWidget") == 0) {
+            lua_pushcfunction(state, &ScriptBindings::plugin_create_dock_widget, "CreateDockWidget");
+            return 1;
+        }
         luaL_error(state, "%s is not a valid member of Plugin", key);
     });
 }
@@ -107,6 +114,81 @@ int ScriptBindings::plugin_create_toolbar(lua_State* state) {
             luaL_error(state, "the plugin has unloaded");
         }
         push_object(state, kPluginToolbarMeta, toolbar);
+        return 1;
+    });
+}
+
+int ScriptBindings::plugin_create_dock_widget(lua_State* state) {
+    return lua_guard(state, [&] {
+        const auto* ud = static_cast<PluginUd*>(luaL_checkudata(state, 1, kPluginMeta));
+        const std::string key = luaL_checkstring(state, 2);
+        const bool options = lua_istable(state, 3);
+        if (!options && !lua_isnoneornil(state, 3)) {
+            luaL_error(state, "CreateDockWidget's options must be a table");
+        }
+        ScriptRuntime* runtime = runtime_from(state);
+        const std::string* plugin = runtime != nullptr ? runtime->plugin_ui().plugin_name(ud->serial) : nullptr;
+        const InstanceId root = runtime != nullptr ? runtime->plugin_root(ud->serial) : 0;
+        if (plugin == nullptr || root == 0) {
+            luaL_error(state, "the plugin has unloaded");
+        }
+        DataModel& game = *runtime->game_;
+        for (InstanceId child = game.first_child(root); child != 0; child = game.next_sibling(child)) {
+            const auto* other = dynamic_cast<const DockWidget*>(game.instance(child));
+            if (other != nullptr && other->key() == key) {
+                luaL_error(state, "a dock widget with id \"%s\" exists already", key.c_str());
+            }
+        }
+        // Read every option before anything is made, so a bad one leaves nothing behind.
+        std::string title = key;
+        bool enabled = false;
+        DockSide side = DockSide::Right;
+        double size[4] = {300, 400, 0, 0};
+        if (options) {
+            lua_getfield(state, 3, "Title");
+            if (lua_isstring(state, -1)) {
+                title = lua_tostring(state, -1);
+            }
+            lua_pop(state, 1);
+            lua_getfield(state, 3, "Enabled");
+            enabled = lua_toboolean(state, -1) != 0;
+            lua_pop(state, 1);
+            lua_getfield(state, 3, "InitialDock");
+            if (!lua_isnil(state, -1)) {
+                const char* name = lua_tostring(state, -1);
+                const std::string dock = name != nullptr ? name : "";
+                if (dock == "Left") {
+                    side = DockSide::Left;
+                } else if (dock == "Bottom") {
+                    side = DockSide::Bottom;
+                } else if (dock == "Float") {
+                    side = DockSide::Float;
+                } else if (dock != "Right") {
+                    luaL_error(state, "InitialDock must be Left, Right, Bottom, or Float");
+                }
+            }
+            lua_pop(state, 1);
+            const char* const fields[4] = {"Width", "Height", "MinWidth", "MinHeight"};
+            for (int i = 0; i < 4; ++i) {
+                lua_getfield(state, 3, fields[i]);
+                if (lua_isnumber(state, -1)) {
+                    size[i] = std::max(0.0, static_cast<double>(lua_tonumber(state, -1)));
+                }
+                lua_pop(state, 1);
+            }
+        }
+        DockWidget& widget = game.create<DockWidget>();
+        widget.set_origin(*plugin, key);
+        game.set_name(widget.id(), key);
+        widget.initial_dock = side;
+        widget.width = size[0];
+        widget.height = size[1];
+        widget.min_width = size[2];
+        widget.min_height = size[3];
+        widget.set_title(title);
+        widget.set_enabled(enabled);
+        game.set_parent(widget.id(), root);
+        runtime->push_instance(state, widget.id());
         return 1;
     });
 }

@@ -4,6 +4,7 @@
 
 #include "Engine.hpp"
 #include "Folder.hpp"
+#include "Gui.hpp"
 #include "InstanceFile.hpp"
 #include "ModuleScript.hpp"
 #include "PluginUi.hpp"
@@ -666,4 +667,54 @@ TEST_CASE("PL21 two plugins with one toolbar name keep two groups, each going wi
     bars = rig.runtime.plugin_ui().toolbars();
     REQUIRE(bars.size() == 1);
     REQUIRE(bars[0].plugin == "B");
+}
+
+TEST_CASE("PL22 CreateDockWidget makes a DockWidget under the plugin, once per id", "[PL22]") {
+    ScriptRig rig;
+    const InstanceId folder = add_folder(rig.game, "Tools", rig.game.core());
+    add_script(rig.game, folder, "Main",
+               "local w = plugin:CreateDockWidget('Panel', {Title = 'Terrain', InitialDock = 'Bottom', Enabled = true,"
+               " Width = 250, Height = 120})\n"
+               "print(w.ClassName, w.Parent == script.Parent, w.Title, w.Enabled)\n"
+               "local d = plugin:CreateDockWidget('Plain')\n"
+               "print(d.Title, d.Enabled)\n"
+               "print(pcall(function() plugin:CreateDockWidget('Panel') end))\n"
+               "print(pcall(function() plugin:CreateDockWidget('X', {InitialDock = 'Up'}) end))\n"
+               "print(pcall(function() Instance.new('DockWidget') end))\n"
+               "w.Enabled = false print(w.Enabled)");
+    rig.runtime.drain_output();
+    REQUIRE(rig.runtime.register_plugin(folder, "Tools"));
+    const std::vector<std::string> out = texts(rig.runtime.drain_output());
+    REQUIRE(out.size() == 6);
+    REQUIRE(out[0] == "DockWidget\ttrue\tTerrain\ttrue\n");
+    REQUIRE(out[1] == "Plain\tfalse\n");
+    REQUIRE(out[2].rfind("false\t", 0) == 0);
+    REQUIRE(out[2].find("already") != std::string::npos);
+    REQUIRE(out[3].find("InitialDock") != std::string::npos);
+    REQUIRE(out[4].rfind("false\t", 0) == 0);
+    REQUIRE(out[5] == "false\n");
+    // The refused InitialDock left nothing behind.
+    REQUIRE(rig.game.find_first_child(folder, "X") == 0);
+
+    const InstanceId panel = rig.game.find_first_child(folder, "Panel");
+    const auto* widget = dynamic_cast<const engine_core::DockWidget*>(rig.game.instance(panel));
+    REQUIRE(widget != nullptr);
+    REQUIRE(widget->pane_name() == "plugin:Tools/Panel");
+    REQUIRE(widget->initial_dock == engine_core::DockSide::Bottom);
+    REQUIRE(widget->width == 250);
+    REQUIRE(widget->height == 120);
+    REQUIRE_FALSE(widget->enabled());
+}
+
+TEST_CASE("PL23 a BillboardGui inside a DockWidget is not drawn in the world", "[PL23]") {
+    ScriptRig rig;
+    const InstanceId folder = add_folder(rig.game, "Tools", rig.game.core());
+    add_script(rig.game, folder, "Main",
+               "local w = plugin:CreateDockWidget('Panel')\n"
+               "local b = Instance.new('BillboardGui') b.Name = 'Board' b.Parent = w");
+    REQUIRE(rig.runtime.register_plugin(folder, "Tools"));
+    const InstanceId board = rig.game.find_first_child(rig.game.find_first_child(folder, "Panel"), "Board");
+    const auto* gui = dynamic_cast<const engine_core::BillboardGui*>(rig.game.instance(board));
+    REQUIRE(gui != nullptr);
+    REQUIRE_FALSE(gui->drawn());
 }

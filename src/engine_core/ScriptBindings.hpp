@@ -396,6 +396,7 @@ struct ScriptBindings {
     // The plugin global, its toolbars, and their buttons, in PluginBindings.cpp.
     static int plugin_index(lua_State* state);
     static int plugin_create_toolbar(lua_State* state);
+    static int plugin_create_dock_widget(lua_State* state);
     static int toolbar_index(lua_State* state);
     static int toolbar_create_button(lua_State* state);
     static int button_index(lua_State* state);

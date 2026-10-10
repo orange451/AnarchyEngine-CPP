@@ -510,6 +510,89 @@ int RunPluginsTests() {
                    layout.dock_of_for_tests(spot) != layout.dock_of_for_tests(layout.page_named_for_tests("Game Explorer")),
                "a page alone in its own dock opens in a dock of its own again");
         Expect(layout.dock_count_for_tests() == docksMoved, "beside Console, as it was, with no extra dock");
+
+        // Two tools whose panes the user keeps in the same place: switching from one to
+        // the other, as turning one tool on turns the other off, shows the new one in the
+        // old one's dock at its size, and that is the size it remembers.
+        {
+            auto setSwap = [&](const char* tool, bool enabled) {
+                engine.on_simulation([&, tool, enabled](engine_core::DataModel& game) {
+                    for (engine_core::InstanceId id : game.get_children(game.core())) {
+                        if (game.name(id) == tool) {
+                            if (auto* widget = dynamic_cast<engine_core::DockWidget*>(
+                                    game.instance(game.find_first_child(id, "W")))) {
+                                widget->set_enabled(enabled);
+                            }
+                        }
+                    }
+                });
+            };
+            layout.save_as_plugin(MakeToolFolder(engine, "Swap A",
+                                                 "plugin:CreateDockWidget('W', {InitialDock = 'BottomLeft', Enabled = false})"));
+            layout.save_as_plugin(MakeToolFolder(engine, "Swap B",
+                                                 "plugin:CreateDockWidget('W', {InitialDock = 'BottomLeft', Enabled = false})"));
+            frames(4);
+            ide::IdePane* swapConsole = layout.page_named_for_tests("Console");
+            // Each left in a dock of its own below Console.
+            for (const char* tool : {"Swap A", "Swap B"}) {
+                setSwap(tool, true);
+                frames(4);
+                layout.move_page_for_tests(layout.page_named_for_tests(std::string("plugin:") + tool + "/W"),
+                                           swapConsole, 4);
+                frames(4);
+                setSwap(tool, false);
+                frames(4);
+            }
+            auto heightOf = [&](const char* name) {
+                ide::IdePane* page = layout.page_named_for_tests(name);
+                return page != nullptr && layout.page_open_for_tests(page) ? page->getHeight() : -1.0;
+            };
+            setSwap("Swap A", true);
+            frames(4);
+            const double aHeight = heightOf("plugin:Swap A/W");
+            const std::size_t docks = layout.dock_count_for_tests();
+            // In one step.
+            setSwap("Swap A", false);
+            setSwap("Swap B", true);
+            frames(4);
+            Expect(std::abs(heightOf("plugin:Swap B/W") - aHeight) < 1 && layout.dock_count_for_tests() == docks,
+                   "switching shows the new pane in the old one's place, at its height");
+            // And back, the old pane closing a frame after the new one opens.
+            setSwap("Swap A", true);
+            frames(1);
+            setSwap("Swap B", false);
+            frames(4);
+            Expect(std::abs(heightOf("plugin:Swap A/W") - aHeight) < 1 && layout.dock_count_for_tests() == docks,
+                   "so does switching when the old pane closes a frame later");
+            // Many switches later, still the same.
+            for (int round = 0; round < 3; ++round) {
+                setSwap("Swap A", false);
+                setSwap("Swap B", true);
+                frames(3);
+                setSwap("Swap B", false);
+                setSwap("Swap A", true);
+                frames(3);
+            }
+            Expect(std::abs(heightOf("plugin:Swap A/W") - aHeight) < 1 && layout.dock_count_for_tests() == docks,
+                   "and its height holds over many switches");
+            // The switches leave each pane's own place, not "a tab with the other one":
+            // opened alone, B comes back there.
+            setSwap("Swap A", false);
+            frames(3);
+            setSwap("Swap B", true);
+            frames(4);
+            // Closed and opened alone again and again, it keeps that height.
+            for (int i = 0; i < 5; ++i) {
+                setSwap("Swap B", false);
+                frames(3);
+                setSwap("Swap B", true);
+                frames(4);
+            }
+            Expect(std::abs(heightOf("plugin:Swap B/W") - aHeight) < 1 && layout.dock_count_for_tests() == docks,
+                   "opened alone after the switches, and again and again, a pane is back in its place at that height");
+            setSwap("Swap B", false);
+            frames(3);
+        }
         layout.move_page_for_tests(spot, layout.page_named_for_tests("Properties"), 0);
         frames(3);
     }

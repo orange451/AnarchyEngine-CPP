@@ -520,7 +520,11 @@ IdeDock* IdeLayout::dock_beside(jadefx::Node* target, DropSide side, double dept
     }
     const bool across = side == DropSide::Left || side == DropSide::Right;
     const double span = across ? target->getWidth() : target->getHeight();
-    const double fraction = span > 1.0 ? clampFraction(depth / span) : 0.25;
+    // The divider sits centered on the cut and is 4 points wide (padding 0 2px in
+    // the split-pane-divider style), so it takes half of that from the new dock:
+    // cut that much farther, or a page reopened at its saved size shrinks each time.
+    constexpr double kHalfDivider = 2.0;
+    const double fraction = span > 1.0 ? clampFraction((depth + kHalfDivider) / span) : 0.25;
     auto share = [this](jadefx::Node* node) { return shareNode(node); };
     auto replaced = [this](jadefx::Node& owner, const std::shared_ptr<jadefx::Node>& previous,
                            const std::shared_ptr<jadefx::Node>& replacement) { noteReplaced(owner, previous, replacement); };
@@ -1966,6 +1970,45 @@ void IdeLayout::sync_plugin_widgets() {
     };
     bool changed = false;
     bool spots_changed = false;
+    // The docks plugin panes closed from in this pass, by pane name.
+    std::unordered_map<std::string, std::shared_ptr<IdeDock>> closing;
+    // Two saved places are the same place: the same tab group, or the same side of the same page.
+    auto samePlace = [](const engine_core::JsonValue& a, const engine_core::JsonValue& b) {
+        const engine_core::JsonValue* aTab = a.find("tab");
+        const engine_core::JsonValue* bTab = b.find("tab");
+        if (aTab != nullptr || bTab != nullptr) {
+            return aTab != nullptr && bTab != nullptr && *aTab == *bTab;
+        }
+        const engine_core::JsonValue* aBeside = a.find("beside");
+        const engine_core::JsonValue* bBeside = b.find("beside");
+        const engine_core::JsonValue* aSide = a.find("side");
+        const engine_core::JsonValue* bSide = b.find("side");
+        return aBeside != nullptr && bBeside != nullptr && aSide != nullptr && bSide != nullptr &&
+               *aBeside == *bBeside && *aSide == *bSide;
+    };
+    // The dock of another plugin's pane kept in the same place as name's, showing or closed this pass.
+    auto sharedPlace = [&](const std::string& name) -> std::shared_ptr<IdeDock> {
+        const auto mine = plugin_spots_.find(name);
+        if (mine == plugin_spots_.end()) {
+            return nullptr;
+        }
+        for (const auto& [other, widget] : plugin_widgets_) {
+            const auto theirs = plugin_spots_.find(other);
+            if (other == name || theirs == plugin_spots_.end() || !samePlace(mine->second, theirs->second)) {
+                continue;
+            }
+            std::shared_ptr<IdeDock> found;
+            if (IdeDock* showing = dockContaining(widget.pane.get())) {
+                found = liveDock(showing);
+            } else if (const auto closed = closing.find(other); closed != closing.end()) {
+                found = liveDock(closed->second.get());
+            }
+            if (found && utilityOf(found.get()) == nullptr) {
+                return found;
+            }
+        }
+        return nullptr;
+    };
 
     // A widget that went: its plugin unloaded, or it was destroyed. Where it was
     // docked is kept, so a reload puts it back there.
@@ -2043,6 +2086,13 @@ void IdeLayout::sync_plugin_widgets() {
             widget.entry->last = liveDock(dock);
             // Where it opens next time, this run or a later one: how it sits among the other pages.
             engine_core::JsonValue spot = page_spot(widget.pane.get());
+            // In a tab with another plugin's pane, as for the moment a switch from that
+            // pane's tool to this one shares its dock: the place this pane had stays.
+            const engine_core::JsonValue* with = spot.is_null() ? nullptr : spot.find("tab");
+            if (with != nullptr && with->is_string() && plugin_widgets_.count(with->as_string()) != 0 &&
+                plugin_spots_.count(item.name) != 0) {
+                spot = engine_core::JsonValue();
+            }
             if (!spot.is_null()) {
                 engine_core::JsonValue& kept = plugin_spots_[item.name];
                 if (kept != spot) {
@@ -2066,13 +2116,23 @@ void IdeLayout::sync_plugin_widgets() {
         }
         const bool wanted = item.enabled;
         if (wanted && dock == nullptr) {
-            show_window(*widget.entry);
-            if (item.side == engine_core::DockSide::Float && !widget.entry->last.lock()) {
-                if (const std::shared_ptr<jadefx::Tab> tab = TabShowing(docks_, widget.pane.get())) {
-                    floatTab(tab, 200, 200);
+            // A pane kept where another plugin's pane is showing, or just closed from, as
+            // when one tool turns on and turns the other off: it takes that dock, at its size.
+            if (const std::shared_ptr<IdeDock> shared = sharedPlace(item.name)) {
+                shared->dock(widget.pane);
+            } else {
+                show_window(*widget.entry);
+                if (item.side == engine_core::DockSide::Float && !widget.entry->last.lock()) {
+                    if (const std::shared_ptr<jadefx::Tab> tab = TabShowing(docks_, widget.pane.get())) {
+                        floatTab(tab, 200, 200);
+                    }
                 }
             }
         } else if (!wanted && dock != nullptr) {
+            // Its dock stays until the frame ends, so a pane opening in its place can take it.
+            if (const std::shared_ptr<IdeDock> live = liveDock(dock)) {
+                closing[item.name] = live;
+            }
             close_page(widget.pane.get());
         }
         widget.docked = dockContaining(widget.pane.get()) != nullptr;

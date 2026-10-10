@@ -65,11 +65,65 @@ rows is not shown.
 - `same_layout` compares group names as well as rows, so a selection change
   that changes the groups rebuilds the panel.
 
-## Out of scope
+## Groups for existing classes
 
-Assigning groups to the existing classes is follow-up work, done class by
-class. This change ships the mechanism plus groups on one or two classes
-(Lighting, Part) to prove it works.
+This change gives groups to the classes below. Groups are listed in display
+order, and fields within a group are in registration order. Some groups are
+written in a base class and extended by a subclass, so a subclass's fields
+come after the base's within those groups. A field that a class registers
+again takes the group named at its new place. Fields are reordered inside the
+`LuaField` arrays to match. Saves store properties by name, and reference
+slots use fixed indices, so reordering changes nothing on disk.
+
+- **Material**
+  - Surface: DiffuseTexture, NormalTexture, RoughnessTexture, MetalnessTexture
+  - Modifier: Color, Transparency, Roughness, Metalness, Reflectivity,
+    EmissiveTexture, Emissive
+  - Terrain: TextureScale, BlendSharpness, HeightTexture, HeightStrength
+- **Lighting**
+  - Appearance: Ambient, Brightness, Exposure, Saturation, Gamma, ToneMapping
+  - Quality: ShadingModel, Antialiasing, TerrainQuality
+- **GameObject**
+  - Behavior: Prefab
+  - Appearance: Color, Transparency
+  - Transform: Transform, Scale
+- **PointLight and SpotLight** (from GameObject)
+  - Behavior: Enabled, Shadows. These merge into GameObject's Behavior, so
+    they come right after Prefab.
+  - Light: Color, Intensity, Radius, plus OuterFOV and InnerFOVScale on
+    SpotLight
+- **DirectionalLight**
+  - Behavior: Enabled, Shadows, ShadowDistance
+  - Light: Direction, Color, Intensity
+- **PhysicsBase and subclasses**
+  - Transform: Transform
+  - Physics: Anchored, CanCollide, Mass, Friction, Bounciness
+  - Motion: Velocity, AngularVelocity, LinearDamping, AngularDamping
+  - Shape: Shape, Size, Mesh
+  - Behavior: GameObject
+  - Brush adds Appearance: Color, Transparency.
+  - PlayerController adds Character: Radius, Height, StepHeight, MaxSlope,
+    OnGround, IsSliding.
+- **SoundEmitter**
+  - Playback: Sound, Volume, Pitch, Looped, TimePosition, IsPlaying
+  - Roll-off: RollOffMode, RollOffMinDistance, RollOffMaxDistance
+- **DynamicSky**
+  - Time: TimeOfDay, Latitude
+  - Sun & Moon: Brightness, Shadows, SunTexture, SunSize, MoonTexture,
+    MoonSize
+  - Clouds: CloudCover, CloudDensity, WindDirection
+  - Quality: ReflectionQuality
+- **GuiBase and subclasses**
+  - Layout: Size, Alignment, Spacing
+  - Appearance: BackgroundColor, BackgroundTransparency, Image,
+    ImageTransparency
+  - Text: Text, TextColor, FontSize, TextScaled, Prompt
+  - Style: ClassList, Style
+  - Behavior: Visible, MouseTransparent, AlwaysOnTop, Adornee
+
+All other classes stay ungrouped, and their properties show under Data: the
+effects, Skybox, Camera, Terrain, Attachment, Dragger, the file assets, Model,
+Script, Slider, DockWidget, and Workspace.
 
 ## Testing
 

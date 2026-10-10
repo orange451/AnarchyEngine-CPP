@@ -1,5 +1,7 @@
 #include "GameExport.hpp"
 
+#include "texture/TextureBake.hpp"
+
 #include "IdeResources.hpp"
 #include "Project.hpp"
 #include "runner/GamePack.hpp"
@@ -65,7 +67,9 @@ fs::path ShaderFolder() {
     return {};
 }
 
-bool CollectFiles(const GameExportRequest& request, std::vector<runner::PackFile>& files, std::string& error) {
+}  // namespace
+
+bool collect_export_files(const GameExportRequest& request, std::vector<runner::PackFile>& files, std::string& error) {
     files.push_back({std::string(runner::kPackedProject) + "/project.json", request.project_root / "project.json"});
     std::string prefix;
     if (!ProjectFolder(request.tree_root, request.project_root, prefix, error) ||
@@ -80,6 +84,15 @@ bool CollectFiles(const GameExportRequest& request, std::vector<runner::PackFile
             return false;
         }
     }
+    // The textures the studio already baked, where the player looks for
+    // them (beside the resources folder), so it never bakes them again.
+    const fs::path baked = engine_core::texture::cache_path(request.resources_root, "x").parent_path();
+    if (fs::is_directory(baked, failure)) {
+        if (!ProjectFolder(baked, request.project_root, prefix, error) ||
+            !runner::add_pack_folder(baked, prefix, files, error)) {
+            return false;
+        }
+    }
     const fs::path shaders = ShaderFolder();
     if (shaders.empty()) {
         error = "the engine's shaders were not found beside the studio";
@@ -87,6 +100,8 @@ bool CollectFiles(const GameExportRequest& request, std::vector<runner::PackFile
     }
     return runner::add_pack_folder(shaders, std::string(runner::kPackedResources) + "/shaders/", files, error);
 }
+
+namespace {
 
 #if defined(__APPLE__)
 std::string EscapeXml(const std::string& text) {
@@ -207,7 +222,7 @@ bool export_game(const GameExportRequest& request, fs::path& written, std::strin
         return false;
     }
     std::vector<runner::PackFile> files;
-    if (!CollectFiles(request, files, error)) {
+    if (!collect_export_files(request, files, error)) {
         return false;
     }
     const fs::path output = game_path(request.output);

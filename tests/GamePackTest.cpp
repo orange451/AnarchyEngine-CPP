@@ -152,5 +152,28 @@ int RunGamePackTests() {
 #else
     Expect(ide::game_path("/games/Pong") == fs::path("/games/Pong"), "export: no extension on Linux");
 #endif
+
+    // Export packs the project's baked textures, so a player never bakes
+    // what the studio already did.
+    {
+        TempFolder cached;
+        const fs::path root = cached.path / "proj";
+        Write(root / "project.json", "{\"format\": 1}");
+        Write(root / "src" / "init.json", "{}");
+        Write(root / "resources" / "textures" / "a.png", "png");
+        Write(root / ".cache" / "textures" / "0123456789abcdef.atex", "ATEX");
+        ide::GameExportRequest request;
+        request.project_root = root;
+        request.tree_root = root / "src";
+        request.resources_root = root / "resources";
+        std::vector<runner::PackFile> packed;
+        std::string why;
+        Expect(ide::collect_export_files(request, packed, why), "export: collects the project");
+        bool hasCache = false;
+        for (const runner::PackFile& file : packed) {
+            hasCache = hasCache || file.path == "game/.cache/textures/0123456789abcdef.atex";
+        }
+        Expect(hasCache, "export: packs the baked textures beside the resources");
+    }
     return gFailures - before;
 }

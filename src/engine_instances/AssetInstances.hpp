@@ -1,6 +1,7 @@
 #pragma once
 
 #include "DataModel.hpp"
+#include "Enum.hpp"
 #include "InstanceRef.hpp"
 #include "amesh.hpp"
 
@@ -66,14 +67,23 @@ public:
     // SimulationThread.
     void set_flip_y(bool flip_y);
 
+    // Streaming: Automatic draws the smallest mips first and sharpens to full
+    // resolution; AlwaysLoaded keeps the Texture's placeholder until every mip
+    // is uploaded. Images drawn by GUI never stream, whatever this says.
+    TextureStreaming streaming() const { return streaming_; }
+    // SimulationThread. An Enum.TextureStreaming value; why not when it is none.
+    std::optional<std::string> set_streaming(int value);
+
 protected:
     void on_reuse() override {
         FileAsset::on_reuse();
         flip_y_ = false;
+        streaming_ = TextureStreaming::Automatic;
     }
 
 private:
     bool flip_y_ = false;
+    TextureStreaming streaming_ = TextureStreaming::Automatic;
 };
 
 class Mesh : public FileAsset {

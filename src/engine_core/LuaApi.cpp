@@ -1109,6 +1109,10 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
         "Enum.TextureSize: how large this Terrain's packed textures are (Small 256, Medium 512, Large 1024, Max "
         "2048 pixels).",
         "Enum.TextureSize", false, {});
+    add("Texture", "Streaming",
+        "Enum.TextureStreaming: Automatic draws the smallest mips first and sharpens to full resolution; "
+        "AlwaysLoaded waits until every mip is loaded, so it never looks blurry.",
+        "Enum.TextureStreaming", false, {});
     // The voxel methods take positions and frames in world space unless space
     // is Enum.TransformSpace.Local, and a TerrainMaterial of this Terrain or nil
     // for the default material.

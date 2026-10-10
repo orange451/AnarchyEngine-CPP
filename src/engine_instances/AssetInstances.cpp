@@ -101,6 +101,35 @@ void Texture::set_flip_y(bool flip_y) {
     after.flag = flip_y;
     note_property_change("FlipY", before, after);
 }
+
+namespace {
+
+LuaSlot texture_streaming_slot(TextureStreaming value) {
+    LuaSlot slot;
+    slot.kind = LuaSlot::Kind::Enum;
+    slot.enum_type = &texture_streaming_enum();
+    slot.number = static_cast<int>(value);
+    return slot;
+}
+
+}  // namespace
+
+std::optional<std::string> Texture::set_streaming(int value) {
+    if (!on_gameplay_thread()) {
+        contract_fail("asset setters run on SimulationThread");
+    }
+    if (enum_item_name(texture_streaming_enum(), value) == nullptr) {
+        return std::string("Streaming must be an Enum.TextureStreaming");
+    }
+    const TextureStreaming next = static_cast<TextureStreaming>(value);
+    if (next == streaming_) {
+        return std::nullopt;
+    }
+    const TextureStreaming previous = streaming_;
+    streaming_ = next;
+    note_property_change("Streaming", texture_streaming_slot(previous), texture_streaming_slot(next));
+    return std::nullopt;
+}
 const char* Mesh::class_name() const { return "Mesh"; }
 
 std::optional<std::string> Mesh::read_file(const std::filesystem::path& root, const std::string& path,
@@ -662,6 +691,32 @@ bool write_flip_y(DataModel&, DataModel& object, LuaSlot& in) {
     return true;
 }
 
+bool read_streaming(DataModel&, DataModel& object, LuaSlot& out) {
+    const auto* texture = dynamic_cast<const Texture*>(&object);
+    if (texture == nullptr) {
+        return false;
+    }
+    out = texture_streaming_slot(texture->streaming());
+    return true;
+}
+
+bool write_streaming(DataModel&, DataModel& object, LuaSlot& in) {
+    auto* texture = dynamic_cast<Texture*>(&object);
+    if (texture == nullptr) {
+        return false;
+    }
+    if (in.kind != LuaSlot::Kind::Enum || in.enum_type != &texture_streaming_enum()) {
+        in.error = "Streaming must be an Enum.TextureStreaming";
+        return false;
+    }
+    std::optional<std::string> why = texture->set_streaming(static_cast<int>(in.number));
+    if (why) {
+        in.error = std::move(*why);
+        return false;
+    }
+    return true;
+}
+
 bool read_time_length(DataModel& game,DataModel& object, LuaSlot& out) {
     const auto* sound = dynamic_cast<const Sound*>(&object);
     if (sound == nullptr) {
@@ -793,8 +848,9 @@ ANARCHY_LUA_REGISTER(register_asset_instances_lua) {
     const LuaField texture_fields[] = {
         file_fields[0],
         lua_saved_property("FlipY", "boolean", read_flip_y, write_flip_y, "false"),
+        lua_saved_enum("Streaming", texture_streaming_enum(), read_streaming, write_streaming, "\"Automatic\""),
     };
-    register_lua_class("Texture", "FileAsset", texture_fields, 2);
+    register_lua_class("Texture", "FileAsset", texture_fields, 3);
     // OriginOffset is measured from the geometry, never written or saved.
     const LuaField mesh_fields[] = {
         file_fields[0],

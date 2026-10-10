@@ -568,6 +568,7 @@ add_library(engine_instances STATIC
     src/engine_instances/MeshShapes.cpp
     src/engine_instances/Folder.cpp
     src/engine_instances/GameObject.cpp
+    src/engine_instances/SpatialObject.cpp
     src/engine_instances/Gui.cpp
     src/engine_instances/Light.cpp
     src/engine_instances/LuaSource.cpp

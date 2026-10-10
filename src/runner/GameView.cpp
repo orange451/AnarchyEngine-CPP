@@ -9,6 +9,7 @@
 #include "ConvexDecomposition.hpp"
 #include "DataModelLock.hpp"
 #include "Engine.hpp"
+#include "GameObject.hpp"
 #include "PhysicsObject.hpp"
 #include "PlayerController.hpp"
 #include "PhysicsWorld.hpp"

@@ -52,7 +52,8 @@ TEST_CASE("LIT1 a Light's properties are checked, undo, save, and come back at S
     SimRole role;
     engine_core::Game game;
     PointLight& light = add_light<PointLight>(game);
-    REQUIRE(game.game_object(light.id()) == &light);
+    REQUIRE(game.spatial_object(light.id()) == &light);
+    REQUIRE(game.game_object(light.id()) == nullptr);
     REQUIRE(light.intensity() == PointLight::kDefaultIntensity);
     REQUIRE(light.radius() == PointLight::kDefaultRadius);
     REQUIRE(light.enabled());
@@ -371,18 +372,12 @@ TEST_CASE("LIT8 lights under Lighting shine as they do in Workspace", "[light][r
     REQUIRE(pump.find(point.id())->world.m[13] == 2.f);
     REQUIRE(pump.find(point.id())->light.radius == 5.f);
 
-    // Under Lighting a light only shines: its Prefab draws in Workspace alone.
-    engine_core::Prefab& lamp = game.create<engine_core::Prefab>();
-    game.set_parent(lamp.id(), game.service("Prefabs"));
-    engine_core::LuaSlot lamp_slot;
-    lamp_slot.kind = engine_core::LuaSlot::Kind::Instance;
-    lamp_slot.id = lamp.id();
-    REQUIRE_FALSE(point.set_prefab(lamp_slot));
-    frame();
+    // A Light is not a GameObject: it draws nothing, in Workspace or under Lighting.
     REQUIRE(pump.find(point.id())->prefab == 0);
     game.set_parent(point.id(), workspace_of(game));
     frame();
-    REQUIRE(pump.find(point.id())->prefab != 0);
+    REQUIRE(pump.find(point.id())->prefab == 0);
+    REQUIRE(pump.find(point.id())->world.m[13] == 2.f);
     game.set_parent(point.id(), lighting);
     frame();
     REQUIRE(pump.find(point.id())->prefab == 0);

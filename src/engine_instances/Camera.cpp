@@ -1,5 +1,6 @@
 #include "Camera.hpp"
 
+#include "Containment.hpp"
 #include "LuaApi.hpp"
 #include "PropertyBag.hpp"
 
@@ -46,8 +47,16 @@ void Camera::set_viewport_size(Vec2 size) {
     emit_property("ViewportSize");
 }
 
+bool Camera::load_property(const std::string& key, const JsonValue& value, std::string& error) {
+    // A place saved while Camera was a GameObject may hold these. A Camera has none of them.
+    if (key == "Prefab" || key == "Color" || key == "Transparency" || key == "Scale") {
+        return true;
+    }
+    return SpatialObject::load_property(key, value, error);
+}
+
 void Camera::on_reuse() {
-    GameObject::on_reuse();
+    SpatialObject::on_reuse();
     field_of_view_ = kDefaultFieldOfView;
     viewport_size_ = Vec2{};
 }
@@ -90,12 +99,14 @@ ANARCHY_LUA_REGISTER(register_camera_lua) {
     // The default, as a file would hold it, from the class's own constant.
     static const std::string field_of_view = write_json(JsonValue::number(Camera::kDefaultFieldOfView));
     const LuaField fields[] = {
+        lua_spatial_transform(),
         lua_slider(lua_saved_property("FieldOfView", "number", read_field_of_view, write_field_of_view,
                                       field_of_view.c_str()),
                    Camera::kMinFieldOfView, Camera::kMaxFieldOfView),
         lua_property("ViewportSize", "Vector2", false, read_viewport_size, nullptr),
     };
-    register_lua_class("Camera", "GameObject", fields, static_cast<int>(std::size(fields)));
+    register_lua_class("Camera", "PVInstance", fields, static_cast<int>(std::size(fields)));
+    register_suited_parents("Camera", {"Workspace", "PVInstance"});
 }
 
 }  // namespace

@@ -102,8 +102,16 @@ void Light::set_shadows(bool shadows) {
     note_visual(VisualField::Light);
 }
 
+bool Light::load_property(const std::string& key, const JsonValue& value, std::string& error) {
+    // A place saved while Light was a GameObject may hold these. A Light has none of them.
+    if (key == "Prefab" || key == "Transparency" || key == "Scale") {
+        return true;
+    }
+    return SpatialObject::load_property(key, value, error);
+}
+
 void Light::on_reuse() {
-    GameObject::on_reuse();
+    SpatialObject::on_reuse();
     color_ = kDefaultColor;
     intensity_ = kDefaultIntensity;
     radius_ = kDefaultRadius;
@@ -352,7 +360,6 @@ ANARCHY_LUA_REGISTER(register_light_lua) {
     static const std::string outer_fov = number_json(SpotLight::kDefaultOuterFov);
     static const std::string inner_fov_scale = number_json(SpotLight::kDefaultInnerFovScale);
     static const std::string shadow_distance = number_json(DirectionalLight::kDefaultShadowDistance);
-    static const std::string scale = number_json(GameObject::kDefaultScale);
     // Each class that can be made lists the fields, as FileAsset's subclasses
     // list Path: Light itself is only for IsA, and is never made.
     const LuaField point_fields[] = {
@@ -367,11 +374,10 @@ ANARCHY_LUA_REGISTER(register_light_lua) {
         lua_slider(lua_saved_property("Radius", "number", read_number<Light, &Light::radius>,
                                       write_number<Light, &Light::set_radius>, radius.c_str()),
                    0.0, Light::kMaxRadiusSlider),
-        // GameObject's Scale does nothing to a light, so Properties leaves it out.
-        lua_hidden(lua_saved_property("Scale", "number", read_number<GameObject, &GameObject::scale>,
-                                      write_number<GameObject, &GameObject::set_scale>, scale.c_str())),
+        lua_group("Transform"),
+        lua_spatial_transform(),
     };
-    register_lua_class("Light", "GameObject", nullptr, 0);
+    register_lua_class("Light", "PVInstance", nullptr, 0);
     register_lua_class("PointLight", "Light", point_fields, static_cast<int>(std::size(point_fields)));
     // Not a Light: it has no Transform, so it is a plain Instance.
     static const std::string direction = [] {
@@ -402,7 +408,7 @@ ANARCHY_LUA_REGISTER(register_light_lua) {
     register_lua_class("DirectionalLight", "Instance", directional_fields,
                        static_cast<int>(std::size(directional_fields)));
     const LuaField spot_fields[] = {
-        // Point's groups and fields, markers included: Behavior, then Light.
+        // Point's groups and fields, markers included: Behavior, Light, then Transform.
         point_fields[0],
         point_fields[1],
         point_fields[2],
@@ -417,10 +423,11 @@ ANARCHY_LUA_REGISTER(register_light_lua) {
                                       write_number<SpotLight, &SpotLight::set_inner_fov_scale>,
                                       inner_fov_scale.c_str()),
                    0.0, 1.0),
+        point_fields[7],
+        point_fields[8],
     };
     register_lua_class("SpotLight", "Light", spot_fields, static_cast<int>(std::size(spot_fields)));
-    // Light adds Lighting to what it inherits from GameObject.
-    register_suited_parents("Light", {"Lighting"});
+    register_suited_parents("Light", {"Lighting", "Workspace", "PVInstance"});
     register_suited_parents("DirectionalLight", {"Lighting", "Workspace", "PVInstance"});
 }
 

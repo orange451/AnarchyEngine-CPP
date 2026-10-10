@@ -359,7 +359,7 @@ TEST_CASE("CO8 a GameObject in Core has a snapshot row, and a PhysicsObject in C
     game.set_name(shown.id(), "Shown");
     game.set_parent(shown.id(), game.core());
     std::vector<InstanceId> rendered;
-    game.for_each_rendered([&](const engine_core::GameObject& object) { rendered.push_back(object.id()); });
+    game.for_each_rendered([&](const engine_core::SpatialObject& object) { rendered.push_back(object.id()); });
     REQUIRE(std::find(rendered.begin(), rendered.end(), shown.id()) != rendered.end());
 
     engine_core::SnapshotPump pump;

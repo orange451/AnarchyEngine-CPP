@@ -1,6 +1,6 @@
 #pragma once
 
-#include "GameObject.hpp"
+#include "SpatialObject.hpp"
 
 #include <optional>
 #include <string>
@@ -8,13 +8,13 @@
 namespace engine_core {
 
 // A light the Scene View shades with, at its Transform's translation. Like a
-// Camera, it is a GameObject. A Light in Workspace, or anywhere under
-// Lighting, has a render snapshot row that carries what it shines
-// (VisualLight). Under Lighting it only shines: its Prefab is not drawn.
+// Camera, it is a SpatialObject, not a GameObject: it draws nothing. A Light
+// in Workspace, or anywhere under Lighting, has a render snapshot row that
+// carries what it shines (VisualLight).
 //
 // Color      Color3  white.
 // Intensity  number  how bright, 1. Not below 0; the slider runs to 8.
-// Radius     number  studs it reaches; it fades to nothing there. 8, not below
+// Radius     number  units it reaches; it fades to nothing there. 8, not below
 //                    0; the slider runs to 64.
 // Enabled    boolean when false it gives no light.
 // Shadows    boolean when true it casts shadows in the Scene View. false.
@@ -23,7 +23,7 @@ namespace engine_core {
 // loads, undoes, and restores it at Stop. "Light" itself is only a base class:
 // Instance.new makes a PointLight or a SpotLight. A DirectionalLight, below,
 // is not one: it has no Transform.
-class Light : public GameObject {
+class Light : public SpatialObject {
 public:
     static constexpr ColorRgb kDefaultColor{1.f, 1.f, 1.f, 1.f};
     static constexpr double kDefaultIntensity = 1.0;
@@ -32,7 +32,7 @@ public:
     static constexpr double kMaxRadiusSlider = 64.0;
     static constexpr bool kDefaultShadows = false;
 
-    using GameObject::GameObject;
+    using SpatialObject::SpatialObject;
 
     ColorRgb color() const { return color_; }
     double intensity() const { return intensity_; }
@@ -47,6 +47,8 @@ public:
     std::optional<std::string> set_radius(double value);
     void set_enabled(bool enabled);
     void set_shadows(bool shadows);
+
+    bool load_property(const std::string& key, const JsonValue& value, std::string& error) override;
 
 protected:
     void on_reuse() override;
@@ -80,7 +82,7 @@ public:
 // Intensity  number   how bright, 1. Not below 0; the slider runs to 8.
 // Enabled    boolean  when false it gives no light.
 // Shadows         boolean  when true it casts shadows. true.
-// ShadowDistance  number   studs from the camera that get its shadows, 100.
+// ShadowDistance  number   units from the camera that get its shadows, 100.
 //                          Not below 0; the slider runs to 1000.
 //
 // Each is a saved registry property, as a Light's are.

@@ -205,7 +205,7 @@ void DataModel::adopt_slot(std::uint16_t pool_index, InstanceId id) {
     part.pool = pool_index;
     part.storage = storage;
     part.instance = object;
-    part.body = as_game_object(object);
+    part.body = as_spatial(object);
 }
 
 void DataModel::restore_record(const PlaceRecord& record) {

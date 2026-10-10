@@ -85,6 +85,7 @@ public:
 class ChangeHistoryService;
 class Engine;
 class GameObject;
+class SpatialObject;
 class PhysicsWorld;
 class ScriptAnalysis;
 class ScriptHost;
@@ -402,6 +403,10 @@ public:
     // Null when the id is dead or the instance is not a GameObject.
     GameObject* game_object(InstanceId id);
     const GameObject* game_object(InstanceId id) const;
+    // Null when the id is dead or the instance keeps no ECS Transform
+    // (GameObject, Camera, and the Lights do).
+    SpatialObject* spatial_object(InstanceId id);
+    const SpatialObject* spatial_object(InstanceId id) const;
 
     bool alive(InstanceId id) const;
     // Scope. in_game: under game. in_workspace: under the Workspace service,
@@ -486,9 +491,9 @@ public:
         }
     }
 
-    // The GameObjects the render snapshot holds: live and under Workspace.
+    // The SpatialObjects the render snapshot holds: live and under Workspace or Core.
     // A query, not a scan of every slot. The snapshot's resync uses it.
-    void for_each_rendered(const std::function<void(const GameObject&)>& fn) const;
+    void for_each_rendered(const std::function<void(const SpatialObject&)>& fn) const;
 
     void set_prerender_window(bool open);
     bool prerender_window() const;
@@ -508,6 +513,7 @@ public:
     class ChildTag {
         friend class DataModel;
         friend class GameObject;
+        friend class SpatialObject;
         explicit ChildTag() = default;
     };
 
@@ -594,6 +600,7 @@ private:
     friend class DataModelLock;
     friend class Engine;
     friend class GameObject;
+    friend class SpatialObject;
     friend class ChangeHistoryService;
 
     struct SpawnOps {
@@ -610,9 +617,9 @@ private:
         std::uint16_t pool = 0;
         std::uint32_t storage = 0;
         DataModel* instance = nullptr;
-        // instance as a GameObject, or null. Set with instance, so the physics
+        // instance as a SpatialObject, or null. Set with instance, so the physics
         // step does not cast each body on every substep.
-        GameObject* body = nullptr;
+        SpatialObject* body = nullptr;
         // This instance's flecs entity: issued with the slot, deleted when it
         // is released. 0 while the slot is free.
         std::uint64_t entity = 0;
@@ -738,7 +745,7 @@ private:
     bool queues_visual_write() const;
     // The GameObject a Transform write lands on, or null after the write
     // is refused. The messages are literals: a deferred violation keeps the pointer.
-    GameObject* visual_target(InstanceId id, bool force, const char* dead, const char* not_object);
+    SpatialObject* visual_target(InstanceId id, bool force, const char* dead, const char* not_object);
     void apply_transform(InstanceId id, const Matrix4& transform, bool force);
     void enqueue(Command command);
     WriteOrigin current_origin() const;

@@ -606,7 +606,7 @@ DataModel& DataModel::spawn(const SpawnOps& ops) {
     part.pool = pool_index;
     part.storage = storage;
     part.instance = object;
-    part.body = as_game_object(object);
+    part.body = as_spatial(object);
     if (dynamic_cast<LuaSource*>(object) != nullptr) {
         if (ScriptAnalysis* analysis = script_analysis()) {
             analysis->invalidate(object->id());
@@ -692,13 +692,13 @@ bool DataModel::queues_visual_write() const {
     return state_->threads_running && !gameplay_thread() && std::this_thread::get_id() != state_->render_thread;
 }
 
-GameObject* DataModel::visual_target(InstanceId id, bool force, const char* dead, const char* not_object) {
+SpatialObject* DataModel::visual_target(InstanceId id, bool force, const char* dead, const char* not_object) {
     Slot* part = slot(id);
     if (part == nullptr) {
         reject_write(dead);
         return nullptr;
     }
-    GameObject* object = as_game_object(part->instance);
+    SpatialObject* object = as_spatial(part->instance);
     if (object == nullptr) {
         reject_write(not_object);
         return nullptr;
@@ -715,8 +715,8 @@ void DataModel::apply_transform(InstanceId id, const Matrix4& transform, bool fo
         enqueue(command);
         return;
     }
-    GameObject* target = visual_target(id, force, "transform write on a dead instance",
-                                       "transform write on an instance that is not a GameObject");
+    SpatialObject* target = visual_target(id, force, "transform write on a dead instance",
+                                          "transform write on an instance with no Transform");
     if (target == nullptr) {
         return;
     }
@@ -780,6 +780,12 @@ GameObject* DataModel::game_object(InstanceId id) { return as_game_object(instan
 
 const GameObject* DataModel::game_object(InstanceId id) const {
     return const_cast<DataModel*>(this)->game_object(id);
+}
+
+SpatialObject* DataModel::spatial_object(InstanceId id) { return as_spatial(instance(id)); }
+
+const SpatialObject* DataModel::spatial_object(InstanceId id) const {
+    return const_cast<DataModel*>(this)->spatial_object(id);
 }
 
 bool DataModel::alive(InstanceId id) const { return slot(id) != nullptr; }
@@ -1025,13 +1031,13 @@ void DataModel::step_instances(double dt) {
     }
 }
 
-void DataModel::for_each_rendered(const std::function<void(const GameObject&)>& fn) const {
+void DataModel::for_each_rendered(const std::function<void(const SpatialObject&)>& fn) const {
     for (const flecs::query<>* query : {&state_->render_query, &state_->core_render_query}) {
         ecs_iter_t it = ecs_query_iter(ecs_world(), query->c_ptr());
         while (ecs_query_next(&it)) {
             const auto* owners = static_cast<const ecs::Instance*>(ecs_field_w_size(&it, sizeof(ecs::Instance), 0));
             for (std::int32_t i = 0; i < it.count; ++i) {
-                if (const GameObject* object = game_object(owners[i].id)) {
+                if (const SpatialObject* object = spatial_object(owners[i].id)) {
                     fn(*object);
                 }
             }

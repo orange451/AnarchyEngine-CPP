@@ -61,7 +61,8 @@ TEST_CASE("CAM1 a Camera's FieldOfView is clamped, undoes, and comes back at Sto
     engine_core::Game game;
     Camera& camera = add_camera(game);
     REQUIRE(camera.field_of_view() == Camera::kDefaultFieldOfView);
-    REQUIRE(game.game_object(camera.id()) == &camera);
+    REQUIRE(game.spatial_object(camera.id()) == &camera);
+    REQUIRE(game.game_object(camera.id()) == nullptr);
 
     // A default Camera saves no FieldOfView.
     engine_core::PropertyBag saved;

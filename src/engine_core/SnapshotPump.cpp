@@ -49,14 +49,14 @@ static_assert(VisualAmbientOcclusion{}.enabled == AmbientOcclusionEffect::kDefau
                   VisualAmbientOcclusion{}.quality == static_cast<int>(AmbientOcclusionEffect::kDefaultQuality),
               "a place with no AmbientOcclusionEffect carries its defaults");
 
-float field_of_view_of(const GameObject& object) {
+float field_of_view_of(const SpatialObject& object) {
     const auto* camera = dynamic_cast<const Camera*>(&object);
     return camera != nullptr ? static_cast<float>(camera->field_of_view()) : 0.f;
 }
 
 float unit(double value) { return static_cast<float>(std::clamp(value, 0.0, 1.0)); }
 
-VisualLight light_of(const GameObject& object) {
+VisualLight light_of(const SpatialObject& object) {
     VisualLight out;
     const auto* light = dynamic_cast<const Light*>(&object);
     if (light == nullptr) {
@@ -101,7 +101,7 @@ bool is_light(const DataModel* instance) {
     return dynamic_cast<const Light*>(instance) != nullptr || dynamic_cast<const DirectionalLight*>(instance) != nullptr;
 }
 
-// Whether id has a row: a GameObject or DirectionalLight in Workspace or Core,
+// Whether id has a row: a SpatialObject or DirectionalLight in Workspace or Core,
 // or any light under Lighting.
 bool has_row(const DataModel& game, InstanceId id) {
     return game.in_workspace(id) || game.in_core(id) || (game.in_lighting(id) && is_light(game.instance(id)));
@@ -187,14 +187,14 @@ void SnapshotPump::apply_live(DataModel& game, const Invalidation& change) {
         erase_base(change.id);
         return;
     }
-    // Only GameObjects and DirectionalLights under Workspace, and lights under
+    // Only SpatialObjects and DirectionalLights under Workspace, and lights under
     // Lighting, have rows. This drops the row of one that left, and ignores a
     // change to one that was never in.
     if (!has_row(game, change.id)) {
         erase_base(change.id);
         return;
     }
-    const GameObject* object = game.game_object(change.id);
+    const SpatialObject* object = game.spatial_object(change.id);
     if (object == nullptr) {
         const auto* sun = dynamic_cast<const DirectionalLight*>(game.instance(change.id));
         if (sun == nullptr) {
@@ -228,21 +228,20 @@ void SnapshotPump::apply_live(DataModel& game, const Invalidation& change) {
         inst->world = object->transform();
         inst->transform_origin = change.origin;
     }
-    if (whole || any(change.fields, VisualField::Prefab)) {
-        // A light under Lighting only shines: Lighting is not part of the scene.
-        static const std::string kNoPrefab;
-        const bool scene = game.in_workspace(change.id) || game.in_core(change.id);
-        set_row_prefab(*inst, scene ? object->prefab_guid() : kNoPrefab);
+    // Only a GameObject draws: a Camera or a Light keeps a row's defaults.
+    const auto* drawn = dynamic_cast<const GameObject*>(object);
+    if (drawn != nullptr && (whole || any(change.fields, VisualField::Prefab))) {
+        set_row_prefab(*inst, drawn->prefab_guid());
     }
     if (whole || any(change.fields, VisualField::Camera)) {
         inst->field_of_view = field_of_view_of(*object);
     }
-    if (whole || any(change.fields, VisualField::Appearance)) {
-        inst->color = object->color();
-        inst->transparency = unit(object->transparency());
+    if (drawn != nullptr && (whole || any(change.fields, VisualField::Appearance))) {
+        inst->color = drawn->color();
+        inst->transparency = unit(drawn->transparency());
     }
-    if (whole || any(change.fields, VisualField::Scale)) {
-        inst->scale = static_cast<float>(object->scale());
+    if (drawn != nullptr && (whole || any(change.fields, VisualField::Scale))) {
+        inst->scale = static_cast<float>(drawn->scale());
     }
     if (whole || any(change.fields, VisualField::Light)) {
         inst->light = light_of(*object);
@@ -256,22 +255,24 @@ void SnapshotPump::resync(DataModel& game) {
     prefab_entries_.clear();
     free_prefab_entries_.clear();
     prefab_by_guid_.clear();
-    game.for_each_rendered([&](const GameObject& object) {
+    game.for_each_rendered([&](const SpatialObject& object) {
         VisualInstance inst;
         inst.id = object.id();
         inst.world = object.transform();
         inst.alive = true;
         inst.transform_origin = WriteOrigin::Simulation;
-        inst.prefab = acquire_prefab(object.prefab_guid());
+        if (const auto* drawn = dynamic_cast<const GameObject*>(&object)) {
+            inst.prefab = acquire_prefab(drawn->prefab_guid());
+            inst.color = drawn->color();
+            inst.transparency = unit(drawn->transparency());
+            inst.scale = static_cast<float>(drawn->scale());
+        }
         inst.field_of_view = field_of_view_of(object);
-        inst.color = object.color();
-        inst.transparency = unit(object.transparency());
-        inst.scale = static_cast<float>(object.scale());
         inst.light = light_of(object);
         base_ids_.insert(object.id());
         base_.instances.push_back(inst);
     });
-    // The render query sees only GameObjects in Workspace. DirectionalLights
+    // The render query sees only SpatialObjects in Workspace. DirectionalLights
     // there, and every light under Lighting, are found by walking those two
     // services. A resync is rare, so the walk is cheap enough.
     std::vector<InstanceId> walk;
@@ -285,7 +286,7 @@ void SnapshotPump::resync(DataModel& game) {
         walk.pop_back();
         const DataModel* instance = game.instance(id);
         const bool sun = dynamic_cast<const DirectionalLight*>(instance) != nullptr;
-        // A light GameObject in Workspace or Core already has its row from the query.
+        // A Light in Workspace or Core already has its row from the query.
         const bool lit =
             !game.in_workspace(id) && !game.in_core(id) && dynamic_cast<const Light*>(instance) != nullptr;
         if (sun || lit) {
@@ -296,7 +297,7 @@ void SnapshotPump::resync(DataModel& game) {
             if (sun) {
                 row = sun_row(*static_cast<const DirectionalLight*>(instance));
             } else {
-                // Under Lighting: it shines, and draws no Prefab.
+                // Under Lighting: it shines.
                 const auto& light = *static_cast<const Light*>(instance);
                 row.id = id;
                 row.world = light.transform();

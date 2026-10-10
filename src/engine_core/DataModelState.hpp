@@ -50,6 +50,7 @@ inline int field_index(Field field) {
 }
 
 inline GameObject* as_game_object(DataModel* instance) { return dynamic_cast<GameObject*>(instance); }
+inline SpatialObject* as_spatial(DataModel* instance) { return dynamic_cast<SpatialObject*>(instance); }
 
 inline const PropertyBag& empty_bag() {
     static const PropertyBag bag;
@@ -97,7 +98,7 @@ struct DataModel::State {
     // Simulated and without VisualOnly.
     flecs::query<> physics_query;
     // Rendered GameObjects: Instance (in), with InWorkspace and Transform,
-    // which only GameObjects carry.
+    // which only SpatialObjects carry.
     flecs::query<> render_query;
     // Rendered GameObjects in Core: the same, with InCore. Core draws as Workspace does.
     flecs::query<> core_render_query;

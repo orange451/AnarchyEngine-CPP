@@ -266,7 +266,7 @@ AuthoredRecord DataModel::capture_record(InstanceId id, bool subtree) const {
     record.sibling_index = sibling_index_of(id);
     record.simulated = simulated(id);
     record.visual_only = visual_only(id);
-    if (const GameObject* body = dynamic_cast<const GameObject*>(object)) {
+    if (const SpatialObject* body = dynamic_cast<const SpatialObject*>(object)) {
         record.spatial = true;
         record.transform = body->transform();
     }
@@ -278,7 +278,7 @@ AuthoredRecord DataModel::capture_record(InstanceId id, bool subtree) const {
         record.enabled = script->enabled();
     }
     if (record.spatial) {
-        // A GameObject's saved registry properties, its Prefab: the base class's bytes.
+        // A SpatialObject's saved registry properties, such as a Prefab: the base class's bytes.
         object->DataModel::write_place(record.extra);
     } else if (!record.has_source) {
         object->write_place(record.extra);
@@ -301,7 +301,7 @@ void DataModel::apply_record_fields(const AuthoredRecord& record) {
     set_simulated(record.id, record.simulated);
     set_visual_only(record.id, record.visual_only);
     if (record.spatial) {
-        if (GameObject* body = game_object(record.id)) {
+        if (SpatialObject* body = spatial_object(record.id)) {
             body->set_transform(record.transform);
             const std::byte* bytes = record.extra.empty() ? nullptr : record.extra.data();
             body->DataModel::read_place(bytes, record.extra.size());
@@ -427,7 +427,7 @@ void DataModel::apply_property(InstanceId id, const PropertyValue& value) {
     }
     switch (value.prop) {
     case HistoryProp::Transform:
-        if (GameObject* body = game_object(id)) {
+        if (SpatialObject* body = spatial_object(id)) {
             body->set_transform(value.transform);
         }
         break;

@@ -1486,16 +1486,23 @@ TEST_CASE("client sync steps an uncapped simulation with each paint", "[pace]") 
         dts.clear();
     }
     // Paints every 4 ms, a 250 Hz window. A 60 Hz step would take 40 ms per 2.4 paints.
+    // Paced against a deadline, not sleep_for(4 ms): Windows sleeps in ~15.6 ms
+    // ticks, which would make this a 64 Hz window and look like the fallback.
     const auto paced_at = std::chrono::steady_clock::now();
     const auto first = engine.sim_frame_count();
+    auto next_paint = paced_at;
     for (int i = 0; i < 60; ++i) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(4));
+        next_paint += std::chrono::milliseconds(4);
+        while (std::chrono::steady_clock::now() < next_paint) {
+            std::this_thread::yield();
+        }
         engine.note_client_frame();
     }
     const auto steps = engine.sim_frame_count() - first;
     const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - paced_at).count();
     engine.stop();
     const double hz = static_cast<double>(steps) / seconds;
+    INFO("paints a second: " << 60.0 / seconds);
     INFO("steps a second: " << hz);
     REQUIRE(hz > 120.0);
     // Each step's dt is the time it covers, so Heartbeat time keeps up with the clock.

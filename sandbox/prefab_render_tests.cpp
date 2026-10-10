@@ -226,7 +226,7 @@ TEST_CASE("a Model draws its Material's other textures and numbers, clamped", "[
     // No Material has a Material's defaults.
     scene.frame();
     REQUIRE(surface().metalness == 0.f);
-    REQUIRE(surface().roughness == 0.4f);
+    REQUIRE(surface().roughness == static_cast<float>(engine_core::Material::kDefaultRoughness));
     REQUIRE(surface().reflectivity == 0.5f);
     REQUIRE(surface().transparency == 0.f);
     REQUIRE(surface().emissive.r == 0.f);

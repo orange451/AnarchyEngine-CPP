@@ -4,6 +4,7 @@
 #include "support.hpp"
 
 #include "Camera.hpp"
+#include "DynamicSky.hpp"
 #include "Light.hpp"
 #include "ChangeHistoryService.hpp"
 #include "Project.hpp"
@@ -40,7 +41,7 @@ std::vector<Camera*> workspace_cameras(engine_core::DataModel& game) {
 }
 
 engine_core::Matrix4 default_view() {
-    return engine_core::matrix4_look_at(engine_core::Vec3{0.f, 3.f, 7.f}, engine_core::Vec3{0.f, 0.f, 0.f},
+    return engine_core::matrix4_look_at(engine_core::Vec3{0.f, 9.f, 21.f}, engine_core::Vec3{0.f, 0.f, 0.f},
                                         engine_core::Vec3{0.f, 1.f, 0.f});
 }
 
@@ -97,7 +98,7 @@ TEST_CASE("CAM2 scripts make a Camera and set its FieldOfView", "[camera]") {
     ScriptRig rig;
     add_script(rig.game, "Cameras", R"(
         local camera = Instance.new("Camera", workspace)
-        _G.isa = camera:IsA("GameObject") and camera.ClassName == "Camera"
+        _G.isa = camera:IsA("PVInstance") and not camera:IsA("GameObject") and camera.ClassName == "Camera"
         _G.default = camera.FieldOfView == 70
         camera.FieldOfView = 30
         _G.set = camera.FieldOfView == 30
@@ -229,13 +230,13 @@ TEST_CASE("CAM6 Lua turns view points into rays and world points into view point
     CHECK(has("not shown in a view"));
 }
 
-TEST_CASE("CAM7 a new place and a new project start with a DirectionalLight in Lighting", "[camera][project]") {
+TEST_CASE("CAM7 a new place and a new project start with a DynamicSky in Lighting", "[camera][project]") {
     SimRole role;
     TempDir dir;
     const auto suns = [](engine_core::DataModel& game) {
         int count = 0;
         for (InstanceId id : game.get_children(game.scene_service("Lighting"))) {
-            count += dynamic_cast<engine_core::DirectionalLight*>(game.instance(id)) != nullptr ? 1 : 0;
+            count += dynamic_cast<engine_core::DynamicSky*>(game.instance(id)) != nullptr ? 1 : 0;
         }
         return count;
     };

@@ -11,7 +11,10 @@
 #include "jadefx/jadefx.hpp"
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
@@ -27,6 +30,23 @@ void expect(bool condition, const char* message) {
         std::fprintf(stderr, "FAIL %s\n", message);
         ++gFailures;
     }
+}
+
+// Real time in nanoseconds, but never the same value twice. steady_clock ticks
+// every 100 ns on Windows, so frame boundaries made back to back in Release can
+// share a tick, and the profiler (rightly) opens no frame for a boundary that is
+// not later than the last.
+std::uint64_t strictly_rising_clock() {
+    static std::atomic<std::uint64_t> last{0};
+    const std::uint64_t real = static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch())
+            .count());
+    std::uint64_t previous = last.load();
+    std::uint64_t next = real > previous ? real : previous + 1;
+    while (!last.compare_exchange_weak(previous, next)) {
+        next = real > previous ? real : previous + 1;
+    }
+    return next;
 }
 
 runner::GameView* scene_view(jadefx::Scene& scene, const std::string& name) {
@@ -178,6 +198,7 @@ int RunProfilerOverlayTests(ide::IdeLayout& layout, jadefx::Scene& scene) {
     key(jadefx::Key::F6, jadefx::Key::ModControl);
     profiler::register_thread("Render");
     const profiler::ScopeId work = profiler::intern("Overlay test work", profiler::Group::Engine);
+    profiler::set_clock_for_testing(&strictly_rising_clock);
     for (int index = 0; index < 6; ++index) {
         profiler::frame_boundary();
         profiler::begin(work);
@@ -189,7 +210,7 @@ int RunProfilerOverlayTests(ide::IdeLayout& layout, jadefx::Scene& scene) {
     runner::ProfilerOverlay& overlay = first->profilerOverlay();
     std::size_t count = 0;
     profiler::with_view([&](const profiler::History& history) { count = history.frames.size(); });
-    expect(count == 6, "six frames recorded");
+    expect(count == 6, ("six frames recorded (" + std::to_string(count) + ")").c_str());
     click(scene, overlay.barRect(count - 3, count));
     frame();
     expect(profiler::paused(), "clicking a frame pauses");
@@ -286,6 +307,7 @@ int RunProfilerOverlayTests(ide::IdeLayout& layout, jadefx::Scene& scene) {
     key(jadefx::Key::F6, jadefx::Key::ModControl);
     fs::remove_all(folder);
     profiler::reset_for_testing();
+    profiler::set_clock_for_testing(nullptr);
     return gFailures;
 }
 

@@ -1748,9 +1748,9 @@ void TestClassGroups() {
            "Material's groups");
 
     const std::vector<std::string> point = GroupedRows(rig, rig.add<engine_core::PointLight>("Lamp"));
-    Expect(point.size() >= 3 && point[0] == "Behavior:Prefab" && point[1] == "Behavior:Enabled" &&
-               point[2] == "Behavior:Shadows",
-           "a PointLight opens with Prefab, Enabled, Shadows");
+    Expect(point.size() >= 2 && point[0] == "Behavior:Enabled" && point[1] == "Behavior:Shadows" &&
+               !Has(point, "Behavior:Prefab"),
+           "a PointLight opens with Enabled, Shadows, and has no Prefab");
     Expect(Has(point, "Light:Color"), "a light's own Color is in Light");
 
     const std::vector<std::string> brush = GroupedRows(rig, rig.add<engine_core::Brush>("Block"));

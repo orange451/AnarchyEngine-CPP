@@ -1197,17 +1197,21 @@ void testInsertFilter() {
         "Folder",
         "CSS", "ModuleScript", "Script",
         "Camera",
-        "GameObject", "Model", "PhysicsObject", "PlayerController", "Terrain",
+        "Brush", "GameObject", "Model", "PhysicsObject", "PlayerController", "Terrain",
         "AmbientOcclusionEffect", "BloomEffect", "DynamicSky", "ScreenSpaceReflections", "Skybox",
         "DirectionalLight", "PointLight", "SpotLight",
         "Sound", "SoundEmitter",
         "Attachment",
         "BillboardGui", "ScreenGui",
         "HBox", "ImagePane", "Pane", "VBox",
-        "Button", "Label", "TextField",
-        "Dragger", "Material", "Mesh", "Prefab", "Texture"};
+        "AssetPicker", "Button", "Label", "Slider", "TextField",
+        "Dragger", "Material", "Mesh", "Prefab", "Texture", "WireframeAdornment"};
     if (shown != expected) {
-        fail("insert list is every creatable class, in clusters, each A to Z");
+        std::string listed;
+        for (const std::string& name : shown) {
+            listed += (listed.empty() ? "" : ", ") + name;
+        }
+        fail(("insert list is every creatable class, in clusters, each A to Z; got: " + listed).c_str());
     }
     ide::filter_class_names(names, "scr", shown);
     // Names that start with it first, then those that have it inside, each in clusters.

@@ -91,7 +91,7 @@ TEST_CASE("C2 scripts make a PlayerController and cannot write its ground flags"
     add_script(rig.game, "Controller", R"(
         local c = Instance.new("PlayerController", workspace)
         _G.default = c.Friction == 8 and c.Radius == 0.5 and c.Height == 2 and c.StepHeight == 0.4
-            and c.MaxSlope == 45 and c.OnGround == false and c.IsSliding == false and c.Mass == 1
+            and c.MaxSlope == 45 and c.OnGround == false and c.IsSliding == false and c.Mass == 50
         _G.isa = c:IsA("PhysicsBase") and c:IsA("PVInstance") and not c:IsA("PhysicsObject")
         _G.readonly = not pcall(function() c.OnGround = true end)
             and not pcall(function() c.IsSliding = true end)

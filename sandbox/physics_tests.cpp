@@ -441,7 +441,7 @@ TEST_CASE("P14 scripts set Shape by item, name, or value, and nothing else", "[p
     ScriptRig rig;
     add_script(rig.game, "Shapes", R"(
         local body = Instance.new("PhysicsObject", workspace)
-        _G.default = body.Shape == Enum.PhysicsShape.Box and body.Mass == 1 and body.Anchored == false
+        _G.default = body.Shape == Enum.PhysicsShape.Box and body.Mass == 50 and body.Anchored == false
             and body.Size == Vector3.new(1, 1, 1) and body.GameObject == nil and body.Mesh == nil
         body.Shape = Enum.PhysicsShape.Sphere
         _G.item = body.Shape == Enum.PhysicsShape.Sphere
@@ -982,7 +982,7 @@ TEST_CASE("P28 a body of pieces weighs its Mass", "[physics]") {
     rig.steps(1);
     REQUIRE(near(rig.physics.body_mass(scene.cup->id()), 20.f, 0.01f));
     // Every shape kind still weighs its Mass, with one shape.
-    REQUIRE(near(rig.physics.body_mass(scene.ball->id()), 1.f, 0.001f));
+    REQUIRE(near(rig.physics.body_mass(scene.ball->id()), static_cast<float>(engine_core::PhysicsBase::kDefaultMass), 0.001f));
     REQUIRE(rig.physics.shape_frictions(scene.ball->id()).size() == 1);
 }
 

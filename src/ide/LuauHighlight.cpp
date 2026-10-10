@@ -41,10 +41,10 @@ const char* Builtin(std::string_view word) {
     return nullptr;
 }
 
-// The engine's datatype globals: what Instance.new, Color3.new, Vector2.new, Vector3.new, RaycastParams.new, and Enum.<Name> start from.
+// The engine's datatype globals: what Instance.new, Color3.new, Vector2.new, Vector3.new, RaycastParams.new, BrushFace.new, and Enum.<Name> start from.
 // A new datatype global goes here too; LuauHighlightTest checks every capitalized global is listed.
 const char* Datatype(std::string_view word) {
-    static const char* kWords[] = {"Color3", "Enum", "Instance", "Matrix4", "RaycastParams", "Vector2", "Vector3"};
+    static const char* kWords[] = {"BrushFace", "Color3", "Enum", "Instance", "Matrix4", "RaycastParams", "Vector2", "Vector3"};
     for (const char* candidate : kWords) {
         if (word == candidate) {
             return "datatype";

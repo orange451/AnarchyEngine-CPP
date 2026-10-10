@@ -30,11 +30,6 @@
 
 namespace ide {
 
-const std::shared_ptr<IdeConflicts>& IdeLayout::conflicts_pane() {
-    window_page(*conflicts_window_);
-    return conflicts_pane_;
-}
-
 std::shared_ptr<IdePane> IdeLayout::make_conflicts() {
     ConflictsHost host;
     host.apply = [this](const std::vector<engine_core::DiskChoice>& choices) { check_disk(choices); };

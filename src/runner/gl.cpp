@@ -63,7 +63,6 @@ void (*rt_glPixelStorei)(GLenum, GLint) = nullptr;
 void (*rt_glUniform1i)(GLint, GLint) = nullptr;
 void (*rt_glUniform4f)(GLint, GLfloat, GLfloat, GLfloat, GLfloat) = nullptr;
 void (*rt_glUniform2f)(GLint, GLfloat, GLfloat) = nullptr;
-void (*rt_glUniform1fv)(GLint, GLsizei, const GLfloat*) = nullptr;
 void (*rt_glUniform3fv)(GLint, GLsizei, const GLfloat*) = nullptr;
 void (*rt_glUniform4fv)(GLint, GLsizei, const GLfloat*) = nullptr;
 void (*rt_glGenFramebuffers)(GLsizei, GLuint*) = nullptr;
@@ -96,12 +95,10 @@ void (*rt_glDepthMask)(GLboolean) = nullptr;
 void (*rt_glGetBooleanv)(GLenum, GLboolean*) = nullptr;
 void (*rt_glGenQueries)(GLsizei, GLuint*) = nullptr;
 void (*rt_glDeleteQueries)(GLsizei, const GLuint*) = nullptr;
-void (*rt_glQueryCounter)(GLuint, GLenum) = nullptr;
 void (*rt_glBeginQuery)(GLenum, GLuint) = nullptr;
 void (*rt_glEndQuery)(GLenum) = nullptr;
 void (*rt_glGetQueryObjectiv)(GLuint, GLenum, GLint*) = nullptr;
 void (*rt_glGetQueryObjectui64v)(GLuint, GLenum, GLuint64*) = nullptr;
-void (*rt_glGetInteger64v)(GLenum, GLint64*) = nullptr;
 void (*rt_glGetFramebufferAttachmentParameteriv)(GLenum, GLenum, GLenum, GLint*) = nullptr;
 
 namespace {
@@ -214,7 +211,6 @@ bool LoadGl(GlGetProcAddress get_proc) {
     LOAD(Uniform1i);
     LOAD(Uniform4f);
     LOAD(Uniform2f);
-    LOAD(Uniform1fv);
     LOAD(Uniform3fv);
     LOAD(Uniform4fv);
     LOAD(GenFramebuffers);
@@ -248,12 +244,10 @@ bool LoadGl(GlGetProcAddress get_proc) {
     rt_gl##suffix = reinterpret_cast<decltype(rt_gl##suffix)>(get_proc("gl" #suffix))
     LOAD_OPTIONAL(GenQueries);
     LOAD_OPTIONAL(DeleteQueries);
-    LOAD_OPTIONAL(QueryCounter);
     LOAD_OPTIONAL(BeginQuery);
     LOAD_OPTIONAL(EndQuery);
     LOAD_OPTIONAL(GetQueryObjectiv);
     LOAD_OPTIONAL(GetQueryObjectui64v);
-    LOAD_OPTIONAL(GetInteger64v);
     LOAD_OPTIONAL(GetFramebufferAttachmentParameteriv);
 #undef LOAD_OPTIONAL
     return true;

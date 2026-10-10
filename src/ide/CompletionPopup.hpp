@@ -45,7 +45,6 @@ public:
     bool commitsQuote(char quote, bool unclosed_only = true) const;
     bool keyAccepts() const;
     bool accepting() const;
-    int replaceEnd() const;
 
     void dismiss();
     void move(int delta);

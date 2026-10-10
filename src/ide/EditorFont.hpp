@@ -13,7 +13,6 @@ struct SystemFont {
 const std::vector<SystemFont>& system_fonts();
 
 void set_editor_font_choice(const std::string& family);
-const std::string& editor_font_choice();
 
 std::string editor_font_wanted();
 

@@ -477,11 +477,6 @@ private:
         // draws even when its lighting cube, uSkyEnabled's cubesReady, is not).
         int skyDrawn = -1;
         // Material.
-        int diffuse = -1;
-        int normalMap = -1;
-        int roughnessMap = -1;
-        int metalnessMap = -1;
-        int emissiveMap = -1;
         int color = -1;
         int emissive = -1;
         int metalness = -1;
@@ -496,11 +491,8 @@ private:
         // terrain.frag: SetTerrainLodColors' level, or -1 for none.
         int lodLevel = -1;
         // terrain.frag: whether a per-Terrain array pair is bound (Task 6),
-        // this draw's LOD node level (quality falloffs, independent of the
-        // debug lodLevel above), and Lighting.TerrainQuality (0 Low, 1
-        // Medium, 2 High).
+        // and Lighting.TerrainQuality (0 Low, 1 Medium, 2 High).
         int hasSurface = -1;
-        int nodeLevel = -1;
         int terrainQuality = -1;
         // terrain.frag: the view-space distance band the far falloffs (mip
         // bias, normal strength, the third triplanar projection) ramp
@@ -516,15 +508,6 @@ private:
         int antiTilingOverride = -1;
         int projectionDebug = -1;
         int detailFadeOverride = -1;
-        // G-buffer inputs.
-        int depth = -1;
-        int albedo = -1;
-        int normal = -1;
-        int material = -1;
-        int emissiveBuffer = -1;
-        int accumulation = -1;
-        int transparencyBuffer = -1;
-        int scene = -1;
         // One light (light.frag).
         int lightPosition = -1;
         int lightDirection = -1;

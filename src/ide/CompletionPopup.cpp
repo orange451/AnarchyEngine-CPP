@@ -728,7 +728,6 @@ bool CompletionPopup::commitsQuote(char quote, bool unclosed_only) const {
 
 bool CompletionPopup::accepting() const { return state_->accepting; }
 
-int CompletionPopup::replaceEnd() const { return state_->replace_end; }
 
 void CompletionPopup::dismiss() {
     if (!state_) {

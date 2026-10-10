@@ -471,7 +471,6 @@ private:
     // The Search pane, made the first time it is asked for.
     const std::shared_ptr<IdeSearch>& search_pane();
     // The Conflicts window, made the first time it is asked for.
-    const std::shared_ptr<IdeConflicts>& conflicts_pane();
     // Build the pages for their window entries.
     std::shared_ptr<IdePane> make_search();
     std::shared_ptr<IdePane> make_conflicts();

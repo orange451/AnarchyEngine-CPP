@@ -1159,7 +1159,6 @@ jadefx::Node* IdePrefabEditor::slotClearNode(engine_core::InstanceId model, Mode
 }
 
 jadefx::Node* IdePrefabEditor::addButton() const { return add_button_.get(); }
-jadefx::Node* IdePrefabEditor::newModelTile() const { return new_tile_.get(); }
 jadefx::Node* IdePrefabEditor::emptyState() const { return empty_->isVisible() ? empty_.get() : nullptr; }
 
 jadefx::TextField* IdePrefabEditor::pickerField() const { return pickerOpen() ? picker_->field() : nullptr; }

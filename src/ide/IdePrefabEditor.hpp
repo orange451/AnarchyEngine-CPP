@@ -86,7 +86,6 @@ public:
     jadefx::Node* slotNode(engine_core::InstanceId model, ModelPart part) const;
     jadefx::Node* slotClearNode(engine_core::InstanceId model, ModelPart part) const;
     jadefx::Node* addButton() const;
-    jadefx::Node* newModelTile() const;
     jadefx::Node* emptyState() const;
     // The open picker's search field and its row for asset, or None's row for 0.
     jadefx::TextField* pickerField() const;

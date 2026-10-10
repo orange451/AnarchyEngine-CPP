@@ -4,6 +4,7 @@
 #include "terrain/LayerBuilder.hpp"
 
 #include "terrain/HeightDerive.hpp"
+#include "texture/TextureBake.hpp"
 
 // Private to this file, so it cannot clash with the copies TextureCache.cpp
 // (studio) and the JadeFX library each compile and define on their own.
@@ -296,8 +297,8 @@ std::vector<std::vector<std::uint8_t>> build_normal_rough_metal_mips(std::vector
 
 }  // namespace
 
-LayerBytes build_layer(const LayerSources& sources, int size) {
-    LayerBytes result;
+LayerPixels build_layer(const LayerSources& sources, int size) {
+    LayerPixels result;
     result.size = size;
     if (size <= 0) return result;
 
@@ -365,16 +366,151 @@ LayerBytes build_layer(const LayerSources& sources, int size) {
     return result;
 }
 
-std::size_t layer_bytes(int size) {
-    if (size <= 0) return 0;
-    std::size_t one_layer = 0;
-    int w = size;
-    for (;;) {
-        one_layer += size_t(w) * size_t(w) * 4;
+namespace {
+
+// The side of each level of a size chain, level 0 first, down to 1.
+std::vector<int> chain_sides(int size) {
+    std::vector<int> sides;
+    if (size <= 0) return sides;
+    for (int w = size;; w = next_level_size(w)) {
+        sides.push_back(w);
         if (w == 1) break;
-        w = next_level_size(w);
     }
-    return one_layer * 2;  // A and B
+    return sides;
+}
+
+// Channels (first, second) of each pixel of rgba as R and G, B 0, A 255.
+std::vector<std::uint8_t> two_channels(const std::vector<std::uint8_t>& rgba, int first, int second) {
+    std::vector<std::uint8_t> out(rgba.size());
+    for (size_t i = 0; i < rgba.size(); i += 4) {
+        out[i + 0] = rgba[i + size_t(first)];
+        out[i + 1] = rgba[i + size_t(second)];
+        out[i + 2] = 0;
+        out[i + 3] = 255;
+    }
+    return out;
+}
+
+}  // namespace
+
+std::array<texture::PixelFormat, 3> layer_formats() {
+    using texture::PixelFormat;
+    if (!texture::s3tc_available()) return {PixelFormat::RGBA8, PixelFormat::RGBA8, PixelFormat::RGBA8};
+    return {PixelFormat::BC3, PixelFormat::BC5, PixelFormat::BC5};
+}
+
+LayerBytes compress_layer(const LayerPixels& pixels) {
+    const std::array<texture::PixelFormat, 3> formats = layer_formats();
+    LayerBytes out;
+    out.size = pixels.size;
+    out.warning = pixels.warning;
+    const std::vector<int> sides = chain_sides(pixels.size);
+    for (size_t level = 0; level < pixels.a_mips.size() && level < sides.size(); ++level) {
+        const int w = sides[level];
+        out.planes[0].push_back(texture::encode_level(formats[0], pixels.a_mips[level].data(), w, w));
+        const std::vector<std::uint8_t>& b = pixels.b_mips[level];
+        if (formats[1] == texture::PixelFormat::RGBA8) {
+            out.planes[1].push_back(two_channels(b, 0, 1));
+            out.planes[2].push_back(two_channels(b, 2, 3));
+        } else {
+            // BC5 reads R and G: B as is, and C's R and G from B's B and A.
+            out.planes[1].push_back(texture::encode_level(formats[1], b.data(), w, w));
+            const std::vector<std::uint8_t> c = two_channels(b, 2, 3);
+            out.planes[2].push_back(texture::encode_level(formats[2], c.data(), w, w));
+        }
+    }
+    return out;
+}
+
+LayerBytes preview_layer(const LayerSources& sources, int size) {
+    LayerSources diffuse_only;
+    diffuse_only.diffuse = sources.diffuse;
+    const int preview_size = std::min(64, size);
+    LayerBytes small = compress_layer(build_layer(diffuse_only, preview_size));
+    const std::vector<int> sides = chain_sides(size);
+    const int first = int(std::find(sides.begin(), sides.end(), preview_size) - sides.begin());
+    LayerBytes out;
+    out.size = size;
+    out.first_level = first;
+    out.warning = small.warning;
+    for (size_t p = 0; p < 3; ++p) {
+        out.planes[p].resize(sides.size());
+        for (size_t level = 0; level < small.planes[p].size() && first + int(level) < int(sides.size()); ++level) {
+            out.planes[p][size_t(first) + level] = std::move(small.planes[p][level]);
+        }
+    }
+    return out;
+}
+
+namespace {
+
+LayerBytes constant_layer(int size, const std::array<std::array<std::uint8_t, 4>, 3>& colors) {
+    const std::array<texture::PixelFormat, 3> formats = layer_formats();
+    LayerBytes out;
+    out.size = size;
+    for (int w : chain_sides(size)) {
+        for (size_t p = 0; p < 3; ++p) out.planes[p].push_back(texture::constant_level(formats[p], colors[p], w, w));
+    }
+    return out;
+}
+
+}  // namespace
+
+LayerBytes placeholder_layer(int size) {
+    return constant_layer(size, {{
+                                    {128, 128, 128, 128},   // mid grey, height 0.5
+                                    {128, 128, 0, 255},     // flat normal
+                                    {255, 255, 0, 255},     // roughness 1, metalness 1
+                                }});
+}
+
+LayerBytes untextured_layer(int size) {
+    return constant_layer(size, {{{255, 255, 255, 128}, {128, 128, 0, 255}, {255, 255, 0, 255}}});
+}
+
+std::size_t layer_bytes(int size) {
+    const std::array<texture::PixelFormat, 3> formats = layer_formats();
+    std::size_t total = 0;
+    for (int w : chain_sides(size)) {
+        for (texture::PixelFormat format : formats) total += texture::level_bytes(format, w, w);
+    }
+    return total;
 }
 
 }  // namespace engine_core::terrain
+
+// texture::decode_image_file lives here, beside the one stb_image this
+// package compiles.
+namespace engine_core::texture {
+
+std::optional<DecodedImage> decode_image_file(const std::filesystem::path& path, std::string& why) {
+    const std::optional<std::vector<std::uint8_t>> bytes = terrain::read_file(path);
+    if (!bytes) {
+        why = "could not be opened";
+        return std::nullopt;
+    }
+    if (bytes->empty() || bytes->size() > (std::size_t(256) << 20)) {
+        why = "is empty or larger than 256 MiB";
+        return std::nullopt;
+    }
+    int w = 0, h = 0, channels = 0;
+    stbi_uc* pixels = stbi_load_from_memory(bytes->data(), static_cast<int>(bytes->size()), &w, &h, &channels, 4);
+    if (pixels == nullptr) {
+        const char* reason = stbi_failure_reason();
+        why = reason != nullptr ? reason : "is not an image";
+        return std::nullopt;
+    }
+    DecodedImage image;
+    image.width = w;
+    image.height = h;
+    image.rgba.resize(std::size_t(w) * std::size_t(h) * 4);
+    // stb_image decodes the top row first; OpenGL takes the bottom row first.
+    const std::size_t row = std::size_t(w) * 4;
+    for (int line = 0; line < h; ++line) {
+        std::copy_n(pixels + std::size_t(line) * row, row, image.rgba.data() + std::size_t(h - 1 - line) * row);
+    }
+    stbi_image_free(pixels);
+    return image;
+}
+
+}  // namespace engine_core::texture

@@ -6,6 +6,7 @@
 #include "InputRouter.hpp"
 #include "PluginLoader.hpp"
 #include "Preferences.hpp"
+#include "NativeMenuBar.hpp"
 #include "ThemeLibrary.hpp"
 #include "Project.hpp"
 
@@ -718,6 +719,9 @@ private:
     double plugin_poll_at_ = 0;
     // The ribbon, and the PluginUi revision its Plugins tab last showed.
     PluginRibbon* plugin_ribbon_ = nullptr;
+    // The JadeFX menu bar, and what macOS's native bar moves or replaces.
+    jadefx::MenuBar* menu_bar_ = nullptr;
+    NativeMenuSetup native_menus_;
     std::uint64_t plugin_ui_revision_ = 0;
     // A plugin dock widget's page, by its pane name, and what the last frame saw of it.
     struct PluginWidget {

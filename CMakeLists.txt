@@ -151,6 +151,14 @@ set(STUDIO_SOURCES
     src/ide/PreferencesPanel.cpp
     src/ide/ThemeLibrary.cpp
 )
+# macOS shows the studio's menus in the screen's menu bar (src/ide/NativeMenuBar.hpp).
+if(APPLE)
+    list(APPEND STUDIO_SOURCES src/ide/NativeMenuBar_apple.mm)
+    # The precompiled header is built for C++, not Objective-C++.
+    set_source_files_properties(src/ide/NativeMenuBar_apple.mm PROPERTIES
+        COMPILE_OPTIONS "-fobjc-arc"
+        SKIP_PRECOMPILE_HEADERS ON)
+endif()
 # The terminal page's pseudo-terminal: ConPTY on Windows, forkpty elsewhere.
 if(WIN32)
     list(APPEND STUDIO_CORE_SOURCES src/ide/PtyWindows.cpp)

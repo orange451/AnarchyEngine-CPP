@@ -59,9 +59,10 @@
 namespace ide {
 namespace layout_detail {
 
-// MenuBar's title row is 28 points. The ribbon under it is 32. The status
+// MenuBar's title row is 28 points, or none where the menus are in the
+// screen's menu bar (NativeMenuBar.hpp). The ribbon under it is 32. The status
 // strip below is 24, matching the Java toolbar.
-constexpr double kMenuHeight = 28;
+constexpr double kMenuHeight = kNativeMenuBar ? 0 : 28;
 constexpr double kRibbonHeight = 32;
 // The rows of tool cards under the ribbon's tab bar: a card's height and a little.
 constexpr double kToolRowHeight = 72;

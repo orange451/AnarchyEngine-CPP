@@ -76,11 +76,12 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight, const std::filesys
         reveal_folder(plugins_dir_);
     });
     file->getItems().add(jadefx::make<jadefx::SeparatorMenuItem>());
-    AddItem(*file, "Preferences\u2026", nullptr, jadefx::Key::Comma, jadefx::Key::ModControl)
-        ->setOnAction([this](jadefx::ActionEvent&) { open_preferences(); });
+    jadefx::MenuItem* preferences = AddItem(*file, "Preferences\u2026", nullptr, jadefx::Key::Comma, jadefx::Key::ModControl);
+    preferences->setOnAction([this](jadefx::ActionEvent&) { open_preferences(); });
     file->getItems().add(jadefx::make<jadefx::SeparatorMenuItem>());
     // The same path as the window's close button: unsaved work is offered a save first.
-    AddItem(*file, "Quit", nullptr, jadefx::Key::Q, jadefx::Key::ModControl)->setOnAction([this](jadefx::ActionEvent&) {
+    jadefx::MenuItem* quit = AddItem(*file, "Quit", nullptr, jadefx::Key::Q, jadefx::Key::ModControl);
+    quit->setOnAction([this](jadefx::ActionEvent&) {
         if (mainStage_ != nullptr && mainStage_->closeRequested()) {
             mainStage_->close();
         }
@@ -174,6 +175,18 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight, const std::filesys
     menuBar->getMenus().add(view);
     menuBar->getMenus().add(window);
     menuBar->setPrefWidthRatio(1);
+    // On macOS the menus show in the screen's menu bar (NativeMenuBar.hpp). The
+    // bar stays in the scene as their model, hidden and taking no height; a
+    // hidden MenuBar does not run accelerators, so each shortcut runs once.
+    if (kNativeMenuBar) {
+        menuBar->setVisible(false);
+        menuBar->setMinSize(0, 0);
+        menuBar->setPrefHeight(0);
+    }
+    menu_bar_ = menuBar.get();
+    native_menus_.settings = preferences;
+    native_menus_.quit = quit;
+    native_menus_.window = window.get();
 
     auto top = jadefx::make<jadefx::VBox>();
     top->setPrefWidthRatio(1);
@@ -445,6 +458,9 @@ void IdeLayout::load_plugins() {
 
 void IdeLayout::mount(jadefx::Scene& scene) {
     scene_ = &scene;
+    if (menu_bar_ != nullptr) {
+        InstallNativeMenuBar(*menu_bar_, native_menus_);
+    }
     scene.setPadding(jadefx::Insets{});
     scene.setStylesheet(kStylesheet);
     scene.setRoot(root_);
@@ -653,6 +669,8 @@ void IdeLayout::flushFrame() {
 }
 
 IdeLayout::~IdeLayout() {
+    // The native menus' items would outlive the actions they run.
+    RemoveNativeMenuBar();
     // Before anything its tools reach is torn down.
     stop_mcp();
     alive_.reset();

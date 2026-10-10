@@ -138,3 +138,124 @@ TEST_CASE("SKEL6 equal tables share a signature; a renamed bone does not", "[ske
     REQUIRE(a->signature == b->signature);
     REQUIRE(a->signature != c->signature);
 }
+
+// Mesh::skeleton and the Prefab's skeleton, read from AMESH files under a resources folder.
+
+#include "AssetInstances.hpp"
+#include "GameObject.hpp"
+#include "Skinning.hpp"
+
+#include <chrono>
+#include <fstream>
+#include <thread>
+
+namespace {
+
+engine_core::LuaSlot id_slot(engine_core::InstanceId id) {
+    engine_core::LuaSlot slot;
+    slot.kind = engine_core::LuaSlot::Kind::Instance;
+    slot.id = id;
+    return slot;
+}
+
+// A triangle whose vertices follow bones: count bones in a chain up Y, 2 units apart.
+amesh::Data arm(int count) {
+    amesh::Data data;
+    for (int v = 0; v < 3; ++v) {
+        amesh::Vertex vertex;
+        vertex.p[0] = static_cast<float>(v);
+        vertex.p[1] = static_cast<float>(v);
+        if (count > 0) {
+            vertex.bone[0] = static_cast<std::uint16_t>(v % count);
+            vertex.weight[0] = 1.f;
+        }
+        data.vertices.push_back(vertex);
+    }
+    data.indices = {0, 1, 2};
+    const char* names[] = {"Root", "Hand", "Finger"};
+    for (int b = 0; b < count; ++b) {
+        data.bones.push_back(bone(names[b], b == 0 ? amesh::kNoBone : static_cast<std::uint16_t>(b - 1),
+                                  engine_core::matrix4_translation(0.f, 2.f * static_cast<float>(b), 0.f), 1.f));
+    }
+    amesh::compute_aabb(data);
+    return data;
+}
+
+void write_mesh(const std::filesystem::path& file, const amesh::Data& data) {
+    std::filesystem::create_directories(file.parent_path());
+    const std::vector<std::byte> bytes = amesh::write(data);
+    std::ofstream out(file, std::ios::binary | std::ios::trunc);
+    out.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+}
+
+// A game whose resources folder holds meshes/arm.amesh (two bones) and meshes/box.amesh (none).
+struct Rig {
+    SimRole role;
+    TempDir dir;
+    engine_core::Game game;
+
+    Rig() {
+        write_mesh(dir / "meshes" / "arm.amesh", arm(2));
+        write_mesh(dir / "meshes" / "box.amesh", arm(0));
+        game.set_resources_root(dir.path);
+    }
+
+    engine_core::Mesh& mesh(const char* path) {
+        engine_core::Mesh& made = game.create<engine_core::Mesh>();
+        game.set_parent(made.id(), game.service("Meshes"));
+        REQUIRE_FALSE(made.set_path(path));
+        return made;
+    }
+
+    engine_core::Prefab& prefab(std::initializer_list<engine_core::InstanceId> meshes) {
+        engine_core::Prefab& made = game.create<engine_core::Prefab>();
+        game.set_parent(made.id(), game.service("Prefabs"));
+        for (const engine_core::InstanceId mesh : meshes) {
+            engine_core::Model& model = game.create<engine_core::Model>();
+            game.set_parent(model.id(), made.id());
+            REQUIRE_FALSE(model.set_reference(engine_core::Model::kMeshReference, id_slot(mesh)));
+        }
+        return made;
+    }
+};
+
+}  // namespace
+
+TEST_CASE("SKEL7 a Mesh's skeleton comes from its AMESH file", "[skeleton]") {
+    Rig rig;
+    const auto skeleton = rig.mesh("meshes/arm.amesh").skeleton();
+    REQUIRE(skeleton != nullptr);
+    REQUIRE(skeleton->bones.size() == 2);
+    REQUIRE(skeleton->bones[1].name == "Hand");
+    REQUIRE(rig.mesh("meshes/box.amesh").skeleton() == nullptr);
+    REQUIRE(rig.mesh("meshes/missing.amesh").skeleton() == nullptr);
+}
+
+TEST_CASE("SKEL8 a Mesh's skeleton is read once, and again when its file changes", "[skeleton]") {
+    Rig rig;
+    engine_core::Mesh& mesh = rig.mesh("meshes/arm.amesh");
+    const auto first = mesh.skeleton();
+    REQUIRE(mesh.skeleton() == first);
+    // A file time that moves on, however coarse the file system's clock.
+    std::this_thread::sleep_for(std::chrono::milliseconds(1100));
+    write_mesh(rig.dir / "meshes" / "arm.amesh", arm(3));
+    std::filesystem::last_write_time(rig.dir / "meshes" / "arm.amesh",
+                                     std::filesystem::file_time_type::clock::now() + std::chrono::seconds(5));
+    const auto second = mesh.skeleton();
+    REQUIRE(second != nullptr);
+    REQUIRE(second->bones.size() == 3);
+}
+
+TEST_CASE("SKEL9 a Prefab poses with its first Model whose Mesh has bones", "[skeleton]") {
+    Rig rig;
+    engine_core::Mesh& box = rig.mesh("meshes/box.amesh");
+    engine_core::Mesh& arm_mesh = rig.mesh("meshes/arm.amesh");
+    engine_core::Prefab& prefab = rig.prefab({box.id(), arm_mesh.id()});
+    const auto skeleton = engine_core::prefab_skeleton(rig.game, rig.game.guid(prefab.id()));
+    REQUIRE(skeleton != nullptr);
+    REQUIRE(skeleton->bones.size() == 2);
+    REQUIRE(engine_core::mesh_poses_with(arm_mesh, *skeleton));
+    REQUIRE_FALSE(engine_core::mesh_poses_with(box, *skeleton));
+    REQUIRE(engine_core::prefab_skeleton(rig.game, rig.game.guid(rig.prefab({}).id())) == nullptr);
+    REQUIRE(engine_core::prefab_skeleton(rig.game, "") == nullptr);
+}

@@ -6,6 +6,7 @@
 #include "LuaApi.hpp"
 #include "Project.hpp"
 #include "PropertyBag.hpp"
+#include "Skeleton.hpp"
 #include "amesh.hpp"
 
 #include <algorithm>
@@ -417,6 +418,50 @@ std::optional<std::string> Mesh::store_pieces(std::uint32_t recipe, std::vector<
     return write_file(root, path(), data);
 }
 
+std::shared_ptr<const Skeleton> Mesh::skeleton() const {
+    const SessionGeometry session = session_geometry();
+    std::filesystem::path file;
+    if (session.data == nullptr) {
+        const std::filesystem::path root = resources_root();
+        if (!root.empty() && !path().empty()) {
+            file = root / std::filesystem::u8path(path());
+        }
+    }
+    std::lock_guard<std::mutex> lock(skeleton_mutex_);
+    const auto now = std::chrono::steady_clock::now();
+    const bool same_source = skeleton_read_ && skeleton_revision_ == session.revision && skeleton_file_ == file;
+    if (same_source && (file.empty() || now - skeleton_checked_ < std::chrono::seconds(1))) {
+        return skeleton_;
+    }
+    std::filesystem::file_time_type stamp{};
+    if (!file.empty()) {
+        std::error_code error;
+        stamp = std::filesystem::last_write_time(file, error);
+        if (error) {
+            stamp = {};
+        }
+    }
+    skeleton_checked_ = now;
+    if (same_source && stamp == skeleton_stamp_) {
+        return skeleton_;
+    }
+    skeleton_read_ = true;
+    skeleton_revision_ = session.revision;
+    skeleton_file_ = file;
+    skeleton_stamp_ = stamp;
+    if (session.data != nullptr) {
+        skeleton_ = make_skeleton(session.data->bones);
+    } else if (!file.empty()) {
+        // A file with LODs still has its bones.
+        anarchy::amesh::Data read;
+        read_file(resources_root(), path(), read, true);
+        skeleton_ = make_skeleton(read.bones);
+    } else {
+        skeleton_.reset();
+    }
+    return skeleton_;
+}
+
 void Mesh::on_reuse() {
     FileAsset::on_reuse();
     session_ = SessionGeometry{};
@@ -427,6 +472,9 @@ void Mesh::on_reuse() {
     std::lock_guard<std::mutex> pieces_lock(pieces_mutex_);
     pieces_stamp_.clear();
     pieces_.clear();
+    std::lock_guard<std::mutex> skeleton_lock(skeleton_mutex_);
+    skeleton_read_ = false;
+    skeleton_.reset();
 }
 
 const char* Sound::class_name() const { return "Sound"; }

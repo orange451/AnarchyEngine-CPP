@@ -6,6 +6,7 @@
 #include "amesh.hpp"
 
 #include <array>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -22,6 +23,8 @@ struct Data;
 }
 
 namespace engine_core {
+
+struct Skeleton;
 
 // Assets, kept under game.Assets. Each lives only under its own category, as
 // Containment's rules say: a Texture under Textures, a Model only in a Prefab.
@@ -155,6 +158,13 @@ public:
     // Empty with no Path or no file.
     std::string file_stamp() const;
 
+    // The bones of what the Mesh draws now: this session's geometry while
+    // playing, else its AMESH file. Null when it has none. Read again when the
+    // session geometry, the Path, or the resources folder changes, and when
+    // the file's time on disk does, which is looked at no more than once a
+    // second. Needs the DataModel lock; a read lock is enough.
+    std::shared_ptr<const Skeleton> skeleton() const;
+
 protected:
     void on_reuse() override;
 
@@ -184,6 +194,15 @@ private:
     mutable bool bounds_found_ = false;
     mutable Vec3 bounds_low_{};
     mutable Vec3 bounds_high_{};
+
+    // skeleton, as last read, and what from, as bounds keeps it.
+    mutable std::mutex skeleton_mutex_;
+    mutable bool skeleton_read_ = false;
+    mutable std::uint64_t skeleton_revision_ = 0;
+    mutable std::filesystem::path skeleton_file_;
+    mutable std::filesystem::file_time_type skeleton_stamp_{};
+    mutable std::chrono::steady_clock::time_point skeleton_checked_{};
+    mutable std::shared_ptr<const Skeleton> skeleton_;
 
     // file_pieces, as last read, and the file_stamp it was read at.
     mutable std::mutex pieces_mutex_;

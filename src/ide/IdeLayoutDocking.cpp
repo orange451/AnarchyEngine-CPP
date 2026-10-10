@@ -999,9 +999,14 @@ engine_core::JsonValue IdeLayout::capture_layout() {
         engine_core::JsonValue window = engine_core::JsonValue::object();
         window.set("x", engine_core::JsonValue::number(x));
         window.set("y", engine_core::JsonValue::number(y));
-        window.set("width", engine_core::JsonValue::number(mainStage_->getWidth()));
-        window.set("height", engine_core::JsonValue::number(mainStage_->getHeight()));
-        window.set("maximized", engine_core::JsonValue::boolean(jadefx::isStageMaximized(*mainStage_)));
+        // A maximized window's size is the display's, not one to come back to.
+        // Its place still picks the display it maximizes on.
+        const bool maximized = jadefx::isStageMaximized(*mainStage_);
+        if (!maximized) {
+            window.set("width", engine_core::JsonValue::number(mainStage_->getWidth()));
+            window.set("height", engine_core::JsonValue::number(mainStage_->getHeight()));
+        }
+        window.set("maximized", engine_core::JsonValue::boolean(maximized));
         saved.set("window", std::move(window));
     }
     return saved;

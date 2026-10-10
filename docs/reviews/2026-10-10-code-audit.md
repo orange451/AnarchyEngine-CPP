@@ -7,6 +7,10 @@
 | **Scope** | All of `src/` (105,028 lines), the pipeline shaders under `resources/`, `tests/`, `sandbox/`, and the build files |
 | **Looking for** | Illogical code, dead code, duplicated code, obviously buggy code |
 
+## Status
+
+Fixed on branch `audit-fixes` (plan: `docs/superpowers/plans/2026-10-10-audit-fixes.md`): B1-B8, B10-B13, B15, D1-D6, D8, and section 4 dead code. B9's header now states the real limit and a test pins it; `ancestry_changed` is kept and pinned by a test. Corrections found while fixing: `DirectionalLight` is not a PVInstance, lights do have a `Color`, `glGetTexParameteriv` is used by `scene-render-check`, and the render-side `VisualDynamicSky` defaults had drifted too. Deferred: B9's real fix (a render-thread hand-off point), B14, D7, exposing instance signals to Luau, `Lighting.Ambient`'s colour space, and section 5 duplication P1-P8. Pre-existing test failures on `main` that this branch does not address are listed in the branch's final report.
+
 > **Bottom line.** The code is in good shape. Nothing found here crashes the studio, corrupts a project, or loses work; the eleven critical and high findings of the September review are fixed. What remains is one Medium rendering bug that can silently turn off point and spot shadows for a session, one Medium copy-paste omission that hides a revived Dragger, a handful of Low bugs, several places where the README, the tests, and the code disagree about defaults and class hierarchy, and a large amount of copy-pasted helper code (roughly 1,500 lines) that has already started to drift.
 
 Line numbers refer to commit `2676e0b`. Paths drop the `src/` prefix where the file name is unique.

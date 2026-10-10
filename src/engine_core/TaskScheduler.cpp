@@ -185,8 +185,9 @@ void TaskScheduler::unbind(JobId id) {
             if (entry.id != id) {
                 continue;
             }
-            // A retired job that is not permanent leaves the list at the next
-            // cancel_session_jobs, or stays until its parked frame is done.
+            // A retired simulation-phase job leaves the list at the next
+            // cancel_session_jobs, or stays until its parked frame is done. A
+            // render-phase entry stays until shutdown.
             entry.permanent = false;
             entry.retired = true;
             // A render job may be inside its closure on the render thread, and a

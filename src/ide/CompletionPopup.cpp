@@ -22,7 +22,6 @@
 namespace ide {
 namespace {
 
-
 // Text drawn bold the way the code area draws it: struck twice, the second
 // time a little to the right. Open Sans has no bold face loaded.
 class BoldText : public jadefx::Controls {
@@ -727,7 +726,6 @@ bool CompletionPopup::commitsQuote(char quote, bool unclosed_only) const {
 }
 
 bool CompletionPopup::accepting() const { return state_->accepting; }
-
 
 void CompletionPopup::dismiss() {
     if (!state_) {

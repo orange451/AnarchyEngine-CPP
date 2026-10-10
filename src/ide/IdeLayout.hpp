@@ -470,7 +470,6 @@ private:
     void adopt_tree(const std::shared_ptr<jadefx::Node>& node);
     // The Search pane, made the first time it is asked for.
     const std::shared_ptr<IdeSearch>& search_pane();
-    // The Conflicts window, made the first time it is asked for.
     // Build the pages for their window entries.
     std::shared_ptr<IdePane> make_search();
     std::shared_ptr<IdePane> make_conflicts();

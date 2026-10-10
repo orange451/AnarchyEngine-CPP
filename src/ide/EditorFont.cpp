@@ -219,7 +219,6 @@ const std::vector<SystemFont>& system_fonts() {
 
 void set_editor_font_choice(const std::string& family) { Choice() = family; }
 
-
 std::string editor_font_wanted() {
     if (!Choice().empty()) {
         return Choice();

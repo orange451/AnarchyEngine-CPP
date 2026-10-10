@@ -27,10 +27,6 @@ namespace {
 // rows are rewritten while the view is detached and rebuilt once.
 constexpr std::size_t kInPlaceEdits = 8;
 
-// The simulation thread can hold the DataModel lock for a whole step.
-// This wait is short so a busy step does not freeze the shell.
-// An action the person asked for waits longer than a repaint, then says why it did nothing.
-
 // A second click on the same row, at least this long after the first, renames it.
 constexpr double kSlowClickSeconds = 0.5;
 // JadeFX's TreeView turns two clicks inside this window into a double-click.

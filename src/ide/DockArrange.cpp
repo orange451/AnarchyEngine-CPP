@@ -188,6 +188,9 @@ void liftDegenerateSplits(
         std::shared_ptr<jadefx::Node> replacement;
         if (split->getItems().size() == 1) {
             replacement = split->getItems()[0];
+            // It takes the split's place, so whether it keeps its size as the window
+            // resizes is the split's: a fixed side column stays fixed.
+            jadefx::SplitPane::setResizableWithParent(*replacement, jadefx::SplitPane::isResizableWithParent(*split));
         }
         // Split children are parented to an internal host, not the split itself.
         jadefx::Node* parent = structuralParent(node.get());

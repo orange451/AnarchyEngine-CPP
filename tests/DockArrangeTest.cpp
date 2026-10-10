@@ -184,6 +184,68 @@ void TestLiftKeepsColumns() {
            "the row dividers stay where they were");
 }
 
+
+// A fixed column split in two (a page docked under the left column's), then
+// back to one page: that page keeps the column's width as the window grows.
+void TestLiftKeepsFixedColumn() {
+    auto root = jadefx::make<jadefx::BorderPane>();
+    auto outer = jadefx::make<jadefx::SplitPane>();
+    auto west = jadefx::make<jadefx::SplitPane>();
+    west->setOrientation(jadefx::Orientation::Vertical);
+    auto westTop = jadefx::make<jadefx::Pane>();
+    auto westBottom = jadefx::make<jadefx::Pane>();
+    auto center = jadefx::make<jadefx::Pane>();
+    auto east = jadefx::make<jadefx::Pane>();
+    for (jadefx::Pane* pane : {westTop.get(), westBottom.get(), center.get(), east.get()}) {
+        pane->setMinSize(64, 64);
+    }
+    west->getItems().add(westTop);
+    west->getItems().add(westBottom);
+    west->setDividerPositions({0.5});
+    // As wrapNode leaves it: the split holds the column's fixed width; the page in it resizes.
+    jadefx::SplitPane::setResizableWithParent(*westTop, true);
+    jadefx::SplitPane::setResizableWithParent(*west, false);
+    outer->getItems().add(west);
+    outer->getItems().add(center);
+    outer->getItems().add(east);
+    outer->setDividerPositions({0.2, 0.8});
+    jadefx::SplitPane::setResizableWithParent(*east, false);
+    root->setCenter(outer);
+    auto scene = jadefx::make<jadefx::Scene>(root, 1000, 600);
+    scene->layout(1000, 600, 0);
+
+    std::shared_ptr<jadefx::Node> heldOuter = outer;
+    std::shared_ptr<jadefx::Node> heldRoot = root;
+    auto share = [&](jadefx::Node* node) -> std::shared_ptr<jadefx::Node> {
+        if (node == heldRoot.get()) {
+            return heldRoot;
+        }
+        if (node == heldOuter.get()) {
+            return heldOuter;
+        }
+        auto* parent = dynamic_cast<jadefx::SplitPane*>(node->getParent());
+        if (parent == nullptr) {
+            return nullptr;
+        }
+        for (const std::shared_ptr<jadefx::Node>& item : parent->getItems().items()) {
+            if (item.get() == node) {
+                return item;
+            }
+        }
+        return nullptr;
+    };
+    auto replaced = [](jadefx::Node&, const std::shared_ptr<jadefx::Node>&, const std::shared_ptr<jadefx::Node>&) {};
+    west->getItems().removeAt(1);
+    ide::liftDegenerateSplits(west, root.get(), share, replaced);
+    Expect(outer->getItems()[0].get() == westTop.get(), "the left page takes its column's place");
+    Expect(!jadefx::SplitPane::isResizableWithParent(*westTop), "and keeps the column fixed");
+    scene->layout(1000, 600, 0);
+    const double westWidth = westTop->getWidth();
+    const double eastWidth = east->getWidth();
+    scene->layout(1400, 600, 0);
+    Expect(std::fabs(westTop->getWidth() - westWidth) < 2, "a wider window keeps the left column's width");
+    Expect(std::fabs(east->getWidth() - eastWidth) < 2, "and the right column's");
+}
 void TestDockZones() {
     const ide::Box dock{0, 0, 200, 120};
     Expect(ide::dockZone(dock, 20, 30, 8) == ide::DockZone::Header, "the tab strip is the header zone");
@@ -323,6 +385,7 @@ int main() {
     TestDockMinimum();
     TestLiftSplit();
     TestLiftKeepsColumns();
+    TestLiftKeepsFixedColumn();
     TestDockZones();
     TestSplitBeside();
     TestSplitEdge();

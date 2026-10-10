@@ -4,6 +4,7 @@
 #include "DataModel.hpp"
 #include "DenseIdSet.hpp"
 #include "DraggerMath.hpp"
+#include "DynamicSky.hpp"
 #include "TerrainWorld.hpp"
 #include "types.hpp"
 
@@ -109,14 +110,14 @@ struct VisualSky {
 // present is false otherwise, and the values are DynamicSky's defaults.
 struct VisualDynamicSky {
     bool present = false;
-    float time_of_day = 14.f;
-    float latitude = 35.f;
-    float brightness = 3.f;
-    bool shadows = true;
-    float cloud_cover = 0.5f;
-    float cloud_density = 0.5f;
-    // Studs per second; Y is ignored.
-    Vec3 wind{1.f, 0.f, 0.3f};
+    float time_of_day = static_cast<float>(DynamicSky::kDefaultTimeOfDay);
+    float latitude = static_cast<float>(DynamicSky::kDefaultLatitude);
+    float brightness = static_cast<float>(DynamicSky::kDefaultBrightness);
+    bool shadows = DynamicSky::kDefaultShadows;
+    float cloud_cover = static_cast<float>(DynamicSky::kDefaultCloudCover);
+    float cloud_density = static_cast<float>(DynamicSky::kDefaultCloudDensity);
+    // Units per second; Y is ignored.
+    Vec3 wind = DynamicSky::kDefaultWindDirection;
     // Texture Paths, relative to the resources folder. Empty for none.
     std::string sun_texture;
     std::string moon_texture;
@@ -127,10 +128,10 @@ struct VisualDynamicSky {
     bool sun_always_loaded = false;
     bool moon_always_loaded = false;
     // Degrees across.
-    float sun_size = 2.f;
-    float moon_size = 2.f;
+    float sun_size = static_cast<float>(DynamicSky::kDefaultSunSize);
+    float moon_size = static_cast<float>(DynamicSky::kDefaultMoonSize);
     // Enum.EffectQuality's value: Low 0, Medium 1, High 2.
-    int reflection_quality = 1;
+    int reflection_quality = static_cast<int>(DynamicSky::kDefaultReflectionQuality);
 };
 
 // The first BloomEffect under Lighting, in tree order, as the renderer reads

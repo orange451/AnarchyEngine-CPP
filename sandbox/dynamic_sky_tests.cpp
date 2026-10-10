@@ -59,16 +59,22 @@ TEST_CASE("DS1 a DynamicSky's properties are checked, undo, save, and come back 
     DynamicSky& sky = add_dynamic_sky(game, game.scene_service("Lighting"));
     REQUIRE(sky.time_of_day() == 14.0);
     REQUIRE(sky.latitude() == 35.0);
-    REQUIRE(sky.brightness() == 3.0);
+    REQUIRE(sky.brightness() == DynamicSky::kDefaultBrightness);
     REQUIRE(sky.shadows());
-    REQUIRE(sky.cloud_cover() == 0.5);
-    REQUIRE(sky.cloud_density() == 0.5);
+    REQUIRE(sky.cloud_cover() == DynamicSky::kDefaultCloudCover);
+    REQUIRE(sky.cloud_density() == DynamicSky::kDefaultCloudDensity);
     REQUIRE(sky.wind_direction().x == 1.f);
     REQUIRE(sky.wind_direction().z == 0.3f);
     REQUIRE(sky.sun_texture().kind == engine_core::LuaSlot::Kind::Nil);
     REQUIRE(sky.moon_texture().kind == engine_core::LuaSlot::Kind::Nil);
-    REQUIRE(sky.sun_size() == 2.0);
-    REQUIRE(sky.moon_size() == 2.0);
+    REQUIRE(sky.sun_size() == DynamicSky::kDefaultSunSize);
+    REQUIRE(sky.moon_size() == DynamicSky::kDefaultMoonSize);
+    // The documented defaults, as README.md states them.
+    REQUIRE(DynamicSky::kDefaultBrightness == 2.0);
+    REQUIRE(DynamicSky::kDefaultCloudCover == 0.3);
+    REQUIRE(DynamicSky::kDefaultCloudDensity == 0.0);
+    REQUIRE(DynamicSky::kDefaultSunSize == 4.0);
+    REQUIRE(DynamicSky::kDefaultMoonSize == 4.0);
     REQUIRE(sky.reflection_quality() == engine_core::EffectQuality::Medium);
 
     // A default DynamicSky saves none of them.
@@ -137,6 +143,8 @@ TEST_CASE("DS1 a DynamicSky's properties are checked, undo, save, and come back 
     REQUIRE_FALSE(sky.set_shadows(false));
     REQUIRE_FALSE(sky.set_wind_direction(engine_core::Vec3{0.f, 0.f, 5.f}));
     REQUIRE_FALSE(sky.set_reflection_quality(2));
+    // The clamp tests left CloudDensity at its default 0, which a bag omits.
+    REQUIRE_FALSE(sky.set_cloud_density(0.5));
     engine_core::PropertyBag changed;
     sky.save_properties(changed);
     for (const char* name : {"TimeOfDay", "Latitude", "Brightness", "Shadows", "CloudCover", "CloudDensity",
@@ -185,9 +193,9 @@ TEST_CASE("DS4 scripts make a DynamicSky and set it", "[dynamic_sky]") {
     rig.game.set_parent(moon.id(), rig.game.service("Textures"));
     add_script(rig.game, "Sky", R"(
         local sky = Instance.new("DynamicSky", game.Lighting)
-        _G.defaults = sky.TimeOfDay == 14 and sky.Latitude == 35 and sky.Brightness == 3 and sky.Shadows
+        _G.defaults = sky.TimeOfDay == 14 and sky.Latitude == 35 and sky.Brightness == 2 and sky.Shadows
             and sky.CloudCover == 0.3 and sky.CloudDensity == 0 and sky.SunTexture == nil
-            and sky.MoonTexture == nil and sky.SunSize == 2 and sky.MoonSize == 2
+            and sky.MoonTexture == nil and sky.SunSize == 4 and sky.MoonSize == 4
             and sky.ReflectionQuality == Enum.EffectQuality.Medium
             and math.abs(sky.WindDirection.Z - 0.3) < 1e-6
         sky.TimeOfDay = 30

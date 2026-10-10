@@ -50,6 +50,13 @@ std::string cache_key(const std::vector<std::filesystem::path>& sources,
 // each larger level alone, smallest first. levels counts the whole chain.
 std::vector<std::vector<int>> streaming_batches(int width, int height, int levels);
 
+// The name a baked texture's cache file goes by: 16 hex digits of FNV-1a
+// over kAtexVersion, each source file's bytes (an empty path and a missing
+// file each count as their own marker), and settings. Its bytes, not its path
+// or time, so a project copied elsewhere -- as a player unpacks a game --
+// still finds what the studio baked. Reads every source: a worker's job.
+std::string content_key(const std::vector<std::filesystem::path>& sources, const std::string& settings);
+
 // <project>/.cache/textures/<key>.atex, the project being resources_root's
 // parent folder.
 std::filesystem::path cache_path(const std::filesystem::path& resources_root, const std::string& key);

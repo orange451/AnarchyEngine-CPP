@@ -174,7 +174,8 @@ struct LoadJob {
     std::string key;
     terrain::LayerSources sources;
     int size = 0;
-    std::filesystem::path cache;   // empty with no project: nothing on disk
+    std::filesystem::path root;    // the resources folder; empty with no project: nothing on disk
+    std::filesystem::path cache;   // set by first_look, from the sources' bytes
 };
 
 void bake(const SharedPtr& shared, const LoadJob& job) {
@@ -214,8 +215,14 @@ void read_larger(texture::TexturePool& pool, const SharedPtr& shared, const Load
 // small levels, or, with none, a preview of the diffuse alone. The rest
 // follows at lower priority, so every layer gets its first look before any
 // layer's full build.
-void first_look(texture::TexturePool& pool, const SharedPtr& shared, const LoadJob& job) {
+void first_look(texture::TexturePool& pool, const SharedPtr& shared, LoadJob job) {
     if (shared->stopped()) return;
+    if (!job.root.empty()) {
+        // Named by the sources' bytes, read here off SimulationThread.
+        const terrain::LayerSources& s = job.sources;
+        job.cache = texture::cache_path(
+            job.root, texture::content_key({s.diffuse, s.normal, s.roughness, s.metalness, s.height}, layer_settings(job.size)));
+    }
     if (!job.cache.empty()) {
         const std::optional<texture::AtexHeader> header = texture::read_atex_header(job.cache);
         const std::array<texture::PixelFormat, 3> formats = terrain::layer_formats();
@@ -275,7 +282,7 @@ bool TerrainTextures::start_layer(LayerSlot& slot, const std::filesystem::path& 
     job.key = slot.key;
     job.sources = slot.sources;
     job.size = slot.size;
-    if (!root.empty()) job.cache = texture::cache_path(root, slot.key);
+    job.root = root;
     SharedPtr shared = shared_;
     texture::TexturePool* pool = &pool_;
     pool_.submit(texture::JobPriority::TerrainPreview, [pool, shared, job] { first_look(*pool, shared, job); });

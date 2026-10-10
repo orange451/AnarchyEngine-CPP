@@ -4,6 +4,7 @@
 #include <atomic>
 #include <cmath>
 #include <cstdio>
+#include <fstream>
 
 namespace engine_core::texture {
 
@@ -114,6 +115,36 @@ std::string cache_key(const std::vector<std::filesystem::path>& sources,
         const long long ticks =
             i < stamps.size() ? static_cast<long long>(stamps[i].time_since_epoch().count()) : 0ll;
         fnv(hash, &ticks, sizeof(ticks));
+    }
+    fnv(hash, settings);
+    char text[17];
+    std::snprintf(text, sizeof(text), "%016llx", static_cast<unsigned long long>(hash));
+    return text;
+}
+
+std::string content_key(const std::vector<std::filesystem::path>& sources, const std::string& settings) {
+    std::uint64_t hash = 0xcbf29ce484222325ull;
+    const std::uint32_t version = kAtexVersion;
+    fnv(hash, &version, sizeof(version));
+    std::vector<char> chunk(std::size_t(1) << 20);
+    for (const std::filesystem::path& source : sources) {
+        if (source.empty()) {
+            fnv(hash, std::string("none"));
+            continue;
+        }
+        std::ifstream in(source, std::ios::binary);
+        if (!in) {
+            fnv(hash, std::string("missing"));
+            continue;
+        }
+        std::uint64_t length = 0;
+        while (in) {
+            in.read(chunk.data(), std::streamsize(chunk.size()));
+            const std::size_t got = std::size_t(in.gcount());
+            fnv(hash, chunk.data(), got);
+            length += got;
+        }
+        fnv(hash, &length, sizeof(length));   // so one file's end never reads as the next's start
     }
     fnv(hash, settings);
     char text[17];

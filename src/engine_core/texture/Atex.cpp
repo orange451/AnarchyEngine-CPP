@@ -1,9 +1,11 @@
 #include "texture/Atex.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <cstring>
 #include <fstream>
 #include <system_error>
+#include <thread>
 
 namespace engine_core::texture {
 
@@ -82,7 +84,11 @@ bool write_atex(const std::filesystem::path& path, const BakedTexture& baked, st
     std::error_code ec;
     std::filesystem::create_directories(path.parent_path(), ec);
     std::filesystem::path temporary = path;
-    temporary += ".tmp";
+    // Unique to this write, so two bakes of one key at once (two caches, or a
+    // re-bake overlapping the first) never write into the same file.
+    static std::atomic<std::uint64_t> writes{0};
+    temporary += "." + std::to_string(std::hash<std::thread::id>{}(std::this_thread::get_id())) + "." +
+                 std::to_string(writes.fetch_add(1)) + ".tmp";
     {
         std::ofstream out(temporary, std::ios::binary | std::ios::trunc);
         if (!out) {

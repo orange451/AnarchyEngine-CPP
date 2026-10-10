@@ -203,7 +203,9 @@ struct MeshLoad {
     std::string name;
     std::string key;
     std::filesystem::path source;
-    std::filesystem::path cache;
+    std::filesystem::path root;       // the resources folder the cache sits beside
+    std::string settings;             // what besides the file's bytes names its cache file
+    std::filesystem::path cache;      // set by FirstLook, from the file's bytes
     texture::Usage usage = texture::Usage::Color;
     bool flipY = false;
 };
@@ -326,8 +328,10 @@ void ReadBatches(texture::TexturePool& pool, const LoadsPtr& loads, const MeshLo
 
 // The first step: the cache file's small levels, or, with none, a preview
 // (its small levels decoded now, the rest baked later).
-void FirstLook(texture::TexturePool& pool, const LoadsPtr& loads, const MeshLoad& job) {
+void FirstLook(texture::TexturePool& pool, const LoadsPtr& loads, MeshLoad job) {
     if (loads->stopped()) return;
+    // Named by the file's bytes, read here off the GL thread.
+    job.cache = texture::cache_path(job.root, texture::content_key({job.source}, job.settings));
     const std::optional<texture::AtexHeader> header = texture::read_atex_header(job.cache);
     if (header && header->formats.size() == 1) {
         ReadBatches(pool, loads, job, *header, texture::streaming_batches(header->width, header->height, header->levels),
@@ -484,7 +488,8 @@ void TextureCache::start(Streamed& streamed) {
     job.name = streamed.path + '|' + std::to_string(int(streamed.usage)) + (streamed.flipY ? "|1" : "|0");
     job.key = streamed.key;
     job.source = file;
-    job.cache = texture::cache_path(root_, streamed.key);
+    job.root = root_;
+    job.settings = settings;
     job.usage = streamed.usage;
     job.flipY = streamed.flipY;
     LoadsPtr loads = loads_;

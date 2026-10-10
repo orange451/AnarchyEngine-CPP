@@ -602,3 +602,29 @@ TEST_CASE("TT10 a reference changed while its layer builds drops the stale build
     REQUIRE(set != nullptr);
     CHECK(std::abs(first_red(*set->layers[1]) - 10) <= 4);
 }
+
+TEST_CASE("TT11 a project copied elsewhere (as a player unpacks a game) still reads its texture cache",
+          "[terrain][textures]") {
+    SimRole role;
+    TempDir first;
+    {
+        StreamingScene scene(first, {200, 40});
+        TerrainTextures textures;
+        settle(textures, scene.game);
+    }
+    TempDir second;
+    std::filesystem::copy(first.path, second.path, std::filesystem::copy_options::recursive);
+    // Unpacking gives every file a new time, too.
+    for (const auto& entry : std::filesystem::recursive_directory_iterator(second.path / "resources")) {
+        if (entry.is_regular_file()) {
+            std::filesystem::last_write_time(entry.path(), std::filesystem::file_time_type::clock::now());
+        }
+    }
+    StreamingScene moved(second, {200, 40}, false);
+    TexturePool pool(1);
+    PriorityLog log(pool);
+    TerrainTextures textures(pool);
+    settle(textures, moved.game);
+    const std::vector<JobPriority> seen = log.copy();
+    CHECK(std::count(seen.begin(), seen.end(), JobPriority::TerrainBake) == 0);
+}

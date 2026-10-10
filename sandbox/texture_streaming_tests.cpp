@@ -328,6 +328,7 @@ TEST_CASE("TS14 bake_texture reports a file it cannot decode", "[texture]") {
 #include "texture/TexturePool.hpp"
 
 #include <atomic>
+#include <thread>
 #include <future>
 #include <mutex>
 
@@ -463,4 +464,35 @@ TEST_CASE("TS21 BC1 keeps a red and blue block exactly (colors whose axis is squ
         const auto dec = decode_level(format, encode_level(format, tile.data(), 4, 4).data(), 4, 4);
         CHECK(mean_abs_error(tile, dec, 0, 3) < 1.0);
     }
+}
+
+TEST_CASE("TS22 atex files written at once to one path never mix their bytes", "[texture]") {
+    using namespace engine_core::texture;
+    TempDir dir;
+    const std::filesystem::path path = dir.path / "shared.atex";
+    std::vector<std::thread> writers;
+    for (int t = 0; t < 8; ++t) {
+        writers.emplace_back([&path, t] {
+            BakedTexture baked = sample_baked();
+            for (auto& plane : baked.planes)
+                for (auto& level : plane) std::fill(level.begin(), level.end(), std::uint8_t(t + 1));
+            std::string error;
+            for (int i = 0; i < 40; ++i) write_atex(path, baked, error);
+        });
+    }
+    for (std::thread& writer : writers) writer.join();
+    const std::optional<AtexHeader> header = read_atex_header(path);
+    REQUIRE(header);
+    std::uint8_t seen = 0;
+    bool mixed = false;
+    for (int level = 0; level < header->levels; ++level) {
+        const auto data = read_atex_level(path, *header, level);
+        REQUIRE(data);
+        for (const auto& plane : *data)
+            for (std::uint8_t b : plane) {
+                if (seen == 0) seen = b;
+                mixed = mixed || b != seen;
+            }
+    }
+    CHECK_FALSE(mixed);
 }

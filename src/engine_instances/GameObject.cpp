@@ -343,13 +343,16 @@ ANARCHY_LUA_REGISTER(register_game_object_lua) {
     // class with a Transform.
     register_lua_class("PVInstance", "Instance", nullptr, 0);
     const LuaField fields[] = {
-        lua_property("Transform", "Matrix4", true, read_lua_transform, write_lua_transform),
+        lua_group("Behavior"),
         lua_saved_property("Prefab", "Prefab?", read_prefab, write_prefab, "null"),
-        lua_saved_property("Scale", "number", read_scale, write_scale, scale.c_str()),
+        lua_group("Appearance"),
         lua_saved_property("Color", "Color3", read_color, write_color, color.c_str()),
         lua_slider(lua_saved_property("Transparency", "number", read_transparency, write_transparency,
                                       transparency.c_str()),
                    0.0, 1.0),
+        lua_group("Transform"),
+        lua_property("Transform", "Matrix4", true, read_lua_transform, write_lua_transform),
+        lua_saved_property("Scale", "number", read_scale, write_scale, scale.c_str()),
     };
     register_lua_class("GameObject", "PVInstance", fields, static_cast<int>(sizeof(fields) / sizeof(fields[0])));
     // Camera and the Lights inherit these.

@@ -300,6 +300,7 @@ ANARCHY_LUA_REGISTER(register_lighting_lua) {
     static const std::string saturation = number_json(Lighting::kDefaultSaturation);
     static const std::string gamma = number_json(Lighting::kDefaultGamma);
     const LuaField fields[] = {
+        lua_group("Appearance"),
         lua_saved_property("Ambient", "Color3", read_color<&Lighting::ambient>, write_color<&Lighting::set_ambient>,
                            ambient.c_str()),
         lua_saved_property("Brightness", "number", read_number<&Lighting::brightness>,
@@ -313,17 +314,18 @@ ANARCHY_LUA_REGISTER(register_lighting_lua) {
         lua_slider(lua_saved_property("Gamma", "number", read_number<&Lighting::gamma>,
                                       write_number<&Lighting::set_gamma>, gamma.c_str()),
                    0.0, 4.0),
-        lua_saved_enum("Antialiasing", antialiasing_mode_enum(), read_antialiasing, write_antialiasing, "\"FXAA\""),
-        lua_saved_enum("TerrainQuality", effect_quality_enum(), read_terrain_quality, write_terrain_quality,
-                      "\"High\""),
         lua_saved_enum("ToneMapping", tone_mapping_mode_enum(),
                        read_enum<ToneMappingMode, &Lighting::tone_mapping, &Lighting::set_tone_mapping, &tone_mapping_mode_enum>,
                        write_enum<ToneMappingMode, &Lighting::tone_mapping, &Lighting::set_tone_mapping, &tone_mapping_mode_enum>,
                        "\"Classic\""),
+        lua_group("Quality"),
         lua_saved_enum("ShadingModel", shading_model_enum(),
                        read_enum<ShadingModel, &Lighting::shading_model, &Lighting::set_shading_model, &shading_model_enum>,
                        write_enum<ShadingModel, &Lighting::shading_model, &Lighting::set_shading_model, &shading_model_enum>,
                        "\"Standard\""),
+        lua_saved_enum("Antialiasing", antialiasing_mode_enum(), read_antialiasing, write_antialiasing, "\"FXAA\""),
+        lua_saved_enum("TerrainQuality", effect_quality_enum(), read_terrain_quality, write_terrain_quality,
+                      "\"High\""),
     };
     register_lua_class("Lighting", "SceneService", fields, static_cast<int>(sizeof(fields) / sizeof(fields[0])));
 }

@@ -8,7 +8,10 @@
 #include "Camera.hpp"
 #include "DataModel.hpp"
 #include "Folder.hpp"
+#include "Brush.hpp"
 #include "Game.hpp"
+#include "Gui.hpp"
+#include "Light.hpp"
 #include "GameObject.hpp"
 #include "LuaApi.hpp"
 #include "ModuleScript.hpp"
@@ -1717,6 +1720,50 @@ void TestGroupTitlesAndEmptyGroups() {
     engine_core::set_thread_role(engine_core::ThreadRole::Unknown);
 }
 
+// The sheet's group:name rows for one instance, without the Instance rows.
+std::vector<std::string> GroupedRows(Rig& rig, InstanceId id) {
+    std::vector<std::string> out;
+    for (const ide::PropertyRow& row : ide::read_sheet(rig.game, {id}).rows) {
+        if (row.group != "Instance") {
+            out.push_back(row.group + ":" + row.name);
+        }
+    }
+    return out;
+}
+
+bool Has(const std::vector<std::string>& rows, const char* row) {
+    return std::find(rows.begin(), rows.end(), row) != rows.end();
+}
+
+void TestClassGroups() {
+    engine_core::set_thread_role(engine_core::ThreadRole::Simulation);
+    Rig rig;
+    const std::vector<std::string> material = {
+        "Surface:DiffuseTexture", "Surface:NormalTexture", "Surface:RoughnessTexture", "Surface:MetalnessTexture",
+        "Modifier:Color", "Modifier:Transparency", "Modifier:Roughness", "Modifier:Metalness",
+        "Modifier:Reflectivity", "Modifier:EmissiveTexture", "Modifier:Emissive",
+        "Terrain:TextureScale", "Terrain:BlendSharpness", "Terrain:HeightTexture", "Terrain:HeightStrength",
+    };
+    Expect(GroupedRows(rig, MakeAsset(rig.game, "Material", "M", rig.game.service("Materials"))) == material,
+           "Material's groups");
+
+    const std::vector<std::string> point = GroupedRows(rig, rig.add<engine_core::PointLight>("Lamp"));
+    Expect(point.size() >= 3 && point[0] == "Behavior:Prefab" && point[1] == "Behavior:Enabled" &&
+               point[2] == "Behavior:Shadows",
+           "a PointLight opens with Prefab, Enabled, Shadows");
+    Expect(Has(point, "Light:Color"), "a light's own Color is in Light");
+
+    const std::vector<std::string> brush = GroupedRows(rig, rig.add<engine_core::Brush>("Block"));
+    Expect(Has(brush, "Physics:Anchored"), "Brush's Anchored, registered again, stays in Physics");
+    for (const std::string& row : brush) {
+        Expect(row.rfind("Data:", 0) != 0, "Brush has nothing left in Data");
+    }
+
+    const std::vector<std::string> pane = GroupedRows(rig, rig.add<engine_core::Pane>("Box"));
+    Expect(Has(pane, "Layout:Size"), "Pane's Size stays in Layout");
+    engine_core::set_thread_role(engine_core::ThreadRole::Unknown);
+}
+
 void TestGroupsFold() {
     engine_core::set_thread_role(engine_core::ThreadRole::Simulation);
     Rig rig;
@@ -1742,7 +1789,8 @@ void TestGroupsFold() {
     rig.click(rig.field("Name"));
     rig.scene->noteKey(jadefx::Key::Tab, true, false, 0);
     rig.frame();
-    Expect(rig.field("Name")->isFocused(), "Tab passes over the folded fields");
+    Expect(rig.field("TextureScale") != nullptr && rig.field("TextureScale")->isFocused(),
+           "Tab passes over the folded fields to Terrain's first");
 
     rig.select({floor});
     rig.frame();
@@ -1765,6 +1813,7 @@ int main() {
     TestGroupMarkersRegister();
     TestSheetGroupOrder();
     TestGroupTitlesAndEmptyGroups();
+    TestClassGroups();
     TestGroupsFold();
     TestRowsScroll();
     TestAssetPreview();

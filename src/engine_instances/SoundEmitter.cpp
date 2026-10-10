@@ -266,6 +266,7 @@ ANARCHY_LUA_REGISTER(register_sound_emitter_lua) {
     static const std::string min_distance = number_json(SoundEmitter::kDefaultRollOffMinDistance);
     static const std::string max_distance = number_json(SoundEmitter::kDefaultRollOffMaxDistance);
     const LuaField fields[] = {
+        lua_group("Playback"),
         lua_saved_property("Sound", "Sound?", read_sound, write_sound, "null"),
         lua_slider(lua_saved_property("Volume", "number", read_number<&SoundEmitter::volume>,
                                       write_number<&SoundEmitter::set_volume>, volume.c_str()),
@@ -274,6 +275,10 @@ ANARCHY_LUA_REGISTER(register_sound_emitter_lua) {
                                       write_number<&SoundEmitter::set_pitch>, pitch.c_str()),
                    0.0, SoundEmitter::kMaxPitch),
         lua_saved_property("Looped", "boolean", read_looped, write_looped, "false"),
+        lua_saved_property("TimePosition", "number", read_number<&SoundEmitter::time_position>,
+                           write_number<&SoundEmitter::set_time_position>, "0"),
+        lua_property("IsPlaying", "boolean", false, read_is_playing, nullptr),
+        lua_group("Roll-off"),
         lua_saved_enum("RollOffMode", roll_off_mode_enum(), read_roll_off_mode, write_roll_off_mode, "\"Inverse\""),
         lua_slider(lua_saved_property("RollOffMinDistance", "number", read_number<&SoundEmitter::roll_off_min_distance>,
                                       write_number<&SoundEmitter::set_roll_off_min_distance>, min_distance.c_str()),
@@ -281,9 +286,6 @@ ANARCHY_LUA_REGISTER(register_sound_emitter_lua) {
         lua_slider(lua_saved_property("RollOffMaxDistance", "number", read_number<&SoundEmitter::roll_off_max_distance>,
                                       write_number<&SoundEmitter::set_roll_off_max_distance>, max_distance.c_str()),
                    0.0, SoundEmitter::kMaxRollOffDistance),
-        lua_saved_property("TimePosition", "number", read_number<&SoundEmitter::time_position>,
-                           write_number<&SoundEmitter::set_time_position>, "0"),
-        lua_property("IsPlaying", "boolean", false, read_is_playing, nullptr),
     };
     register_lua_class("SoundEmitter", "Instance", fields, static_cast<int>(std::size(fields)));
     register_suited_parents("SoundEmitter", {"Workspace", "PVInstance"});

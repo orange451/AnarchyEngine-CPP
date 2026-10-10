@@ -229,16 +229,20 @@ ANARCHY_LUA_REGISTER(register_physics_base_lua) {
         return write_json(json_floats(value.m, 16));
     }();
     const LuaField fields[] = {
+        lua_group("Transform"),
         lua_saved_property("Transform", "Matrix4", read_transform, write_transform, identity.c_str()),
-        lua_saved_property("Velocity", "Vector3", read_vec<PhysicsBase, &PhysicsBase::velocity>,
-                           write_vec<PhysicsBase, &PhysicsBase::set_velocity>, "[0,0,0]"),
+        lua_group("Physics"),
         lua_saved_property("Anchored", "boolean", read_anchored, write_anchored, "false"),
         lua_slider(lua_saved_property("Mass", "number", read_number<PhysicsBase, &PhysicsBase::mass>,
                                       write_number<PhysicsBase, &PhysicsBase::set_mass>, mass.c_str()),
                    0.0, 100.0),
+        lua_group("Motion"),
+        lua_saved_property("Velocity", "Vector3", read_vec<PhysicsBase, &PhysicsBase::velocity>,
+                           write_vec<PhysicsBase, &PhysicsBase::set_velocity>, "[0,0,0]"),
         lua_slider(lua_saved_property("LinearDamping", "number", read_number<PhysicsBase, &PhysicsBase::linear_damping>,
                                       write_number<PhysicsBase, &PhysicsBase::set_linear_damping>, "0"),
                    0.0, 1.0),
+        lua_group("Behavior"),
         lua_saved_property("GameObject", "GameObject?", read_game_object, write_game_object, "null"),
     };
     // Abstract: no factory registers it.

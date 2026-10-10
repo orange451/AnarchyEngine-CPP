@@ -95,8 +95,10 @@ ANARCHY_LUA_REGISTER(register_player_controller_lua) {
     static const std::string step = number_json(C::kDefaultStepHeight);
     static const std::string slope = number_json(C::kDefaultMaxSlope);
     const LuaField fields[] = {
+        lua_group("Physics"),
         lua_saved_property("Friction", "number", read_number<C, &C::friction>, write_number<C, &C::set_friction>,
                            friction.c_str()),
+        lua_group("Character"),
         lua_saved_property("Radius", "number", read_number<C, &C::radius>, write_number<C, &C::set_radius>,
                            radius.c_str()),
         lua_saved_property("Height", "number", read_number<C, &C::height>, write_number<C, &C::set_height>,

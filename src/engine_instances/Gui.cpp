@@ -630,10 +630,13 @@ bool write_image(DataModel&, DataModel& object, LuaSlot& in) {
 
 ANARCHY_LUA_REGISTER(register_gui_lua) {
     const LuaField base[] = {
-        gui_field<GuiProperty::ClassList>("GuiBase"),
-        gui_field<GuiProperty::Style>("GuiBase"),
+        lua_group("Layout"),
         gui_field<GuiProperty::Size>("GuiBase"),
         gui_field<GuiProperty::Alignment>("GuiBase"),
+        lua_group("Style"),
+        gui_field<GuiProperty::ClassList>("GuiBase"),
+        gui_field<GuiProperty::Style>("GuiBase"),
+        lua_group("Behavior"),
         gui_field<GuiProperty::Visible>("GuiBase"),
         gui_field<GuiProperty::MouseTransparent>("GuiBase"),
         lua_event(kGuiMouseClicked),
@@ -646,30 +649,35 @@ ANARCHY_LUA_REGISTER(register_gui_lua) {
     register_lua_class("ScreenGui", "GuiBase", nullptr, 0);
 
     const LuaField billboard[] = {
+        lua_group("Behavior"),
         lua_saved_property("Adornee", "PVInstance?", read_adornee, write_adornee, "null"),
         gui_field<GuiProperty::AlwaysOnTop>("BillboardGui"),
     };
     add_class("BillboardGui", "GuiBase", billboard);
 
     const LuaField pane_base[] = {
+        lua_group("Appearance"),
         gui_field<GuiProperty::BackgroundColor>("GuiBasePane"),
         gui_field<GuiProperty::BackgroundTransparency>("GuiBasePane"),
     };
     add_class("GuiBasePane", "GuiBase", pane_base);
     // A Pane starts 100 by 100, as the legacy one did.
-    const LuaField pane[] = {gui_field<GuiProperty::Size>("Pane")};
+    const LuaField pane[] = {lua_group("Layout"), gui_field<GuiProperty::Size>("Pane")};
     add_class("Pane", "GuiBasePane", pane);
     const LuaField image_pane[] = {
+        lua_group("Layout"),
         gui_field<GuiProperty::Size>("ImagePane"),
+        lua_group("Appearance"),
         lua_saved_property("Image", "Texture?", read_image, write_image, "null"),
         gui_field<GuiProperty::ImageTransparency>("ImagePane"),
     };
     add_class("ImagePane", "GuiBasePane", image_pane);
-    const LuaField box[] = {gui_field<GuiProperty::Spacing>("HBox")};
+    const LuaField box[] = {lua_group("Layout"), gui_field<GuiProperty::Spacing>("HBox")};
     add_class("HBox", "GuiBasePane", box);
     add_class("VBox", "GuiBasePane", box);
 
     const LuaField label[] = {
+        lua_group("Text"),
         gui_field<GuiProperty::Text>("Label"),
         gui_field<GuiProperty::TextColor>("Label"),
         gui_field<GuiProperty::FontSize>("Label"),
@@ -677,12 +685,14 @@ ANARCHY_LUA_REGISTER(register_gui_lua) {
     };
     add_class("Label", "GuiBase", label);
     const LuaField button[] = {
+        lua_group("Text"),
         gui_field<GuiProperty::Text>("Button"),
         gui_field<GuiProperty::TextScaled>("Button"),
         lua_event(kGuiAction),
     };
     add_class("Button", "GuiBase", button);
     const LuaField text_field[] = {
+        lua_group("Text"),
         gui_field<GuiProperty::Text>("TextField"),
         gui_field<GuiProperty::Prompt>("TextField"),
         lua_event(kGuiAction),

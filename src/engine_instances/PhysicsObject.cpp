@@ -148,17 +148,20 @@ std::string number_json(double value) { return write_json(JsonValue::number(valu
 ANARCHY_LUA_REGISTER(register_physics_object_lua) {
     static const std::string friction = number_json(PhysicsObject::kDefaultFriction);
     const LuaField fields[] = {
-        lua_saved_property("AngularVelocity", "Vector3", read_vec<PhysicsObject, &PhysicsObject::angular_velocity>,
-                           write_vec<PhysicsObject, &PhysicsObject::set_angular_velocity>, "[0,0,0]"),
+        lua_group("Physics"),
         lua_slider(lua_saved_property("Friction", "number", read_number<PhysicsObject, &PhysicsObject::friction>,
                                       write_number<PhysicsObject, &PhysicsObject::set_friction>, friction.c_str()),
                    0.0, 1.0),
         lua_slider(lua_saved_property("Bounciness", "number", read_number<PhysicsObject, &PhysicsObject::bounciness>,
                                       write_number<PhysicsObject, &PhysicsObject::set_bounciness>, "0"),
                    0.0, 1.0),
+        lua_group("Motion"),
+        lua_saved_property("AngularVelocity", "Vector3", read_vec<PhysicsObject, &PhysicsObject::angular_velocity>,
+                           write_vec<PhysicsObject, &PhysicsObject::set_angular_velocity>, "[0,0,0]"),
         lua_slider(lua_saved_property("AngularDamping", "number", read_number<PhysicsObject, &PhysicsObject::angular_damping>,
                                       write_number<PhysicsObject, &PhysicsObject::set_angular_damping>, "0"),
                    0.0, 1.0),
+        lua_group("Shape"),
         lua_saved_enum("Shape", physics_shape_enum(), read_shape, write_shape, "\"Box\""),
         lua_shown_when(lua_saved_property("Size", "Vector3", read_vec<PhysicsObject, &PhysicsObject::size>,
                                           write_vec<PhysicsObject, &PhysicsObject::set_size>, "[1,1,1]"),

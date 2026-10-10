@@ -380,20 +380,23 @@ ANARCHY_LUA_REGISTER(register_brush_lua) {
     LuaField faces_field = lua_hidden(lua_saved_property("Faces", "string", read_faces, write_faces, faces.c_str()));
     faces_field.writable = false;
     const LuaField fields[] = {
-        lua_saved_property("AngularVelocity", "Vector3", read_vec<Brush, &Brush::angular_velocity>,
-                           write_vec<Brush, &Brush::set_angular_velocity>, "[0,0,0]"),
+        lua_group("Physics"),
+        // A Brush starts anchored, so its saved default is true where PhysicsBase's is false.
+        lua_saved_property("Anchored", "boolean", read_anchored, write_anchored, "true"),
+        lua_saved_property("CanCollide", "boolean", read_can_collide, write_can_collide, "true"),
         lua_slider(lua_saved_property("Friction", "number", read_number<Brush, &Brush::friction>,
                                       write_number<Brush, &Brush::set_friction>, friction.c_str()),
                    0.0, 1.0),
         lua_slider(lua_saved_property("Bounciness", "number", read_number<Brush, &Brush::bounciness>,
                                       write_number<Brush, &Brush::set_bounciness>, "0"),
                    0.0, 1.0),
+        lua_group("Motion"),
+        lua_saved_property("AngularVelocity", "Vector3", read_vec<Brush, &Brush::angular_velocity>,
+                           write_vec<Brush, &Brush::set_angular_velocity>, "[0,0,0]"),
         lua_slider(lua_saved_property("AngularDamping", "number", read_number<Brush, &Brush::angular_damping>,
                                       write_number<Brush, &Brush::set_angular_damping>, "0"),
                    0.0, 1.0),
-        // A Brush starts anchored, so its saved default is true where PhysicsBase's is false.
-        lua_saved_property("Anchored", "boolean", read_anchored, write_anchored, "true"),
-        lua_saved_property("CanCollide", "boolean", read_can_collide, write_can_collide, "true"),
+        lua_group("Appearance"),
         lua_saved_property("Color", "Color3", read_color, write_color, "[1,1,1]"),
         lua_slider(lua_saved_property("Transparency", "number", read_number<Brush, &Brush::transparency>,
                                       write_number<Brush, &Brush::set_transparency>, "0"),

@@ -356,6 +356,10 @@ ANARCHY_LUA_REGISTER(register_light_lua) {
     // Each class that can be made lists the fields, as FileAsset's subclasses
     // list Path: Light itself is only for IsA, and is never made.
     const LuaField point_fields[] = {
+        lua_group("Behavior"),
+        lua_saved_property("Enabled", "boolean", read_enabled<Light>, write_enabled<Light>, "true"),
+        lua_saved_property("Shadows", "boolean", read_shadows<Light>, write_shadows<Light>, "false"),
+        lua_group("Light"),
         lua_saved_property("Color", "Color3", read_color<Light>, write_color<Light>, color.c_str()),
         lua_slider(lua_saved_property("Intensity", "number", read_number<Light, &Light::intensity>,
                                       write_number<Light, &Light::set_intensity>, intensity.c_str()),
@@ -363,8 +367,6 @@ ANARCHY_LUA_REGISTER(register_light_lua) {
         lua_slider(lua_saved_property("Radius", "number", read_number<Light, &Light::radius>,
                                       write_number<Light, &Light::set_radius>, radius.c_str()),
                    0.0, Light::kMaxRadiusSlider),
-        lua_saved_property("Enabled", "boolean", read_enabled<Light>, write_enabled<Light>, "true"),
-        lua_saved_property("Shadows", "boolean", read_shadows<Light>, write_shadows<Light>, "false"),
         // GameObject's Scale does nothing to a light, so Properties leaves it out.
         lua_hidden(lua_saved_property("Scale", "number", read_number<GameObject, &GameObject::scale>,
                                       write_number<GameObject, &GameObject::set_scale>, scale.c_str())),
@@ -378,13 +380,7 @@ ANARCHY_LUA_REGISTER(register_light_lua) {
         return write_json(json_floats(axes, 3));
     }();
     const LuaField directional_fields[] = {
-        lua_saved_property("Direction", "Vector3", read_direction, write_direction, direction.c_str()),
-        lua_saved_property("Color", "Color3", read_color<DirectionalLight>, write_color<DirectionalLight>,
-                           color.c_str()),
-        lua_slider(lua_saved_property("Intensity", "number", read_number<DirectionalLight, &DirectionalLight::intensity>,
-                                      write_number<DirectionalLight, &DirectionalLight::set_intensity>,
-                                      intensity.c_str()),
-                   0.0, Light::kMaxIntensitySlider),
+        lua_group("Behavior"),
         lua_saved_property("Enabled", "boolean", read_enabled<DirectionalLight>, write_enabled<DirectionalLight>,
                            "true"),
         lua_saved_property("Shadows", "boolean", read_shadows<DirectionalLight>, write_shadows<DirectionalLight>,
@@ -394,15 +390,26 @@ ANARCHY_LUA_REGISTER(register_light_lua) {
                                       write_number<DirectionalLight, &DirectionalLight::set_shadow_distance>,
                                       shadow_distance.c_str()),
                    0.0, DirectionalLight::kMaxShadowDistanceSlider),
+        lua_group("Light"),
+        lua_saved_property("Direction", "Vector3", read_direction, write_direction, direction.c_str()),
+        lua_saved_property("Color", "Color3", read_color<DirectionalLight>, write_color<DirectionalLight>,
+                           color.c_str()),
+        lua_slider(lua_saved_property("Intensity", "number", read_number<DirectionalLight, &DirectionalLight::intensity>,
+                                      write_number<DirectionalLight, &DirectionalLight::set_intensity>,
+                                      intensity.c_str()),
+                   0.0, Light::kMaxIntensitySlider),
     };
     register_lua_class("DirectionalLight", "Instance", directional_fields,
                        static_cast<int>(std::size(directional_fields)));
     const LuaField spot_fields[] = {
+        // Point's groups and fields, markers included: Behavior, then Light.
         point_fields[0],
         point_fields[1],
         point_fields[2],
         point_fields[3],
         point_fields[4],
+        point_fields[5],
+        point_fields[6],
         lua_slider(lua_saved_property("OuterFOV", "number", read_number<SpotLight, &SpotLight::outer_fov>,
                                       write_number<SpotLight, &SpotLight::set_outer_fov>, outer_fov.c_str()),
                    SpotLight::kMinOuterFov, SpotLight::kMaxOuterFov),

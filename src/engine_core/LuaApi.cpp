@@ -1117,6 +1117,19 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
         "Enum.TextureSize: how large this Terrain's packed textures are (Small 256, Medium 512, Large 1024, Max "
         "2048 pixels).",
         "Enum.TextureSize", false, {});
+    add("Texture", "Streaming",
+        "Enum.TextureStreaming: Automatic draws the smallest mips first and sharpens to full resolution; "
+        "AlwaysLoaded waits until every mip is loaded, so it never looks blurry.",
+        "Enum.TextureStreaming", false, {});
+    add("Texture", "Loaded",
+        "Read-only. True once the Scene View shows any of this Texture's file, even blurry while it streams; "
+        "false before that, or when the file is missing or will not read.",
+        "boolean", false, {});
+    add("Mesh", "Loaded",
+        "Read-only. True once the Scene View draws this Mesh's file; false before that, or when the file is "
+        "missing or will not read.",
+        "boolean", false, {});
+    add("Sound", "Loaded", "Read-only. True when this Sound's file decodes, so it can play.", "boolean", false, {});
     // The voxel methods take positions and frames in world space unless space
     // is Enum.TransformSpace.Local, and a TerrainMaterial of this Terrain or nil
     // for the default material.
@@ -1352,6 +1365,10 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
     add("TextField", "Text", "The text in the field. Typing changes it.", "string", false, {});
     add("TextField", "Prompt", "Shown while the field is empty.", "string", false, {});
     add("TextField", "Action", "Fires when Enter is pressed in the field.", "Signal", false, {});
+    add("Slider", "Value", "Where the thumb sits, from Min to Max. Dragging changes it.", "number", false, {});
+    add("Slider", "Min", "The value at the left end. Above Max, it raises Max.", "number", false, {});
+    add("Slider", "Max", "The value at the right end. Below Min, it lowers Min.", "number", false, {});
+    add("Slider", "Step", "When above 0, Value stays on Min plus a whole number of Steps.", "number", false, {});
     add("CSS", "Source", "The stylesheet for its parent GuiBase and everything inside it.", "string", false, {});
 
     add("Signal", "Connect", "Calls callback when the signal fires and returns the connection.", "Connection", false,

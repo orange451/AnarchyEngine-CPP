@@ -1,12 +1,20 @@
 #include "TerrainTextures.hpp"
 
 #include "AssetInstances.hpp"
+#include "AssetLoads.hpp"
 #include "Enum.hpp"
 #include "LuaApi.hpp"
 #include "Terrain.hpp"
 #include "TerrainMaterial.hpp"
 
+#include "texture/Atex.hpp"
+#include "texture/TextureBake.hpp"
+
 #include <algorithm>
+#include <map>
+#include <optional>
+#include <set>
+#include <string>
 #include <system_error>
 #include <utility>
 
@@ -43,36 +51,75 @@ const T* referenced_as(DataModel& game, const ReferenceAsset& asset, std::size_t
 
 }  // namespace
 
-bool TerrainTextures::CacheKey::operator<(const CacheKey& other) const {
-    if (size != other.size) {
-        return size < other.size;
-    }
-    for (std::size_t i = 0; i < paths.size(); ++i) {
-        if (paths[i] != other.paths[i]) {
-            return paths[i] < other.paths[i];
-        }
-    }
-    for (std::size_t i = 0; i < stamps.size(); ++i) {
-        if (stamps[i] != other.stamps[i]) {
-            return stamps[i] < other.stamps[i];
-        }
-    }
-    return false;
+namespace {
+
+// What every layer's cache key carries besides its five files and their
+// times: anything else that changes the baked bytes.
+std::string layer_settings(int size) {
+    return "terrain|v1|size=" + std::to_string(size) + "|s3tc=" + (texture::s3tc_available() ? "1" : "0");
 }
 
-TerrainTextures::TerrainTextures() {
-    worker_ = std::thread([this] { worker_loop(); });
+// The first level of a size chain no larger than 64 a side: what a cache
+// read loads before anything else.
+int first_small_level(int size) {
+    int level = 0;
+    for (int w = size; w > 64; w = std::max(1, (w + 1) / 2)) ++level;
+    return level;
 }
+
+int chain_length(int size) {
+    int levels = 1;
+    for (int w = size; w > 1; w = std::max(1, (w + 1) / 2)) ++levels;
+    return levels;
+}
+
+texture::BakedTexture to_baked(const terrain::LayerBytes& layer) {
+    texture::BakedTexture baked;
+    baked.width = baked.height = layer.size;
+    const std::array<texture::PixelFormat, 3> formats = terrain::layer_formats();
+    baked.formats.assign(formats.begin(), formats.end());
+    baked.planes.assign(layer.planes.begin(), layer.planes.end());
+    return baked;
+}
+
+}  // namespace
+
+struct TerrainTextures::Shared {
+    std::mutex mutex;
+    bool stopping = false;
+    // Load steps finished since update() last looked, in the order they landed.
+    std::vector<std::pair<std::string, std::shared_ptr<const terrain::LayerBytes>>> landed;
+    // Keys being loaded now; a slot asking for one waits for its steps.
+    std::set<std::string> in_flight;
+    // Whole layers by key, while any published set still holds them.
+    std::map<std::string, std::weak_ptr<const terrain::LayerBytes>> whole;
+
+    bool stopped() {
+        std::lock_guard<std::mutex> lock(mutex);
+        return stopping;
+    }
+
+    // One step of key's load: bytes, and whether it is the last.
+    void post(const std::string& key, std::shared_ptr<const terrain::LayerBytes> bytes, bool last) {
+        std::lock_guard<std::mutex> lock(mutex);
+        if (last) {
+            in_flight.erase(key);
+            whole[key] = bytes;
+            for (auto it = whole.begin(); it != whole.end();) {
+                it = it->second.expired() ? whole.erase(it) : std::next(it);
+            }
+        }
+        landed.emplace_back(key, std::move(bytes));
+    }
+};
+
+TerrainTextures::TerrainTextures() : TerrainTextures(texture::TexturePool::shared()) {}
+
+TerrainTextures::TerrainTextures(texture::TexturePool& pool) : pool_(pool), shared_(std::make_shared<Shared>()) {}
 
 TerrainTextures::~TerrainTextures() {
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        stopping_ = true;
-    }
-    cv_.notify_all();
-    if (worker_.joinable()) {
-        worker_.join();
-    }
+    std::lock_guard<std::mutex> lock(shared_->mutex);
+    shared_->stopping = true;   // jobs still queued or running see it and stop
 }
 
 terrain::LayerSources TerrainTextures::resolve_sources(DataModel& game, const std::filesystem::path& root,
@@ -120,110 +167,193 @@ std::array<std::filesystem::file_time_type, 5> TerrainTextures::stamp_sources(co
     return stamps;
 }
 
-std::shared_ptr<const terrain::LayerBytes> TerrainTextures::build_or_share(const terrain::LayerSources& sources,
-                                                                           int size) {
-    CacheKey key;
-    key.paths = {sources.diffuse, sources.normal, sources.roughness, sources.metalness, sources.height};
-    key.stamps = stamp_sources(sources);
-    key.size = size;
+namespace {
+
+using SharedPtr = std::shared_ptr<TerrainTextures::Shared>;
+
+struct LoadJob {
+    std::string key;
+    terrain::LayerSources sources;
+    int size = 0;
+    std::filesystem::path root;    // the resources folder; empty with no project: nothing on disk
+    std::filesystem::path cache;   // set by first_look, from the sources' bytes
+};
+
+void bake(const SharedPtr& shared, const LoadJob& job) {
+    if (shared->stopped()) return;
+    auto whole = std::make_shared<const terrain::LayerBytes>(
+        terrain::compress_layer(terrain::build_layer(job.sources, job.size)));
+    if (!job.cache.empty()) {
+        // Next time reads it; this time needs it not, so a failure costs only that.
+        std::string error;
+        texture::write_atex(job.cache, to_baked(*whole), error);
+    }
+    shared->post(job.key, std::move(whole), true);
+}
+
+// Reads the level just above so_far's first, then queues the next.
+void read_larger(texture::TexturePool& pool, const SharedPtr& shared, const LoadJob& job,
+                 const texture::AtexHeader& header, std::shared_ptr<const terrain::LayerBytes> so_far) {
+    pool.submit(texture::JobPriority::TerrainLargeLevels, [&pool, shared, job, header, so_far] {
+        if (shared->stopped()) return;
+        const int level = so_far->first_level - 1;
+        std::optional<std::vector<std::vector<std::uint8_t>>> data = texture::read_atex_level(job.cache, header, level);
+        if (!data) {
+            // The file changed under this load: build the layer instead.
+            pool.submit(texture::JobPriority::TerrainBake, [shared, job] { bake(shared, job); });
+            return;
+        }
+        auto next = std::make_shared<terrain::LayerBytes>(*so_far);
+        for (std::size_t p = 0; p < 3; ++p) next->planes[p][std::size_t(level)] = std::move((*data)[p]);
+        next->first_level = level;
+        std::shared_ptr<const terrain::LayerBytes> landed = next;
+        shared->post(job.key, landed, level == 0);
+        if (level > 0) read_larger(pool, shared, job, header, std::move(landed));
+    });
+}
+
+// The first step of every load, at the pool's top priority: a cache file's
+// small levels, or, with none, a preview of the diffuse alone. The rest
+// follows at lower priority, so every layer gets its first look before any
+// layer's full build.
+void first_look(texture::TexturePool& pool, const SharedPtr& shared, LoadJob job) {
+    if (shared->stopped()) return;
+    if (!job.root.empty()) {
+        // Named by the sources' bytes, read here off SimulationThread.
+        const terrain::LayerSources& s = job.sources;
+        job.cache = texture::cache_path(
+            job.root, texture::content_key({s.diffuse, s.normal, s.roughness, s.metalness, s.height}, layer_settings(job.size)));
+    }
+    if (!job.cache.empty()) {
+        const std::optional<texture::AtexHeader> header = texture::read_atex_header(job.cache);
+        const std::array<texture::PixelFormat, 3> formats = terrain::layer_formats();
+        const bool fits = header && header->width == job.size && header->height == job.size &&
+                          header->levels == chain_length(job.size) &&
+                          header->formats == std::vector<texture::PixelFormat>(formats.begin(), formats.end());
+        if (fits) {
+            auto layer = std::make_shared<terrain::LayerBytes>();
+            layer->size = job.size;
+            const int first = first_small_level(job.size);
+            for (auto& plane : layer->planes) plane.resize(std::size_t(header->levels));
+            bool ok = true;
+            for (int level = header->levels - 1; level >= first && ok; --level) {
+                std::optional<std::vector<std::vector<std::uint8_t>>> data =
+                    texture::read_atex_level(job.cache, *header, level);
+                ok = data.has_value();
+                for (std::size_t p = 0; ok && p < 3; ++p) layer->planes[p][std::size_t(level)] = std::move((*data)[p]);
+            }
+            if (ok) {
+                layer->first_level = first;
+                std::shared_ptr<const terrain::LayerBytes> landed = layer;
+                shared->post(job.key, landed, first == 0);
+                if (first > 0) read_larger(pool, shared, job, *header, std::move(landed));
+                return;
+            }
+        }
+        if (header || std::filesystem::exists(job.cache)) {
+            std::error_code error;
+            std::filesystem::remove(job.cache, error);   // stale or broken: built again below
+        }
+    }
+    shared->post(job.key, std::make_shared<const terrain::LayerBytes>(terrain::preview_layer(job.sources, job.size)),
+                 false);
+    pool.submit(texture::JobPriority::TerrainBake, [shared, job] { bake(shared, job); });
+}
+
+}  // namespace
+
+bool TerrainTextures::start_layer(LayerSlot& slot, const std::filesystem::path& root) {
     {
-        std::lock_guard<std::mutex> lock(cache_mutex_);
-        const auto found = cache_.find(key);
-        if (found != cache_.end()) {
+        std::lock_guard<std::mutex> lock(shared_->mutex);
+        const auto found = shared_->whole.find(slot.key);
+        if (found != shared_->whole.end()) {
             if (std::shared_ptr<const terrain::LayerBytes> existing = found->second.lock()) {
-                return existing;   // TT2: another Terrain already built this Material at this size
+                // Another Terrain (or an earlier start) already holds it whole (TT2).
+                slot.bytes = std::move(existing);
+                slot.bytes_key = slot.key;
+                slot.revision = next_layer_revision_++;
+                return true;
             }
         }
-    }
-    auto built = std::make_shared<const terrain::LayerBytes>(terrain::build_layer(sources, size));
-    {
-        std::lock_guard<std::mutex> lock(cache_mutex_);
-        cache_[key] = built;
-        // Weak entries whose LayerBytes nothing published holds anymore (TT5:
-        // a superseded size or a Material no Terrain uses) are dropped here
-        // rather than left to grow the map forever.
-        for (auto it = cache_.begin(); it != cache_.end();) {
-            it = it->second.expired() ? cache_.erase(it) : std::next(it);
+        if (!shared_->in_flight.insert(slot.key).second) {
+            return false;   // already loading: its steps land in this slot too
         }
     }
-    return built;
+    LoadJob job;
+    job.key = slot.key;
+    job.sources = slot.sources;
+    job.size = slot.size;
+    job.root = root;
+    SharedPtr shared = shared_;
+    texture::TexturePool* pool = &pool_;
+    pool_.submit(texture::JobPriority::TerrainPreview, [pool, shared, job] { first_look(*pool, shared, job); });
+    return false;
 }
 
-void TerrainTextures::worker_loop() {
-    while (true) {
-        InstanceId terrain_id = 0;
-        Request request;
-        {
-            std::unique_lock<std::mutex> lock(mutex_);
-            cv_.wait(lock, [&] { return stopping_ || !order_.empty(); });
-            if (stopping_) {
-                return;   // drops whatever is still queued, as TerrainMesher's dtor does
+void TerrainTextures::land(const std::string& key, const std::shared_ptr<const terrain::LayerBytes>& bytes,
+                           std::vector<InstanceId>& changed) {
+    for (auto& [id, record] : terrains_) {
+        bool any = false;
+        for (LayerSlot& slot : record.layers) {
+            if (slot.key != key || bytes == nullptr || bytes->size != slot.size) continue;
+            bool better;
+            if (slot.bytes == nullptr || slot.bytes_key.empty() || slot.bytes->size != slot.size) {
+                better = true;   // a placeholder: anything beats it
+            } else if (slot.bytes_key != key) {
+                better = bytes->first_level == 0;   // an older version keeps drawing until this one is whole
+            } else {
+                better = bytes->first_level < slot.bytes->first_level;
             }
-            terrain_id = order_.front();
-            order_.pop_front();
-            const auto found = queued_.find(terrain_id);
-            if (found == queued_.end()) {
-                continue;   // defensive: every order_ entry has a queued_ entry
+            if (!better) continue;
+            slot.bytes = bytes;
+            slot.bytes_key = key;
+            slot.revision = next_layer_revision_++;
+            any = true;
+            // Texture.Loaded: terrain now shows something of each of its files.
+            if (!root_.empty()) {
+                const terrain::LayerSources& s = slot.sources;
+                for (const std::filesystem::path* file : {&s.diffuse, &s.normal, &s.roughness, &s.metalness, &s.height}) {
+                    if (!file->empty()) {
+                        set_asset_loaded(AssetKind::Texture, root_, file->lexically_relative(root_).generic_u8string(),
+                                         true);
+                    }
+                }
             }
-            request = std::move(found->second);
-            queued_.erase(found);
-            current_running_ = true;
         }
-
-        std::vector<std::shared_ptr<const terrain::LayerBytes>> layers;
-        layers.reserve(request.layers.size());
-        for (LayerPlan& plan : request.layers) {
-            layers.push_back(plan.needs_build ? build_or_share(plan.sources, request.size) : plan.carry);
-        }
-        auto set = std::make_shared<TerrainTextureSet>();
-        set->size = request.size;
-        set->layers = std::move(layers);
-
-        {
-            std::lock_guard<std::mutex> lock(mutex_);
-            set->revision = next_revision_++;
-            results_.push_back(BuiltResult{terrain_id, request.generation, std::move(set)});
-            current_running_ = false;
-        }
-        cv_.notify_all();   // wait_idle, and a result waiting to be drained
+        if (any && std::find(changed.begin(), changed.end(), id) == changed.end()) changed.push_back(id);
     }
 }
 
-void TerrainTextures::wait_idle() {
-    std::unique_lock<std::mutex> lock(mutex_);
-    cv_.wait(lock, [&] { return order_.empty() && !current_running_; });
+void TerrainTextures::publish(InstanceId terrain, TerrainRecord& record) {
+    auto set = std::make_shared<TerrainTextureSet>();
+    set->size = record.size;
+    for (const LayerSlot& slot : record.layers) {
+        set->layers.push_back(slot.bytes);
+        set->layer_revisions.push_back(slot.revision);
+    }
+    std::lock_guard<std::mutex> lock(mutex_);
+    set->revision = next_revision_++;
+    published_[terrain] = std::move(set);
 }
+
+void TerrainTextures::wait_idle() { pool_.wait_idle(); }
 
 void TerrainTextures::update(DataModel& game) {
     // SimulationThread, under game's write lock (the Engine's contract, as
     // TerrainWorld::update's).
 
-    // 1. Drain finished builds, dropping any result a newer request for its
-    // Terrain already superseded (the ruling's "newer supersedes older").
-    std::vector<BuiltResult> finished;
+    // 1. Put every load step that landed into the slots waiting on it; a step
+    // whose key no slot wants anymore (a superseded size or file) is dropped.
+    std::vector<std::pair<std::string, std::shared_ptr<const terrain::LayerBytes>>> landed;
     {
-        std::lock_guard<std::mutex> lock(mutex_);
-        finished.swap(results_);
+        std::lock_guard<std::mutex> lock(shared_->mutex);
+        landed.swap(shared_->landed);
     }
-    for (BuiltResult& result : finished) {
-        const auto found = terrains_.find(result.terrain);
-        if (found == terrains_.end() || result.generation != found->second.generation) {
-            continue;   // the Terrain left, or a later update() already replaced this request
-        }
-        TerrainRecord& record = found->second;
-        const std::size_t count = std::min(result.set->layers.size(), record.layers.size());
-        for (std::size_t i = 0; i < count; ++i) {
-            record.layers[i].bytes = result.set->layers[i];
-        }
-        record.published = result.set;
-        {
-            std::lock_guard<std::mutex> lock(mutex_);
-            published_[result.terrain] = std::move(result.set);
-        }
-    }
+    std::vector<InstanceId> changed;
+    for (const auto& [key, bytes] : landed) land(key, bytes, changed);
 
     // 2. Drop records (and their published entry) for Terrains no longer in
-    // Workspace; a later return re-queues everything (bytes == nullptr).
+    // Workspace; a later return starts everything again.
     std::vector<InstanceId> current;
     game.terrains(current);
     for (auto it = terrains_.begin(); it != terrains_.end();) {
@@ -232,6 +362,7 @@ void TerrainTextures::update(DataModel& game) {
                 std::lock_guard<std::mutex> lock(mutex_);
                 published_.erase(it->first);
             }
+            changed.erase(std::remove(changed.begin(), changed.end(), it->first), changed.end());
             it = terrains_.erase(it);
         } else {
             ++it;
@@ -239,6 +370,7 @@ void TerrainTextures::update(DataModel& game) {
     }
 
     const std::filesystem::path root = game.resources_root();
+    root_ = root;
     const auto now = std::chrono::steady_clock::now();
 
     for (InstanceId id : current) {
@@ -248,6 +380,8 @@ void TerrainTextures::update(DataModel& game) {
         }
         TerrainRecord& record = terrains_[id];
         const int size = texture_size_pixels(terrain->texture_size());
+        bool publish_now = std::find(changed.begin(), changed.end(), id) != changed.end();
+        record.size = size;
 
         // The distinct Materials this Terrain's TerrainMaterials use, stable
         // order: every Material already holding a layer keeps it; a newly
@@ -277,61 +411,66 @@ void TerrainTextures::update(DataModel& game) {
         // check every update(): without this, reassigning a Material's
         // NormalTexture (or any other reference) between two stamp checks
         // less than a second apart would sit unnoticed until the throttle
-        // next let a disk check through, instead of rebuilding the one
+        // next let a disk check through, instead of restarting the one
         // layer it touched within this very update (TL-T2).
         const bool check_stamps = !record.stamps_checked_once || now - record.stamps_checked_at >= std::chrono::seconds(1);
 
-        Request request;
-        request.terrain = id;
-        request.size = size;
-        request.layers.resize(record.layers.size());
-        bool any_change = false;
         for (std::size_t i = 0; i < record.layers.size(); ++i) {
             LayerSlot& slot = record.layers[i];
-            LayerPlan& plan = request.layers[i];
             terrain::LayerSources sources = i == 0 ? terrain::LayerSources{} : resolve_sources(game, root, slot.material);
             const bool sources_changed = !same_sources(slot.sources, sources);
-            bool changed = slot.bytes == nullptr || slot.size != size || sources_changed;
+            bool restart = slot.key.empty() || slot.size != size || sources_changed;
             std::array<std::filesystem::file_time_type, 5> stamps = slot.stamps;
-            if (changed) {
-                // Already rebuilding (a new/changed reference, a missing
-                // build, or a size change): fresh stamps for the cache key
-                // and for the next throttled comparison, regardless of
-                // check_stamps.
+            if (restart) {
+                if (i != 0) stamps = stamp_sources(sources);
+            } else if (check_stamps && i != 0) {
                 stamps = stamp_sources(sources);
-            } else if (check_stamps) {
-                stamps = stamp_sources(sources);
-                changed = slot.stamps != stamps;   // the same file(s), touched on disk
+                restart = slot.stamps != stamps;   // the same file(s), touched on disk
             }
-            if (changed) {
-                plan.needs_build = true;
-                plan.sources = sources;
-                any_change = true;
-                slot.sources = sources;
-                slot.stamps = stamps;
-                slot.size = size;
-            } else {
-                plan.carry = slot.bytes;
+            if (!restart) {
+                continue;
             }
+            const bool resized = slot.size != size || slot.bytes == nullptr;
+            slot.sources = sources;
+            slot.stamps = stamps;
+            slot.size = size;
+            if (i == 0) {
+                // The untextured default reads no files: it is whole at once.
+                // Shared by every Terrain at this size, as any whole layer is.
+                slot.key = "untextured|" + std::to_string(size) + "|" + layer_settings(size);
+                {
+                    std::lock_guard<std::mutex> lock(shared_->mutex);
+                    std::weak_ptr<const terrain::LayerBytes>& held = shared_->whole[slot.key];
+                    slot.bytes = held.lock();
+                    if (slot.bytes == nullptr) {
+                        slot.bytes = std::make_shared<const terrain::LayerBytes>(terrain::untextured_layer(size));
+                        held = slot.bytes;
+                    }
+                }
+                slot.bytes_key = slot.key;
+                slot.revision = next_layer_revision_++;
+                publish_now = true;
+                continue;
+            }
+            slot.key = texture::cache_key(
+                {sources.diffuse, sources.normal, sources.roughness, sources.metalness, sources.height},
+                std::vector<std::filesystem::file_time_type>(stamps.begin(), stamps.end()), layer_settings(size));
+            if (resized) {
+                // Grey, at once, until its first load step lands. (A layer
+                // whose files changed at the same size keeps drawing its old
+                // version instead, until the new one is whole.)
+                slot.bytes = std::make_shared<const terrain::LayerBytes>(terrain::placeholder_layer(size));
+                slot.bytes_key.clear();
+                slot.revision = next_layer_revision_++;
+                publish_now = true;
+            }
+            if (start_layer(slot, root)) publish_now = true;
         }
         if (check_stamps) {
             record.stamps_checked_once = true;
             record.stamps_checked_at = now;
         }
-
-        if (!any_change) {
-            continue;   // nothing to (re)build; record.published already reflects this state
-        }
-        request.generation = ++record.generation;
-        {
-            std::lock_guard<std::mutex> lock(mutex_);
-            const bool already_queued = queued_.count(id) != 0;
-            queued_[id] = std::move(request);
-            if (!already_queued) {
-                order_.push_back(id);
-            }
-        }
-        cv_.notify_all();
+        if (publish_now) publish(id, record);
     }
 }
 

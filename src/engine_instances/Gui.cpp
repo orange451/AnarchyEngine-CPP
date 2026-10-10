@@ -51,6 +51,10 @@ constexpr GuiSpec kSpecs[] = {
     {"TextScaled", "boolean", LuaSlot::Kind::Bool, 0, 0},
     {"Title", "string", LuaSlot::Kind::String, 0, 0},
     {"Enabled", "boolean", LuaSlot::Kind::Bool, 0, 0},
+    {"Value", "number", LuaSlot::Kind::Number, -kNoLimit, kNoLimit},
+    {"Min", "number", LuaSlot::Kind::Number, -kNoLimit, kNoLimit},
+    {"Max", "number", LuaSlot::Kind::Number, -kNoLimit, kNoLimit},
+    {"Step", "number", LuaSlot::Kind::Number, 0, kNoLimit},
 };
 static_assert(std::size(kSpecs) == static_cast<std::size_t>(GuiProperty::Count), "a GuiProperty has no spec");
 
@@ -143,6 +147,12 @@ LuaSlot GuiValues::default_value(GuiProperty property, const char* class_name) {
         return string_slot(kDefaultCss);
     case GuiProperty::Title:
         return string_slot("");
+    case GuiProperty::Value:
+    case GuiProperty::Min:
+    case GuiProperty::Step:
+        return number_slot(0);
+    case GuiProperty::Max:
+        return number_slot(1);
     case GuiProperty::AlwaysOnTop:
     case GuiProperty::TextScaled:
     case GuiProperty::WidgetEnabled:
@@ -188,7 +198,7 @@ std::optional<std::string> GuiValues::set_value(GuiProperty property, LuaSlot va
         if (value.kind != LuaSlot::Kind::Number || !finite(value.number)) {
             return name + " must be a finite number";
         }
-        clean.number = clamp_to(about, value.number);
+        clean.number = fit_number(property, clamp_to(about, value.number));
         break;
     case LuaSlot::Kind::Color:
         if (value.kind != LuaSlot::Kind::Color || !finite(value.color.r) || !finite(value.color.g) ||
@@ -226,6 +236,7 @@ std::optional<std::string> GuiValues::set_value(GuiProperty property, LuaSlot va
     slot = std::move(clean);
     ++revision_;
     note_property_change(about.name, previous, slot);
+    after_change(property);
     return std::nullopt;
 }
 
@@ -369,6 +380,38 @@ TextField::TextField(DataModel::ChildTag tag, DataModel::State& state, InstanceI
 }
 
 const char* TextField::class_name() const { return "TextField"; }
+
+Slider::Slider(DataModel::ChildTag tag, DataModel::State& state, InstanceId id) : GuiBase(tag, state, id) {
+    reset_values();
+}
+
+const char* Slider::class_name() const { return "Slider"; }
+
+double Slider::fit_number(GuiProperty property, double value) const {
+    if (property != GuiProperty::Value) {
+        return value;
+    }
+    const double low = number(GuiProperty::Min);
+    const double high = number(GuiProperty::Max);
+    const double step = number(GuiProperty::Step);
+    if (step > 0) {
+        value = low + std::round((value - low) / step) * step;
+    }
+    return std::min(std::max(value, low), high);
+}
+
+void Slider::after_change(GuiProperty property) {
+    LuaSlot bound = value(property);
+    if (property == GuiProperty::Min && number(GuiProperty::Max) < bound.number) {
+        set_value(GuiProperty::Max, bound);
+    } else if (property == GuiProperty::Max && number(GuiProperty::Min) > bound.number) {
+        set_value(GuiProperty::Min, bound);
+    }
+    if (property != GuiProperty::Value) {
+        // Refit Value to the new range or Step.
+        set_value(GuiProperty::Value, value(GuiProperty::Value));
+    }
+}
 
 Css::Css(DataModel::ChildTag tag, DataModel::State& state, InstanceId id) : GuiValues(tag, state, id) {
     reset_values();
@@ -565,6 +608,13 @@ ANARCHY_LUA_REGISTER(register_gui_lua) {
         lua_event(kGuiAction),
     };
     add_class("TextField", "GuiBase", text_field);
+    const LuaField slider[] = {
+        gui_field<GuiProperty::Value>("Slider"),
+        gui_field<GuiProperty::Min>("Slider"),
+        gui_field<GuiProperty::Max>("Slider"),
+        gui_field<GuiProperty::Step>("Slider"),
+    };
+    add_class("Slider", "GuiBase", slider);
 
     const LuaField css[] = {gui_field<GuiProperty::Source>("CSS")};
     add_class("CSS", "Instance", css);
@@ -580,7 +630,7 @@ ANARCHY_LUA_REGISTER(register_gui_lua) {
     register_suited_parents("ScreenGui", {"Gui"});
     register_suited_parents("BillboardGui", {"Workspace", "PVInstance"});
     register_suited_parents("GuiBasePane", {"ScreenGui", "BillboardGui", "GuiBasePane", "DockWidget"});
-    for (const char* control : {"Label", "Button", "TextField"}) {
+    for (const char* control : {"Label", "Button", "TextField", "Slider"}) {
         register_suited_parents(control, {"ScreenGui", "BillboardGui", "GuiBasePane", "DockWidget"});
     }
     register_suited_parents("CSS", {"Gui", "GuiBase"});

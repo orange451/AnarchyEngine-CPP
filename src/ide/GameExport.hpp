@@ -2,6 +2,11 @@
 
 #include <filesystem>
 #include <string>
+#include <vector>
+
+namespace runner {
+struct PackFile;
+}
 
 namespace ide {
 
@@ -27,6 +32,11 @@ std::filesystem::path game_path(const std::filesystem::path& path);
 // The player program export copies: AnarchyPlayer beside the studio, or on a
 // Mac AnarchyPlayer.app in the studio bundle's Resources. Empty when it is not there.
 std::filesystem::path find_player();
+
+// What export packs, as {path in the pack, file on disk}: project.json, the
+// tree, the resources folder, the textures baked beside it, and the engine's
+// shaders. False, with why, when a folder cannot be read.
+bool collect_export_files(const GameExportRequest& request, std::vector<runner::PackFile>& files, std::string& error);
 
 // Writes the game to game_path(request.output): a copy of the player with the
 // project and the engine's shaders packed into it (runner/GamePack.hpp). On

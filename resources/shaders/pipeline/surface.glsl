@@ -62,7 +62,9 @@ Surface readSurface(vec3 viewPosition, vec3 viewNormal, vec2 uv, vec4 vertexColo
         N = -N;
     }
     if (uNormalMapEnabled > 0.5) {
-        vec3 map = texture(uNormalMap, uv).rgb * 2.0 - 1.0;
+        // X and Y only (a BC5 map holds no Z): Z is what keeps it unit length.
+        vec2 xy = texture(uNormalMap, uv).rg * 2.0 - 1.0;
+        vec3 map = vec3(xy, sqrt(max(0.0, 1.0 - dot(xy, xy))));
         N = normalize(cotangentFrame(N, viewPosition, uv) * map);
     }
     s.normal = N;

@@ -134,23 +134,25 @@ struct TerrainToolRig {
         }
         FAIL("no Button " << text);
     }
-    // Presses the "+" or "-" beside the pane's label that starts with row, such as "Grid".
-    void step(const std::string& row, const std::string& sign) {
+    // Moves the Slider beside the pane's label that starts with row, such as "Grid", as a drag does.
+    void slide(const std::string& row, double value) {
         for (InstanceId id = 1; id < 100000; ++id) {
             const auto* label = dynamic_cast<const engine_core::Label*>(rig.game.instance(id));
             if (label == nullptr || label->text(engine_core::GuiProperty::Text).rfind(row, 0) != 0) {
                 continue;
             }
             for (InstanceId child : rig.game.get_children(rig.game.parent(id))) {
-                const auto* button = dynamic_cast<const engine_core::Button*>(rig.game.instance(child));
-                if (button != nullptr && button->text(engine_core::GuiProperty::Text) == sign) {
-                    rig.game.fire_event(child, engine_core::kGuiAction);
-                    rig.frames(1);
+                if (auto* slider = dynamic_cast<engine_core::Slider*>(rig.game.instance(child))) {
+                    engine_core::LuaSlot slot;
+                    slot.kind = engine_core::LuaSlot::Kind::Number;
+                    slot.number = value;
+                    REQUIRE_FALSE(slider->set_value(engine_core::GuiProperty::Value, slot));
+                    rig.frames(2);
                     return;
                 }
             }
         }
-        FAIL("no " << sign << " beside " << row);
+        FAIL("no Slider beside " << row);
     }
     bool pane_open() {
         for (InstanceId id = 1; id < 100000; ++id) {
@@ -221,9 +223,8 @@ TEST_CASE("TB3 Add draws as the Brushes tool does: a footprint on the grid, then
     tools.click("Add");
     REQUIRE_FALSE(tools.solid(0, 2, 0));
     using Kind = engine_core::PluginMouseEvent::Kind;
-    // The grid from 1 unit to 4.
-    tools.step("Grid", "+");
-    tools.step("Grid", "+");
+    // The grid from 1 unit to 4, its third notch.
+    tools.slide("Grid", 3);
     // From (-5, 0, -5) to (5, 0, 5) on the ground, which the 4 unit grid makes -4 to 4.
     tools.mouse(Kind::Move, 50, 50);
     tools.mouse(Kind::Button1Down, 50, 50);
@@ -249,8 +250,7 @@ TEST_CASE("TB3 Add draws as the Brushes tool does: a footprint on the grid, then
 TEST_CASE("TB6 Shift while setting Add's height makes the box a cube", "[TB6]") {
     TerrainToolRig tools;
     tools.click("Add");
-    tools.step("Grid", "+");
-    tools.step("Grid", "+");
+    tools.slide("Grid", 3);
     using Kind = engine_core::PluginMouseEvent::Kind;
     tools.mouse(Kind::Move, 50, 50);
     tools.mouse(Kind::Button1Down, 50, 50);
@@ -330,4 +330,16 @@ TEST_CASE("TB5 the pane steps the size and names the Terrain", "[TB5]") {
     REQUIRE(std::find(texts.begin(), texts.end(), "Terrain: Terrain") != texts.end());
     REQUIRE(std::find(texts.begin(), texts.end(), "Size 8 units") != texts.end());
     REQUIRE(std::find(texts.begin(), texts.end(), "Strength 50%") != texts.end());
+}
+
+TEST_CASE("TB9 the pane's sliders set the size, the strength, and the grid", "[TB9]") {
+    TerrainToolRig tools;
+    tools.click("Grow");
+    REQUIRE(tools.showing("Size 8 units"));
+    tools.slide("Size", 16.4);
+    REQUIRE(tools.showing("Size 16 units"));
+    tools.slide("Strength", 0.73);
+    REQUIRE(tools.showing("Strength 75%"));
+    tools.slide("Grid", 5);
+    REQUIRE(tools.showing("Grid 16 units"));
 }

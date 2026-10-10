@@ -123,6 +123,9 @@ struct VisualDynamicSky {
     // Each Texture's FlipY.
     bool sun_flip_y = false;
     bool moon_flip_y = false;
+    // Each Texture's Streaming is AlwaysLoaded.
+    bool sun_always_loaded = false;
+    bool moon_always_loaded = false;
     // Degrees across.
     float sun_size = 2.f;
     float moon_size = 2.f;
@@ -209,6 +212,12 @@ struct VisualMesh {
     bool roughness_flip_y = false;
     bool metalness_flip_y = false;
     bool emissive_flip_y = false;
+    // Each texture's Streaming is AlwaysLoaded, false for none.
+    bool diffuse_always_loaded = false;
+    bool normal_always_loaded = false;
+    bool roughness_always_loaded = false;
+    bool metalness_always_loaded = false;
+    bool emissive_always_loaded = false;
     ColorRgb emissive{0.f, 0.f, 0.f, 1.f};
     float metalness = 0.f;
     float roughness = 0.4f;

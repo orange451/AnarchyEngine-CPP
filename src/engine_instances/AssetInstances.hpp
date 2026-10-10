@@ -1,6 +1,7 @@
 #pragma once
 
 #include "DataModel.hpp"
+#include "Enum.hpp"
 #include "InstanceRef.hpp"
 #include "amesh.hpp"
 
@@ -66,20 +67,36 @@ public:
     // SimulationThread.
     void set_flip_y(bool flip_y);
 
+    // Streaming: Automatic draws the smallest mips first and sharpens to full
+    // resolution; AlwaysLoaded keeps the Texture's placeholder until every mip
+    // is uploaded. Images drawn by GUI never stream, whatever this says.
+    TextureStreaming streaming() const { return streaming_; }
+    // SimulationThread. An Enum.TextureStreaming value; why not when it is none.
+    std::optional<std::string> set_streaming(int value);
+    // Loaded: whether a Scene View shows any of Path's file under root yet
+    // (blurry first levels count), as AssetLoads hears it. Any thread.
+    bool loaded(const std::filesystem::path& root) const;
+
 protected:
     void on_reuse() override {
         FileAsset::on_reuse();
         flip_y_ = false;
+        streaming_ = TextureStreaming::Automatic;
     }
 
 private:
     bool flip_y_ = false;
+    TextureStreaming streaming_ = TextureStreaming::Automatic;
 };
 
 class Mesh : public FileAsset {
 public:
     using FileAsset::FileAsset;
     const char* class_name() const override;
+
+    // Loaded: whether a Scene View shows Path's file under root yet, as
+    // AssetLoads hears it. Any thread.
+    bool loaded(const std::filesystem::path& root) const;
 
     // What the Add methods and Clear do.
     //
@@ -184,6 +201,8 @@ public:
     // no Path or root, or a file that is missing or does not decode. The file
     // is read again only when Path, root, or its time on disk changes. Any thread.
     double time_length(const std::filesystem::path& root) const;
+    // Loaded: whether Path's file under root decodes, so it can play. Any thread.
+    bool loaded(const std::filesystem::path& root) const { return time_length(root) > 0.0; }
 
 private:
     mutable std::mutex length_mutex_;

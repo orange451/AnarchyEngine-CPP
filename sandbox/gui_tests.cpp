@@ -616,3 +616,43 @@ TEST_CASE("GUI17 scripts set an ImagePane's Image and ImageTransparency", "[gui]
     rig.frames(1, 0.05);
     require_globals(rig, {"defaults", "set", "typed", "cleared"});
 }
+
+TEST_CASE("GUI18 Slider holds Value inside Min and Max, on its Step", "[gui][slider]") {
+    ScriptRig rig;
+    add_script(rig.game, "Ui", R"(
+        local slider = Instance.new("Slider")
+        _G.defaults = slider:IsA("GuiBase") and slider.Min == 0 and slider.Max == 1
+            and slider.Value == 0 and slider.Step == 0
+        slider.Max = 10
+        slider.Value = 15
+        _G.clamped = slider.Value == 10
+        slider.Value = -3
+        _G.low = slider.Value == 0
+        slider.Step = 2
+        slider.Value = 4.9
+        _G.stepped = slider.Value == 4
+        slider.Min = 1
+        _G.fromMin = slider.Value == 5
+        slider.Value = 9.6
+        _G.top = slider.Value == 9
+        slider.Max = 3
+        _G.shrunk = slider.Value == 3
+        slider.Min = 7
+        _G.raised = slider.Max == 7 and slider.Value == 7
+        local changed = false
+        slider.Changed:Connect(function(name) if name == "Value" then changed = true end end)
+        slider.Min = 0
+        slider.Max = 10
+        slider.Step = 0
+        slider.Value = 2.5
+        _G.free = slider.Value == 2.5
+        task.wait()
+        task.wait()
+        _G.changed = changed
+        _G.refused = not pcall(function() slider.Value = 0 / 0 end)
+    )");
+    rig.game.start_simulation();
+    rig.frames(3, 0.05);
+    require_globals(rig, {"defaults", "clamped", "low", "stepped", "fromMin", "top", "shrunk", "raised", "free",
+                          "changed", "refused"});
+}

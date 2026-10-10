@@ -25,8 +25,6 @@ local TIPS = {
 	Smooth = "Even out the terrain under the pointer",
 	Paint = "Paint the terrain under the pointer (Shift: the default material)",
 }
-local SIZES = { 1, 2, 4, 6, 8, 12, 16, 24, 32, 48 }
-local STRENGTHS = { 0.05, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1 }
 local RAY_LENGTH = 4000
 -- Grow, Smooth, and Paint apply this often while the button is held.
 local APPLY_SECONDS = 1 / 20
@@ -485,64 +483,43 @@ local function button(parent: Instance, text: string, action: () -> ()): Button
 	return made
 end
 
-local function row(): HBox
-	local box = Instance.new("HBox")
-	box.Spacing = 4
-	box.BackgroundTransparency = 1
-	box.Parent = root
-	return box
+-- A label over a slider, from low to high on step; changed hears each new value.
+local function slider(low: number, high: number, step: number, changed: (number) -> ()): (Label, Slider)
+	local group = vbox(root)
+	group.Spacing = 2
+	local caption = label("", group)
+	local made = Instance.new("Slider")
+	made.Min = low
+	made.Max = high
+	made.Step = step
+	made.Style = "width: 100%;"
+	made.Parent = group
+	made.Changed:Connect(function(name)
+		if name == "Value" then
+			changed(made.Value)
+		end
+	end)
+	return caption, made
 end
 
 local terrainLabel = label("", root)
-local sizeRow = row()
-local sizeLabel: Label
-local strengthRow = row()
-local gridRow = row()
-local gridLabel: Label
-local strengthLabel: Label
+local sizeLabel, sizeSlider = slider(1, 48, 1, function(value)
+	size = value
+	redraw_pane()
+	redraw()
+end)
+local strengthLabel, strengthSlider = slider(0.05, 1, 0.05, function(value)
+	strength = value
+	redraw_pane()
+end)
+-- The grid's notches are GRIDS' entries.
+local gridLabel, gridSlider = slider(1, #GRIDS, 1, function(value)
+	grid = GRIDS[value]
+	redraw_pane()
+end)
 local materialButton: Button
-local hintLabel = label("", root)
+local hintLabel: Label
 
--- The next value of list from now, steps along, held to its ends.
-local function stepped(list: { number }, now: number, steps: number): number
-	local at = 1
-	for i, value in list do
-		if math.abs(value - now) < 1e-9 then
-			at = i
-		end
-	end
-	return list[math.clamp(at + steps, 1, #list)]
-end
-
-button(sizeRow, "-", function()
-	size = stepped(SIZES, size, -1)
-	redraw_pane()
-	redraw()
-end)
-sizeLabel = label("", sizeRow)
-button(sizeRow, "+", function()
-	size = stepped(SIZES, size, 1)
-	redraw_pane()
-	redraw()
-end)
-button(strengthRow, "-", function()
-	strength = stepped(STRENGTHS, strength, -1)
-	redraw_pane()
-end)
-strengthLabel = label("", strengthRow)
-button(strengthRow, "+", function()
-	strength = stepped(STRENGTHS, strength, 1)
-	redraw_pane()
-end)
-button(gridRow, "-", function()
-	grid = stepped(GRIDS, grid, -1)
-	redraw_pane()
-end)
-gridLabel = label("", gridRow)
-button(gridRow, "+", function()
-	grid = stepped(GRIDS, grid, 1)
-	redraw_pane()
-end)
 -- Steps through the Terrain's materials, then the default.
 materialButton = button(root, "", function()
 	local t = terrain()
@@ -556,6 +533,7 @@ materialButton = button(root, "", function()
 	materialName = names[at % #names + 1]
 	redraw_pane()
 end)
+hintLabel = label("", root)
 
 label("No terrain selected", empty)
 -- A new Terrain in Workspace, selected, as one undo step.
@@ -576,8 +554,11 @@ function redraw_pane()
 	empty.Visible = t == nil
 	terrainLabel.Text = if t ~= nil then "Terrain: " .. t.Name else ""
 	sizeLabel.Text = string.format("Size %d units", size)
+	sizeSlider.Value = size
 	strengthLabel.Text = string.format("Strength %d%%", math.floor(strength * 100 + 0.5))
+	strengthSlider.Value = strength
 	gridLabel.Text = string.format("Grid %d units", grid)
+	gridSlider.Value = table.find(GRIDS, grid) or 1
 	if t ~= nil and material(t) == nil then
 		materialName = ""
 	end

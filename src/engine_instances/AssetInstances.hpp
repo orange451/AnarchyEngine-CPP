@@ -269,6 +269,10 @@ public:
     static constexpr ColorRgb kDefaultColor{1.f, 1.f, 1.f, 1.f};
     static constexpr ColorRgb kDefaultEmissive{0.f, 0.f, 0.f, 1.f};
     static constexpr double kDefaultTextureScale = 8.0;
+    // Where the Properties slider starts. The write refuses 0 ("must be
+    // greater than 0"), so the slider's left stop is the smallest sensible
+    // repeat rather than a refused value.
+    static constexpr double kMinTextureScaleSlider = 0.25;
     static constexpr double kDefaultBlendSharpness = 0.5;
     static constexpr double kDefaultHeightStrength = 1.0;
 

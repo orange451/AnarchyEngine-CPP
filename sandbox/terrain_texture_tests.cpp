@@ -9,6 +9,7 @@
 #include "ChangeHistoryService.hpp"
 #include "Enum.hpp"
 #include "Lighting.hpp"
+#include "LuaApi.hpp"
 #include "PropertyBag.hpp"
 #include "SnapshotPump.hpp"
 #include "Terrain.hpp"
@@ -205,4 +206,11 @@ TEST_CASE("TX4 Lighting.TerrainQuality defaults to High and reaches the snapshot
     REQUIRE_FALSE(lighting.set_terrain_quality(static_cast<int>(EffectQuality::High)));
     frame();
     REQUIRE(pump.front().lighting.terrain_quality == static_cast<int>(EffectQuality::High));
+}
+
+TEST_CASE("TX5 the TextureScale slider does not start at a value the write refuses", "[terrain][textures]") {
+    const engine_core::LuaField* field = engine_core::lua_class_find("Material", "TextureScale");
+    REQUIRE(field != nullptr);
+    REQUIRE(field->slider_min > 0.0);
+    REQUIRE(field->slider_min == engine_core::Material::kMinTextureScaleSlider);
 }

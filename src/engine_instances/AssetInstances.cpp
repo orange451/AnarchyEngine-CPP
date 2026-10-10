@@ -916,7 +916,7 @@ ANARCHY_LUA_REGISTER(register_asset_instances_lua) {
         lua_group("Terrain"),
         lua_slider(lua_saved_property("TextureScale", "number", read_material_number<&Material::texture_scale>,
                                       write_material_number<&Material::set_texture_scale>, texture_scale.c_str()),
-                   0.0, 16.0),
+                   Material::kMinTextureScaleSlider, 16.0),
         lua_slider(lua_saved_property("BlendSharpness", "number", read_material_number<&Material::blend_sharpness>,
                                       write_material_number<&Material::set_blend_sharpness>,
                                       blend_sharpness.c_str()),

@@ -188,3 +188,9 @@ TEST_CASE("SSR3 the snapshot carries the first ScreenSpaceReflections under Ligh
     REQUIRE_FALSE(pump.front().reflections.present);
     REQUIRE(pump.front().reflections.max_distance == 50.f);
 }
+
+TEST_CASE("SSR9 the MaxDistance slider spans the whole range the write takes", "[reflections]") {
+    const engine_core::LuaField* field = engine_core::lua_class_find("ScreenSpaceReflections", "MaxDistance");
+    REQUIRE(field != nullptr);
+    REQUIRE(field->slider_max == engine_core::ScreenSpaceReflections::kMaxMaxDistance);
+}

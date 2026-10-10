@@ -394,6 +394,54 @@ TEST_CASE("AL2 a node put twice reads back its newest mesh", "[terrain]") {
     REQUIRE(same_mesh(*store->load(NodeKey{2, 0, 0, 0}), test_mesh(5, false)));
 }
 
+namespace {
+
+// Flips bytes of key's record in the file so its first index points past
+// the last vertex. The record's size and key stay right, so only load()'s
+// own checks can catch it.
+void corrupt_first_index(const std::filesystem::path& path, const AlodEntry& entry, bool wide_indices) {
+    // Record layout, after the key (four i32): f32 error, vec3 min, vec3 max,
+    // u32 surface_index_count, vec3 origin, vec3 scale, u32 vertices, u32
+    // indices16, u32 indices32, then positions (u16 x 3 per vertex), normals
+    // (u8 x 2), ids (u8 x 4), weights (u8 x 4), indices16, indices32.
+    std::fstream file(path, std::ios::in | std::ios::out | std::ios::binary);
+    REQUIRE(file.is_open());
+    const std::uint64_t key_bytes = 4 * sizeof(std::int32_t);
+    const std::uint64_t header = key_bytes + 4 + 12 + 12 + 4 + 12 + 12;
+    file.seekg(static_cast<std::streamoff>(entry.offset + header));
+    std::uint32_t vertices = 0;
+    file.read(reinterpret_cast<char*>(&vertices), 4);
+    const std::uint64_t per_vertex = 6 + 2 + 4 + 4;
+    const std::uint64_t first_index = entry.offset + header + 12 + vertices * per_vertex;
+    file.seekp(static_cast<std::streamoff>(first_index));
+    if (wide_indices) {
+        const std::uint32_t bad = 0xFFFFFFF0u;
+        file.write(reinterpret_cast<const char*>(&bad), 4);
+    } else {
+        const std::uint16_t bad = 0xFFF0u;
+        file.write(reinterpret_cast<const char*>(&bad), 2);
+    }
+    REQUIRE(file.good());
+}
+
+}  // namespace
+
+TEST_CASE("AL8 a record whose index is past its vertices is a miss, not a mesh", "[terrain]") {
+    TempFile file("al8.alod");
+    std::optional<AlodStore> store = AlodStore::create(file.path, 0x55u, 1.f);
+    REQUIRE(store);
+    REQUIRE(store->put(NodeKey{2, 0, 0, 0}, test_mesh(1, false), 1.f, Vec3{}, Vec3{1, 1, 1}));
+    REQUIRE(store->put(NodeKey{2, 1, 0, 0}, test_mesh(2, true), 1.f, Vec3{}, Vec3{1, 1, 1}));
+    REQUIRE(store->commit());
+    REQUIRE(store->load(NodeKey{2, 0, 0, 0}) != nullptr);
+    REQUIRE(store->load(NodeKey{2, 1, 0, 0}) != nullptr);
+
+    corrupt_first_index(file.path, store->entries().at(NodeKey{2, 0, 0, 0}), false);
+    corrupt_first_index(file.path, store->entries().at(NodeKey{2, 1, 0, 0}), true);
+    REQUIRE(store->load(NodeKey{2, 0, 0, 0}) == nullptr);
+    REQUIRE(store->load(NodeKey{2, 1, 0, 0}) == nullptr);
+}
+
 TEST_CASE("AL3 a damaged file is not a store", "[terrain]") {
     TempFile file("al3.alod");
     {

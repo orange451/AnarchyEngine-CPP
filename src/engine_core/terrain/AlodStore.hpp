@@ -18,9 +18,10 @@
 // Records and footers are only ever appended; commit() writes a footer at
 // the end and then points the header at it. Records put after the last
 // commit are invisible to a reopen, so a store cut short (Studio stopped
-// mid-build) still reads as its last commit. A header, footer or record
+// mid-build) still reads as its last commit. A header or footer
 // that does not check out makes open() fail: the caller then builds the
-// nodes from voxels and makes a new store.
+// nodes from voxels and makes a new store; a record that does not check out
+// makes load() a miss.
 //
 // SimulationThread only (TerrainWorld): not thread-safe.
 

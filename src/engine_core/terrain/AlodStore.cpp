@@ -303,6 +303,30 @@ std::shared_ptr<const CompactMesh> AlodStore::load(const NodeKey& key) {
     if (!r.ok || r.at != bytes.size()) {
         return nullptr;
     }
+    // The index says this record is key's and this long; nothing else was
+    // checked. A short read, a torn write, or a flipped bit can leave
+    // indices that point past the vertices, which the LOD builder and the
+    // GPU upload would follow. Such a record is a miss, as if never put.
+    if (mesh->positions.size() != vertices * 3 || mesh->normals.size() != vertices * 2 ||
+        mesh->ids.size() != vertices * 4 || mesh->weights.size() != vertices * 4 ||
+        mesh->indices.size() % 3 != 0 || mesh->indices32.size() % 3 != 0 ||
+        (!mesh->indices.empty() && !mesh->indices32.empty())) {
+        return nullptr;
+    }
+    const std::size_t index_count = mesh->indices.empty() ? mesh->indices32.size() : mesh->indices.size();
+    if (mesh->surface_index_count > index_count) {
+        return nullptr;
+    }
+    for (const std::uint16_t index : mesh->indices) {
+        if (index >= vertices) {
+            return nullptr;
+        }
+    }
+    for (const std::uint32_t index : mesh->indices32) {
+        if (index >= vertices) {
+            return nullptr;
+        }
+    }
     return mesh;
 }
 

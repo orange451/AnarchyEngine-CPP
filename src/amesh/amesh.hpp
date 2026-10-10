@@ -28,6 +28,12 @@
 // A static mesh is a skinned mesh with no bones. Skins hold global bone
 // indices; subsets are draw and cluster hints and never remap them.
 //
+// A bone's m and t are its rest transform in model space, the space the
+// vertices are in, not relative to its parent: m is a 3x3 that may carry scale
+// as well as rotation. cull_radius is how far from the rest origin the
+// vertices it moves reach. At rest, every bone's skinning matrix
+// (posed transform times rest inverse) is the identity.
+//
 // Pieces are convex point sets in the mesh's own space that together cover it,
 // for a physics body that cannot use the triangles. piece_recipe names the
 // settings that made them, so a reader can tell when they are stale.

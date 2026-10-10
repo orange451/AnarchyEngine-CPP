@@ -36,6 +36,10 @@ namespace engine_core {
 
 class PhysicsWorld;
 
+// Adds every ECS tag the object's class asks for: the one list spawn() and
+// adopt_slot() both use, so a revived instance is tagged like a new one.
+void tag_entity(ecs_world_t* world, ecs_entity_t entity, const EcsIds& ids, const DataModel& object);
+
 namespace datamodel_detail {
 
 // pool_index_for found no pool for the type. Also the most pools there can be.

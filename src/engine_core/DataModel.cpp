@@ -529,6 +529,30 @@ void DataModel::release_to_pool(Slot& part) {
     part.alive = false;
 }
 
+void tag_entity(ecs_world_t* world, ecs_entity_t entity, const EcsIds& ids, const DataModel& object) {
+    if (object.steps()) {
+        ecs_add_id(world, entity, ids.steps);
+    }
+    if (object.physics_body()) {
+        ecs_add_id(world, entity, ids.physics_body);
+    }
+    if (object.terrain()) {
+        ecs_add_id(world, entity, ids.terrain);
+    }
+    if (object.sound_source()) {
+        ecs_add_id(world, entity, ids.sound_source);
+    }
+    if (object.dragger()) {
+        ecs_add_id(world, entity, ids.dragger);
+    }
+    if (object.billboard_gui()) {
+        ecs_add_id(world, entity, ids.billboard);
+    }
+    if (object.wireframe()) {
+        ecs_add_id(world, entity, ids.wireframe);
+    }
+}
+
 DataModel& DataModel::spawn(const SpawnOps& ops) {
     if (!mutation_thread()) {
         contract_fail("create runs on SimulationThread");
@@ -576,27 +600,7 @@ DataModel& DataModel::spawn(const SpawnOps& ops) {
     const std::uint32_t index = id_slot(id);
     issue_entity(world.slots[index], id);
     DataModel* object = pooled_object(*pool, storage, id);
-    if (object->steps()) {
-        ecs_add_id(ecs_world(), world.slots[index].entity, world.ecs_ids.steps);
-    }
-    if (object->physics_body()) {
-        ecs_add_id(ecs_world(), world.slots[index].entity, world.ecs_ids.physics_body);
-    }
-    if (object->terrain()) {
-        ecs_add_id(ecs_world(), world.slots[index].entity, world.ecs_ids.terrain);
-    }
-    if (object->sound_source()) {
-        ecs_add_id(ecs_world(), world.slots[index].entity, world.ecs_ids.sound_source);
-    }
-    if (object->dragger()) {
-        ecs_add_id(ecs_world(), world.slots[index].entity, world.ecs_ids.dragger);
-    }
-    if (object->billboard_gui()) {
-        ecs_add_id(ecs_world(), world.slots[index].entity, world.ecs_ids.billboard);
-    }
-    if (object->wireframe()) {
-        ecs_add_id(ecs_world(), world.slots[index].entity, world.ecs_ids.wireframe);
-    }
+    tag_entity(ecs_world(), world.slots[index].entity, world.ecs_ids, *object);
     const char* label = object->class_name();
     object->name_ = label != nullptr ? label : std::string();
     // Assigned once. A project load replaces it with the GUID from disk.

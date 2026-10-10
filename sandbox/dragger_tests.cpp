@@ -17,8 +17,10 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -628,4 +630,25 @@ TEST_CASE("DR23 a drag after a write outside any recording is a step of its own,
     REQUIRE(close(drag.transform(drag.part).m[12], 0));
     REQUIRE(drag.rig.game.name(drag.part) == "Edited");
     REQUIRE_FALSE(drag.rig.game.history().can_undo().first);
+}
+
+TEST_CASE("DR20 a Dragger deleted and undone is in the dragger query again", "[DR20]") {
+    DragRig drag;
+    engine_core::DataModel& game = drag.rig.game;
+    std::vector<InstanceId> found;
+    game.draggers(found);
+    REQUIRE(std::find(found.begin(), found.end(), drag.dragger) != found.end());
+
+    begin_step(game, "Delete");
+    game.destroy(drag.dragger);
+    end_step(game);
+    game.draggers(found);
+    REQUIRE(std::find(found.begin(), found.end(), drag.dragger) == found.end());
+
+    game.history().undo();
+    REQUIRE(game.alive(drag.dragger));
+    game.draggers(found);
+    // The revived Dragger must be tagged like a new one, or it is in the tree
+    // but never hovered, dragged, or drawn.
+    REQUIRE(std::find(found.begin(), found.end(), drag.dragger) != found.end());
 }

@@ -88,7 +88,6 @@ public:
     std::array<std::uint64_t, 4> ids_used() const;
     // Chunks changed since the last take_dirty, and every neighbor of each.
     void take_dirty(std::vector<ChunkCoord>& out);
-    bool has_dirty() const { return !dirty_.empty(); }
     // Bumped by every change to the chunk map (edit, set_chunks, clear,
     // replace_everywhere), but only when something actually changed.
     std::uint64_t revision() const { return revision_; }

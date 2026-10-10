@@ -155,14 +155,6 @@ void SnapshotPump::override_visual(const SnapshotOverride& override) {
     overrides_.push_back(override);
 }
 
-void SnapshotPump::set_camera(const Matrix4& camera) {
-    if (!window_open_ || thread_role() != ThreadRole::Render) {
-        contract_fail("camera snapshot writes happen inside RenderStepped or PreRender");
-    }
-    pending_camera_ = camera;
-    camera_pending_ = true;
-}
-
 void SnapshotPump::set_terrain_world(const TerrainWorld* terrains) { terrain_world_ = terrains; }
 
 VisualInstance* SnapshotPump::base_find(InstanceId id) {
@@ -747,10 +739,6 @@ void SnapshotPump::take_changes(DataModel& game) {
     resolve_terrains(game);
     brushes_.update(game, base_.brushes);
     base_.resources_root = game.resources_root();
-    if (camera_pending_) {
-        base_.camera = pending_camera_;
-        camera_pending_ = false;
-    }
 }
 
 void SnapshotPump::finish_copy() {

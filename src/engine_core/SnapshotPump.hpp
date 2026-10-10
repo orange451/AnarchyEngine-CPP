@@ -307,7 +307,6 @@ public:
 
     // Path C. No DataModel write.
     void override_visual(const SnapshotOverride& override);
-    void set_camera(const Matrix4& camera);
     // The TerrainWorld whose views() resolve_terrains reads each take_changes.
     // Set once, outside the per-frame windows (Engine's constructor sets it,
     // and clears it to null in its destructor before terrain_ is torn down).
@@ -380,8 +379,6 @@ private:
     std::uint64_t next_frame_ = 1;
     std::atomic<std::uint64_t> published_frame_{0};
     std::vector<SnapshotOverride> overrides_;
-    bool camera_pending_ = false;
-    Matrix4 pending_camera_ = matrix4_identity();
     // Not owned. Null until Engine's constructor calls set_terrain_world.
     const TerrainWorld* terrain_world_ = nullptr;
     bool window_open_ = false;

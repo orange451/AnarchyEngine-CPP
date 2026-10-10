@@ -78,8 +78,6 @@ public:
     const std::filesystem::path& path() const { return path_; }
     // Bytes in the file: records (live and superseded), footers, header.
     std::uint64_t file_bytes() const { return end_; }
-    // Bytes of the records entries() points at.
-    std::uint64_t live_bytes() const;
 
 private:
     AlodStore() = default;

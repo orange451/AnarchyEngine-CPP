@@ -17,7 +17,6 @@ class HostArgs {
 public:
     int count() const { return argumentCount_; }
 
-    bool isNil(int index) const;
     bool isBoolean(int index) const;
     bool isNumber(int index) const;
     bool isString(int index) const;
@@ -26,10 +25,7 @@ public:
     double number(int index) const;
     std::string_view string(int index) const;
 
-    void pushNil();
-    void pushBoolean(bool value);
     void pushNumber(double value);
-    void pushString(std::string_view value);
 
     // Raises a script error and does not return.
     [[noreturn]] void error(std::string_view message);

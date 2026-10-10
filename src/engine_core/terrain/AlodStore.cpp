@@ -404,13 +404,4 @@ bool AlodStore::commit() {
     return !file_->fail();
 }
 
-std::uint64_t AlodStore::live_bytes() const {
-    std::uint64_t total = 0;
-    for (const auto& [key, entry] : entries_) {
-        (void)key;
-        total += entry.size;
-    }
-    return total;
-}
-
 }  // namespace engine_core::terrain

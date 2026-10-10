@@ -69,10 +69,6 @@ struct PopThread {
 
 HostArgs::HostArgs(lua_State* state) : state_(state), argumentCount_(lua_gettop(state)) {}
 
-bool HostArgs::isNil(int index) const {
-    return lua_type(state_, index) == LUA_TNIL;
-}
-
 bool HostArgs::isBoolean(int index) const {
     return lua_type(state_, index) == LUA_TBOOLEAN;
 }
@@ -112,24 +108,8 @@ std::string_view HostArgs::string(int index) const {
     return std::string_view(text != nullptr ? text : "", length);
 }
 
-void HostArgs::pushNil() {
-    lua_pushnil(state_);
-    ++results_;
-}
-
-void HostArgs::pushBoolean(bool value) {
-    lua_pushboolean(state_, value ? 1 : 0);
-    ++results_;
-}
-
 void HostArgs::pushNumber(double value) {
     lua_pushnumber(state_, value);
-    ++results_;
-}
-
-void HostArgs::pushString(std::string_view value) {
-    const char* text = value.data() != nullptr ? value.data() : "";
-    lua_pushlstring(state_, text, value.size());
     ++results_;
 }
 

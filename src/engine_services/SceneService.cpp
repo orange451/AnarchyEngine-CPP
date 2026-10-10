@@ -14,17 +14,6 @@ void Service::context_actions(std::vector<ContextAction>& out) const {
     out.push_back(ContextAction{InstanceAction::Paste, false});
 }
 
-bool is_scene_service_class(std::string_view class_name) {
-    for (const char* name : kSceneServiceClasses) {
-        if (class_name == name) {
-            return true;
-        }
-    }
-    return false;
-}
-
-std::string scene_service_guid(std::string_view class_name) { return service_guid(class_name); }
-
 const char* Workspace::class_name() const { return "Workspace"; }
 
 InstanceId Workspace::current_camera() const {

@@ -206,8 +206,6 @@ Vec3 center_for(const DataModel& game, InstanceId driven) {
     return scaled(prefab->origin_offset(), scale_for(game, driven));
 }
 
-bool same_vec3(Vec3 a, Vec3 b) { return a.x == b.x && a.y == b.y && a.z == b.z; }
-
 // Equal but for rounding: each axis within one part in ten thousand of the
 // larger of the two. A scale read from a Transform's axis lengths wobbles in
 // its last bits every time physics turns it, and a shape made again for that

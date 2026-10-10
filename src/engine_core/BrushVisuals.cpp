@@ -184,13 +184,12 @@ void BrushVisuals::update(DataModel& game, std::vector<VisualBrushDraw>& out) {
         single.seen = false;
     }
     std::vector<float> scales;
-    const auto texture_scales = [&](const Brush& brush, const brush::Mesh& mesh) {
+    const auto texture_scales = [&](const brush::Mesh& mesh) {
         scales.clear();
         for (const brush::MeshRange& range : mesh.ranges) {
             const Material* look = material(game, range.material);
             scales.push_back(static_cast<float>(look != nullptr ? look->texture_scale() : Material::kDefaultTextureScale));
         }
-        (void)brush;
     };
     const auto opaque = [&](const Brush& brush) {
         if (brush.transparency() > 0.0) {
@@ -226,7 +225,7 @@ void BrushVisuals::update(DataModel& game, std::vector<VisualBrushDraw>& out) {
         Baked& single = singles_[id];
         single.seen = true;
         std::shared_ptr<const brush::Mesh> mesh = brush->mesh();
-        texture_scales(*brush, *mesh);
+        texture_scales(*mesh);
         Hash hash;
         hash.add(brush->revision());
         hash.bytes(scales.data(), scales.size() * sizeof(float));
@@ -282,7 +281,7 @@ void BrushVisuals::update(DataModel& game, std::vector<VisualBrushDraw>& out) {
             for (InstanceId id : members) {
                 const auto* brush = static_cast<const Brush*>(game.instance(id));
                 std::shared_ptr<const brush::Mesh> mesh = brush->mesh();
-                texture_scales(*brush, *mesh);
+                texture_scales(*mesh);
                 const Matrix4 world = brush->transform();
                 builder.append(*mesh, &world, brush->color(), scales);
             }

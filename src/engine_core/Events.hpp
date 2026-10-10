@@ -173,6 +173,7 @@ public:
     // guards the tagged slots it runs. Handlers may connect and disconnect.
     void invoke_render(Signal& signal, bool include_tagged);
 
+    // Events queued from origin; for SnapshotOverride, the writes suppressed instead.
     std::uint64_t count(WriteOrigin origin) const;
     std::uint64_t suppressed_overrides() const { return suppressed_overrides_; }
 

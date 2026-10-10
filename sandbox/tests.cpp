@@ -916,6 +916,13 @@ TEST_CASE("path C emits nothing", "[T18]") {
     REQUIRE(game.events().suppressed_overrides() == 0);
 }
 
+TEST_CASE("count of SnapshotOverride is the suppressed overrides", "[events]") {
+    engine_core::EventQueue events;
+    events.emit(engine_core::SignalId{}, 0, engine_core::Field::Reflected, engine_core::WriteOrigin::SnapshotOverride);
+    REQUIRE(events.suppressed_overrides() == 1);
+    REQUIRE(events.count(engine_core::WriteOrigin::SnapshotOverride) == events.suppressed_overrides());
+}
+
 TEST_CASE("wait resumes on a later simulation phase", "[T19]") {
     if (!engine_core::TaskScheduler::can_suspend()) {
         SKIP("Signal::wait needs the fiber switch, which this platform does not build");

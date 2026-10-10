@@ -1558,7 +1558,7 @@ unsigned CreateTerrainArray(engine_core::texture::PixelFormat format, int size, 
             glTexImage3D(RT_GL_TEXTURE_2D_ARRAY, level, static_cast<GLint>(GL_RGBA8), levelSize, levelSize,
                          layerCount, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
         }
-        levelSize = std::max((levelSize + 1) / 2, 1);
+        levelSize = engine_core::texture::mip_size(size, level + 1);
     }
     glTexParameteri(RT_GL_TEXTURE_2D_ARRAY, RT_GL_TEXTURE_BASE_LEVEL, levels - 1);
     glTexParameteri(RT_GL_TEXTURE_2D_ARRAY, RT_GL_TEXTURE_MAX_LEVEL, levels - 1);
@@ -1697,7 +1697,7 @@ void Renderer::terrainArrays(engine_core::InstanceId terrain,
         entry.seenRevision = set->revision;
         const int layerCount = std::min(static_cast<int>(set->layers.size()), maxArrayLayers_);
         int levels = 1;
-        for (int w = set->size; w > 1; w = std::max((w + 1) / 2, 1)) ++levels;
+        for (int w = set->size; w > 1; w >>= 1) ++levels;
         TerrainArrays* target = entry.pending.surface[0] != 0 ? &entry.pending : &entry.current;
         if (target->surface[0] == 0 || target->size != set->size || target->layerCount != layerCount) {
             // A new size or layer count needs new arrays: built beside the
@@ -1740,7 +1740,7 @@ void Renderer::terrainArrays(engine_core::InstanceId terrain,
         std::size_t spent = 0;
         bool any = false;
         for (int level = filling.levels - 1; level >= 0 && spent < kBudgetBytes; --level) {
-            const int levelSize = std::max(filling.size >> level, 1);
+            const int levelSize = engine_core::texture::mip_size(filling.size, level);
             for (int i = 0; i < filling.layerCount && spent < kBudgetBytes; ++i) {
                 TerrainArrayLayer& layer = filling.layers[static_cast<std::size_t>(i)];
                 if (layer.bytes == nullptr || layer.nextLevel != level || level < layer.bytes->first_level) continue;

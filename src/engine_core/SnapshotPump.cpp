@@ -388,6 +388,9 @@ void SnapshotPump::resolve_prefabs(DataModel& game) {
     for (std::size_t index = 1; index < prefab_entries_.size(); ++index) {
         PrefabEntry& entry = prefab_entries_[index];
         std::vector<VisualMesh>& meshes = base_.prefabs[index].meshes;
+        // The first Model whose Mesh has bones names the skeleton, as prefab_skeleton finds it.
+        std::shared_ptr<const Skeleton>& skeleton = base_.prefabs[index].skeleton;
+        skeleton.reset();
         std::size_t used = 0;
         if (entry.rows != 0) {
             // A Prefab undone, loaded, or brought back by Stop holds its GUID again, maybe under a new id.
@@ -417,6 +420,11 @@ void SnapshotPump::resolve_prefabs(DataModel& game) {
                     }
                     // Assigned in place, so an unchanged Prefab reuses last frame's strings.
                     VisualMesh& out = meshes[used++];
+                    const std::shared_ptr<const Skeleton> own = mesh->skeleton();
+                    if (skeleton == nullptr) {
+                        skeleton = own;
+                    }
+                    out.skinned = own != nullptr && own->signature == skeleton->signature;
                     out.mesh = mesh->id();
                     out.revision = session.revision;
                     if (session.data != nullptr) {
@@ -431,6 +439,19 @@ void SnapshotPump::resolve_prefabs(DataModel& game) {
             }
         }
         meshes.resize(used);
+    }
+}
+
+void SnapshotPump::resolve_poses(DataModel& game) {
+    for (VisualInstance& row : base_.instances) {
+        const bool skinned = row.prefab != 0 && row.prefab < base_.prefabs.size() &&
+                             base_.prefabs[row.prefab].skeleton != nullptr;
+        const auto* drawn = skinned ? dynamic_cast<const GameObject*>(game.instance(row.id)) : nullptr;
+        if (drawn != nullptr) {
+            row.pose = drawn->pose();
+        } else if (row.pose != nullptr) {
+            row.pose.reset();
+        }
     }
 }
 
@@ -732,6 +753,7 @@ void SnapshotPump::take_changes(DataModel& game) {
         queue.drain([&](const Invalidation& change) { apply_live(game, change); });
     }
     resolve_prefabs(game);
+    resolve_poses(game);
     resolve_lighting(game);
     resolve_draggers(game);
     resolve_billboards(game);

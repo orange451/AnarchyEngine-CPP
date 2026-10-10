@@ -152,3 +152,60 @@ TEST_CASE("BONE7 scripts list a GameObject's bones, find its Bones, and add them
     }
     rig.game.stop_simulation();
 }
+
+#include "SnapshotPump.hpp"
+
+namespace {
+
+// rig's game drawn into a pump, a frame at a time.
+struct Drawn {
+    engine_core::SnapshotPump pump;
+
+    Drawn() { pump.reserve(engine_core::DataModel::kMaxInstances); }
+
+    void frame(engine_core::DataModel& game) {
+        pump.prepare_copy(game);
+        pump.publish();
+    }
+};
+
+}  // namespace
+
+TEST_CASE("BONE8 the render snapshot carries a skinned GameObject's pose", "[bone]") {
+    Rig rig;
+    Drawn drawn;
+    engine_core::GameObject& object = rig.arm_object();
+    engine_core::GameObject& plain = create_part(rig.game);
+    drawn.frame(rig.game);
+    const engine_core::VisualInstance* row = drawn.pump.find(object.id());
+    REQUIRE(row != nullptr);
+    REQUIRE(row->pose != nullptr);
+    REQUIRE(row->pose->palette.size() == 24);
+    REQUIRE(drawn.pump.find(plain.id())->pose == nullptr);
+    const auto first = row->pose;
+
+    engine_core::Bone& hand = add_bone(rig.game, object.id(), "Hand");
+    REQUIRE_FALSE(hand.set_offset(spin_z()));
+    drawn.frame(rig.game);
+    row = drawn.pump.find(object.id());
+    REQUIRE(row->pose != first);
+    REQUIRE(row->pose->owners[1] == hand.id());
+}
+
+TEST_CASE("BONE9 a Prefab's Models whose Mesh has another skeleton draw unposed", "[bone]") {
+    Rig rig;
+    Drawn drawn;
+    engine_core::Mesh& box = rig.mesh("meshes/box.amesh");
+    engine_core::Mesh& arm_mesh = rig.mesh("meshes/arm.amesh");
+    engine_core::Prefab& prefab = rig.prefab({box.id(), arm_mesh.id()});
+    engine_core::GameObject& object = create_part(rig.game);
+    REQUIRE_FALSE(object.set_prefab(id_slot(prefab.id())));
+    drawn.frame(rig.game);
+    const engine_core::VisualInstance* row = drawn.pump.find(object.id());
+    REQUIRE(row != nullptr);
+    REQUIRE(row->pose != nullptr);
+    const engine_core::VisualPrefab& drawn_prefab = drawn.pump.front().prefabs[row->prefab];
+    REQUIRE(drawn_prefab.meshes.size() == 2);
+    REQUIRE_FALSE(drawn_prefab.meshes[0].skinned);
+    REQUIRE(drawn_prefab.meshes[1].skinned);
+}

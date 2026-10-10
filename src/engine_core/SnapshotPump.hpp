@@ -5,6 +5,7 @@
 #include "DenseIdSet.hpp"
 #include "DraggerMath.hpp"
 #include "DynamicSky.hpp"
+#include "Skeleton.hpp"
 #include "TerrainWorld.hpp"
 #include "types.hpp"
 
@@ -62,6 +63,9 @@ struct VisualInstance {
     // and its Transparency, clamped to 0..1, which stacks on each Material's.
     ColorRgb color{1.f, 1.f, 1.f, 1.f};
     float transparency = 0.f;
+    // How a skinned GameObject stands: shared with it, and immutable. Null
+    // when its Prefab has no skeleton.
+    std::shared_ptr<const Pose> pose;
     // The GameObject's Scale, which multiplies the size its Prefab draws at.
     float scale = 1.f;
     VisualLight light;
@@ -194,6 +198,9 @@ struct VisualMesh {
     // renderer uploads again only when it changes.
     std::shared_ptr<const anarchy::amesh::Data> session;
     std::uint64_t revision = 0;
+    // Whether the row's pose moves it: its Mesh has the Prefab's skeleton
+    // (mesh_poses_with). Otherwise it draws unposed, in its bind pose.
+    bool skinned = false;
     // The Mesh, which a renderer can key its upload of session by.
     InstanceId mesh = 0;
     // The Model's Material: its DiffuseTexture's Path, relative to the
@@ -254,6 +261,8 @@ struct VisualPrefab {
     // neither a Path nor session geometry, adds nothing, and so does a Prefab
     // no live instance holds.
     std::vector<VisualMesh> meshes;
+    // The skeleton its GameObjects pose (prefab_skeleton), or null.
+    std::shared_ptr<const Skeleton> skeleton;
 };
 
 // Path C. Applied after the DataModel copy. Gone on the next Prepare
@@ -362,6 +371,9 @@ private:
     void set_row_prefab(VisualInstance& inst, const std::string& guid);
     // Fills base_.prefabs from each entry's Prefab, as the DataModel is now.
     void resolve_prefabs(DataModel& game);
+    // Gives each row whose Prefab has a skeleton its GameObject's pose, as
+    // the DataModel is now, and clears every other row's.
+    void resolve_poses(DataModel& game);
     // Fills base_.lighting, base_.sky, base_.dynamic_sky, base_.bloom,
     // base_.reflections, and base_.occlusion from the place's Lighting, as
     // the DataModel is now.

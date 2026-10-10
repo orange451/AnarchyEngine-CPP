@@ -32,8 +32,12 @@ public:
     // bind() is engine-permanent: stop_simulation leaves it in place, and only
     // unbind() takes it out.
     JobId bind(Phase phase, Job job, int priority = 2000);
-    // The job does not run again. Its closure is released now, or at the next
-    // cancel_session_jobs when it is the job running on this thread.
+    // The job does not run again. A simulation-phase closure is released now,
+    // or at the next cancel_session_jobs when it is the job running on this
+    // thread. A render-phase entry keeps its closure and its slot until
+    // shutdown: the render thread may be inside it, and jobs_ is iterated
+    // there without a lock. Bind a render job once and keep it; each phase
+    // holds the entries Engine reserved (64), and bind past that aborts.
     void unbind(JobId id);
     // Dropped by stop_simulation. A script job uses this, not bind().
     void bind_session(Phase phase, Job job, int priority = 2000);

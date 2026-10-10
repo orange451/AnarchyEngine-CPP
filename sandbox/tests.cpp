@@ -27,6 +27,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -5491,4 +5492,24 @@ TEST_CASE("RW2 the window signal binds with RunService and carries its own dt", 
     REQUIRE(service.dt(engine_core::Phase::RenderStepped) == 0.004);
     service.release(game.events());
     REQUIRE_FALSE(service.window_signal()->id().valid());
+}
+
+TEST_CASE("SCH1 a render-phase job's entry stays until shutdown, so a rig binds one and reuses it", "[scheduler]") {
+    engine_core::Engine engine;
+    engine_core::TaskScheduler& scheduler = engine.scheduler();
+    // Engine reserves 64 entries per phase, and its own ScriptRuntime binds one
+    // RenderStepped job (ScriptRuntime::attach), leaving 64 - 1 = 63 free. A
+    // render entry is kept after unbind (the render thread may be inside its
+    // closure), so each bind-unbind cycle uses a slot for good. This fills the
+    // phase to exactly its capacity; a 64th cycle would abort.
+    constexpr int kReserved = 64;
+    constexpr int kBoundByEngine = 1;
+    constexpr int kFree = kReserved - kBoundByEngine;
+    std::vector<engine_core::TaskScheduler::JobId> ids;
+    for (int cycle = 0; cycle < kFree; ++cycle) {
+        ids.push_back(scheduler.bind(engine_core::Phase::RenderStepped, [](double) {}));
+        scheduler.unbind(ids.back());
+    }
+    REQUIRE(ids.size() == static_cast<std::size_t>(kFree));
+    REQUIRE(std::adjacent_find(ids.begin(), ids.end()) == ids.end());
 }

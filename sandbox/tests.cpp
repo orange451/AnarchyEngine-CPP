@@ -1643,6 +1643,49 @@ TEST_CASE("N6 the root Changed signal is not the first instance", "[N6]") {
     REQUIRE(part_changed == part_held);
 }
 
+TEST_CASE("SG9 ancestry_changed fires on the moved instance and every descendant, once each", "[signals]") {
+    engine_core::Game game;
+    engine_core::Folder& folder = game.create<engine_core::Folder>();
+    game.set_parent(folder.id(), workspace_of(game));
+    engine_core::Folder& child = game.create<engine_core::Folder>();
+    game.set_parent(child.id(), folder.id());
+    engine_core::GameObject& grandchild = game.create<engine_core::GameObject>();
+    game.set_parent(grandchild.id(), child.id());
+    engine_core::Folder& bystander = game.create<engine_core::Folder>();
+    game.set_parent(bystander.id(), workspace_of(game));
+
+    int folder_fired = 0, child_fired = 0, grandchild_fired = 0, bystander_fired = 0;
+    game.ancestry_changed(folder.id()).connect([&](engine_core::InstanceId id, engine_core::Field field) {
+        REQUIRE(id == folder.id());
+        REQUIRE(field == engine_core::Field::Parent);
+        ++folder_fired;
+    });
+    game.ancestry_changed(child.id()).connect([&](engine_core::InstanceId id, engine_core::Field) {
+        REQUIRE(id == child.id());
+        ++child_fired;
+    });
+    game.ancestry_changed(grandchild.id()).connect([&](engine_core::InstanceId, engine_core::Field) { ++grandchild_fired; });
+    game.ancestry_changed(bystander.id()).connect([&](engine_core::InstanceId, engine_core::Field) { ++bystander_fired; });
+
+    game.set_parent(folder.id(), game.scene_service("Storage"));
+    {
+        SimRole role;
+        game.events().drain();
+    }
+    REQUIRE(folder_fired == 1);
+    REQUIRE(child_fired == 1);
+    REQUIRE(grandchild_fired == 1);
+    REQUIRE(bystander_fired == 0);
+
+    // A move to the same parent is not a change.
+    game.set_parent(folder.id(), game.scene_service("Storage"));
+    {
+        SimRole role;
+        game.events().drain();
+    }
+    REQUIRE(folder_fired == 1);
+}
+
 TEST_CASE("N2 siblings may share a name and find_first_child returns the first", "[N2]") {
     engine_core::Game game;
     engine_core::DataModel& folder = game.create();

@@ -25,7 +25,8 @@ local watching = {}
 
 -- The PVInstances selected or under what is selected, each once, or none
 -- while the place plays. The camera the view looks through stays out:
--- moving it would move the view the drag is measured in.
+-- moving it would move the view the drag is measured in. An Attachment whose
+-- parent is in the list stays out: it moves with its parent.
 local function selected()
 	local list = {}
 	if RunService:IsRunning() then
@@ -50,7 +51,19 @@ local function selected()
 			gather(item)
 		end
 	end
-	return list
+	-- An Attachment (a Bone among them) holds only an Offset from its parent,
+	-- so a parent that moves carries it: written as well, it would move twice.
+	local moving = {}
+	for _, item in list do
+		moving[item] = true
+	end
+	local carried = {}
+	for _, item in list do
+		if not (item:IsA("Attachment") and moving[item.Parent]) then
+			table.insert(carried, item)
+		end
+	end
+	return carried
 end
 
 -- The middle of the box around their positions.

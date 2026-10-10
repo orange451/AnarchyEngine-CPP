@@ -2,6 +2,7 @@
 
 #include "support.hpp"
 
+#include "Attachment.hpp"
 #include "Camera.hpp"
 #include "ChangeHistoryService.hpp"
 #include "Dragger.hpp"
@@ -486,4 +487,45 @@ TEST_CASE("MT14 Select sits left of Move in its group; it selects with no handle
     move.click_card("Move");
     REQUIRE(move.rig.runtime.plugin_ui().active() == 0);
     REQUIRE_FALSE(move.lit("Move"));
+}
+
+TEST_CASE("MT15 moving a GameObject carries its Attachments with it; their Offsets stay", "[MT15]") {
+    MoveRig move;
+    const InstanceId arm = move.part_at("Arm", 0, 0, -10);
+    // Attachments hold only an Offset from their parent, so a moved parent
+    // carries them: a drag must not write them as well. Several, a chain
+    // among them, so whichever order the tool visits them in shows.
+    std::vector<InstanceId> points;
+    InstanceId parent = arm;
+    for (int i = 0; i < 8; ++i) {
+        engine_core::Attachment& point = move.rig.game.create<engine_core::Attachment>();
+        move.rig.game.set_parent(point.id(), i % 2 == 0 ? arm : parent);
+        REQUIRE_FALSE(point.set_offset(engine_core::matrix4_translation(0.f, static_cast<float>(i + 1), 0.f)));
+        points.push_back(point.id());
+        parent = point.id();
+    }
+    move.rig.game.history().reset_waypoints();
+    move.rig.game.selection().set({arm});
+    move.rig.frames(1);
+    auto at = handles_at(move.rig.game);
+    // The handles sit on the GameObject, not the middle of its Attachments.
+    REQUIRE((at && near(at->x, 0) && near(at->y, 0)));
+    move.post(true, 150, 100);
+    move.move(160, 100);
+    move.move(170, 100);
+    move.post(false, 170, 100);
+    move.rig.frames(1);
+    INFO(move.rig.runtime.last_error());
+    REQUIRE(near(move.x_of(arm), 2));
+    for (std::size_t i = 0; i < points.size(); ++i) {
+        INFO(i);
+        const auto* point = dynamic_cast<engine_core::Attachment*>(move.rig.game.instance(points[i]));
+        REQUIRE(near(point->offset().m[12], 0));
+        REQUIRE(near(point->offset().m[13], static_cast<float>(i + 1)));
+    }
+    // An Attachment selected on its own still moves, by its Offset.
+    move.rig.game.selection().set({points[0]});
+    move.rig.frames(1);
+    at = handles_at(move.rig.game);
+    REQUIRE((at && near(at->x, 2) && near(at->y, 1)));
 }

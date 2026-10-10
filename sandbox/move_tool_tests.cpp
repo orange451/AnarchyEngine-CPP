@@ -573,3 +573,33 @@ TEST_CASE("MT16 Rotate turns the selection about its middle with rings, in 15 de
     REQUIRE(move_dragger(move.rig.game)->transform_mode() == engine_core::DraggerMode::Translation);
     REQUIRE(move_dragger(move.rig.game)->increment() == 1.0);
 }
+
+TEST_CASE("MT17 what is under a moved thing comes along once, however the selection lists it", "[MT17]") {
+    MoveRig move;
+    const InstanceId arm = move.part_at("Arm", 0, 0, -10);
+    // A GameObject under it holds its own world Transform, so the tool moves it;
+    // an Attachment under that rides on it.
+    const InstanceId hand = move.part_at("Hand", 0, 3, -10);
+    move.rig.game.set_parent(hand, arm);
+    engine_core::Attachment& grip = move.rig.game.create<engine_core::Attachment>();
+    move.rig.game.set_parent(grip.id(), hand);
+    REQUIRE_FALSE(grip.set_offset(engine_core::matrix4_translation(1.f, 0.f, 0.f)));
+    move.rig.game.history().reset_waypoints();
+    // Listed deepest first: the order must not matter.
+    move.rig.game.selection().set({grip.id(), hand, arm});
+    move.rig.frames(1);
+    auto at = handles_at(move.rig.game);
+    // On the top-most selected thing, not the middle of what is under it.
+    REQUIRE((at && near(at->x, 0) && near(at->y, 0)));
+    move.post(true, 150, 100);
+    move.move(160, 100);
+    move.move(170, 100);
+    move.post(false, 170, 100);
+    move.rig.frames(1);
+    INFO(move.rig.runtime.last_error());
+    REQUIRE(near(move.x_of(arm), 2));
+    REQUIRE(near(move.x_of(hand), 2));
+    REQUIRE(near(move.rig.game.spatial_object(hand)->transform().m[13], 3));
+    REQUIRE(near(grip.offset().m[12], 1));
+    REQUIRE(near(grip.transform().m[12], 3));
+}

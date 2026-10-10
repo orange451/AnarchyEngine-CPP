@@ -23,15 +23,27 @@ local active = false
 -- arrows too, or "Rotate", which shows the rings.
 local mode = "Move"
 local dragger
--- Where each moved instance was when the drag began, the Dragger included.
+-- Each moved instance and where it was when the drag began, the Dragger
+-- first, then ancestors before what is under them.
 local starts = {}
 -- The selection's Changed connections, so the handles follow an edit or an undo.
 local watching = {}
 
--- The PVInstances selected or under what is selected, each once, or none
--- while the place plays. The camera the view looks through stays out:
--- moving it would move the view the drag is measured in. An Attachment whose
--- parent is in the list stays out: it moves with its parent.
+-- How many ancestors item has.
+local function depth(item)
+	local count = 0
+	local at = item.Parent
+	while at ~= nil do
+		count += 1
+		at = at.Parent
+	end
+	return count
+end
+
+-- The PVInstances selected or under what is selected, each once, ancestors
+-- before what is under them, or none while the place plays. The camera the
+-- view looks through stays out: moving it would move the view the drag is
+-- measured in.
 local function selected()
 	local list = {}
 	if RunService:IsRunning() then
@@ -56,19 +68,35 @@ local function selected()
 			gather(item)
 		end
 	end
-	-- An Attachment (a Bone among them) holds only an Offset from its parent,
-	-- so a parent that moves carries it: written as well, it would move twice.
-	local moving = {}
-	for _, item in list do
-		moving[item] = true
+	local depths = {}
+	for index, item in list do
+		depths[item] = { depth(item), index }
 	end
-	local carried = {}
+	table.sort(list, function(a, b)
+		local da, db = depths[a], depths[b]
+		return da[1] < db[1] or (da[1] == db[1] and da[2] < db[2])
+	end)
+	return list
+end
+
+-- Those of list with no ancestor in list: what the handles sit among. What is
+-- under them comes along when they move.
+local function tops(list)
+	local listed = {}
 	for _, item in list do
-		if not (item:IsA("Attachment") and moving[item.Parent]) then
-			table.insert(carried, item)
+		listed[item] = true
+	end
+	local out = {}
+	for _, item in list do
+		local at = item.Parent
+		while at ~= nil and not listed[at] do
+			at = at.Parent
+		end
+		if at == nil then
+			table.insert(out, item)
 		end
 	end
-	return carried
+	return out
 end
 
 -- The middle of the box around their positions.
@@ -90,17 +118,24 @@ local function make_dragger()
 	made.Space = SPACE
 	made.Parent = Core
 	made.DragBegan:Connect(function()
-		starts = { [made] = made.Transform }
+		starts = { { item = made, start = made.Transform } }
 		for _, item in selected() do
-			starts[item] = item.Transform
+			table.insert(starts, { item = item, start = item.Transform })
 		end
 	end)
-	-- Move's offset is a Vector3 to add; Rotate's a Matrix4, the turn about the middle.
+	-- Move's offset is a Vector3 to add; Rotate's a Matrix4, the turn about the
+	-- middle. Ancestors go first, so what holds its place relative to one (an
+	-- Attachment, a Bone) is already where it belongs and is left alone: written
+	-- as well, it would move twice. What holds a world Transform is written.
 	made.Dragged:Connect(function(_, offset)
 		local turning = typeof(offset) == "Matrix4"
-		for item, start in starts do
+		for _, entry in starts do
+			local item = entry.item
 			if item.Parent ~= nil then
-				item.Transform = if turning then offset * start else start + offset
+				local goal = if turning then offset * entry.start else entry.start + offset
+				if not item.Transform:FuzzyEq(goal, 1e-4) then
+					item.Transform = goal
+				end
 			end
 		end
 	end)
@@ -132,7 +167,7 @@ local function place()
 	end
 	dragger.TransformMode = TRANSFORM_MODE[mode]
 	dragger.Increment = INCREMENT[mode]
-	dragger.Transform = Matrix4.new(middle(list))
+	dragger.Transform = Matrix4.new(middle(tops(list)))
 end
 
 -- A new selection, or Play or Stop: watch what is selected now, and place.

@@ -659,10 +659,12 @@ std::shared_ptr<IdePrefabEditor::Card> IdePrefabEditor::make_card(const ModelVie
     heading->setMinSize(0, 0);
     auto name_stack = jadefx::make<jadefx::StackPane>();
     name_stack->setMinSize(0, 0);
+    name_stack->setStyle("width: 100%;");
     name_stack->setAlignment(jadefx::Pos::CenterLeft);
     card->name = jadefx::make<jadefx::Label>(view.name);
     card->name->getClassList().add("pe-name");
     card->name->setMinSize(0, 0);
+    card->name->setStyle("width: 100%;");
     card->name->setOnMouseClicked([this, id](const jadefx::MouseEvent& event) {
         if (event.button == 0 && event.clickCount == 2) {
             beginRename(id);
@@ -714,8 +716,11 @@ std::shared_ptr<IdePrefabEditor::Card> IdePrefabEditor::make_card(const ModelVie
         text->setMinSize(0, 0);
         slot.text = text_label("", "pe-slot-text");
         slot.sub = text_label("", "pe-slot-sub");
+        // A VBox lays each out at its text's width; a full width lets it end in an ellipsis instead.
         slot.text->setMinSize(0, 0);
         slot.sub->setMinSize(0, 0);
+        slot.text->setStyle("width: 100%;");
+        slot.sub->setStyle("width: 100%;");
         text->getChildren().add(slot.text);
         text->getChildren().add(slot.sub);
         slot.root->getChildren().add(text);

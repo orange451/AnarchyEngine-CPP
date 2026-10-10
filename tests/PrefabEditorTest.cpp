@@ -347,6 +347,40 @@ void deleted_prefab() {
 
 }  // namespace
 
+// A long Model or asset name ends in an ellipsis inside its card.
+void long_names_fit() {
+    Rig rig;
+    const std::string long_name = "Meshessmproptrafficbarrel011MtlWithAVeryLongNameIndeed";
+    rig.game.set_name(rig.rock, long_name);
+    std::string error;
+    const InstanceId model = ide::add_model(rig.game, rig.crate, rig.rock, rig.wood, error);
+    rig.game.set_name(model, long_name);
+    rig.frames(3);
+    jadefx::Node* card = rig.editor->cardNode(model);
+    Expect(card != nullptr, "the long-named Model's card shows");
+    if (card == nullptr) {
+        return;
+    }
+    const double right = card->getAbsoluteX() + card->getWidth();
+    int long_labels = 0;
+    std::vector<jadefx::Node*> pending = {card};
+    while (!pending.empty()) {
+        jadefx::Node* node = pending.back();
+        pending.pop_back();
+        if (auto* label = dynamic_cast<jadefx::Label*>(node); label != nullptr && label->getText() == long_name) {
+            ++long_labels;
+            Expect(label->getAbsoluteX() + label->getWidth() <= right + 0.5, "a long name stays inside its card");
+            Expect(label->displayedText() != long_name, "a long name is cut short with an ellipsis");
+        }
+        if (auto* parent = dynamic_cast<jadefx::Pane*>(node)) {
+            for (const auto& child : parent->getChildren().items()) {
+                pending.push_back(child.get());
+            }
+        }
+    }
+    Expect(long_labels == 2, "the card shows the long Model and Mesh names");
+}
+
 int main() {
     model_logic();
     guided_add();
@@ -354,6 +388,7 @@ int main() {
     clear_select_delete_rename();
     drops();
     deleted_prefab();
+    long_names_fit();
     if (gFailures != 0) {
         std::fprintf(stderr, "%d failed\n", gFailures);
         return 1;

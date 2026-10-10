@@ -37,9 +37,9 @@ struct DrawItem {
 struct VisibleDraw {
     // Into the frame's DrawItems, and so its MeshDraws.
     int index = 0;
-    // Its sphere's radius as projected, in pixels; infinite with the camera inside it.
+    // Its sphere's radius as projected, in pixels; infinite with the camera inside it. Read by tests and kept for a future LOD pick.
     float screenRadius = 0.f;
-    // Which LOD it draws. 0 until LOD selection fills it from screenRadius.
+    // Which LOD it draws: copied from MeshDraw::lod by findVisible.
     std::uint8_t lod = 0;
 };
 

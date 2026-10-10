@@ -1399,7 +1399,7 @@ void describe_function(const WorkerEnv* env, const Luau::FunctionType& fn, bool 
         const std::string noted = annotation(index);
         const std::string type = !noted.empty() ? noted : self ? self_type(args[index]) : shown_type(args[index]);
         out.param_list.emplace_back(name, type);
-        if (index == 0 && (with_self || (fn.hasSelf && with_self))) {
+        if (index == 0 && with_self) {
             continue;
         }
         params += first ? "" : ", ";
@@ -1983,8 +1983,8 @@ LuauCompletion completion_at(WorkerEnv& env, const std::string& module_name, con
     // After '.' or ':', the expression before it.
     for (auto node = result.ancestry.rbegin(); node != result.ancestry.rend() && module != nullptr; ++node) {
         if (auto* index = (*node)->as<Luau::AstExprIndexName>()) {
-            std::string named;
-            describe_object(*module, index->expr, named, out.receiver_instance_known, out.receiver_instance);
+            std::string unused_name;  // Only the instance fields are wanted here.
+            describe_object(*module, index->expr, unused_name, out.receiver_instance_known, out.receiver_instance);
             if (const Luau::TypeId* type = module->astTypes.find(index->expr)) {
                 out.receiver_class = registered_class(*type);
             }

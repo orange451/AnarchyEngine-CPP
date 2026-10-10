@@ -105,7 +105,8 @@ public:
     };
     const std::vector<ChunkCollider>* colliders(InstanceId terrain) const;
 
-    // Task 8: PhysicsWorld's ask, at the start of its own sync, for the
+    // PhysicsWorld::sync drives this through change_collider_interest;
+    // set_collider_interest is the direct form tests use. It asks for the
     // chunks (terrain-local) within kColliderChunks of each dynamic
     // PhysicsObject or PlayerController. Takes effect from the next update():
     // a chunk newly asked for whose collider is not known yet gets a re-mesh

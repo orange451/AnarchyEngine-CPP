@@ -109,8 +109,8 @@ struct MeshDraw {
 // rgba256x4's 256 * 4 * 4 floats, row 0 first. Row 0's texel i is material Id
 // i's color (sRGB, alpha unused); row 1's is its metalness, roughness,
 // reflectivity, and 1; row 2's is its texture layer index, TextureScale,
-// BlendSharpness, and HeightStrength (Task 6 reads it; nothing draws
-// textured yet); row 3 is reserved (0). The GL context has to be current;
+// BlendSharpness, and HeightStrength (terrain.frag's fetchLook reads it);
+// row 3 is reserved (0). The GL context has to be current;
 // the caller deletes the texture.
 unsigned MakeTerrainLookTexture(const float* rgba256x4);
 

@@ -1085,6 +1085,15 @@ void TestToolSpecs() {
     const JsonValue listed = Member(Member(Request(bridge.server(), "tools/list"), "result"), "tools");
     Expect(offered.items().size() == specs.size(), "a studio with every hook offers every tool");
     Expect(listed.items().size() == offered.items().size() + 2, "the bridge lists the studio's tools, then its own two");
+    // The create_instance parent description names every scene service.
+    for (const JsonValue& tool : offered.items()) {
+        if (Member(tool, "name").as_string() == "create_instance") {
+            const std::string parent =
+                Member(Member(Member(Member(tool, "inputSchema"), "properties"), "parent"), "description").as_string();
+            Expect(parent.find("Workspace, Lighting, Storage, Scripts, and Gui") != std::string::npos,
+                   "create_instance names every scene service as a parent: " + parent);
+        }
+    }
     for (std::size_t i = 0; i < offered.items().size(); ++i) {
         const JsonValue& tool = offered.items()[i];
         Expect(Item(listed, i) == tool, "the bridge lists " + Member(tool, "name").as_string() +

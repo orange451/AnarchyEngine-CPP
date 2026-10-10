@@ -144,7 +144,9 @@ CopiedNode copy_tree(const DataModel& game, InstanceId id) {
     node.name = game.name(id);
     object->save_properties(node.properties);
     for (const JsonValue::Member& member : game.extra_properties(id)) {
-        bag_set(node.properties, member.first, member.second);
+        if (bag_find(node.properties, member.first) == nullptr) {  // a key the class writes wins over a stale extra
+            bag_set(node.properties, member.first, member.second);
+        }
     }
     if (const auto* lua = dynamic_cast<const LuaSource*>(object)) {
         node.has_source = true;

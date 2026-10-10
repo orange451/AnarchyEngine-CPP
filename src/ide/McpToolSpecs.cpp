@@ -45,7 +45,7 @@ constexpr SpecText kSpecs[] = {
      "undo step. Returns its id and path.",
      R"({"type":"object","required":["class"],"properties":{
          "class":{"type":"string"},
-         "parent":{"type":["string","number"],"description":"Id or path. Not game, which holds only the scene services Workspace, Lighting, Storage, and Scripts. Default: Workspace."},
+         "parent":{"type":["string","number"],"description":"Id or path. Not game, which holds only the scene services Workspace, Lighting, Storage, Scripts, and Gui. Default: Workspace."},
          "name":{"type":"string","description":"Default: the class name."}}})"},
     {"delete_instance",
      "Deletes an instance and everything under it. One undo step. game and the scene services cannot be deleted.",
@@ -64,7 +64,7 @@ constexpr SpecText kSpecs[] = {
      "show a Prefab in the world, create a GameObject in Workspace and set its Prefab property to "
      "the Prefab. Not during a test.",
      R"({"type":"object","required":["files"],"properties":{
-         "files":{"type":"array","minItems":1,"maxItems":64,"items":{"type":"string"},"description":"Absolute paths of image and model files."}}})"},
+         "files":{"type":"array","minItems":1,"maxItems":64,"items":{"type":"string"},"description":"Absolute paths of image, sound, and model files."}}})"},
     {"read_script",
      "The Source of a Script or ModuleScript, and how many lines it has. first_line and last_line "
      "return only those lines, counting from 1.",

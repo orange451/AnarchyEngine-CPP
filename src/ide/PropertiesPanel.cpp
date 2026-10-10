@@ -45,8 +45,6 @@ namespace {
 
 using engine_core::InstanceId;
 
-// Same wait as the explorer: a busy simulation step must not freeze the shell.
-
 constexpr double kPad = 6;
 constexpr double kRowHeight = 24;
 constexpr double kRowGap = 2;

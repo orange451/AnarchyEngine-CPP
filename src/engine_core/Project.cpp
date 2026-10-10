@@ -1078,7 +1078,9 @@ JsonValue written_doc(const DataModel& world, InstanceId id, const JsonValue& do
         object->save_properties(bag);
     }
     for (const JsonValue::Member& member : world.extra_properties(id)) {
-        bag_set(bag, member.first, member.second);
+        if (bag_find(bag, member.first) == nullptr) {  // a key the class writes wins over a stale extra
+            bag_set(bag, member.first, member.second);
+        }
     }
     for (const JsonValue::Member& member : bag) {
         out.set(member.first, member.second);

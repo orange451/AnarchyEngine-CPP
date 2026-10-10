@@ -141,8 +141,7 @@ struct HoverPlan {
     std::string luau_source;
     std::shared_ptr<const HoverPlanState> state;
 };
-HoverPlan plan_hover(std::string_view source, int index, const std::vector<engine_core::LuaNode>& world,
-                     std::uint32_t script_id, bool script_global);
+HoverPlan plan_hover(std::string_view source, int index);
 HoverInfo finish_hover(const HoverPlan& plan, const engine_core::LuauFacts& facts);
 
 // A completion list Luau is still answering for. A UI asks on a keystroke and

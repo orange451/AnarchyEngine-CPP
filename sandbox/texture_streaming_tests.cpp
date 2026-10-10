@@ -420,17 +420,22 @@ TEST_CASE("TS18 preview_layer fills only the levels from 64 down, from the diffu
     CHECK(preview_layer(sources, 64).first_level == 0);
 }
 
-TEST_CASE("TS19 placeholder_layer is complete, mid grey, flat, and half height", "[texture]") {
+TEST_CASE("TS19 placeholder_layer holds only the levels from 64 down, mid grey, flat, and half height", "[texture]") {
     using namespace engine_core::terrain;
     using namespace engine_core::texture;
     set_s3tc_available(true);
     const LayerBytes layer = placeholder_layer(256);
-    CHECK(layer.first_level == 0);
-    for (const auto& plane : layer.planes) REQUIRE(plane.size() == 9);
-    const auto a = decode_level(PixelFormat::BC3, layer.planes[0][0].data(), 256, 256);
+    CHECK(layer.first_level == 2);   // 256 -> 64: a few KB to upload, at any size
+    for (const auto& plane : layer.planes) {
+        REQUIRE(plane.size() == 9);
+        CHECK(plane[0].empty());
+        CHECK(plane[1].empty());
+    }
+    const auto a = decode_level(PixelFormat::BC3, layer.planes[0][2].data(), 64, 64);
     CHECK(std::abs(int(a[0]) - 128) <= 2);
     CHECK(std::abs(int(a[3]) - 128) <= 2);
-    const auto b = decode_level(PixelFormat::BC5, layer.planes[1][0].data(), 256, 256);
+    const auto b = decode_level(PixelFormat::BC5, layer.planes[1][2].data(), 64, 64);
     CHECK(std::abs(int(b[0]) - 128) <= 2);
     CHECK(std::abs(int(b[1]) - 128) <= 2);
+    CHECK(placeholder_layer(32).first_level == 0);
 }

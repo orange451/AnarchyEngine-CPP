@@ -25,6 +25,9 @@
 namespace engine_core {
 struct TerrainLook;
 struct TerrainTextureSet;
+namespace terrain {
+struct LayerBytes;
+}
 }
 
 namespace anarchy::amesh {
@@ -91,13 +94,14 @@ struct MeshDraw {
     // False for every Brush draw of a mesh but one, so its LOD 0 casts once.
     bool castsShadow = true;
     // The Terrain's two texture arrays, as Renderer::terrainArrays resolves
-    // them (Task 6): Surface A (color + height) and Surface B (normal +
-    // roughness + metalness), full mip chains. terrainLayerCount 0 means no
+    // them: Surface A (color + height), Surface B (normal XY), and Surface C
+    // (roughness + metalness). terrainLayerCount 0 means no
     // array pair is ready yet (or none was ever published for this Terrain):
     // terrain.frag then draws flat colors from the look table alone, as it
     // always did before this task.
     unsigned terrainSurfaceA = 0;
     unsigned terrainSurfaceB = 0;
+    unsigned terrainSurfaceC = 0;
     int terrainLayerCount = 0;
 };
 
@@ -411,16 +415,17 @@ public:
     // that frame's terrainLookTexture calls.
     void sweepTerrainLooks();
     // terrain's current pair of GL_TEXTURE_2D_ARRAY textures for
-    // MeshDraw::terrainSurfaceA/B (Task 6): built incrementally from set's
-    // layers, at most 4 layers (both arrays) uploaded per call, into a new
-    // pair at set's size when set->revision is new; the previous pair (or
-    // none) is returned and keeps drawing until the new one finishes
-    // uploading, then this swaps to it and deletes the old one. set may be
-    // null (nothing published yet): the previous pair, if any, is returned
-    // unchanged. outLayerCount 0 (nothing ever finished building) selects
-    // terrain.frag's flat-color path. RenderThread, GL context current.
+    // MeshDraw::terrainSurfaceA/B/C: three arrays at set's size, filled from
+    // set's layers a level at a time, smallest first across every layer,
+    // within 16 MB a call; BASE_LEVEL follows the finest level every layer
+    // has, so terrain sharpens as levels land. A layer whose bytes change
+    // uploads again over what it had, never going blurrier. A new size or
+    // layer count fills new arrays while the old ones keep drawing, and
+    // swaps once every layer has its small levels. set may be null (nothing
+    // published yet). outLayerCount 0 (no arrays yet) selects terrain.frag's
+    // flat-color path. RenderThread, GL context current.
     void terrainArrays(engine_core::InstanceId terrain, const std::shared_ptr<const engine_core::TerrainTextureSet>& set,
-                       unsigned& outSurfaceA, unsigned& outSurfaceB, int& outLayerCount);
+                       unsigned outSurface[3], int& outLayerCount);
     // Deletes the array pairs no terrainArrays call asked for since the last
     // sweep, as for a Terrain that left Workspace. Call once a frame, after
     // that frame's terrainArrays calls.
@@ -741,15 +746,30 @@ private:
     std::unordered_map<engine_core::InstanceId, TerrainLookEntry> terrainLooks_;
     // terrainArrays' state per Terrain: the pair currently drawn, and (while
     // building) the new pair being uploaded, a few layers per call.
-    struct TerrainArrayEntry {
-        unsigned surfaceA = 0, surfaceB = 0;
+    // One layer of a Terrain's arrays: the bytes it last took, which level
+    // it uploads next (counting down from the coarsest), and the finest
+    // level from which every coarser level holds data (levels: none yet).
+    struct TerrainArrayLayer {
+        std::uint64_t revision = 0;
+        std::shared_ptr<const engine_core::terrain::LayerBytes> bytes;
+        int nextLevel = -1;
+        int validFirst = 0;
+    };
+    // Three arrays (color + height, normal, roughness + metalness) at one
+    // size and layer count, BASE_LEVEL at base.
+    struct TerrainArrays {
+        unsigned surface[3] = {0, 0, 0};
+        int size = 0;
+        int levels = 0;
         int layerCount = 0;
-        std::uint64_t currentRevision = 0;
-        unsigned pendingA = 0, pendingB = 0;
-        int pendingLayerCount = 0;
-        int uploadedLayers = 0;
-        std::uint64_t buildingRevision = 0;
-        std::shared_ptr<const engine_core::TerrainTextureSet> buildingSet;
+        int base = 0;
+        bool dirty = false;
+        std::vector<TerrainArrayLayer> layers;
+    };
+    struct TerrainArrayEntry {
+        TerrainArrays current;   // drawing
+        TerrainArrays pending;   // filling, at a new size or layer count, until it can take over
+        std::uint64_t seenRevision = 0;
         bool asked = false;
     };
     std::unordered_map<engine_core::InstanceId, TerrainArrayEntry> terrainArrays_;

@@ -480,10 +480,13 @@ struct PriorityLog {
     }
 };
 
-// Level 0 of layer's color plane, decoded: its first texel's red.
+// The red of layer's first texel, at its finest level present.
 int first_red(const engine_core::terrain::LayerBytes& layer) {
     const auto formats = engine_core::terrain::layer_formats();
-    const auto rgba = engine_core::texture::decode_level(formats[0], layer.planes[0][0].data(), layer.size, layer.size);
+    const int level = layer.first_level;
+    const int side = std::max(1, layer.size >> level);
+    const auto rgba =
+        engine_core::texture::decode_level(formats[0], layer.planes[0][std::size_t(level)].data(), side, side);
     return rgba[0];
 }
 
@@ -529,7 +532,7 @@ TEST_CASE("TT7 every layer publishes at once as a grey placeholder, before anyth
     REQUIRE(set->layer_revisions.size() == 3u);
     for (std::size_t i = 1; i < 3; ++i) {
         REQUIRE(set->layers[i] != nullptr);
-        CHECK(set->layers[i]->first_level == 0);
+        CHECK(set->layers[i]->first_level == 3);   // 512 -> 64
         CHECK(std::abs(first_red(*set->layers[i]) - 128) <= 2);   // grey, not white
     }
     CHECK(first_red(*set->layers[0]) >= 250);   // layer 0, the untextured default, stays white

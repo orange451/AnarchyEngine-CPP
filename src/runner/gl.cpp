@@ -42,6 +42,7 @@ void (*rt_glEnable)(GLenum) = nullptr;
 void (*rt_glDisable)(GLenum) = nullptr;
 GLboolean (*rt_glIsEnabled)(GLenum) = nullptr;
 void (*rt_glGetIntegerv)(GLenum, GLint*) = nullptr;
+void (*rt_glGetTexParameteriv)(GLenum, GLenum, GLint*) = nullptr;
 void (*rt_glScissor)(GLint, GLint, GLsizei, GLsizei) = nullptr;
 GLint (*rt_glGetUniformLocation)(GLuint, const GLchar*) = nullptr;
 void (*rt_glUniform1f)(GLint, GLfloat) = nullptr;
@@ -74,6 +75,13 @@ void (*rt_glDrawBuffers)(GLsizei, const GLenum*) = nullptr;
 void (*rt_glTexImage3D)(GLenum, GLint, GLint, GLsizei, GLsizei, GLsizei, GLint, GLenum, GLenum, const void*) = nullptr;
 void (*rt_glTexSubImage3D)(GLenum, GLint, GLint, GLint, GLint, GLsizei, GLsizei, GLsizei, GLenum, GLenum,
                            const void*) = nullptr;
+void (*rt_glCompressedTexImage2D)(GLenum, GLint, GLenum, GLsizei, GLsizei, GLint, GLsizei, const void*) = nullptr;
+void (*rt_glCompressedTexSubImage2D)(GLenum, GLint, GLint, GLint, GLsizei, GLsizei, GLenum, GLsizei,
+                                     const void*) = nullptr;
+void (*rt_glCompressedTexImage3D)(GLenum, GLint, GLenum, GLsizei, GLsizei, GLsizei, GLint, GLsizei,
+                                  const void*) = nullptr;
+void (*rt_glCompressedTexSubImage3D)(GLenum, GLint, GLint, GLint, GLint, GLsizei, GLsizei, GLsizei, GLenum, GLsizei,
+                                     const void*) = nullptr;
 void (*rt_glTexParameterf)(GLenum, GLenum, GLfloat) = nullptr;
 const GLubyte* (*rt_glGetStringi)(GLenum, GLuint) = nullptr;
 void (*rt_glFramebufferTextureLayer)(GLenum, GLenum, GLuint, GLint, GLint) = nullptr;
@@ -184,6 +192,7 @@ bool LoadGl(GlGetProcAddress get_proc) {
     LOAD(Disable);
     LOAD(IsEnabled);
     LOAD(GetIntegerv);
+    LOAD(GetTexParameteriv);
     LOAD(Scissor);
     LOAD(GetUniformLocation);
     LOAD(Uniform1f);
@@ -215,6 +224,10 @@ bool LoadGl(GlGetProcAddress get_proc) {
     LOAD(DrawBuffers);
     LOAD(TexImage3D);
     LOAD(TexSubImage3D);
+    LOAD(CompressedTexImage2D);
+    LOAD(CompressedTexSubImage2D);
+    LOAD(CompressedTexImage3D);
+    LOAD(CompressedTexSubImage3D);
     LOAD(TexParameterf);
     LOAD(GetStringi);
     LOAD(FramebufferTextureLayer);

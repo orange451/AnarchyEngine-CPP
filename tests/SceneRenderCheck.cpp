@@ -596,7 +596,7 @@ std::vector<std::uint8_t> DownsampleRgba8(const std::vector<std::uint8_t>& level
 // kind -1 is the untextured default layer (white, 0.5 height, flat normal,
 // roughness 1, metalness 1), as layer 0 of every TerrainTextureSet.
 engine_core::terrain::LayerBytes ProceduralLayer(int size, int kind) {
-    engine_core::terrain::LayerBytes layer;
+    engine_core::terrain::LayerPixels layer;
     layer.size = size;
     std::vector<std::uint8_t> a, b;
     if (kind < 0) {
@@ -621,7 +621,7 @@ engine_core::terrain::LayerBytes ProceduralLayer(int size, int kind) {
         layer.b_mips.push_back(b);
         levelSize = nextSize;
     }
-    return layer;
+    return engine_core::terrain::compress_layer(layer);
 }
 
 // A published TerrainTextureSet: layer 0 the untextured default, then one
@@ -631,10 +631,12 @@ std::shared_ptr<const engine_core::TerrainTextureSet> MakeTextureSet(int size, s
     auto set = std::make_shared<engine_core::TerrainTextureSet>();
     set->size = size;
     set->revision = revision;
+    // One revision a layer, so the renderer uploads each once.
     set->layers.push_back(std::make_shared<const engine_core::terrain::LayerBytes>(ProceduralLayer(size, -1)));
     for (int kind : kinds) {
         set->layers.push_back(std::make_shared<const engine_core::terrain::LayerBytes>(ProceduralLayer(size, kind)));
     }
+    for (std::size_t i = 0; i < set->layers.size(); ++i) set->layer_revisions.push_back(revision * 100 + i);
     return set;
 }
 
@@ -671,16 +673,17 @@ std::vector<runner::MeshDraw> TexturedTerrainDraws(const std::vector<std::unique
                                                     unsigned look,
                                                     const std::shared_ptr<const engine_core::TerrainTextureSet>& set,
                                                     const engine_core::Matrix4& model = engine_core::matrix4_identity()) {
-    unsigned surfaceA = 0, surfaceB = 0;
+    unsigned surface[3] = {0, 0, 0};
     int layerCount = 0;
-    renderer.terrainArrays(terrainId, set, surfaceA, surfaceB, layerCount);
+    renderer.terrainArrays(terrainId, set, surface, layerCount);
     std::vector<runner::MeshDraw> draws;
     for (const auto& chunk : chunks) {
         runner::MeshDraw draw{chunk.get(), model};
         draw.terrainLook = look;
         draw.owner = terrainId;
-        draw.terrainSurfaceA = surfaceA;
-        draw.terrainSurfaceB = surfaceB;
+        draw.terrainSurfaceA = surface[0];
+        draw.terrainSurfaceB = surface[1];
+        draw.terrainSurfaceC = surface[2];
         draw.terrainLayerCount = layerCount;
         draws.push_back(draw);
     }
@@ -834,6 +837,75 @@ void ExpectTerrainShown(const std::string& name, const runner::ViewPixels& shot,
                                      std::to_string(total) + " pixels)");
     const std::int64_t mean = covered > 0 ? brightness / covered : 0;
     Expect(mean > 90, name + ": the terrain is lit, not black (mean channel sum " + std::to_string(mean) + ")");
+}
+
+// The level a terrain array samples from first (GL_TEXTURE_BASE_LEVEL).
+int TerrainBaseLevel(unsigned array) {
+    runner::GLint base = -1;
+    glBindTexture(runner::RT_GL_TEXTURE_2D_ARRAY, array);
+    runner::rt_glGetTexParameteriv(runner::RT_GL_TEXTURE_2D_ARRAY, runner::RT_GL_TEXTURE_BASE_LEVEL, &base);
+    glBindTexture(runner::RT_GL_TEXTURE_2D_ARRAY, 0);
+    return base;
+}
+
+// A set of layer 0 (untextured) and `layers` more, each either grey
+// placeholders or procedural kinds, with revisions telling them apart.
+std::shared_ptr<const engine_core::TerrainTextureSet> StreamingSet(int size, const std::vector<int>& kinds,
+                                                                    std::uint64_t revision) {
+    auto set = std::make_shared<engine_core::TerrainTextureSet>();
+    set->size = size;
+    set->revision = revision;
+    set->layers.push_back(std::make_shared<const engine_core::terrain::LayerBytes>(
+        engine_core::terrain::untextured_layer(size)));
+    set->layer_revisions.push_back(1);
+    for (int kind : kinds) {
+        // kind -2: a grey placeholder, as TerrainTextures publishes first.
+        set->layers.push_back(std::make_shared<const engine_core::terrain::LayerBytes>(
+            kind == -2 ? engine_core::terrain::placeholder_layer(size) : ProceduralLayer(size, kind)));
+        set->layer_revisions.push_back(kind == -2 ? 2 : 10 + static_cast<std::uint64_t>(kind));
+    }
+    return set;
+}
+
+// Terrain streaming: grey placeholders draw on the first call, at their small
+// levels; whole layers then sharpen the arrays to level 0 in place; a layer
+// added later fills new arrays while the old ones keep drawing, so the
+// terrain never falls back to no arrays (its flat look) once it had them;
+// and a placeholder draws grey, not white.
+void TerrainStreamingCheck(runner::Renderer& renderer) {
+    constexpr engine_core::InstanceId kTerrain = 9801;
+    constexpr int kSize = 512;   // 512 -> 64 is level 3
+    unsigned surface[3] = {0, 0, 0};
+    int layerCount = 0;
+
+    renderer.terrainArrays(kTerrain, StreamingSet(kSize, {-2, -2}, 1), surface, layerCount);
+    Expect(layerCount == 3, "terrain streaming: grey placeholders draw on the first frame (" +
+                                std::to_string(layerCount) + " layers)");
+    Expect(surface[0] != 0 && surface[1] != 0 && surface[2] != 0, "terrain streaming: all three arrays exist");
+    Expect(TerrainBaseLevel(surface[0]) == 3, "terrain streaming: placeholders sample from their 64-pixel level (" +
+                                                   std::to_string(TerrainBaseLevel(surface[0])) + ")");
+
+    const unsigned first[3] = {surface[0], surface[1], surface[2]};
+    const auto whole = StreamingSet(kSize, {1, 0}, 2);
+    int calls = 0;
+    do {
+        renderer.terrainArrays(kTerrain, whole, surface, layerCount);
+        ++calls;
+    } while (TerrainBaseLevel(surface[0]) != 0 && calls < 10);
+    Expect(TerrainBaseLevel(surface[0]) == 0, "terrain streaming: whole layers sharpen the arrays to level 0");
+    Expect(surface[0] == first[0] && surface[1] == first[1] && surface[2] == first[2],
+           "terrain streaming: whole layers upload into the same arrays");
+
+    bool everBlank = false;
+    const auto grown = StreamingSet(kSize, {1, 0, -2}, 3);
+    for (int call = 0; call < 4; ++call) {
+        renderer.terrainArrays(kTerrain, grown, surface, layerCount);
+        everBlank = everBlank || layerCount == 0;
+    }
+    Expect(!everBlank, "terrain streaming: adding a layer never leaves the terrain without arrays");
+    Expect(layerCount == 4, "terrain streaming: the added layer's arrays take over (" + std::to_string(layerCount) +
+                                " layers)");
+    Expect(runner::rt_glGetError() == runner::GL_NO_ERROR, "terrain streaming leaves no GL error");
 }
 
 // Terrain LOD seen whole (--terrain-shots): a large rolling island through
@@ -4730,6 +4802,7 @@ int main(int argc, char** argv) {
             runner::GLuint texture = look;
             glDeleteTextures(1, &texture);
         }
+        TerrainStreamingCheck(renderer);
         if (budgetMode) {
             TerrainBudget(renderer);
         }

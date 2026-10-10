@@ -67,8 +67,9 @@ LayerBytes compress_layer(const LayerPixels& pixels);
 // a size chain has from 64 down, so first_level = log2(size / 64).
 LayerBytes preview_layer(const LayerSources& sources, int size);
 
-// A layer with nothing to show yet: every level mid grey (128), height 0.5,
-// a flat normal, and roughness and metalness 1 (what a missing map gives).
+// A layer with nothing to show yet: its levels from 64 down (first_level
+// past the rest) mid grey (128), height 0.5, a flat normal, and roughness
+// and metalness 1 (what a missing map gives).
 LayerBytes placeholder_layer(int size);
 
 // What build_layer gives a layer with no maps at all, without decoding or

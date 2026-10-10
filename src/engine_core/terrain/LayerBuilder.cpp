@@ -444,12 +444,22 @@ LayerBytes preview_layer(const LayerSources& sources, int size) {
 
 namespace {
 
-LayerBytes constant_layer(int size, const std::array<std::array<std::uint8_t, 4>, 3>& colors) {
+// Every level no larger than `largest` a side of a size chain, one color a
+// plane; the larger levels left empty, first_level set past them.
+LayerBytes constant_layer(int size, const std::array<std::array<std::uint8_t, 4>, 3>& colors, int largest) {
     const std::array<texture::PixelFormat, 3> formats = layer_formats();
     LayerBytes out;
     out.size = size;
-    for (int w : chain_sides(size)) {
-        for (size_t p = 0; p < 3; ++p) out.planes[p].push_back(texture::constant_level(formats[p], colors[p], w, w));
+    const std::vector<int> sides = chain_sides(size);
+    out.first_level = int(sides.size()) - 1;
+    for (size_t level = 0; level < sides.size(); ++level) {
+        const int w = sides[level];
+        const bool kept = w <= largest;
+        if (kept) out.first_level = std::min(out.first_level, int(level));
+        for (size_t p = 0; p < 3; ++p) {
+            out.planes[p].push_back(kept ? texture::constant_level(formats[p], colors[p], w, w)
+                                         : std::vector<std::uint8_t>{});
+        }
     }
     return out;
 }
@@ -457,15 +467,19 @@ LayerBytes constant_layer(int size, const std::array<std::array<std::uint8_t, 4>
 }  // namespace
 
 LayerBytes placeholder_layer(int size) {
-    return constant_layer(size, {{
-                                    {128, 128, 128, 128},   // mid grey, height 0.5
-                                    {128, 128, 0, 255},     // flat normal
-                                    {255, 255, 0, 255},     // roughness 1, metalness 1
-                                }});
+    // Only the small levels: grey is grey at any resolution, and they upload
+    // in a few kilobytes where the whole chain at 2048 would take megabytes.
+    return constant_layer(size,
+                          {{
+                              {128, 128, 128, 128},   // mid grey, height 0.5
+                              {128, 128, 0, 255},     // flat normal
+                              {255, 255, 0, 255},     // roughness 1, metalness 1
+                          }},
+                          64);
 }
 
 LayerBytes untextured_layer(int size) {
-    return constant_layer(size, {{{255, 255, 255, 128}, {128, 128, 0, 255}, {255, 255, 0, 255}}});
+    return constant_layer(size, {{{255, 255, 255, 128}, {128, 128, 0, 255}, {255, 255, 0, 255}}}, size);
 }
 
 std::size_t layer_bytes(int size) {

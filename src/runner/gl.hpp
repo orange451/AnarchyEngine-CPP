@@ -264,6 +264,12 @@ constexpr GLenum RT_GL_POLYGON_OFFSET_FILL = 0x8037;
 // same enum value under both the EXT and the (GL 4.6 core) ARB names.
 constexpr GLenum RT_GL_MAX_ARRAY_TEXTURE_LAYERS = 0x88FF;
 constexpr GLenum RT_GL_TEXTURE_MAX_ANISOTROPY = 0x84FE;
+// Block-compressed formats: BC1 and BC3 through GL_EXT_texture_compression_s3tc
+// (on every desktop driver, checked at startup), BC4 and BC5 core since 3.0.
+constexpr GLenum RT_GL_COMPRESSED_RGBA_S3TC_DXT1 = 0x83F1;
+constexpr GLenum RT_GL_COMPRESSED_RGBA_S3TC_DXT5 = 0x83F3;
+constexpr GLenum RT_GL_COMPRESSED_RED_RGTC1 = 0x8DBB;
+constexpr GLenum RT_GL_COMPRESSED_RG_RGTC2 = 0x8DBD;
 constexpr GLenum RT_GL_MAX_TEXTURE_MAX_ANISOTROPY = 0x84FF;
 constexpr GLenum RT_GL_NUM_EXTENSIONS = 0x821D;
 // glGetStringi's own target for one indexed extension name (core profiles
@@ -309,6 +315,7 @@ extern void (*rt_glEnable)(GLenum cap);
 extern void (*rt_glDisable)(GLenum cap);
 extern GLboolean (*rt_glIsEnabled)(GLenum cap);
 extern void (*rt_glGetIntegerv)(GLenum pname, GLint* data);
+extern void (*rt_glGetTexParameteriv)(GLenum target, GLenum pname, GLint* params);
 extern void (*rt_glScissor)(GLint x, GLint y, GLsizei width, GLsizei height);
 extern GLint (*rt_glGetUniformLocation)(GLuint program, const GLchar* name);
 extern void (*rt_glUniform1f)(GLint location, GLfloat v0);
@@ -343,6 +350,16 @@ extern void (*rt_glTexImage3D)(GLenum target, GLint level, GLint internalformat,
 extern void (*rt_glTexSubImage3D)(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLint zoffset,
                                   GLsizei width, GLsizei height, GLsizei depth, GLenum format, GLenum type,
                                   const void* pixels);
+extern void (*rt_glCompressedTexImage2D)(GLenum target, GLint level, GLenum internalformat, GLsizei width,
+                                         GLsizei height, GLint border, GLsizei imageSize, const void* data);
+extern void (*rt_glCompressedTexSubImage2D)(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLsizei width,
+                                            GLsizei height, GLenum format, GLsizei imageSize, const void* data);
+extern void (*rt_glCompressedTexImage3D)(GLenum target, GLint level, GLenum internalformat, GLsizei width,
+                                         GLsizei height, GLsizei depth, GLint border, GLsizei imageSize,
+                                         const void* data);
+extern void (*rt_glCompressedTexSubImage3D)(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLint zoffset,
+                                            GLsizei width, GLsizei height, GLsizei depth, GLenum format,
+                                            GLsizei imageSize, const void* data);
 extern void (*rt_glTexParameterf)(GLenum target, GLenum pname, GLfloat param);
 extern const GLubyte* (*rt_glGetStringi)(GLenum name, GLuint index);
 extern void (*rt_glFramebufferTextureLayer)(GLenum target, GLenum attachment, GLuint texture, GLint level,
@@ -469,6 +486,10 @@ bool LoadGl(GlGetProcAddress get_proc);
 #define glDrawBuffers ::runner::rt_glDrawBuffers
 #define glTexImage3D ::runner::rt_glTexImage3D
 #define glTexSubImage3D ::runner::rt_glTexSubImage3D
+#define glCompressedTexImage2D ::runner::rt_glCompressedTexImage2D
+#define glCompressedTexSubImage2D ::runner::rt_glCompressedTexSubImage2D
+#define glCompressedTexImage3D ::runner::rt_glCompressedTexImage3D
+#define glCompressedTexSubImage3D ::runner::rt_glCompressedTexSubImage3D
 #define glTexParameterf ::runner::rt_glTexParameterf
 #define glGetStringi ::runner::rt_glGetStringi
 #define glFramebufferTextureLayer ::runner::rt_glFramebufferTextureLayer

@@ -368,6 +368,12 @@ struct ScriptBindings {
     // Brush's methods and the BrushFace datatype, in BrushBindings.cpp.
     static Brush& brush_self(lua_State* state);
     static void link_brush_methods();
+    // GameObject's bone methods, in SkeletonBindings.cpp: GetBoneNames, GetBone, AddBone.
+    static void link_skeleton_methods();
+    static GameObject& game_object_self(lua_State* state);
+    static int game_object_get_bone_names(lua_State* state);
+    static int game_object_get_bone(lua_State* state);
+    static int game_object_add_bone(lua_State* state);
     // Camera's methods, in CameraBindings.cpp.
     static void link_camera_methods();
     static Camera& camera_self(lua_State* state);

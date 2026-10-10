@@ -1590,6 +1590,7 @@ ANARCHY_LUA_REGISTER(register_script_methods) {
     ScriptBindings::link_terrain_methods();
     ScriptBindings::link_brush_methods();
     ScriptBindings::link_camera_methods();
+    ScriptBindings::link_skeleton_methods();
     ScriptBindings::link_wireframe_methods();
 
     // AssetInstances.cpp declares the class and its Path.

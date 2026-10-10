@@ -108,3 +108,47 @@ TEST_CASE("BONE6 a GameObject's pose is made again only when what poses it chang
     REQUIRE(object.pose()->owners[0] == hand.id());
     REQUIRE(create_part(rig.game).pose() == nullptr);
 }
+
+TEST_CASE("BONE7 scripts list a GameObject's bones, find its Bones, and add them", "[bone]") {
+    ScriptRig rig;
+    TempDir dir;
+    write_mesh(dir / "meshes" / "arm.amesh", arm(2));
+    rig.game.set_resources_root(dir.path);
+    engine_core::Mesh& mesh = rig.game.create<engine_core::Mesh>();
+    rig.game.set_parent(mesh.id(), rig.game.service("Meshes"));
+    REQUIRE_FALSE(mesh.set_path("meshes/arm.amesh"));
+    engine_core::Prefab& prefab = rig.game.create<engine_core::Prefab>();
+    rig.game.set_parent(prefab.id(), rig.game.service("Prefabs"));
+    engine_core::Model& model = rig.game.create<engine_core::Model>();
+    rig.game.set_parent(model.id(), prefab.id());
+    REQUIRE_FALSE(model.set_reference(engine_core::Model::kMeshReference, id_slot(mesh.id())));
+    engine_core::GameObject& object = create_part(rig.game);
+    rig.game.set_name(object.id(), "Arm");
+    REQUIRE_FALSE(object.set_prefab(id_slot(prefab.id())));
+    add_script(rig.game, "Pose", R"(
+        local arm = workspace.Arm
+        local names = arm:GetBoneNames()
+        _G.names = #names == 2 and names[1] == "Root" and names[2] == "Hand"
+        _G.none = arm:GetBone("Hand") == nil
+        local hand = arm:AddBone("Hand")
+        _G.added = hand.ClassName == "Bone" and hand.Name == "Hand" and hand.Parent == arm
+            and arm:GetBone("Hand") == hand
+        local ok, why = pcall(function() arm:AddBone("Hand") end)
+        _G.twice = not ok and string.find(why, "already has a Bone for Hand", 1, true) ~= nil
+        ok, why = pcall(function() arm:AddBone("Nope") end)
+        _G.unknown = not ok and string.find(why, "no bone named Nope", 1, true) ~= nil
+        _G.plain = #Instance.new("GameObject", workspace):GetBoneNames() == 0
+        hand.Offset = Matrix4.new() + Vector3.new(1, 0, 0)
+        _G.moved = hand.Transform.Position == Vector3.new(1, 2, 0)
+    )");
+    rig.game.start_simulation();
+    rig.frames(2);
+    INFO(rig.runtime.last_error());
+    for (const char* name : {"names", "none", "added", "twice", "unknown", "plain", "moved"}) {
+        bool value = false;
+        INFO(name);
+        REQUIRE(rig.runtime.global_boolean(name, value));
+        REQUIRE(value);
+    }
+    rig.game.stop_simulation();
+}

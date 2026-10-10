@@ -1559,6 +1559,14 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
         "Replaces every face. Faces that cut nothing are dropped. Raises, changing nothing, when the faces do not "
         "close a solid.",
         "nil", false, {P("faces", "{BrushFace}")});
+    add("GameObject", "GetBoneNames", "The names of the bones its Prefab's skeleton has, in order; empty when it has none.",
+        "{string}", false, {});
+    add("GameObject", "GetBone", "The Bone child that poses the bone called name, or nil. It never makes one.", "Bone?",
+        false, {P("name", "string")});
+    add("GameObject", "AddBone",
+        "Makes a Bone child that poses the bone called name. Errors when the skeleton has no such bone or a Bone "
+        "for it is already there.",
+        "Bone", false, {P("name", "string")});
     add("Brush", "GetFace", "One face.", "BrushFace", false, {P("index", "number")});
     add("Brush", "SetFace", "Replaces one face.", "nil", false, {P("index", "number"), P("face", "BrushFace")});
     add("Brush", "SetFaceMaterial", "Sets one face's Material.", "nil", false,

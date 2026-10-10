@@ -145,6 +145,29 @@ TEST_CASE("TL11 SmoothBall rounds a corner; strength 0 changes nothing; strength
     REQUIRE(all_text(out).find("strength must be a finite number") != std::string::npos);
 }
 
+TEST_CASE("TL12 GrowBall raises and lowers the top of a box, and gives new ground its material", "[terrain][lua]") {
+    ScriptRig rig;
+    rig.runtime.run_chunk(R"(
+        local t = Instance.new("Terrain", workspace)
+        local grass = t:AddMaterial(nil)
+        t:FillBlock(Matrix4.new(0, 0, 0), Vector3.new(16, 8, 16), nil)
+        local above = Vector3.new(0, 4.5, 0)
+        local function at() return t:ReadVoxels(above, above) end
+        local before = at().Distances[1][1][1]
+        t:GrowBall(Vector3.new(0, 4, 0), 4, 1, grass)
+        local grown = at()
+        t:GrowBall(Vector3.new(0, 4, 0), 4, -1, grass)
+        local lowered = at().Distances[1][1][1]
+        print(grown.Distances[1][1][1] < before, grown.Materials[1][1][1] == grass.Id, lowered > grown.Distances[1][1][1])
+        print(select(2, pcall(function() t:GrowBall(above, 4, 0 / 0, grass) end)))
+    )");
+    rig.frames(1);
+    const auto out = rig.runtime.drain_output();
+    INFO(all_text(out));
+    REQUIRE(has_line(out, "true\ttrue\ttrue\n"));
+    REQUIRE(all_text(out).find("amount must be a finite number") != std::string::npos);
+}
+
 TEST_CASE("TL10 a box too large to count in cells raises and changes nothing", "[terrain][lua]") {
     ScriptRig rig;
     rig.runtime.run_chunk(R"(

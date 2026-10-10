@@ -19,6 +19,10 @@
 namespace engine_core::terrain {
 
 inline constexpr int kChunkSize = 32;
+// How many cells past its own a chunk's mesh reads on every side (Surface
+// Nets' sample apron): a change to a cell can alter the meshes of chunks
+// this far away, and no farther.
+inline constexpr int kMeshReach = 2;
 inline constexpr int kChunkCells = kChunkSize * kChunkSize * kChunkSize;
 // The distance band either side of the surface, in cells.
 inline constexpr float kBandCells = 4.f;

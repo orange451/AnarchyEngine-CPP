@@ -355,6 +355,8 @@ private:
         terrain::ChunkCoord residency_camera{};
         // When the node list was last rebuilt, and update_store last ran.
         double nodes_ms = -1e300;
+        // An edit batch published since the node list was last rebuilt.
+        bool edit_published = false;
         double store_ms = -1e300;
     };
 

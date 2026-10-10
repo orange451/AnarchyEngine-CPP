@@ -14,7 +14,7 @@ namespace {
 // Samples run -2..33 (chunk-local): the chunk's own 0..31 plus a 2-sample
 // apron on each side, so a cell's gradient (needing samples +/-1 around its
 // vertex, which itself needs samples +/-1 around a cell) never runs dry.
-constexpr int kApron = 2;
+constexpr int kApron = kMeshReach;
 constexpr int kSampleMin = -kApron;
 constexpr int kSampleMax = kChunkSize - 1 + kApron;  // 33
 constexpr int kSamplesPerAxis = kChunkSize + 2 * kApron;  // 36

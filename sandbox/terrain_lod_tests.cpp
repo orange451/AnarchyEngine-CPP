@@ -19,6 +19,7 @@
 #include "terrain/VoxelSampler.hpp"
 #include "terrain/VoxelVolume.hpp"
 
+#include <cstring>
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
@@ -1927,4 +1928,43 @@ TEST_CASE("LB11 one edit's updates on a settled 4,096-chunk island's tree stay c
     // 5,461 nodes) once per update the tree changed in; LB12 times the
     // tree's own share.
     REQUIRE(total_ms / kEdits < 12.0);
+}
+
+TEST_CASE("LV1 a node built from only the chunks around it matches one built from the whole map", "[terrain][lod]") {
+    // A node job reads voxels only to re-shade its own vertices: the chunks
+    // in its box and one around it are all it needs, so a brush stroke need
+    // not copy a huge Terrain's whole chunk map for every rebuild.
+    VoxelVolume volume(1.f);
+    fill_rolling_slab(volume);
+    const auto full = std::make_shared<const ChunkMap>(volume.chunks());
+    for (const NodeKey& key : {NodeKey{1, 1, 0, 1}, NodeKey{2, 1, 0, 1}, NodeKey{3, 0, 0, 0}}) {
+        INFO("level " << key.level << " (" << key.x << ", " << key.y << ", " << key.z << ")");
+        LodInput input;
+        input.key = key;
+        input.voxel_size = volume.voxel_size();
+        for (const NodeKey& child_key : children_of(key)) {
+            const LodResult child = build_lod_node(volume, child_key, full);
+            if (child.mesh) {
+                input.children.push_back(child.mesh);
+                input.child_errors.push_back(child.error);
+                input.child_surface_index_counts.push_back(child_key.level == 0
+                                                               ? static_cast<std::uint32_t>(child.mesh->indices.size())
+                                                               : child.surface_index_count);
+            }
+        }
+        REQUIRE_FALSE(input.children.empty());
+        input.voxels = full;
+        const LodResult whole = build_node(input);
+        const std::shared_ptr<const ChunkMap> near = node_voxels(volume.chunks(), key);
+        REQUIRE(near->size() < full->size());
+        input.voxels = near;
+        const LodResult part = build_node(input);
+        REQUIRE(whole.mesh != nullptr);
+        REQUIRE(part.mesh != nullptr);
+        REQUIRE(part.mesh->indices == whole.mesh->indices);
+        REQUIRE(part.mesh->vertices.size() == whole.mesh->vertices.size());
+        for (std::size_t v = 0; v < whole.mesh->vertices.size(); ++v) {
+            REQUIRE(std::memcmp(&part.mesh->vertices[v], &whole.mesh->vertices[v], sizeof(whole.mesh->vertices[v])) == 0);
+        }
+    }
 }

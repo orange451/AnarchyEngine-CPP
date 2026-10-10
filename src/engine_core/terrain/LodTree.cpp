@@ -461,7 +461,25 @@ void LodTree::sort_residency_sets() {
             it = stale_.erase(it);
             continue;
         }
-        bucket(stale_by_level_, *it);
+        // Only a node built before can have let its children go (a child is
+        // dropped only under a built, current parent), so only its children
+        // may need asking back. A first build's ancestors (tens of thousands,
+        // never built) have their children still in RAM or on the way. The
+        // exception: an ancestor a warm open had to make (the store lacked
+        // it) over children it adopted out of RAM.
+        bool wants_children = node->built;
+        if (!wants_children && it->level >= 2) {
+            for (const NodeKey& child : children_of(*it)) {
+                const Node* c = find(child);
+                if (c != nullptr && c->persisted && !c->resident) {
+                    wants_children = true;
+                    break;
+                }
+            }
+        }
+        if (wants_children) {
+            bucket(stale_by_level_, *it);
+        }
         ++it;
     }
     if (stale_by_level_.size() < 2) stale_by_level_.resize(2);

@@ -19,7 +19,13 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <atomic>
+#include <cmath>
+#include <cstring>
+#include <map>
+#include <set>
+#include <tuple>
 #include <filesystem>
 #include <fstream>
 #include <optional>
@@ -762,4 +768,244 @@ TEST_CASE("TW-A5 a warm open's updates before a camera exists mesh nothing", "[t
     // Only chunks near the camera (in a corner of the slab), not the slab.
     REQUIRE(world.meshed_count() < static_cast<std::uint64_t>(kSlabChunks * kSlabChunks / 2));
     (void)footprint;
+}
+
+// ---- Brush feel: an edit shows the update its meshes land ----
+
+namespace {
+
+// The revision of the node the view holds for chunk coord at level 0, or 0.
+std::uint64_t shown_chunk_revision(const TerrainWorld& world, ChunkCoord coord) {
+    if (world.views().empty() || world.views()[0].nodes == nullptr) return 0;
+    for (const TerrainNodeView& node : *world.views()[0].nodes) {
+        if (node.key == NodeKey{0, coord.x, coord.y, coord.z}) return node.revision;
+    }
+    return 0;
+}
+
+}  // namespace
+
+TEST_CASE("TB1 an edit's new meshes are in the node list as soon as they land", "[terrain]") {
+    // The node list is rebuilt at most every kNodeListIntervalMs for LOD
+    // churn; a brush stroke must not wait for that.
+    SimRole role;
+    Game game;
+    Terrain& t = streaming_terrain(game);
+    REQUIRE_FALSE(t.edit_volume([&](VoxelVolume& v) { return v.fill(ball_at(16.f, 16.f, 16.f, 12.f), 0); }));
+    look_from(game, Vec3{16.f, 60.f, 16.f});
+    TerrainWorld world({}, 2);
+    double now = 0.0;
+    for (int i = 0; i < 400 && (world.first_build_remaining(t.id()) != 0 || world.jobs_in_flight(t.id()) != 0 || i < 20); ++i) {
+        world.update(game, now);
+        world.wait_idle();
+        now += 200.0;
+    }
+    world.update(game, now);
+    const ChunkCoord edited{0, 0, 0};
+    const std::uint64_t before = shown_chunk_revision(world, edited);
+    REQUIRE(before != 0);
+    // An edit right after a list rebuild: well inside the interval.
+    REQUIRE_FALSE(t.edit_volume([&](VoxelVolume& v) { return v.fill(ball_at(20.f, 26.f, 20.f, 3.f), 0); }));
+    bool shown = false;
+    for (int i = 0; i < 10 && !shown; ++i) {
+        now += 1.0;   // 10 updates, 10 ms: far less than kNodeListIntervalMs
+        world.update(game, now);
+        world.wait_idle();
+        shown = shown_chunk_revision(world, edited) != before;
+    }
+    REQUIRE(shown);
+}
+
+
+// ---- Brush feel: an edit re-meshes only the chunks whose meshes can change ----
+
+TEST_CASE("VD1 a small edit inside one chunk marks only that chunk dirty", "[terrain]") {
+    VoxelVolume volume(1.f);
+    REQUIRE_FALSE(volume.fill(ball_at(16.f, 16.f, 16.f, 12.f), 1));
+    std::vector<ChunkCoord> dirty;
+    volume.take_dirty(dirty);
+    // A hole of radius 3 at the chunk middle: its cells and band stay
+    // well clear of every face (a chunk's mesh reads 2 cells past it).
+    REQUIRE_FALSE(volume.subtract(ball_at(16.f, 16.f, 16.f, 3.f)));
+    dirty.clear();
+    volume.take_dirty(dirty);
+    REQUIRE(dirty.size() == 1u);
+    REQUIRE(dirty[0] == ChunkCoord{0, 0, 0});
+}
+
+TEST_CASE("VD2 every chunk an edit leaves clean meshes as it did before", "[terrain]") {
+    VoxelVolume volume(1.f);
+    REQUIRE_FALSE(volume.fill(ball_at(0.f, 0.f, 0.f, 40.f), 1));
+    std::vector<ChunkCoord> dirty;
+    volume.take_dirty(dirty);
+    // Edits on and near chunk borders, both signs, fill, subtract, and paint.
+    const Shape edits[] = {ball_at(31.f, 31.f, 31.f, 3.f), ball_at(-0.5f, 39.f, 5.f, 4.f),
+                           ball_at(33.f, -2.f, 30.f, 2.f), ball_at(-30.f, 20.f, -33.f, 5.f)};
+    int which = 0;
+    for (const Shape& edit : edits) {
+        // Meshes of every chunk around the island before the edit.
+        std::map<std::tuple<int, int, int>, ChunkMesh> before;
+        for (int z = -3; z <= 2; ++z)
+            for (int y = -3; y <= 2; ++y)
+                for (int x = -3; x <= 2; ++x)
+                    before[{x, y, z}] = surface_nets(mesh_input(volume, ChunkCoord{x, y, z}));
+        if (which % 3 == 0) REQUIRE_FALSE(volume.fill(edit, 3));
+        if (which % 3 == 1) REQUIRE_FALSE(volume.subtract(edit));
+        if (which % 3 == 2) REQUIRE_FALSE(volume.paint(edit, 4));
+        ++which;
+        dirty.clear();
+        volume.take_dirty(dirty);
+        std::set<std::tuple<int, int, int>> marked;
+        for (const ChunkCoord& c : dirty) marked.insert({c.x, c.y, c.z});
+        for (const auto& [key, mesh] : before) {
+            if (marked.count(key) != 0) continue;
+            const auto [x, y, z] = key;
+            INFO("edit " << which << ", chunk (" << x << ", " << y << ", " << z << ")");
+            const ChunkMesh now = surface_nets(mesh_input(volume, ChunkCoord{x, y, z}));
+            REQUIRE(now.positions.size() == mesh.positions.size());
+            REQUIRE(now.triangles == mesh.triangles);
+            REQUIRE(now.triangle_ids == mesh.triangle_ids);
+            if (now.render != nullptr) {
+                REQUIRE(mesh.render != nullptr);
+                REQUIRE(now.render->vertices.size() == mesh.render->vertices.size());
+                for (std::size_t v = 0; v < now.render->vertices.size(); ++v) {
+                    REQUIRE(std::memcmp(&now.render->vertices[v], &mesh.render->vertices[v],
+                                        sizeof(now.render->vertices[v])) == 0);
+                }
+            }
+        }
+    }
+}
+
+TEST_CASE("VD3 a single cell changed just past a chunk's border marks the chunks whose meshes read it", "[terrain]") {
+    // A flat ground with its surface at y 16 running through chunks x 0 and 1:
+    // chunk 0's mesh reads cells x -2..33, so a change at x 33 (2 past its
+    // last cell) or x -2 still alters its normals.
+    for (const int x : {33, 32, -1, -2}) {
+        VoxelVolume volume(1.f);
+        Shape ground;
+        ground.kind = Shape::Kind::Block;
+        ground.frame = matrix4_translation(0.f, 8.f, 16.f);
+        ground.size = Vec3{200.f, 16.f, 64.f};
+        REQUIRE_FALSE(volume.fill(ground, 1));
+        std::vector<ChunkCoord> dirty;
+        volume.take_dirty(dirty);
+        const ChunkMesh before = surface_nets(mesh_input(volume, ChunkCoord{0, 0, 0}));
+        REQUIRE(before.render != nullptr);
+        // Push the one cell at (x, 16, 16), on the surface, well into the air.
+        std::vector<float> distances{4.f};
+        std::vector<std::uint8_t> materials{0};
+        REQUIRE_FALSE(volume.write(CellCoord{x, 16, 16}, CellCoord{x, 16, 16}, distances, materials));
+        dirty.clear();
+        volume.take_dirty(dirty);
+        const ChunkMesh after = surface_nets(mesh_input(volume, ChunkCoord{0, 0, 0}));
+        bool same = after.render != nullptr && after.render->vertices.size() == before.render->vertices.size() &&
+                    after.triangles == before.triangles;
+        if (same) {
+            for (std::size_t v = 0; v < after.render->vertices.size() && same; ++v) {
+                same = std::memcmp(&after.render->vertices[v], &before.render->vertices[v],
+                                   sizeof(after.render->vertices[v])) == 0;
+            }
+        }
+        INFO("cell x " << x);
+        REQUIRE_FALSE(same);   // the setup does reach chunk 0's mesh
+        const bool marked = std::find(dirty.begin(), dirty.end(), ChunkCoord{0, 0, 0}) != dirty.end();
+        REQUIRE(marked);
+    }
+}
+
+// ---- Brush feel: Grow raises the ground by an amount, so stamps add up evenly ----
+
+namespace {
+
+// Flat ground of Id 1 with its surface at y = top (cells below solid).
+VoxelVolume flat_ground(float top) {
+    VoxelVolume volume(1.f);
+    Shape ground;
+    ground.kind = Shape::Kind::Block;
+    ground.frame = matrix4_translation(0.f, top - 16.f, 0.f);
+    ground.size = Vec3{256.f, 32.f, 256.f};
+    REQUIRE_FALSE(volume.fill(ground, 1));
+    return volume;
+}
+
+// The surface height in the column at (x, z): where the distance field
+// crosses zero going up, interpolated between cells.
+float surface_at(const VoxelVolume& volume, int x, int z) {
+    float previous = dequantize(volume.cell(CellCoord{x, -40, z}).distance, 1.f);
+    for (int y = -39; y <= 80; ++y) {
+        const float d = dequantize(volume.cell(CellCoord{x, y, z}).distance, 1.f);
+        if (previous < 0.f && d >= 0.f) {
+            return static_cast<float>(y - 1) + previous / (previous - d);
+        }
+        previous = d;
+    }
+    return -1000.f;
+}
+
+}  // namespace
+
+TEST_CASE("G1 grow raises the ground under the ball by about the amount, and nothing outside it", "[terrain]") {
+    VoxelVolume volume = flat_ground(10.f);
+    const float before_center = surface_at(volume, 0, 0);
+    const float before_outside = surface_at(volume, 12, 0);
+    REQUIRE_FALSE(volume.grow(Vec3{0.f, 10.f, 0.f}, 6.f, 1.f, 2));
+    REQUIRE(std::fabs(surface_at(volume, 0, 0) - (before_center + 1.f)) < 0.1f);
+    REQUIRE(surface_at(volume, 12, 0) == before_outside);
+    // Strength fades toward the rim: half way out it raised less than the middle.
+    REQUIRE(surface_at(volume, 4, 0) - before_center < 1.f);
+    REQUIRE(surface_at(volume, 4, 0) > before_center);
+}
+
+TEST_CASE("G2 a drag's overlapping stamps make an even ridge, not a climb", "[terrain]") {
+    // A stamp every half radius along x, each centred on the ground as it is
+    // now (as the tool does): the ridge's height must not grow along it.
+    VoxelVolume volume = flat_ground(10.f);
+    const float radius = 4.f;
+    for (float x = -40.f; x <= 40.f; x += radius * 0.5f) {
+        const float y = surface_at(volume, static_cast<int>(std::lround(x)), 0);
+        REQUIRE_FALSE(volume.grow(Vec3{x, y, 0.f}, radius, 0.5f, 1));
+    }
+    const float early = surface_at(volume, -30, 0);
+    const float late = surface_at(volume, 30, 0);
+    INFO("ridge at x -30: " << early << ", at x 30: " << late);
+    REQUIRE(early > 10.5f);                     // it did raise a ridge
+    REQUIRE(std::fabs(late - early) < 0.25f);   // the same height all along
+}
+
+TEST_CASE("G3 a negative amount lowers; new ground takes the material, old ground keeps its own", "[terrain]") {
+    VoxelVolume volume = flat_ground(10.f);
+    REQUIRE_FALSE(volume.grow(Vec3{0.f, 10.f, 0.f}, 6.f, -1.f, 2));
+    REQUIRE(std::fabs(surface_at(volume, 0, 0) - 9.f) < 0.1f);
+    REQUIRE_FALSE(volume.grow(Vec3{20.f, 10.f, 0.f}, 6.f, 1.5f, 2));
+    // The cell just above the old surface was air: it takes Id 2.
+    REQUIRE(volume.cell(CellCoord{20, 11, 0}).distance <= 0);
+    REQUIRE(volume.cell(CellCoord{20, 11, 0}).material == 2);
+    // Ground that was already solid keeps Id 1.
+    REQUIRE(volume.cell(CellCoord{20, 5, 0}).material == 1);
+}
+
+TEST_CASE("G4 holding grow in place raises one surface, never a shell above it", "[terrain]") {
+    // Cells far above the ground are stored at the band's edge ("this far or
+    // farther"); moving them with every stamp would bring far air down to
+    // zero long before the ground got there.
+    VoxelVolume volume = flat_ground(10.f);
+    for (int stamp = 0; stamp < 40; ++stamp) {
+        const float y = surface_at(volume, 0, 0);
+        REQUIRE_FALSE(volume.grow(Vec3{0.f, y, 0.f}, 8.f, 0.5f, 1));
+    }
+    for (const int x : {0, 2, 5}) {
+        int crossings = 0;
+        float previous = dequantize(volume.cell(CellCoord{x, -10, 0}).distance, 1.f);
+        for (int y = -9; y <= 80; ++y) {
+            const float d = dequantize(volume.cell(CellCoord{x, y, 0}).distance, 1.f);
+            crossings += (previous < 0.f) != (d < 0.f) ? 1 : 0;
+            previous = d;
+        }
+        INFO("column x " << x);
+        REQUIRE(crossings == 1);
+    }
+    // 40 stamps of half a unit: 20 units, no more (a jump to the ball rim is
+    // what far air brought down to zero looks like).
+    REQUIRE(std::fabs(surface_at(volume, 0, 0) - 30.f) < 1.f);
 }

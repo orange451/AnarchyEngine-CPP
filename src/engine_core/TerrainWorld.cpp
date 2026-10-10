@@ -114,6 +114,8 @@ void TerrainWorld::publish_batch(TerrainRecord& record, std::uint64_t id) {
     }
     TerrainRecord::EditBatch batch = std::move(batch_it->second);
     record.batches.erase(batch_it);
+    // The edit shows this update, not when the node list is next due.
+    record.edit_published = true;
     for (const terrain::ChunkCoord& coord : batch.members) {
         const auto member = record.chunk_batch.find(coord);
         if (member != record.chunk_batch.end() && member->second == id) {
@@ -591,16 +593,20 @@ void TerrainWorld::update_lod(InstanceId terrain_id, Terrain& terrain, TerrainRe
     if (builds.empty()) {
         return;
     }
-    // Spec decision 4: a snapshot of the chunk map (a copy of pointers to
-    // immutable chunks) for the node jobs, taken only when one is queued and
-    // kept until the voxels change: copying a huge Terrain's map (tens of
-    // thousands of entries) every update was most of an update.
-    if (record.voxels_snapshot == nullptr || record.voxels_snapshot_revision != volume.revision()) {
-        PROFILE_SCOPE("Terrain voxel snapshot", profiler::Group::Engine);
-        record.voxels_snapshot = std::make_shared<const terrain::ChunkMap>(volume.chunks());
-        record.voxels_snapshot_revision = volume.revision();
-    }
-    const std::shared_ptr<const terrain::ChunkMap>& voxels = record.voxels_snapshot;
+    // Spec decision 4: node jobs get the voxels as a snapshot (pointers to
+    // immutable chunks). Each takes only the chunks around its own box
+    // (node_voxels): a brush changes the voxels every frame, and copying a
+    // huge Terrain's whole map for each round of rebuilds hitched the
+    // stroke. A node whose box covers most of the map shares one copy of the
+    // whole map instead, kept until the voxels change.
+    const auto whole_map = [&]() -> const std::shared_ptr<const terrain::ChunkMap>& {
+        if (record.voxels_snapshot == nullptr || record.voxels_snapshot_revision != volume.revision()) {
+            PROFILE_SCOPE("Terrain voxel snapshot", profiler::Group::Engine);
+            record.voxels_snapshot = std::make_shared<const terrain::ChunkMap>(volume.chunks());
+            record.voxels_snapshot_revision = volume.revision();
+        }
+        return record.voxels_snapshot;
+    };
     for (terrain::NodeBuildRequest& build : builds) {
         float job_distance = 0.f;
         if (has_camera) {
@@ -609,7 +615,13 @@ void TerrainWorld::update_lod(InstanceId terrain_id, Terrain& terrain, TerrainRe
             const Vec3 center{(min.x + max.x) * 0.5f, (min.y + max.y) * 0.5f, (min.z + max.z) * 0.5f};
             job_distance = distance(matrix4_point(transform, center), camera_pos);
         }
-        build.input.voxels = voxels;
+        const std::int64_t span = (std::int64_t{1} << build.input.key.level) + 2;
+        if (span * span * span <= static_cast<std::int64_t>(volume.chunks().size())) {
+            PROFILE_SCOPE("Terrain node voxels", profiler::Group::Engine);
+            build.input.voxels = terrain::node_voxels(volume.chunks(), build.input.key);
+        } else {
+            build.input.voxels = whole_map();
+        }
         mesher_.queue_node(terrain_id, build.revision, std::move(build.input), job_distance);
     }
 }
@@ -882,8 +894,11 @@ void TerrainWorld::update(DataModel& game, double now_ms) {
             publish_chunks(record);
         }
         // Rebuilt at most every kNodeListIntervalMs (the tree's changed flag
-        // waits until then), since the list covers every node.
-        const bool list_due = !has_camera || now_ms - record.nodes_ms >= kNodeListIntervalMs;
+        // waits until then), since the list covers every node in RAM; but
+        // at once when an edit has published, so a brush's work shows the
+        // update its meshes land rather than up to an interval later.
+        const bool list_due = !has_camera || record.edit_published || now_ms - record.nodes_ms >= kNodeListIntervalMs;
+        record.edit_published = false;
         if (fresh || (list_due && record.tree->take_changed())) {
             PROFILE_SCOPE("Terrain node list", profiler::Group::Engine);
             if (fresh) {

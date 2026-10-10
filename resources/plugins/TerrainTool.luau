@@ -346,27 +346,118 @@ local function grid_patch(center: Vector3)
 	end
 end
 
-local function apply_ball()
+local function apply_ball(at: Vector3)
 	local t = terrain()
-	if t == nil or hit == nil then
+	if t == nil then
 		return
 	end
 	local radius = size / 2
-	local at, normal = hit.position, hit.normal
 	if tool == "Grow" then
-		-- Mostly sunk below the surface, so each application raises (or, with
-		-- Shift, lowers) the ground by a fraction of the radius rather than
-		-- stamping a whole ball.
-		local sink = radius * (1 - 0.3 * strength)
-		if mouse.Shift then
-			t:SubtractBall(at + normal * sink, radius)
-		else
-			t:FillBall(at - normal * sink, radius, material(t))
-		end
+		-- Moves the surface by a small amount rather than placing a ball, so
+		-- overlapping stamps add up evenly: a drag leaves a ridge of one
+		-- height, and a held brush rises at a steady rate.
+		local amount = math.clamp(0.25 * radius * strength, 0.05, 1)
+		t:GrowBall(at, radius, if mouse.Shift then -amount else amount, material(t))
 	elseif tool == "Smooth" then
 		t:SmoothBall(at, radius, strength)
 	elseif tool == "Paint" then
 		t:PaintBall(at, radius, if mouse.Shift then nil else material(t))
+	end
+end
+
+-- Strokes ------------------------------------------------------------------------
+-- A held Grow, Smooth, or Paint follows the pointer's footprint on the plane
+-- of the surface first pressed, and each stamp lands on the ground in that
+-- footprint's column. Picking along the view ray instead hit the mound the
+-- stroke had just raised (or the hole it dug), so a drag climbed its own
+-- bump toward the camera rather than drawing along the ground. Stamps are
+-- spaced evenly along the path however fast the pointer moves, and repeat
+-- in place while it rests.
+
+-- The plane the stroke started on, the footprint of the last stamp, and how
+-- far above the plane the stroke has raised the ground (where a column's
+-- ground search starts).
+local strokePoint = Vector3.zero
+local strokeNormal = Vector3.yAxis
+local lastFoot = Vector3.zero
+local strokeTop = 0
+-- At most this many stamps in one frame, so a fling across the map stays cheap.
+local MAX_STAMPS_PER_FRAME = 24
+
+-- Where the pointer's ray meets the stroke's plane, or nil.
+local function footprint(): Vector3?
+	return ray_plane(ray(), strokePoint, strokeNormal)
+end
+
+-- The ground in foot's column: cast down the stroke's normal from above
+-- anything the stroke has raised. Falls back to the plane itself.
+local function column(foot: Vector3): (Vector3, Vector3)
+	local t = terrain()
+	if t == nil then
+		return foot, strokeNormal
+	end
+	local above = strokeTop + size * 2
+	local params = RaycastParams.new()
+	params.FilterType = Enum.RaycastFilterType.Include
+	params.FilterDescendantsInstances = { t }
+	local from = foot + strokeNormal * above
+	local result = workspace:Raycast(from, -strokeNormal * (above + size * 4), params)
+	if result == nil then
+		return foot, strokeNormal
+	end
+	return result.Position, result.Normal
+end
+
+local function stamp(foot: Vector3)
+	local at, normal = column(foot)
+	apply_ball(at)
+	-- A later column search must start above what this stamp raised.
+	strokeTop = math.max(strokeTop, (at - strokePoint):Dot(strokeNormal) + size)
+	hit = { position = at, normal = normal }
+	lastFoot = foot
+end
+
+local function begin_brush()
+	pick()
+	if hit == nil then
+		return false
+	end
+	strokePoint = hit.position
+	strokeNormal = hit.normal
+	strokeTop = 0
+	stamp(strokePoint)
+	return true
+end
+
+-- One frame of a held stroke: stamps along the path from the last footprint
+-- to the pointer's, or one in place once APPLY_SECONDS have passed at rest.
+local function continue_brush(dt: number)
+	local foot = footprint()
+	if foot == nil then
+		return
+	end
+	-- A quarter of the ball's radius: the stamps overlap enough for an even ridge.
+	local spacing = math.max(size * 0.125, 0.25)
+	local delta = foot - lastFoot
+	local distance = delta.Magnitude
+	if distance >= spacing then
+		local count = math.floor(distance / spacing)
+		if count > MAX_STAMPS_PER_FRAME then
+			spacing = distance / MAX_STAMPS_PER_FRAME
+			count = MAX_STAMPS_PER_FRAME
+		end
+		local step = delta.Unit * spacing
+		local from = lastFoot
+		for i = 1, count do
+			stamp(from + step * i)
+		end
+		sinceApply = 0
+		return
+	end
+	sinceApply += dt
+	if sinceApply >= APPLY_SECONDS then
+		sinceApply = 0
+		stamp(lastFoot)
 	end
 end
 
@@ -659,7 +750,8 @@ mouse.Move:Connect(function()
 		elseif drawing == "Height" then
 			update_height()
 		end
-	else
+	elseif not held then
+		-- While a stroke is held, its stamps place the cursor.
 		pick()
 	end
 	redraw()
@@ -679,11 +771,13 @@ mouse.Button1Down:Connect(function()
 		redraw()
 		return
 	end
-	pick()
 	begin_stroke()
 	held = true
 	sinceApply = 0
-	apply_ball()
+	if not begin_brush() then
+		held = false
+		end_stroke()
+	end
 	redraw()
 end)
 
@@ -702,18 +796,13 @@ mouse.Button1Up:Connect(function()
 	redraw()
 end)
 
--- Grow, Smooth, and Paint keep applying while the button is held.
+-- Grow, Smooth, and Paint keep applying while the button is held: every frame,
+-- along the path the pointer took.
 RunService.RenderStepped:Connect(function(dt)
 	if not active or not held then
 		return
 	end
-	sinceApply += dt
-	if sinceApply < APPLY_SECONDS then
-		return
-	end
-	sinceApply = 0
-	pick()
-	apply_ball()
+	continue_brush(dt)
 	redraw()
 end)
 

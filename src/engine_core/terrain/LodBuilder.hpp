@@ -100,4 +100,10 @@ float target_error(int level, float voxel_size);
 // Callable from any thread (voxels, like children, is only ever read).
 LodResult build_node(const LodInput& input);
 
+// The chunks of chunks a build of key re-shades from: those in its box and
+// one chunk around it (its vertices, skirts, and gradient taps all fall
+// there). Far fewer than a huge Terrain's whole map, so each node job can
+// carry its own instead of a copy of the map. SimulationThread (it reads chunks).
+std::shared_ptr<const ChunkMap> node_voxels(const ChunkMap& chunks, const NodeKey& key);
+
 }  // namespace engine_core::terrain

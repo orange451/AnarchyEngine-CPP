@@ -71,6 +71,13 @@ public:
     // cell it turns solid takes its solid neighbours' Id (a TerrainMaterial's
     // over the default's): its Id as air meant nothing.
     std::optional<std::string> smooth(Vec3 center, float radius, float strength);
+    // Within a ball, raises the surface by amount units (negative lowers
+    // it), full in the inner half and fading to nothing at the rim.
+    // It moves the surface rather than placing a shape, so overlapping
+    // stamps add up evenly: a brush dragged over the ground leaves a ridge of
+    // one height. A cell it turns solid takes material. At most one cell per
+    // call: larger amounts are cut to one cell.
+    std::optional<std::string> grow(Vec3 center, float radius, float amount, std::uint8_t material);
     std::optional<std::string> replace(CellCoord min, CellCoord max, std::uint8_t from, std::uint8_t to);
     // Every solid or band cell with Id from takes Id to, across every chunk,
     // with no size limit. Chunks whose Id mask lacks from are skipped
@@ -99,6 +106,8 @@ private:
     void edit(CellCoord min, CellCoord max, Change change);
     // Marks coord and its 26 neighbors dirty.
     void mark_dirty(ChunkCoord coord);
+    // Marks dirty every chunk whose mesh reads one of cells lo..hi.
+    void mark_dirty_cells(CellCoord lo, CellCoord hi);
 
     float voxel_size_;
     ChunkMap chunks_;

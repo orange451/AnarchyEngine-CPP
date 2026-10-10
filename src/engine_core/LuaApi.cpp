@@ -1179,6 +1179,13 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
         "frame or two later.",
         "nil", false,
         {P("center", "Vector3"), P("radius", "number"), P("strength", "number"), P("space", "Enum.TransformSpace?")});
+    add("Terrain", "GrowBall",
+        "Raises the surface in a ball by amount units (negative lowers it), fully in its inner half and fading to its "
+        "rim; ground it makes takes material. Repeated calls add up evenly, so a brush dragged over the ground leaves "
+        "a ridge of one height. At most one voxel per call. Meshes and colliders follow a frame or two later.",
+        "nil", false,
+        {P("center", "Vector3"), P("radius", "number"), P("amount", "number"), P("material", "TerrainMaterial?"),
+         P("space", "Enum.TransformSpace?")});
     add("Terrain", "PaintBall",
         "Sets the material of the solid cells in a ball, keeping their shape. Meshes and colliders follow a frame or "
         "two later.",

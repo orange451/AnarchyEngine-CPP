@@ -883,20 +883,23 @@ TEST_CASE("LT12 a bomb by a close camera: no frame draws its region coarser or w
         ++frames;
     };
 
-    // The bomb: a ball of radius 8 out of the top of chunk (4, 1, 4), right under the camera.
+    // The bomb: a ball of radius 8 at the corner of chunks x 3-4, z 3-4, near
+    // the camera, reaching up into the air chunks above (y 2): an edit
+    // re-meshes only the chunks whose meshes read a cell it changed, which
+    // here are 4 surface chunks and the 4 air ones over them.
     hold_air = true;
     Shape ball;
-    ball.center = Vec3{4.5f * span, 48.f, 4.5f * span};
+    ball.center = Vec3{4.f * span, 52.f, 4.f * span};
     ball.radius = 8.f;
     REQUIRE_FALSE(t.edit_volume([&](VoxelVolume& v) { return v.subtract(ball); }));
     const std::uint64_t meshed = world.meshed_count();
-    // Until the 18 surface chunks of its 27 have landed (the 9 air ones held), then a few frames more.
-    for (int i = 0; i < 5000 && world.meshed_count() < meshed + 18; ++i) {
+    // Until the 4 surface chunks of its 8 have landed (the 4 air ones held), then a few frames more.
+    for (int i = 0; i < 5000 && world.meshed_count() < meshed + 4; ++i) {
         frame();
         check("surface chunks landing");
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
-    REQUIRE(world.meshed_count() >= meshed + 18);
+    REQUIRE(world.meshed_count() >= meshed + 4);
     for (int i = 0; i < 10; ++i) {
         frame();
         check("air chunks held");
@@ -1294,11 +1297,14 @@ TEST_CASE("LT17 an empty chunk under a body with an edit in flight is meshed for
     double now = 0.0;
     settle_lod(world, game, now);
 
+    // A ball added just under (2, 1, 2): its band reaches y 31, so the
+    // chunk above (whose mesh reads cells from y 30) is re-meshed, yet stays
+    // air. An edit re-meshes only the chunks whose meshes read a cell it changed.
     const auto dig = [&] {
         Shape ball;
-        ball.center = Vec3{2.5f * kChunkSize, 16.f, 2.5f * kChunkSize};
+        ball.center = Vec3{2.5f * kChunkSize, 24.f, 2.5f * kChunkSize};
         ball.radius = 3.f;
-        REQUIRE_FALSE(t.edit_volume([&](VoxelVolume& v) { return v.subtract(ball); }));
+        REQUIRE_FALSE(t.edit_volume([&](VoxelVolume& v) { return v.fill(ball, 1); }));
         world.update(game, now);   // the edit's jobs are queued, not landed
     };
     // (2, 1, 2): air above the dig, so meshed with nothing to collide with.
@@ -1313,10 +1319,11 @@ TEST_CASE("LT17 an empty chunk under a body with an edit in flight is meshed for
     world.wait_idle();
     now += 16.0;
     world.update(game, now);
-    Shape bigger;
-    bigger.center = Vec3{2.5f * kChunkSize, 16.f, 2.5f * kChunkSize};
-    bigger.radius = 5.f;
-    REQUIRE_FALSE(t.edit_volume([&](VoxelVolume& v) { return v.subtract(bigger); }));
+    // Another, a little bigger, still with (2, 1, 2) air.
+    Shape raised;
+    raised.center = Vec3{2.5f * kChunkSize, 24.f, 2.5f * kChunkSize};
+    raised.radius = 3.5f;
+    REQUIRE_FALSE(t.edit_volume([&](VoxelVolume& v) { return v.fill(raised, 1); }));
     world.update(game, now);
     for (int sync = 0; sync < 5; ++sync) REQUIRE(world.build_colliders_now(game, t.id(), under_body));
     REQUIRE(world.sync_meshed_count() == before + 2);

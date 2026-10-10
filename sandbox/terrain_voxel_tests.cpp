@@ -194,12 +194,12 @@ TEST_CASE("V5 read then write round-trips exactly", "[terrain]") {
     }
 }
 
-TEST_CASE("V6 an edit dirties its chunks and their neighbors", "[terrain]") {
+TEST_CASE("V6 an edit dirties only the chunks whose meshes read a cell it changed", "[terrain]") {
     VoxelVolume volume;
     REQUIRE_FALSE(volume.fill(ball_at(16.f, 16.f, 16.f, 2.f), 1));
     std::vector<ChunkCoord> dirty;
     volume.take_dirty(dirty);
-    REQUIRE(dirty.size() == 27u);
+    REQUIRE(dirty.size() == 1u);   // radius 2 at the chunk middle: nowhere near a face
     volume.take_dirty(dirty);
     REQUIRE(dirty.empty());
 }

@@ -1,6 +1,7 @@
 #include "terrain/VoxelVolume.hpp"
 
 #include <algorithm>
+#include <limits>
 #include <cmath>
 #include <utility>
 
@@ -176,6 +177,12 @@ void VoxelVolume::edit(CellCoord min, CellCoord max, Change change) {
     // Set only when some chunk actually changes, so a no-op edit (nothing in
     // range, or every cell already at its new value) leaves revision_ alone.
     bool changed = false;
+    // The box of cells that actually changed: only meshes that read one of
+    // them need building again (mark_dirty_cells).
+    CellCoord changed_lo{std::numeric_limits<int>::max(), std::numeric_limits<int>::max(),
+                         std::numeric_limits<int>::max()};
+    CellCoord changed_hi{std::numeric_limits<int>::min(), std::numeric_limits<int>::min(),
+                         std::numeric_limits<int>::min()};
     for (int cz = c0.z; cz <= c1.z; ++cz) {
         for (int cy = c0.y; cy <= c1.y; ++cy) {
             for (int cx = c0.x; cx <= c1.x; ++cx) {
@@ -230,6 +237,10 @@ void VoxelVolume::edit(CellCoord min, CellCoord max, Change change) {
                                 copy = old->clone_dense();
                             }
                             copy->set_dense_at(index, after);
+                            changed_lo = CellCoord{std::min(changed_lo.x, x), std::min(changed_lo.y, y),
+                                                   std::min(changed_lo.z, z)};
+                            changed_hi = CellCoord{std::max(changed_hi.x, x), std::max(changed_hi.y, y),
+                                                   std::max(changed_hi.z, z)};
                             if (after.distance != kAirDistance) {
                                 written_mask[after.material >> 6] |= 1ull << (after.material & 63);
                             }
@@ -263,13 +274,31 @@ void VoxelVolume::edit(CellCoord min, CellCoord max, Change change) {
                         extent_.add(coord);
                     }
                 }
-                mark_dirty(coord);
                 changed = true;
             }
         }
     }
     if (changed) {
+        mark_dirty_cells(changed_lo, changed_hi);
         ++revision_;
+    }
+}
+
+void VoxelVolume::mark_dirty_cells(CellCoord lo, CellCoord hi) {
+    // A chunk's mesh reads cells from kMeshReach before its own first cell
+    // to kMeshReach past its last (Surface Nets' sample apron), so a change
+    // to cells lo..hi reaches exactly the chunks holding lo - reach .. hi + reach.
+    // Marking every neighbour of each changed chunk instead re-meshed 27
+    // chunks for a small stroke inside one, which kept a brush from showing
+    // its work every frame.
+    const ChunkCoord c0 = chunk_of(lo.x - kMeshReach, lo.y - kMeshReach, lo.z - kMeshReach);
+    const ChunkCoord c1 = chunk_of(hi.x + kMeshReach, hi.y + kMeshReach, hi.z + kMeshReach);
+    for (int z = c0.z; z <= c1.z; ++z) {
+        for (int y = c0.y; y <= c1.y; ++y) {
+            for (int x = c0.x; x <= c1.x; ++x) {
+                dirty_.insert(ChunkCoord{x, y, z});
+            }
+        }
     }
 }
 
@@ -435,6 +464,109 @@ std::optional<std::string> VoxelVolume::smooth(Vec3 center, float radius, float 
         return std::nullopt;
     }
     return write(min, max, out, out_materials);
+}
+
+std::optional<std::string> VoxelVolume::grow(Vec3 center, float radius, float amount, std::uint8_t material) {
+    if (!(radius > 0.f) || !std::isfinite(amount) || amount == 0.f) {
+        return std::nullopt;
+    }
+    const float vs = voxel_size_;
+    const float band = kBandCells * vs;
+    // At most a cell per call, so one neighbour pass (below) keeps the band
+    // whole as the surface moves.
+    const float shift = std::clamp(amount, -vs, vs);
+    // The ball's cells, and one more on every side for their neighbours.
+    const double reach = std::ceil(static_cast<double>(radius) / vs) + 1.0;
+    const double middle[3] = {std::round(static_cast<double>(center.x) / vs),
+                              std::round(static_cast<double>(center.y) / vs),
+                              std::round(static_cast<double>(center.z) / vs)};
+    for (const double m : middle) {
+        // Also refused for NaN, which fails both comparisons.
+        if (!(m - reach >= -kMaxBoundCell && m + reach <= kMaxBoundCell)) {
+            return std::string(kTooLarge);
+        }
+    }
+    const int r = static_cast<int>(reach);
+    const CellCoord c{static_cast<int>(middle[0]), static_cast<int>(middle[1]), static_cast<int>(middle[2])};
+    const CellCoord min{c.x - r, c.y - r, c.z - r};
+    const CellCoord max{c.x + r, c.y + r, c.z + r};
+    std::vector<float> distances;
+    std::vector<std::uint8_t> materials;
+    if (auto why = read(min, max, distances, materials)) {
+        return why;
+    }
+    const int nx = max.x - min.x + 1;
+    const int ny = max.y - min.y + 1;
+    const int nz = max.z - min.z + 1;
+    auto at = [&](int x, int y, int z) { return (static_cast<std::size_t>(z) * ny + y) * nx + x; };
+    auto weight_at = [&](int x, int y, int z) {
+        const float dx = (min.x + x) * vs - center.x;
+        const float dy = (min.y + y) * vs - center.y;
+        const float dz = (min.z + z) * vs - center.z;
+        const float d = std::sqrt(dx * dx + dy * dy + dz * dz);
+        return d > radius ? 0.f : std::min(1.f, 2.f * (1.f - d / radius));
+    };
+    // Moving the surface by s moves every distance near it by s, but a cell
+    // stored at the band's edge only says "this far or farther": moving it
+    // too would, stamp after stamp, carry far air down to zero (a floating
+    // shell) or far solid up to it. So cells inside the band move, and
+    // cells at its edge are worked out again from their moved neighbours.
+    std::vector<float> out = distances;
+    const float edge = band - 0.5f * dequantize(1, vs);
+    for (int z = 1; z < nz - 1; ++z) {
+        for (int y = 1; y < ny - 1; ++y) {
+            for (int x = 1; x < nx - 1; ++x) {
+                const float w = weight_at(x, y, z);
+                const std::size_t self = at(x, y, z);
+                if (w > 0.f && std::fabs(distances[self]) < edge) {
+                    out[self] = distances[self] - shift * w;
+                }
+            }
+        }
+    }
+    const int steps[6][3] = {{1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}};
+    std::vector<float> settled = out;
+    for (int z = 1; z < nz - 1; ++z) {
+        for (int y = 1; y < ny - 1; ++y) {
+            for (int x = 1; x < nx - 1; ++x) {
+                const std::size_t self = at(x, y, z);
+                if (weight_at(x, y, z) <= 0.f || std::fabs(distances[self]) < edge) {
+                    continue;
+                }
+                if (distances[self] > 0.f) {
+                    // Air at the edge: no nearer than a moved neighbour plus a cell.
+                    float nearest = band;
+                    for (const auto& s : steps) {
+                        nearest = std::min(nearest, out[at(x + s[0], y + s[1], z + s[2])] + vs);
+                    }
+                    settled[self] = std::max(nearest, 0.f) < band ? nearest : distances[self];
+                } else {
+                    float deepest = -band;
+                    for (const auto& s : steps) {
+                        deepest = std::max(deepest, out[at(x + s[0], y + s[1], z + s[2])] - vs);
+                    }
+                    settled[self] = std::min(deepest, 0.f) > -band ? deepest : distances[self];
+                }
+            }
+        }
+    }
+    bool changed = false;
+    std::vector<std::uint8_t> out_materials = materials;
+    for (std::size_t i = 0; i < settled.size(); ++i) {
+        if (quantize(settled[i], vs) == quantize(distances[i], vs)) {
+            continue;
+        }
+        changed = true;
+        // A cell this turns solid (judged as stored: just above 0 rounds to
+        // 0, which counts as solid) takes the grown material.
+        if (quantize(distances[i], vs) > 0 && quantize(settled[i], vs) <= 0) {
+            out_materials[i] = material;
+        }
+    }
+    if (!changed) {
+        return std::nullopt;
+    }
+    return write(min, max, settled, out_materials);
 }
 
 std::optional<std::string> VoxelVolume::replace(CellCoord min, CellCoord max, std::uint8_t from, std::uint8_t to) {

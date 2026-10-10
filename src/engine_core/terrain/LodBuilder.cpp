@@ -845,4 +845,37 @@ LodResult build_node(const LodInput& input) {
     return result;
 }
 
+std::shared_ptr<const ChunkMap> node_voxels(const ChunkMap& chunks, const NodeKey& key) {
+    const std::int64_t side = std::int64_t{1} << key.level;
+    const std::int64_t lo[3] = {key.x * side - 1, key.y * side - 1, key.z * side - 1};
+    const std::int64_t hi[3] = {(key.x + 1) * side, (key.y + 1) * side, (key.z + 1) * side};
+    const auto inside = [&](const ChunkCoord& c) {
+        return c.x >= lo[0] && c.x <= hi[0] && c.y >= lo[1] && c.y <= hi[1] && c.z >= lo[2] && c.z <= hi[2];
+    };
+    auto out = std::make_shared<ChunkMap>();
+    const std::int64_t span = side + 2;
+    // Look each coordinate up while the box is small; past the map's own
+    // size, filter the map instead.
+    if (span * span * span <= static_cast<std::int64_t>(chunks.size())) {
+        for (std::int64_t z = lo[2]; z <= hi[2]; ++z) {
+            for (std::int64_t y = lo[1]; y <= hi[1]; ++y) {
+                for (std::int64_t x = lo[0]; x <= hi[0]; ++x) {
+                    const ChunkCoord c{static_cast<int>(x), static_cast<int>(y), static_cast<int>(z)};
+                    const auto found = chunks.find(c);
+                    if (found != chunks.end()) {
+                        out->emplace(c, found->second);
+                    }
+                }
+            }
+        }
+    } else {
+        for (const auto& [coord, chunk] : chunks) {
+            if (inside(coord)) {
+                out->emplace(coord, chunk);
+            }
+        }
+    }
+    return out;
+}
+
 }  // namespace engine_core::terrain

@@ -1842,7 +1842,12 @@ struct PhysicsWorld::Impl {
     void make_brush_shape(DataModel& game, Brush& brush, Body& record) {
         drop_shape(record);
         record.scale = scale_for(game, record.driven);
-        record.center = Vec3{};
+        // The Brush's solid is placed by its own faces, not by a Prefab, but
+        // recenter() compares these against the driven GameObject's Prefab:
+        // record them as make_object_shape does, or every move remakes the hull.
+        record.center = center_for(game, record.driven);
+        const GameObject* driven = record.driven != 0 ? game.game_object(record.driven) : nullptr;
+        record.prefab = driven != nullptr ? driven->prefab_guid() : std::string();
         if (!brush.can_collide()) {
             record.volume = 0.f;
             return;

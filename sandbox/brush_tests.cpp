@@ -1,14 +1,18 @@
 // The Brush instance: its faces, saving, undo, Stop, the Lua API, physics,
 // raycasts, and the snapshot draws BrushVisuals makes.
 
+#include "AssetInstances.hpp"
 #include "Brush.hpp"
 #include "BrushVisuals.hpp"
+#include "GameObject.hpp"
+#include "MeshShapes.hpp"
 #include "PhysicsWorld.hpp"
 #include "Project.hpp"
 #include "PropertyBag.hpp"
 #include "SnapshotPump.hpp"
 #include "physics_rig.hpp"
 #include "support.hpp"
+#include "amesh.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -311,4 +315,56 @@ TEST_CASE("BR1 anchored brushes bake into cells; only edited cells rebake", "[br
                                     [&](const VisualBrushDraw& d) { return d.owner == brushes[1]->id(); });
     REQUIRE(alone != draws.end());
     REQUIRE(alone->transparency == 0.5f);
+}
+
+namespace {
+
+LuaSlot slot_of(InstanceId id) {
+    LuaSlot slot;
+    slot.kind = LuaSlot::Kind::Instance;
+    slot.id = id;
+    return slot;
+}
+
+// A 2 by 2 by 2 box whose bottom is at the Mesh's origin: its middle is (0, 1, 0).
+void box_above_origin(anarchy::amesh::Data& data) { add_box(data, Vec3{2.f, 2.f, 2.f}, Vec3{0.f, 1.f, 0.f}); }
+
+}  // namespace
+
+TEST_CASE("BP7 a Brush under a GameObject with an off-centre Prefab keeps its hull across moves", "[brush]") {
+    PhysicsRig rig;
+    rig.floor();
+    Game& game = rig.game;
+    // A Prefab whose Model's Mesh is not centred on the origin, so its
+    // origin_offset is non-zero and center_for() is never Vec3{}.
+    Mesh& mesh = game.create<Mesh>();
+    game.set_parent(mesh.id(), game.service("Meshes"));
+    Prefab& prefab = game.create<Prefab>();
+    game.set_parent(prefab.id(), game.service("Prefabs"));
+    Model& model = game.create<Model>();
+    game.set_parent(model.id(), prefab.id());
+    REQUIRE_FALSE(model.set_reference(Model::kMeshReference, slot_of(mesh.id())));
+
+    GameObject& part = game.create<GameObject>();
+    part.set_transform(at(0.f, 2.f, 0.f));
+    REQUIRE_FALSE(part.set_prefab(slot_of(prefab.id())));
+    game.set_parent(part.id(), workspace_of(game));
+    // A Brush whose parent is a GameObject drives it.
+    Brush& brush = game.create<Brush>();
+    game.set_parent(brush.id(), part.id());
+    REQUIRE(brush.anchored());
+
+    rig.play();
+    REQUIRE_FALSE(mesh.edit_geometry(box_above_origin));
+    REQUIRE(prefab.origin_offset().y != 0.f);
+    rig.steps(1);
+    const int made = rig.physics.shapes_made(brush.id());
+    REQUIRE(made >= 1);
+    // Someone else moves the GameObject each step, as a script or a drag would.
+    for (int step = 0; step < 30; ++step) {
+        part.set_transform(at(0.f, 2.f + 0.01f * static_cast<float>(step), 0.f));
+        rig.steps(1);
+    }
+    // A move is not a reason to clip the hull again.
+    REQUIRE(rig.physics.shapes_made(brush.id()) == made);
 }

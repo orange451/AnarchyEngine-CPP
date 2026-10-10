@@ -102,6 +102,12 @@ struct LuaField {
     // Never a row in the Properties panel, though scripts, the command line,
     // and MCP read and write it. Archivable is one.
     bool hidden = false;
+    // The Properties group the field shows under, named by the latest
+    // lua_group above it in its register_lua_class array. Null shows it
+    // under "Data".
+    const char* group = nullptr;
+    // A lua_group marker. register_lua_class reads it and does not keep it.
+    bool group_marker = false;
     // A service's own signal, found by tag through ScriptRuntime::host_signal
     // (HostSignal); its handlers get whatever values the event carries.
     bool host_signal = false;
@@ -170,6 +176,15 @@ inline LuaField lua_host_signal(const char* name, HostSignal tag) {
     field.type_name = "Signal";
     field.tag = static_cast<int>(tag);
     field.host_signal = true;
+    return field;
+}
+
+// A marker for a register_lua_class array: the fields after it, up to the
+// next marker, show under the Properties group `name`, in array order.
+inline LuaField lua_group(const char* name) {
+    LuaField field;
+    field.name = name;
+    field.group_marker = true;
     return field;
 }
 

@@ -23,6 +23,7 @@
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -102,6 +103,76 @@ void RegisterProbe() {
         engine_core::lua_property("Flag", "boolean", true, ReadFlag, WriteFlag),
     };
     engine_core::register_lua_class("Probe", "DataModel", fields, 2);
+}
+
+// Two classes with groups. GroupKid adds to GroupBase's "Look", registers
+// Alpha again under "Extra", and has one field with no group.
+class GroupBase : public Probe {
+public:
+    using Probe::Probe;
+    const char* class_name() const override { return "GroupBase"; }
+};
+
+class GroupKid : public Probe {
+public:
+    using Probe::Probe;
+    const char* class_name() const override { return "GroupKid"; }
+};
+
+void RegisterGroups() {
+    static bool done = false;
+    if (done) {
+        return;
+    }
+    done = true;
+    using engine_core::lua_group;
+    using engine_core::lua_property;
+    const engine_core::LuaField base[] = {
+        lua_group("Look"),
+        lua_property("Zeta", "number", true, ReadSpeed, WriteSpeed),
+        lua_property("Alpha", "number", true, ReadSpeed, WriteSpeed),
+        lua_group("Feel"),
+        lua_property("Mid", "boolean", true, ReadFlag, WriteFlag),
+    };
+    engine_core::register_lua_class("GroupBase", "DataModel", base, static_cast<int>(std::size(base)));
+    const engine_core::LuaField kid[] = {
+        lua_property("Loose", "number", true, ReadSpeed, WriteSpeed),
+        lua_group("Look"),
+        lua_property("Kappa", "number", true, ReadSpeed, WriteSpeed),
+        lua_group("Extra"),
+        lua_property("Alpha", "number", true, ReadSpeed, WriteSpeed),
+        lua_property("Beta", "number", true, ReadSpeed, WriteSpeed),
+    };
+    engine_core::register_lua_class("GroupKid", "GroupBase", kid, static_cast<int>(std::size(kid)));
+}
+
+const char* GroupOf(const std::vector<engine_core::LuaField>& fields, const char* name) {
+    for (const engine_core::LuaField& field : fields) {
+        if (field.name != nullptr && std::string_view(field.name) == name) {
+            return field.group != nullptr ? field.group : "";
+        }
+    }
+    return "missing";
+}
+
+void TestGroupMarkersRegister() {
+    RegisterGroups();
+    std::vector<engine_core::LuaField> members;
+    engine_core::lua_class_members("GroupKid", members);
+    Expect(std::string_view(GroupOf(members, "Zeta")) == "Look", "a field takes the marker above it");
+    Expect(std::string_view(GroupOf(members, "Mid")) == "Feel", "a later marker starts a new group");
+    Expect(std::string_view(GroupOf(members, "Loose")).empty(), "a field above any marker has no group");
+    Expect(std::string_view(GroupOf(members, "Alpha")) == "Extra", "a replacing field takes its new group");
+    for (const engine_core::LuaField& field : members) {
+        Expect(!field.group_marker, "markers are not members");
+        Expect(field.name == nullptr ||
+                   (std::string_view(field.name) != "Look" && std::string_view(field.name) != "Feel" &&
+                    std::string_view(field.name) != "Extra"),
+               "no member is named after a group");
+    }
+    std::vector<engine_core::LuaField> own;
+    engine_core::lua_class_own_members("GroupKid", own);
+    Expect(own.size() == 4, "own members are the four fields, no markers");
 }
 
 engine_core::LuaSlot ColorSlot(engine_core::ColorRgb color) {
@@ -1636,6 +1707,7 @@ void TestGroupsFold() {
 }
 
 int main() {
+    TestGroupMarkersRegister();
     TestGroupsFold();
     TestRowsScroll();
     TestAssetPreview();

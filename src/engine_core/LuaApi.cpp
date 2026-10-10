@@ -165,10 +165,17 @@ void register_lua_class(const char* class_name, const char* base, const LuaField
         record->base = base;
         changed = true;
     }
+    const char* group = nullptr;
     for (int index = 0; fields != nullptr && index < count; ++index) {
-        changed = append_unique(record->fields, fields[index]) || changed;
-        if (!fields[index].method && fields[index].name != nullptr) {
-            lua_property_id(fields[index].name);
+        if (fields[index].group_marker) {
+            group = fields[index].name;
+            continue;
+        }
+        LuaField field = fields[index];
+        field.group = group;
+        changed = append_unique(record->fields, field) || changed;
+        if (!field.method && field.name != nullptr) {
+            lua_property_id(field.name);
         }
     }
     if (changed) {

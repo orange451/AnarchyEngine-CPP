@@ -7,6 +7,7 @@
 #include "FindBar.hpp"
 #include "IdeIcons.hpp"
 #include "IdeResources.hpp"
+#include "StretchRow.hpp"
 #include "LuaApi.hpp"
 #include "PropertySheet.hpp"
 #include "SelectionService.hpp"
@@ -305,52 +306,6 @@ private:
     std::vector<double> fractions_;
 };
 
-// A line of cells at their own widths, except one that takes what is left, so
-// a long name ends in an ellipsis instead of pushing the rest out.
-class StretchRow : public jadefx::HBox {
-public:
-    explicit StretchRow(std::size_t stretch) : stretch_(stretch) {
-        setAlignment(jadefx::Pos::CenterLeft);
-        setSpacing(5);
-    }
-
-protected:
-    double preferredContentWidth(double innerAvailable) const override {
-        const double wanted = HBox::preferredContentWidth(innerAvailable);
-        return innerAvailable > 0 ? std::min(wanted, innerAvailable) : wanted;
-    }
-
-    void layoutChildren() override {
-        const std::vector<std::shared_ptr<jadefx::Node>>& children = getChildren().items();
-        const double gap = getSpacing();
-        const double height = contentHeight();
-        std::vector<double> widths(children.size(), 0);
-        double used = 0;
-        for (std::size_t index = 0; index < children.size(); ++index) {
-            if (index != stretch_ && children[index]) {
-                widths[index] = children[index]->measuredWidth(contentWidth());
-                used += widths[index];
-            }
-            if (index > 0) {
-                used += gap;
-            }
-        }
-        if (stretch_ < children.size()) {
-            widths[stretch_] = std::max(0.0, contentWidth() - used);
-        }
-        double x = contentLeft();
-        for (std::size_t index = 0; index < children.size(); ++index) {
-            if (jadefx::Node* child = children[index].get()) {
-                const double child_height = std::min(child->measuredHeight(widths[index], height), height);
-                child->performLayout(x, contentTop() + (height - child_height) * 0.5, widths[index], child_height);
-            }
-            x += widths[index] + gap;
-        }
-    }
-
-private:
-    std::size_t stretch_;
-};
 
 // The List view's columns: Name, Kind, and Path.
 const std::vector<double> kListColumns = {0.45, 0.20, 0.35};
@@ -1278,7 +1233,7 @@ void IdeAssets::rebuild_list(const std::vector<AssetRow>& rows) {
             disclosure->setMouseTransparent(true);
         }
         name->getChildren().add(disclosure);
-        name->getChildren().add(sized_icon(row.class_name, 16));
+        name->getChildren().add(asset_icon(row, 16));
         name->getChildren().add(row_name(row.name));
         line->getChildren().add(name);
         auto kind = text_label(row.class_name, "assets-cell");
@@ -1315,7 +1270,7 @@ void IdeAssets::rebuild_search(const std::vector<AssetRow>& rows) {
         line->setMinSize(0, kRowHeight);
         line->setPrefHeight(kRowHeight);
         auto name = jadefx::make<StretchRow>(1);
-        name->getChildren().add(sized_icon(row.class_name, 16));
+        name->getChildren().add(asset_icon(row, 16));
         name->getChildren().add(row_name(row.name));
         line->getChildren().add(name);
         auto kind = text_label(row.class_name, "assets-cell");
@@ -1353,7 +1308,7 @@ void IdeAssets::rebuild_columns(const std::vector<std::pair<engine_core::Instanc
             line->setStyle("width: 100%;");
             line->setMinSize(0, kRowHeight);
             line->setPrefHeight(kRowHeight);
-            line->getChildren().add(sized_icon(row.class_name, 16));
+            line->getChildren().add(asset_icon(row, 16));
             line->getChildren().add(row_name(row.name));
             const bool opens = level == 0 || row.opens;
             line->getChildren().add(text_label(opens ? "›" : "", "assets-opens"));

@@ -7,6 +7,7 @@
 #include "IdeIcons.hpp"
 #include "PropertySheet.hpp"
 #include "SelectionService.hpp"
+#include "StretchRow.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -648,9 +649,9 @@ std::shared_ptr<IdePrefabEditor::Card> IdePrefabEditor::make_card(const ModelVie
     card->root->setElementId("pe-card:" + std::to_string(id));
 
     // Icon, name over status, and delete.
-    auto top = jadefx::make<jadefx::HBox>();
+    // The heading takes what is left, so a long name ends in an ellipsis.
+    auto top = std::make_shared<StretchRow>(1);
     top->setSpacing(10);
-    top->setAlignment(jadefx::Pos::CenterLeft);
     top->getChildren().add(icon_box("Model.png", 18, 32, "pe-card-icon"));
     auto heading = jadefx::make<jadefx::VBox>();
     heading->setSpacing(2);
@@ -700,9 +701,9 @@ std::shared_ptr<IdePrefabEditor::Card> IdePrefabEditor::make_card(const ModelVie
         auto section = jadefx::make<jadefx::VBox>();
         section->getClassList().add("pe-section");
         section->getChildren().add(text_label(part == ModelPart::Mesh ? "MESH" : "MATERIAL", "pe-slot-label"));
-        slot.root = jadefx::make<jadefx::HBox>();
+        // The text takes what is left, so a long name ends in an ellipsis.
+        slot.root = std::make_shared<StretchRow>(1);
         slot.root->getClassList().add("pe-slot");
-        slot.root->setAlignment(jadefx::Pos::CenterLeft);
         slot.root->setElementId(std::string("pe-slot:") + std::to_string(id) + ":" + model_part_name(part));
         slot.thumb = icon_box(part_icon(part), 18, kThumbSize, "pe-thumb");
         slot.root->getChildren().add(slot.thumb);

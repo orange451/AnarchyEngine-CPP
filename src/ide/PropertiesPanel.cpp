@@ -29,6 +29,7 @@
 #include "jadefx/scene/layout/Pane.hpp"
 
 #include <algorithm>
+#include <optional>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -51,6 +52,8 @@ constexpr double kRowGap = 2;
 constexpr double kIndent = 10;
 constexpr double kAxisGap = 4;
 constexpr double kClearWidth = 24;
+// An asset reference's icon, a Texture's image or a Material's ball, before its Name.
+constexpr double kAssetIconSize = 18;
 // The widest a slider row's field gets. The track takes the rest.
 constexpr double kSliderFieldWidth = 72;
 // The fold arrow before a Transform's name sits in the name's indent.
@@ -523,6 +526,9 @@ struct RowView {
     // A reference to an asset, such as "Mesh": its Name opens the asset picker.
     // Empty for any other reference, which picks from the selection.
     std::string asset_class;
+    // The asset whose detailed icon pick shows, so it changes only when that does.
+    std::optional<AssetChoice> shown_asset;
+    bool asset_icon_set = false;
     // A Transform's fold arrow, and the names of its Position and Orientation lines.
     std::shared_ptr<PropertyDisclosure> disclosure;
     std::shared_ptr<jadefx::Label> lines[2];
@@ -1374,6 +1380,38 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
     }
 
     // Puts the row's value in its widgets. A field being typed in keeps its text.
+    // An asset reference shows the asset's detailed icon, a Texture's image or a
+    // Material's ball, and the class's icon when nothing is set or it has none.
+    void show_asset_icon(RowView& view, const PropertyRow& row) {
+        if (view.asset_class.empty() || world == nullptr) {
+            return;
+        }
+        std::optional<AssetChoice> asset;
+        if (!row.mixed && row.value.ref != 0) {
+            engine_core::DataModelLock lock(*world, engine_core::DataModelLock::Read, kFrameLockWait);
+            if (!lock.owns()) {
+                return;
+            }
+            asset = asset_choice(*world, row.value.ref);
+        }
+        const auto same = [](const std::optional<AssetChoice>& a, const std::optional<AssetChoice>& b) {
+            return a.has_value() == b.has_value() &&
+                   (!a || (a->id == b->id && a->file == b->file && a->look == b->look));
+        };
+        if (view.asset_icon_set && same(asset, view.shown_asset)) {
+            return;
+        }
+        view.asset_icon_set = true;
+        view.shown_asset = asset;
+        std::shared_ptr<jadefx::Node> icon =
+            asset ? AssetPicker::detailedIcon(*asset, view.asset_class, kAssetIconSize) : nullptr;
+        if (!icon) {
+            icon = icon_graphic(icon_filename(view.asset_class));
+        }
+        view.pick->setGraphic(std::move(icon));
+        view.pick->setGraphicTextGap(4);
+    }
+
     void show_row(RowView& view, const PropertyRow& row) {
         view.row = row;
         auto put = [](PropertyField& field, const std::string& text) {
@@ -1430,6 +1468,7 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
             break;
         case PropertyKind::Ref:
             view.pick->setText(shown_text(row));
+            show_asset_icon(view, row);
             view.tip->setText(row.mixed ? std::string() : row.path);
             if (!row.mixed && !row.path.empty()) {
                 if (!view.tip_installed) {

@@ -2,6 +2,7 @@
 #include "LockWaits.hpp"
 
 #include "AssetInstances.hpp"
+#include "AssetPicker.hpp"
 #include "DataModelLock.hpp"
 #include "FindBar.hpp"
 #include "IdeIcons.hpp"
@@ -581,9 +582,16 @@ IdeAssets::IdeAssets(engine_core::DataModel& world, AssetsHost host)
 
     scroll_->setOnContextMenuRequested([this](const jadefx::MouseEvent& event) { show_empty_menu(event.x, event.y); });
     fit_view();
+    // Pickers show the same thumbnails and balls as the pane, kept and refreshed with its own.
+    AssetPicker::setIconSource([this](const AssetChoice& choice, const std::string& asset_class, double size) {
+        return icon_box(choice.id, asset_class, choice.file, choice.look, size);
+    });
 }
 
-IdeAssets::~IdeAssets() { world_.unwatch_changes(watch_); }
+IdeAssets::~IdeAssets() {
+    AssetPicker::setIconSource(nullptr);
+    world_.unwatch_changes(watch_);
+}
 
 void IdeAssets::fit_view() {
     // A search lists its matches the way List does, whatever the view.
@@ -1476,8 +1484,14 @@ std::shared_ptr<jadefx::Node> IdeAssets::asset_icon(const AssetRow& row, double 
     std::filesystem::path file = row.class_name == "Texture" ? texture_file(row.path) : std::filesystem::path();
     const std::optional<MaterialLook> look =
         row.class_name == "Material" ? material_look(world_, row.id) : std::optional<MaterialLook>();
+    return icon_box(row.id, row.class_name, std::move(file), look, size);
+}
+
+std::shared_ptr<jadefx::Node> IdeAssets::icon_box(engine_core::InstanceId id, const std::string& class_name,
+                                                  std::filesystem::path file, const std::optional<MaterialLook>& look,
+                                                  double size) {
     if (file.empty() && !look) {
-        return sized_icon(row.class_name, size);
+        return sized_icon(class_name, size);
     }
     // A square box either way, so a wide or tall texture lines up with the icons beside it.
     auto box = jadefx::make<jadefx::StackPane>();
@@ -1489,10 +1503,10 @@ std::shared_ptr<jadefx::Node> IdeAssets::asset_icon(const AssetRow& row, double 
     IconSlot slot;
     slot.file = std::move(file);
     if (look) {
-        slot.material = row.id;
+        slot.material = id;
         slot.look = *look;
     }
-    slot.class_name = row.class_name;
+    slot.class_name = class_name;
     slot.size = size;
     slot.box = box;
     show_icon(slot, slot.material != 0 ? previews_.get(slot.material, slot.look) : thumbnails_.get(slot.file));

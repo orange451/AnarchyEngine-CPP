@@ -192,6 +192,11 @@ void model_logic() {
            "choices list every Mesh by name, with its folder");
     Expect(ide::filter_choices(meshes, "PROPS").size() == 1, "a search matches a folder, ignoring case");
     Expect(ide::filter_choices(meshes, "").size() == 2, "an empty search keeps every choice");
+    std::vector<ide::AssetChoice> textures(1);
+    textures[0].name = "Diffuse";
+    textures[0].where = "Textures";
+    textures[0].path = "Textures/Grass/Diffuse.png";
+    Expect(ide::filter_choices(textures, "grass").size() == 1, "a search matches a file asset's Path");
 
     const ide::DraggedParts parts = ide::dragged_parts(game, {rig.metal, rig.crate, rig.lid, rig.rock});
     Expect(parts.mesh == rig.lid && parts.material == rig.metal, "a drag's first Mesh and first Material count");

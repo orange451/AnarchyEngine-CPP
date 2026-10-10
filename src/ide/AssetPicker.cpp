@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <unordered_map>
 
 namespace ide {
 
@@ -13,6 +14,18 @@ namespace {
 constexpr double kPickerWidth = 300;
 constexpr double kPickerRowHeight = 38;
 constexpr int kPickerRows = 7;
+constexpr double kPickerIconSize = 30;
+
+// The last search typed in a picker of each asset class, which its next picker starts with.
+std::unordered_map<std::string, std::string>& last_searches() {
+    static std::unordered_map<std::string, std::string> searches;
+    return searches;
+}
+
+AssetPicker::IconSource& icon_source() {
+    static AssetPicker::IconSource source;
+    return source;
+}
 
 // The picker is a popup, outside any page, so it carries its own rules.
 constexpr const char* kPickerRules = R"CSS(
@@ -29,7 +42,15 @@ constexpr const char* kPickerRules = R"CSS(
 .pe-picker-field {
     width: 100%;
     border-radius: 6px;
-    padding: 5px 8px;
+    padding: 5px 26px 5px 8px;
+}
+.pe-picker-clear {
+    color: var(--ide-popup-detail-text-color);
+    cursor: pointer;
+    padding: 0 8px;
+}
+.pe-picker-clear:hover {
+    color: var(--ide-popup-text-color);
 }
 .pe-picker-list {
     background-color: rgba(0, 0, 0, 0);
@@ -126,6 +147,16 @@ private:
     std::function<void()> cancel_;
 };
 
+void AssetPicker::setIconSource(IconSource source) { icon_source() = std::move(source); }
+
+std::shared_ptr<jadefx::Node> AssetPicker::detailedIcon(const AssetChoice& choice, const std::string& asset_class,
+                                                       double size) {
+    if (!icon_source() || (choice.file.empty() && !choice.look)) {
+        return nullptr;
+    }
+    return icon_source()(choice, asset_class, size);
+}
+
 std::shared_ptr<AssetPicker> AssetPicker::create() {
     std::shared_ptr<AssetPicker> picker(new AssetPicker());
     picker->self_ = picker;
@@ -138,7 +169,22 @@ AssetPicker::AssetPicker() {
     setPrefWidth(kPickerWidth);
     field_ = std::make_shared<AssetPickerField>([this](int delta) { move(delta); }, [this] { dismiss(); });
     field_->setOnAction([this](jadefx::ActionEvent&) { choose(active_); });
-    getChildren().add(field_);
+    // The clear button sits over the field's right end, shown only while there is text.
+    clear_ = jadefx::make<jadefx::Label>("×");
+    clear_->getClassList().add("pe-picker-clear");
+    clear_->setFont(jadefx::Font("Open Sans", 16.f));
+    clear_->setVisible(false);
+    clear_->setOnMouseClicked([this](const jadefx::MouseEvent& event) {
+        if (event.button == 0) {
+            field_->clear();
+            field_->requestFocus();
+        }
+    });
+    auto search = jadefx::make<jadefx::StackPane>();
+    search->setAlignment(jadefx::Pos::CenterRight);
+    search->getChildren().add(field_);
+    search->getChildren().add(clear_);
+    getChildren().add(search);
     list_ = jadefx::make<jadefx::VBox>();
     list_->setSpacing(1);
     scroll_ = jadefx::make<jadefx::ScrollPane>(list_);
@@ -161,8 +207,11 @@ void AssetPicker::open(jadefx::Node& anchor, std::string asset_class, std::vecto
     pick_ = std::move(pick);
     const char* plural = engine_core::asset_plural(asset_class_);
     field_->setPromptText("Search " + lower(plural != nullptr ? plural : asset_class_));
-    field_->setText("");
-    query_.clear();
+    // Starts with this class's last search, selected so typing replaces it.
+    const auto last = last_searches().find(asset_class_);
+    query_ = last != last_searches().end() ? last->second : std::string();
+    opened_query_ = query_;
+    field_->setText(query_);
     rebuild();
     // A steady height, so filtering does not make the popover jump.
     const int rows = std::clamp(static_cast<int>(all_.size()) + (current_ != 0 ? 1 : 0), 1, kPickerRows);
@@ -172,6 +221,7 @@ void AssetPicker::open(jadefx::Node& anchor, std::string asset_class, std::vecto
     options.autoHide = true;
     scene->showPopupNear(self_.lock(), &anchor, jadefx::Side::Bottom, options);
     field_->requestFocus();
+    field_->selectAll();
 }
 
 void AssetPicker::dismiss() {
@@ -200,8 +250,10 @@ jadefx::Node* AssetPicker::row(engine_core::InstanceId id) const {
 void AssetPicker::layoutChildren() {
     if (field_->getText() != query_) {
         query_ = field_->getText();
+        last_searches()[asset_class_] = query_;
         rebuild();
     }
+    clear_->setVisible(!query_.empty());
     jadefx::VBox::layoutChildren();
     // The search field changes as the user types, so the picker checks it again next frame.
     markLayoutDirty(LayoutDirt::Arrange);
@@ -211,12 +263,16 @@ void AssetPicker::rebuild() {
     list_->getChildren().clear();
     rows_.clear();
     // None comes first while something is picked, and only with no search typed.
-    if (current_ != 0 && query_.empty()) {
-        add_row(0, "No " + lower(asset_class_), "Leave it empty", "Cross.png", "pe-pick-none");
+    if (current_ != 0 && (query_.empty() || query_ == opened_query_)) {
+        add_row(0, "No " + lower(asset_class_), "Leave it empty", icon_graphic("Cross.png"), "pe-pick-none");
     }
     const std::string icon = icon_filename(asset_class_);
     for (const AssetChoice& choice : filter_choices(all_, query_)) {
-        add_row(choice.id, choice.name, choice.where, icon, nullptr);
+        std::shared_ptr<jadefx::Node> graphic = detailedIcon(choice, asset_class_, kPickerIconSize);
+        if (!graphic) {
+            graphic = icon_graphic(icon);
+        }
+        add_row(choice.id, choice.name, choice.where, std::move(graphic), nullptr);
     }
     if (rows_.empty()) {
         const char* plural = engine_core::asset_plural(asset_class_);
@@ -230,7 +286,7 @@ void AssetPicker::rebuild() {
     // The current asset starts highlighted, else the first row.
     active_ = rows_.empty() ? -1 : 0;
     for (std::size_t index = 0; index < rows_.size(); ++index) {
-        if (rows_[index].first == current_ && current_ != 0 && query_.empty()) {
+        if (rows_[index].first == current_ && current_ != 0 && query_ == opened_query_) {
             active_ = static_cast<int>(index);
         }
     }
@@ -238,7 +294,7 @@ void AssetPicker::rebuild() {
 }
 
 void AssetPicker::add_row(engine_core::InstanceId id, const std::string& name, const std::string& where,
-                          const std::string& icon, const char* extra_class) {
+                          std::shared_ptr<jadefx::Node> icon, const char* extra_class) {
     auto row = jadefx::make<jadefx::HBox>();
     row->getClassList().add("pe-pick-row");
     if (extra_class != nullptr) {
@@ -247,8 +303,8 @@ void AssetPicker::add_row(engine_core::InstanceId id, const std::string& name, c
     row->setAlignment(jadefx::Pos::CenterLeft);
     row->setPrefHeight(kPickerRowHeight);
     row->setMinSize(0, kPickerRowHeight);
-    if (std::shared_ptr<jadefx::ImageView> image = icon_graphic(icon)) {
-        row->getChildren().add(std::move(image));
+    if (icon) {
+        row->getChildren().add(std::move(icon));
     }
     auto text = jadefx::make<jadefx::VBox>();
     text->setAlignment(jadefx::Pos::CenterLeft);

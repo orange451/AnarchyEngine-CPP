@@ -94,6 +94,10 @@ private:
     // loaded on thumbnails_'s thread or a Material's ball is drawn, then that,
     // fit and centered. Callers hold the world's read lock.
     std::shared_ptr<jadefx::Node> asset_icon(const AssetRow& row, double size);
+    // asset_icon's box for a Texture's file or a Material's look, or the class's icon for neither. Needs no lock.
+    std::shared_ptr<jadefx::Node> icon_box(engine_core::InstanceId id, const std::string& class_name,
+                                           std::filesystem::path file, const std::optional<MaterialLook>& look,
+                                           double size);
     struct IconSlot;
     // Puts image in slot's box, or the class's icon when it is null. False,
     // changing nothing, when the box shows it already or is gone.

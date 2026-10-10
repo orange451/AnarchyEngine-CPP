@@ -1,4 +1,5 @@
 #include "IdeLayout.hpp"
+#include "PluginWidgetPane.hpp"
 
 #include "IdeTerrainEditor.hpp"
 #include "runner/ProfilerOverlay.hpp"
@@ -581,6 +582,14 @@ void IdeLayout::flushFrame() {
     poll_plugins(false);
     refresh_plugin_ribbon();
     sync_plugin_widgets();
+    // A pane is laid out only when something in it changed, and a script's
+    // writes to its GUI change nothing there until it reads them, so each
+    // open plugin page reads them once a frame.
+    for (const auto& [name, widget] : plugin_widgets_) {
+        if (widget.pane && dockContaining(widget.pane.get()) != nullptr) {
+            widget.pane->sync();
+        }
+    }
     refresh_modified();
     // A tab that is not showing, or a closed page kept for reopening, is not
     // laid out, so Problems would stop counting. Its tick keeps the list and

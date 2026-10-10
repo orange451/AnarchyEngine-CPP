@@ -79,6 +79,8 @@ enum class ToneMappingMode { Classic = 0, Cinematic = 1 };
 const EnumType& shading_model_enum();
 // shading_model_enum's items, by value.
 enum class ShadingModel { Standard = 0, Fast = 1 };
+// The asset class an AssetPicker lists: Material 0, Prefab 1, Texture 2, Mesh 3, Sound 4, Model 5.
+const EnumType& asset_type_enum();
 
 // Every type the Enum global holds, for script analysis to declare.
 int enum_type_count();

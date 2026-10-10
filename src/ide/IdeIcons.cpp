@@ -72,6 +72,9 @@ const char* IconFileOverride(const std::string& class_name) {
     if (class_name == "Button") {
         return "TextButton.png";
     }
+    if (class_name == "AssetPicker") {
+        return "folder-search-result.png";
+    }
     if (class_name == "Slider") {
         return "ui-slider.png";
     }

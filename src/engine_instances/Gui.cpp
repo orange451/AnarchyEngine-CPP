@@ -55,10 +55,19 @@ constexpr GuiSpec kSpecs[] = {
     {"Min", "number", LuaSlot::Kind::Number, -kNoLimit, kNoLimit},
     {"Max", "number", LuaSlot::Kind::Number, -kNoLimit, kNoLimit},
     {"Step", "number", LuaSlot::Kind::Number, 0, kNoLimit},
+    {"AssetType", "EnumItem", LuaSlot::Kind::Enum, 0, 0},
 };
 static_assert(std::size(kSpecs) == static_cast<std::size_t>(GuiProperty::Count), "a GuiProperty has no spec");
 
 const GuiSpec& spec(GuiProperty property) { return kSpecs[static_cast<int>(property)]; }
+
+// The Enum an EnumItem property holds.
+const EnumType& enum_of(GuiProperty property) {
+    return property == GuiProperty::AssetType ? asset_type_enum() : gui_alignment_enum();
+}
+
+// Enum.AssetType's classes, by value.
+constexpr const char* kAssetClasses[] = {"Material", "Prefab", "Texture", "Mesh", "Sound", "Model"};
 
 constexpr const char* kDefaultCss = "/* CSS Document */";
 
@@ -153,6 +162,8 @@ LuaSlot GuiValues::default_value(GuiProperty property, const char* class_name) {
         return number_slot(0);
     case GuiProperty::Max:
         return number_slot(1);
+    case GuiProperty::AssetType:
+        return enum_slot(asset_type_enum(), 0);
     case GuiProperty::AlwaysOnTop:
     case GuiProperty::TextScaled:
     case GuiProperty::WidgetEnabled:
@@ -216,10 +227,10 @@ std::optional<std::string> GuiValues::set_value(GuiProperty property, LuaSlot va
                          static_cast<float>(clamp_to(about, value.vec.y)), 0.f};
         break;
     case LuaSlot::Kind::Enum: {
-        const EnumType& type = gui_alignment_enum();
+        const EnumType& type = enum_of(property);
         if (value.kind != LuaSlot::Kind::Enum || value.enum_type != &type ||
             enum_item_name(type, static_cast<int>(value.number)) == nullptr) {
-            return name + " must be an Enum.GuiAlignment item";
+            return name + " must be an Enum." + type.name + " item";
         }
         clean.enum_type = &type;
         clean.number = value.number;
@@ -413,6 +424,54 @@ void Slider::after_change(GuiProperty property) {
     }
 }
 
+AssetPicker::AssetPicker(DataModel::ChildTag tag, DataModel::State& state, InstanceId id) : GuiBase(tag, state, id) {
+    reset_values();
+}
+
+const char* AssetPicker::class_name() const { return "AssetPicker"; }
+
+const char* AssetPicker::asset_class() const {
+    const int item = static_cast<int>(number(GuiProperty::AssetType));
+    return item >= 0 && item < static_cast<int>(std::size(kAssetClasses)) ? kAssetClasses[item] : kAssetClasses[0];
+}
+
+LuaSlot AssetPicker::asset() const { return instance_reference_slot(asset_ref_, asset_class()); }
+
+InstanceId AssetPicker::asset_id() const {
+    const InstanceId target = asset_ref_.resolve(*this);
+    const DataModel* object = target != 0 ? instance(target) : nullptr;
+    return object != nullptr && lua_class_inherits(object->class_name(), asset_class()) ? target : 0;
+}
+
+std::optional<std::string> AssetPicker::set_asset(const LuaSlot& value) {
+    if (!on_gameplay_thread()) {
+        contract_fail("Gui setters run on SimulationThread");
+    }
+    const std::string before = asset_ref_.guid();
+    std::optional<std::string> error = set_instance_reference("Value", asset_class(), asset_ref_, value);
+    if (asset_ref_.guid() != before) {
+        touch();
+    }
+    return error;
+}
+
+void AssetPicker::after_change(GuiProperty property) {
+    if (property != GuiProperty::AssetType) {
+        return;
+    }
+    // A Value of the old class goes. One not loaded yet stays, to be read once it is.
+    const InstanceId target = asset_ref_.resolve(*this);
+    const DataModel* object = target != 0 ? instance(target) : nullptr;
+    if (object != nullptr && !lua_class_inherits(object->class_name(), asset_class())) {
+        set_asset(LuaSlot{});
+    }
+}
+
+void AssetPicker::on_reuse() {
+    GuiValues::on_reuse();
+    asset_ref_.set_guid(std::string());
+}
+
 Css::Css(DataModel::ChildTag tag, DataModel::State& state, InstanceId id) : GuiValues(tag, state, id) {
     reset_values();
 }
@@ -492,7 +551,7 @@ LuaField gui_field(const char* class_name) {
     slot_to_json(GuiValues::default_value(P, class_name), about.type, json);
     const char* default_json = kept(write_json(json));
     if (about.kind == LuaSlot::Kind::Enum) {
-        return lua_saved_enum(about.name, gui_alignment_enum(), read_gui<P>, write_gui<P>, default_json);
+        return lua_saved_enum(about.name, enum_of(P), read_gui<P>, write_gui<P>, default_json);
     }
     LuaField field = lua_saved_property(about.name, about.type, read_gui<P>, write_gui<P>, default_json);
     if constexpr (P == GuiProperty::BackgroundTransparency || P == GuiProperty::ImageTransparency) {
@@ -521,6 +580,27 @@ bool write_adornee(DataModel&, DataModel& object, LuaSlot& in) {
         return false;
     }
     if (std::optional<std::string> error = board->set_adornee(in)) {
+        in.error = std::move(*error);
+        return false;
+    }
+    return true;
+}
+
+bool read_asset(DataModel&, DataModel& object, LuaSlot& out) {
+    const auto* picker = dynamic_cast<const AssetPicker*>(&object);
+    if (picker == nullptr) {
+        return false;
+    }
+    out = picker->asset();
+    return true;
+}
+
+bool write_asset(DataModel&, DataModel& object, LuaSlot& in) {
+    auto* picker = dynamic_cast<AssetPicker*>(&object);
+    if (picker == nullptr) {
+        return false;
+    }
+    if (std::optional<std::string> error = picker->set_asset(in)) {
         in.error = std::move(*error);
         return false;
     }
@@ -615,6 +695,11 @@ ANARCHY_LUA_REGISTER(register_gui_lua) {
         gui_field<GuiProperty::Step>("Slider"),
     };
     add_class("Slider", "GuiBase", slider);
+    const LuaField picker[] = {
+        gui_field<GuiProperty::AssetType>("AssetPicker"),
+        lua_saved_property("Value", "Instance?", read_asset, write_asset, "null"),
+    };
+    add_class("AssetPicker", "GuiBase", picker);
 
     const LuaField css[] = {gui_field<GuiProperty::Source>("CSS")};
     add_class("CSS", "Instance", css);
@@ -630,7 +715,7 @@ ANARCHY_LUA_REGISTER(register_gui_lua) {
     register_suited_parents("ScreenGui", {"Gui"});
     register_suited_parents("BillboardGui", {"Workspace", "PVInstance"});
     register_suited_parents("GuiBasePane", {"ScreenGui", "BillboardGui", "GuiBasePane", "DockWidget"});
-    for (const char* control : {"Label", "Button", "TextField", "Slider"}) {
+    for (const char* control : {"Label", "Button", "TextField", "Slider", "AssetPicker"}) {
         register_suited_parents(control, {"ScreenGui", "BillboardGui", "GuiBasePane", "DockWidget"});
     }
     register_suited_parents("CSS", {"Gui", "GuiBase"});

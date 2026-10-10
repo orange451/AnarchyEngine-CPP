@@ -656,3 +656,65 @@ TEST_CASE("GUI18 Slider holds Value inside Min and Max, on its Step", "[gui][sli
     require_globals(rig, {"defaults", "clamped", "low", "stepped", "fromMin", "top", "shrunk", "raised", "free",
                           "changed", "refused"});
 }
+
+TEST_CASE("GUI19 AssetPicker holds one asset of its AssetType", "[gui][assetpicker]") {
+    ScriptRig rig;
+    engine_core::Texture& logo = rig.game.create<engine_core::Texture>();
+    rig.game.set_name(logo.id(), "Logo");
+    rig.game.set_parent(logo.id(), rig.game.service("Textures"));
+    engine_core::Material& stone = rig.game.create<engine_core::Material>();
+    rig.game.set_name(stone.id(), "Stone");
+    rig.game.set_parent(stone.id(), rig.game.service("Materials"));
+    add_script(rig.game, "Ui", R"(
+        local picker = Instance.new("AssetPicker")
+        _G.defaults = picker:IsA("GuiBase") and picker.AssetType == Enum.AssetType.Material and picker.Value == nil
+        local changed = false
+        picker.Changed:Connect(function(name) if name == "Value" then changed = true end end)
+        picker.Value = game.Assets.Materials.Stone
+        _G.set = picker.Value == game.Assets.Materials.Stone
+        _G.typed = not pcall(function() picker.Value = game.Assets.Textures.Logo end)
+            and picker.Value == game.Assets.Materials.Stone
+        picker.AssetType = Enum.AssetType.Texture
+        _G.cleared = picker.Value == nil
+        picker.Value = game.Assets.Textures.Logo
+        _G.texture = picker.Value == game.Assets.Textures.Logo
+        _G.badType = not pcall(function() picker.AssetType = Enum.GuiAlignment.Center end)
+        task.wait()
+        task.wait()
+        _G.changed = changed
+    )");
+    rig.game.start_simulation();
+    rig.frames(3, 0.05);
+    require_globals(rig, {"defaults", "set", "typed", "cleared", "texture", "badType", "changed"});
+}
+
+TEST_CASE("GUI20 a project saves and loads an AssetPicker's AssetType and Value", "[gui][assetpicker][project]") {
+    SimRole role;
+    TempDir dir;
+    {
+        engine_core::Project project = engine_core::Project::create(dir.path);
+        engine_core::DataModel& game = project.datamodel();
+        engine_core::ScreenGui& screen = game.create<engine_core::ScreenGui>();
+        game.set_parent(screen.id(), gui_service(game));
+        engine_core::AssetPicker& picker = game.create<engine_core::AssetPicker>();
+        game.set_parent(picker.id(), screen.id());
+        engine_core::Texture& texture = game.create<engine_core::Texture>();
+        game.set_name(texture.id(), "Logo");
+        game.set_parent(texture.id(), game.service("Textures"));
+        engine_core::LuaSlot type;
+        type.kind = engine_core::LuaSlot::Kind::Enum;
+        type.enum_type = &engine_core::asset_type_enum();
+        type.number = 2;
+        REQUIRE_FALSE(picker.set_value(GuiProperty::AssetType, type));
+        REQUIRE_FALSE(picker.set_asset(instance_slot(texture.id())));
+        project.save();
+    }
+    engine_core::Game game;
+    engine_core::Project loaded = engine_core::Project::load(dir.path, game);
+    const engine_core::InstanceId screen = game.find_first_child(gui_service(game), "ScreenGui");
+    auto* picker = dynamic_cast<engine_core::AssetPicker*>(game.instance(game.find_first_child(screen, "AssetPicker")));
+    REQUIRE(picker != nullptr);
+    REQUIRE(picker->number(GuiProperty::AssetType) == 2);
+    REQUIRE(picker->asset_id() != 0);
+    REQUIRE(game.name(picker->asset_id()) == "Logo");
+}

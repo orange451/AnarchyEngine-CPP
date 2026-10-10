@@ -32,7 +32,7 @@ struct GuiInput {
 
 // The JadeFX nodes for GUI instances, made once and updated in place: each
 // GuiBase is a node of its class's element type (screengui, billboardgui,
-// dockwidget, pane, imagepane, hbox, vbox, label, button, textfield, slider) whose id
+// dockwidget, pane, imagepane, hbox, vbox, label, button, textfield, slider, assetpicker) whose id
 // is its Name and whose classes are its ClassList, and the CSS instances
 // under one, joined in child order, are its stylesheet. A node keeps its
 // state, such as a TextField's caret, while its instance does. Mouse events on
@@ -66,11 +66,20 @@ public:
     // For a tree drawn as a studio pane: a Label whose TextColor is still its
     // default takes the studio theme's text color, as the studio's own labels do.
     void setThemedText(bool themed) { themedText_ = themed; }
+    // What a click on an AssetPicker opens: the studio's asset picker under
+    // anchor, listing asset_class, with current checked. Unset, as in a game,
+    // a click does nothing.
+    using AssetPicking = std::function<void(jadefx::Node& anchor, engine_core::InstanceId picker,
+                                            const std::string& asset_class, engine_core::InstanceId current)>;
+    void setAssetPicking(AssetPicking picking) { assetPicking_ = std::move(picking); }
+    // Writes a pick to the AssetPicker's Value on the simulation thread, as one undo step while stopped.
+    void pickAsset(engine_core::InstanceId picker, engine_core::InstanceId asset);
 
 private:
     struct Entry;
 
     bool themedText_ = false;
+    AssetPicking assetPicking_;
 
     std::shared_ptr<jadefx::Node> makeNode(engine_core::InstanceId id, const std::string& className);
     void apply(Entry& entry, const engine_core::GuiValues& gui);

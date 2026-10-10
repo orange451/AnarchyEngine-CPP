@@ -1,5 +1,7 @@
 #include "PluginWidgetPane.hpp"
 
+#include "AssetChoices.hpp"
+#include "AssetPicker.hpp"
 #include "IdeResources.hpp"
 #include "runner/GuiTree.hpp"
 
@@ -8,7 +10,9 @@
 #include "Gui.hpp"
 
 #include <chrono>
+#include <string>
 #include <utility>
+#include <vector>
 
 namespace ide {
 
@@ -20,10 +24,31 @@ PluginWidgetPane::PluginWidgetPane(engine_core::Engine& engine, engine_core::Ins
       })) {
     getClassList().add("plugin-widget");
     tree_->setThemedText(true);
+    tree_->setAssetPicking([this](jadefx::Node& anchor, engine_core::InstanceId picker, const std::string& asset_class,
+                                  engine_core::InstanceId current) {
+        std::vector<AssetChoice> choices;
+        {
+            engine_core::DataModelLock lock(engine_.datamodel(), engine_core::DataModelLock::Read,
+                                            std::chrono::milliseconds(50));
+            if (!lock.owns()) {
+                return;
+            }
+            choices = asset_choices(engine_.datamodel(), asset_class);
+        }
+        if (!picker_) {
+            picker_ = AssetPicker::create();
+        }
+        picker_->open(anchor, asset_class, std::move(choices), current,
+                      [this, picker](engine_core::InstanceId chosen) { tree_->pickAsset(picker, chosen); });
+    });
     setIconFile("Script.png");
 }
 
-PluginWidgetPane::~PluginWidgetPane() = default;
+PluginWidgetPane::~PluginWidgetPane() {
+    if (picker_) {
+        picker_->dismiss();
+    }
+}
 
 void PluginWidgetPane::sync() {
     std::shared_ptr<jadefx::Node> root;

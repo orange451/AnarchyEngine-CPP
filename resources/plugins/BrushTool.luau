@@ -65,8 +65,6 @@ local active = false
 local mode = "Draw"
 local grid = 1
 local lastHeight = 4
-local materials: { Material } = {}
-local materialIndex = 0
 local material: Material? = nil
 
 local mouse = plugin:GetMouse()
@@ -355,16 +353,6 @@ local function refresh_corners()
 		for _, v in brush:GetVertices() do
 			table.insert(corners, { brush = brush, world = m * v })
 		end
-	end
-end
-
--- Every Material in Assets, in tree order.
-local function find_materials(at: Instance, out: { Material })
-	for _, child in at:GetChildren() do
-		if child:IsA("Material") then
-			table.insert(out, child :: any)
-		end
-		find_materials(child, out)
 	end
 end
 
@@ -1125,7 +1113,7 @@ end
 local modeButtons: { [string]: Button } = {}
 local gridLabel: Label
 local gridSlider: Slider
-local materialButton: Button
+local materialPicker: AssetPicker
 local sideButton: Button
 local clipRow: HBox
 local hintLabel: Label
@@ -1290,13 +1278,15 @@ end)
 
 caption("Material")
 local materialRow = row()
-materialButton = button(materialRow, "", function()
-	materials = {}
-	find_materials(Assets :: any, materials)
-	-- Default first, then each Material.
-	materialIndex = (materialIndex + 1) % (#materials + 1)
-	material = materialIndex > 0 and materials[materialIndex] or nil
-	redraw_pane()
+-- The Material new and painted brushes get; None is the default.
+materialPicker = Instance.new("AssetPicker")
+materialPicker.AssetType = Enum.AssetType.Material
+materialPicker.Parent = materialRow
+materialPicker.Changed:Connect(function(name)
+	if name == "Value" then
+		material = materialPicker.Value :: any
+		redraw_pane()
+	end
 end)
 button(materialRow, "Apply", function()
 	on_selection("Paint Brushes", function(brushes)
@@ -1349,7 +1339,6 @@ redraw_pane = function()
 	sideButton.Text = "Side: " .. SIDES[clipSide]
 	gridLabel.Text = "Grid " .. number(grid)
 	gridSlider.Value = table.find(GRIDS, grid) or 1
-	materialButton.Text = (material ~= nil and material.Name or "Default") .. "  \u{25B8}"
 	hintLabel.Text = HINTS[mode]
 end
 redraw_pane()

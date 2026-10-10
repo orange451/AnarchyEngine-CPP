@@ -115,6 +115,7 @@ struct GuiTree::Entry {
     jadefx::Pane* container = nullptr;
     jadefx::TextField* field = nullptr;
     jadefx::Slider* slider = nullptr;
+    jadefx::Button* assetButton = nullptr;
     std::string className;
     // The instance's revision at the last apply. 0 forces one.
     std::uint64_t revision = 0;
@@ -138,6 +139,10 @@ struct GuiTree::Entry {
     // showed or wrote it.
     double instanceValue = 0;
     double sliderValue = 0;
+    // An AssetPicker's class, Value, and the name shown, as the last build read them.
+    std::string assetClass;
+    engine_core::InstanceId asset = 0;
+    std::string assetText;
     // An ImagePane's Image as its Texture's Path, empty for none, and the
     // opacity ImageTransparency gives it, as the last sync read them.
     bool imagePane = false;
@@ -217,6 +222,16 @@ std::shared_ptr<jadefx::Node> GuiTree::makeNode(engine_core::InstanceId id, cons
         auto field = std::make_shared<GuiNode<jadefx::TextField>>("textfield", input, true);
         field->setOnAction([this, id](jadefx::ActionEvent&) { fire(id, engine_core::kGuiAction); });
         node = field;
+    } else if (className == "AssetPicker") {
+        auto button = std::make_shared<GuiNode<jadefx::Button>>("assetpicker", input, false, std::string());
+        jadefx::Button* raw = button.get();
+        button->setOnAction([this, id, raw](jadefx::ActionEvent&) {
+            const auto found = entries_.find(id);
+            if (assetPicking_ && found != entries_.end()) {
+                assetPicking_(*raw, id, found->second->assetClass, found->second->asset);
+            }
+        });
+        node = button;
     } else if (className == "Slider") {
         node = std::make_shared<GuiNode<jadefx::Slider>>("slider", input, true, 0.0, 1.0, 0.0);
     } else {
@@ -251,6 +266,7 @@ std::shared_ptr<jadefx::Node> GuiTree::build(engine_core::InstanceId id, const e
         entry.container = dynamic_cast<jadefx::Pane*>(entry.node.get());
         entry.field = dynamic_cast<jadefx::TextField*>(entry.node.get());
         entry.slider = dynamic_cast<jadefx::Slider*>(entry.node.get());
+        entry.assetButton = className == "AssetPicker" ? dynamic_cast<jadefx::Button*>(entry.node.get()) : nullptr;
         entry.className = className;
     }
     entry.pass = pass_;
@@ -265,6 +281,16 @@ std::shared_ptr<jadefx::Node> GuiTree::build(engine_core::InstanceId id, const e
     if (gui.revision() != entry.revision) {
         apply(entry, gui);
         entry.revision = gui.revision();
+    }
+    // Read at every sync, since the asset's Name can change without the picker's revision moving.
+    if (const auto* picker = dynamic_cast<const engine_core::AssetPicker*>(&gui)) {
+        entry.assetClass = picker->asset_class();
+        entry.asset = picker->asset_id();
+        std::string text = entry.asset != 0 ? game_.name(entry.asset) : std::string("None");
+        if (text != entry.assetText && entry.assetButton != nullptr) {
+            entry.assetButton->setText(text);
+            entry.assetText = std::move(text);
+        }
     }
     // Read at every sync, since the Texture's Path can change without the
     // ImagePane's revision moving.
@@ -355,6 +381,8 @@ void GuiTree::apply(Entry& entry, const engine_core::GuiValues& gui) {
         }
         label->setFont(jadefx::Font(jadefx::Font().family(), static_cast<float>(gui.number(GuiProperty::FontSize))));
         label->setTextScaled(gui.flag(GuiProperty::TextScaled));
+    } else if (entry.assetButton != nullptr) {
+        // Its text is the picked asset's name, which build reads each pass.
     } else if (auto* button = dynamic_cast<jadefx::Button*>(&node)) {
         button->setText(gui.text(GuiProperty::Text));
         button->setTextScaled(gui.flag(GuiProperty::TextScaled));
@@ -426,6 +454,28 @@ void GuiTree::writeValue(engine_core::InstanceId id, double value) {
         slot.kind = engine_core::LuaSlot::Kind::Number;
         slot.number = value;
         gui->set_value(GuiProperty::Value, slot);
+        if (recording) {
+            game.history().finish_recording(*recording, engine_core::FinishRecordingOperation::Commit);
+        }
+    });
+}
+
+void GuiTree::pickAsset(engine_core::InstanceId picker, engine_core::InstanceId asset) {
+    engine_.on_simulation([picker, asset](engine_core::DataModel& game) {
+        auto* gui = dynamic_cast<engine_core::AssetPicker*>(game.instance(picker));
+        if (gui == nullptr || gui->asset_id() == asset) {
+            return;
+        }
+        std::optional<std::string> recording;
+        if (!game.simulation_running()) {
+            recording = game.history().try_begin_recording("Pick Asset");
+        }
+        engine_core::LuaSlot slot;
+        if (asset != 0) {
+            slot.kind = engine_core::LuaSlot::Kind::Instance;
+            slot.id = asset;
+        }
+        gui->set_asset(slot);
         if (recording) {
             game.history().finish_recording(*recording, engine_core::FinishRecordingOperation::Commit);
         }

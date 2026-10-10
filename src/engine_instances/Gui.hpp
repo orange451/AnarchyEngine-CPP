@@ -69,6 +69,10 @@ class Texture;
 //            Min plus a whole number of Steps. A Min above Max raises Max,
 //            a Max below Min lowers Min. Dragging writes Value; listen
 //            with Changed.
+// AssetPicker  AssetType (Enum.AssetType, Material) and Value (the picked
+//            asset of that class, or nil). A Value of another class is
+//            refused, and a new AssetType clears a Value that no longer fits.
+//            In the studio a click opens the asset picker; a pick writes Value.
 // CSS        Source ("/* CSS Document */"): a stylesheet for its parent
 //            GuiBase and everything inside it, or, directly under the Gui
 //            service, for the whole layer: every ScreenGui and every drawn
@@ -79,7 +83,7 @@ class Texture;
 //
 // The Name of a GuiBase is its CSS id, its ClassList its classes, and its
 // class, lowercase, its element type: screengui, billboardgui, pane,
-// imagepane, hbox, vbox, label, button, textfield, slider.
+// imagepane, hbox, vbox, label, button, textfield, slider, assetpicker.
 //
 // Each property is a saved registry property (lua_saved_property), so
 // DataModel saves, loads, undoes, and restores it at Stop.
@@ -109,6 +113,7 @@ enum class GuiProperty : int {
     Min,
     Max,
     Step,
+    AssetType,
     Count
 };
 
@@ -270,6 +275,28 @@ public:
 protected:
     double fit_number(GuiProperty property, double value) const override;
     void after_change(GuiProperty property) override;
+};
+
+class AssetPicker : public GuiBase {
+public:
+    AssetPicker(DataModel::ChildTag tag, DataModel::State& state, InstanceId id);
+    const char* class_name() const override;
+
+    // The class AssetType names, such as "Material".
+    const char* asset_class() const;
+    // Value as a script reads it, and its live target, or 0.
+    LuaSlot asset() const;
+    InstanceId asset_id() const;
+    // SimulationThread. nil clears it; anything but a live asset of
+    // asset_class is refused, and returns why.
+    std::optional<std::string> set_asset(const LuaSlot& value);
+
+protected:
+    void after_change(GuiProperty property) override;
+    void on_reuse() override;
+
+private:
+    InstanceRef asset_ref_;
 };
 
 class Css : public GuiValues {

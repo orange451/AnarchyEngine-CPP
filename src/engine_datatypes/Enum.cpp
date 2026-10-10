@@ -247,6 +247,9 @@ const EnumType kToneMappingModeType{"ToneMappingMode", kToneMappingModes, count_
 // Fast is normalized Blinn-Phong with a cheap visibility term, for low-end GPUs.
 const EnumEntry kShadingModels[] = {{"Standard", 0}, {"Fast", 1}};
 const EnumType kShadingModelType{"ShadingModel", kShadingModels, count_of(kShadingModels)};
+// The asset class an AssetPicker lists.
+const EnumEntry kAssetTypes[] = {{"Material", 0}, {"Prefab", 1}, {"Texture", 2}, {"Mesh", 3}, {"Sound", 4}, {"Model", 5}};
+const EnumType kAssetTypeType{"AssetType", kAssetTypes, count_of(kAssetTypes)};
 
 const EnumType* const kTypes[] = {&kNormalIdType,       &kAxisType,          &kRotationOrderType,
                                   &kKeyCodeType,        &kUserInputTypeType, &kUserInputStateType,
@@ -254,7 +257,7 @@ const EnumType* const kTypes[] = {&kNormalIdType,       &kAxisType,          &kR
                                   &kGuiAlignmentType,   &kTransformSpaceType,  &kDraggerHandleType,
                                   &kFinishRecordingOperationType, &kAntialiasingModeType, &kEffectQualityType,
                                   &kRaycastFilterTypeType, &kTextureSizeType, &kTextureStreamingType,
-                                  &kToneMappingModeType, &kShadingModelType};
+                                  &kToneMappingModeType, &kShadingModelType, &kAssetTypeType};
 
 int enum_item_index(lua_State* state) {
     auto* item = static_cast<EnumItemUd*>(luaL_checkudata(state, 1, kEnumItemMeta));
@@ -341,6 +344,7 @@ const EnumType& texture_size_enum() { return kTextureSizeType; }
 const EnumType& texture_streaming_enum() { return kTextureStreamingType; }
 const EnumType& tone_mapping_mode_enum() { return kToneMappingModeType; }
 const EnumType& shading_model_enum() { return kShadingModelType; }
+const EnumType& asset_type_enum() { return kAssetTypeType; }
 
 int enum_item_value(const EnumType& type, std::string_view name) {
     for (int index = 0; index < type.count; ++index) {

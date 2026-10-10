@@ -2,8 +2,11 @@
 #include "ide/IdePane.hpp"
 #include "ide/PluginLoader.hpp"
 #include "ide/PluginRibbon.hpp"
+#include "ide/PluginWidgetPane.hpp"
+#include "ide/AssetPicker.hpp"
 #include "runner/GameView.hpp"
 
+#include "AssetInstances.hpp"
 #include "DataModel.hpp"
 #include "Engine.hpp"
 #include "Folder.hpp"
@@ -301,6 +304,61 @@ int RunPluginsTests() {
         ide::IdePane* reloaded = layout.page_named_for_tests(paneName);
         Expect(layout.page_open_for_tests(reloaded), "a reload opens the page again");
         Expect(dockBefore != nullptr && layout.dock_of_for_tests(reloaded) == dockBefore, "in the dock it was in");
+
+        // A click on an AssetPicker opens the studio's asset picker, and a pick writes its Value.
+        {
+            engine_core::InstanceId stone = 0;
+            engine.on_simulation([&](engine_core::DataModel& game) {
+                engine_core::Material& made = game.create<engine_core::Material>();
+                game.set_name(made.id(), "Stone");
+                game.set_parent(made.id(), game.service("Materials"));
+                stone = made.id();
+            });
+            const engine_core::InstanceId pickerTool = MakeToolFolder(
+                engine, "Picker Tool",
+                "local w = plugin:CreateDockWidget('P', {Enabled = true})\n"
+                "local p = Instance.new('AssetPicker') p.Name = 'Pick' p.AssetType = Enum.AssetType.Material p.Parent = w");
+            layout.save_as_plugin(pickerTool);
+            frames(4);
+            auto* pane = dynamic_cast<ide::PluginWidgetPane*>(layout.page_named_for_tests("plugin:Picker Tool/P"));
+            Expect(pane != nullptr, "the picker's widget is a page");
+            auto* pick = pane != nullptr ? dynamic_cast<jadefx::Button*>(pane->getElementById("Pick")) : nullptr;
+            Expect(pick != nullptr && pick->getText() == "None", "an AssetPicker with no Value shows None");
+            auto click = [&](jadefx::Node* node) {
+                const double x = node->getAbsoluteX() + node->getWidth() / 2;
+                const double y = node->getAbsoluteY() + node->getHeight() / 2;
+                scene->noteButton(0, true, x, y);
+                scene->noteButton(0, false, x, y);
+                frames(2);
+            };
+            if (pick != nullptr) {
+                click(pick);
+                Expect(pane->picker() != nullptr && pane->picker()->showing(), "a click opens the asset picker");
+                jadefx::Node* row = pane->picker() != nullptr ? pane->picker()->row(stone) : nullptr;
+                Expect(row != nullptr, "listing the Materials");
+                if (row != nullptr) {
+                    click(row);
+                    DrainEvents(engine);
+                    frames(2);
+                }
+                engine_core::InstanceId picked = 0;
+                engine.on_simulation([&](engine_core::DataModel& game) {
+                    for (engine_core::InstanceId id : game.get_children(game.core())) {
+                        if (game.name(id) != "Picker Tool") {
+                            continue;
+                        }
+                        const engine_core::InstanceId widget = game.find_first_child(id, "P");
+                        if (const auto* gui = dynamic_cast<const engine_core::AssetPicker*>(
+                                game.instance(game.find_first_child(widget, "Pick")))) {
+                            picked = gui->asset_id();
+                        }
+                    }
+                });
+                Expect(picked == stone, "the pick writes Value");
+                pick = dynamic_cast<jadefx::Button*>(pane->getElementById("Pick"));
+                Expect(pick != nullptr && pick->getText() == "Stone", "and the picker shows the asset's name");
+            }
+        }
 
         // InitialDock Center docks beside the Scene View.
         const engine_core::InstanceId centerTool = MakeToolFolder(

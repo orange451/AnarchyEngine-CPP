@@ -1368,6 +1368,10 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
     add("Slider", "Value", "Where the thumb sits, from Min to Max. Dragging changes it.", "number", false, {});
     add("Slider", "Min", "The value at the left end. Above Max, it raises Max.", "number", false, {});
     add("Slider", "Max", "The value at the right end. Below Min, it lowers Min.", "number", false, {});
+    add("AssetPicker", "AssetType", "The class of asset it picks. A Value of another class is cleared.", "EnumItem",
+        false, {});
+    add("AssetPicker", "Value", "The picked asset, or nil. Picking one in the studio changes it.", "Instance?", false,
+        {});
     add("Slider", "Step", "When above 0, Value stays on Min plus a whole number of Steps.", "number", false, {});
     add("CSS", "Source", "The stylesheet for its parent GuiBase and everything inside it.", "string", false, {});
 

@@ -205,6 +205,119 @@ int RunModelImportTests(ide::IdeLayout& layout, jadefx::Scene& scene) {
                "a file with no triangles is refused, saying why");
     }
 
+    // A glTF arm skinned to two joints, Root and Hand (2 units up), under a
+    // node 5 units along Z, with one triangle in each of two materials.
+    {
+        const fs::path source = folder / "Rigged";
+        const fs::path resources = folder / "RiggedResources";
+        std::string buffer;
+        for (float value : {0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 1.f, 0.f}) {
+            Append(buffer, value);
+        }
+        for (float value : {0.f, 2.f, 0.f, 1.f, 2.f, 0.f, 0.f, 3.f, 0.f}) {
+            Append(buffer, value);
+        }
+        for (std::uint8_t joint : {0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0}) {
+            Append(buffer, joint);
+        }
+        for (float weight : {0.75f, 0.25f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f}) {
+            Append(buffer, weight);
+        }
+        for (std::uint16_t index : {0, 1, 2, 0}) {
+            Append(buffer, index);
+        }
+        // Inverse bind matrices, column-major: Root's identity, Hand's 2 units down.
+        for (float value : {1.f, 0.f, 0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 0.f, 1.f,
+                            1.f, 0.f, 0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 0.f, 1.f, 0.f, 0.f, -2.f, 0.f, 1.f}) {
+            Append(buffer, value);
+        }
+        WriteBytes(source / "arm.bin", buffer);
+        WriteBytes(source / "Arm.gltf", R"({
+  "asset": {"version": "2.0"},
+  "scene": 0,
+  "scenes": [{"nodes": [0]}],
+  "nodes": [{"name": "Arm", "translation": [0, 0, 5], "children": [1, 3]},
+            {"name": "Root", "children": [2]},
+            {"name": "Hand", "translation": [0, 2, 0]},
+            {"name": "Skin", "mesh": 0, "skin": 0}],
+  "skins": [{"joints": [1, 2], "inverseBindMatrices": 5}],
+  "meshes": [{"primitives": [
+    {"attributes": {"POSITION": 0, "JOINTS_0": 2, "WEIGHTS_0": 3}, "indices": 4, "material": 0},
+    {"attributes": {"POSITION": 1, "JOINTS_0": 2, "WEIGHTS_0": 3}, "indices": 4, "material": 1}]}],
+  "materials": [{"name": "Upper", "pbrMetallicRoughness": {"baseColorFactor": [1, 0, 0, 1]}},
+                {"name": "Lower", "pbrMetallicRoughness": {"baseColorFactor": [0, 0, 1, 1]}}],
+  "buffers": [{"byteLength": 268, "uri": "arm.bin"}],
+  "bufferViews": [{"buffer": 0, "byteOffset": 0, "byteLength": 36},
+                  {"buffer": 0, "byteOffset": 36, "byteLength": 36},
+                  {"buffer": 0, "byteOffset": 72, "byteLength": 12},
+                  {"buffer": 0, "byteOffset": 84, "byteLength": 48},
+                  {"buffer": 0, "byteOffset": 132, "byteLength": 6},
+                  {"buffer": 0, "byteOffset": 140, "byteLength": 128}],
+  "accessors": [{"bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3", "min": [0, 0, 0], "max": [1, 1, 0]},
+                {"bufferView": 1, "componentType": 5126, "count": 3, "type": "VEC3", "min": [0, 2, 0], "max": [1, 3, 0]},
+                {"bufferView": 2, "componentType": 5121, "count": 3, "type": "VEC4"},
+                {"bufferView": 3, "componentType": 5126, "count": 3, "type": "VEC4"},
+                {"bufferView": 4, "componentType": 5123, "count": 3, "type": "SCALAR"},
+                {"bufferView": 5, "componentType": 5126, "count": 2, "type": "MAT4"}]
+})");
+        std::string error;
+        const std::optional<ide::ImportedModel> model =
+            ide::import_model_file(resources, ide::utf8_path(source / "Arm.gltf"), error);
+        expect(model.has_value(), "a skinned glTF file imports");
+        if (!model) {
+            std::fprintf(stderr, "  %s\n", error.c_str());
+        }
+        if (model && model->meshes.size() == 2) {
+            bool skins_fine = true;
+            for (const std::string& note : model->notes) {
+                expect(note.find("came in static") == std::string::npos, "a skinned mesh no longer comes in static");
+            }
+            std::vector<anarchy::amesh::Data> meshes(2);
+            for (std::size_t m = 0; m < 2; ++m) {
+                expect(ReadMesh(resources / ide::path_from_utf8(model->meshes[m].path), meshes[m]),
+                       "each skinned mesh is an AMESH file");
+            }
+            const anarchy::amesh::Data& upper = meshes[0];
+            expect(upper.bones.size() == 2 && upper.bones[0].name == "Root" && upper.bones[1].name == "Hand" &&
+                       upper.bones[1].parent == 0 && upper.bones[0].parent == anarchy::amesh::kNoBone,
+                   "it keeps the skeleton's joints, parents first");
+            expect(meshes[1].bones.size() == upper.bones.size(), "every mesh of the file carries the same bones");
+            for (std::size_t b = 0; b < upper.bones.size() && b < meshes[1].bones.size(); ++b) {
+                const anarchy::amesh::Bone& a = upper.bones[b];
+                const anarchy::amesh::Bone& c = meshes[1].bones[b];
+                skins_fine = skins_fine && a.name == c.name && a.parent == c.parent &&
+                             std::memcmp(a.m, c.m, sizeof(a.m)) == 0 && std::memcmp(a.t, c.t, sizeof(a.t)) == 0;
+            }
+            expect(skins_fine, "the same bones, the same way, in each");
+            if (upper.bones.size() == 2) {
+                const anarchy::amesh::Bone& hand = upper.bones[1];
+                expect(Near(hand.t[0], 0) && Near(hand.t[1], 2) && Near(hand.t[2], 5) && Near(hand.m[0][0], 1) &&
+                           Near(hand.m[1][1], 1) && Near(hand.m[2][2], 1),
+                       "a joint rests where the file binds it, in the model's space");
+                expect(hand.cull_radius > 0.9f, "a joint's cull radius reaches the vertices it moves");
+            }
+            bool placed = true;
+            bool weighed = true;
+            bool blended = false;
+            for (const anarchy::amesh::Data& data : meshes) {
+                for (const anarchy::amesh::Vertex& vertex : data.vertices) {
+                    placed = placed && Near(vertex.p[2], 5);
+                    float total = 0.f;
+                    for (int k = 0; k < 4; ++k) {
+                        total += vertex.weight[k];
+                        blended = blended || (vertex.bone[k] == 1 && std::fabs(vertex.weight[k] - 0.25f) < 0.01f);
+                    }
+                    weighed = weighed && std::fabs(total - 1.f) < 0.01f;
+                }
+            }
+            expect(placed, "skinned vertices are in the model's space, where they rest");
+            expect(weighed, "every skinned vertex's weights add to 1");
+            expect(blended, "a vertex shared by two joints keeps both weights");
+        } else if (model) {
+            expect(false, "one mesh for each of its two materials");
+        }
+    }
+
     // An OBJ with three materials, one drawn by two objects, dropped on the studio.
     const fs::path root = folder / "ModelPlace";
     const fs::path outside = folder / "Downloads" / "crate";

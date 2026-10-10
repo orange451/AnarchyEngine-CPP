@@ -57,7 +57,7 @@ struct ImportedModel {
     std::vector<ImportedTexture> textures;
     std::vector<ImportedMaterial> materials;
     std::vector<ImportedMesh> meshes;
-    // What the file had that was left out, such as skinning or a texture not
+    // What the file had that was left out, such as animations or a texture not
     // found, one line each.
     std::vector<std::string> notes;
 };
@@ -67,10 +67,12 @@ struct ImportedModel {
 // meshes/<Name>/, and the textures its materials use in textures/<Name>/,
 // where <Name> is the file's name or name-2, name-3, and so on when another
 // import has it. Every node's transform is baked into the vertices, so the
-// Models need none. Skinned meshes come in static, in their bind pose; bones and animations are
-// left out. A texture the file names is looked for where it says, then by
-// file name beside the model and in the folders under it; one embedded in the
-// file is written out. A glTF metallic-roughness map is split in two, since a
+// Models need none. A skinned file keeps its skeleton: every AMESH it writes
+// holds the same bone table, each bone resting where the file binds it, and
+// each vertex its four heaviest bones; a mesh under a bone follows that bone
+// whole. Animations are left out. A texture the file names is looked for
+// where it says, then by file name beside the model and in the folders under
+// it; one embedded in the file is written out. A glTF metallic-roughness map is split in two, since a
 // Material reads each from the red channel. Takes as long as the file does to
 // read, on the calling thread. Empty, with error set, when the file cannot be
 // read or holds no triangles.

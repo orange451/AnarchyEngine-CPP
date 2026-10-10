@@ -81,8 +81,182 @@ struct Bucket {
     amesh::Data data;
 };
 
-// Appends mesh to data, moved by transform into the model's space.
-void AppendMesh(amesh::Data& data, const aiMesh& mesh, const aiMatrix4x4& transform) {
+// The skeleton every mesh of a file shares: each node an aiBone names, and
+// the nodes between them and the lowest node they all hang from, that one
+// included, parents first. Rest transforms are in the model's space.
+struct SkeletonTable {
+    std::vector<amesh::Bone> bones;
+    // An aiBone's name, as the file gives it, to its bone.
+    std::map<std::string, std::uint16_t> by_name;
+    std::map<const aiNode*, std::uint16_t> by_node;
+
+    // node's bone, or its nearest ancestor's; kNoBone when none is one.
+    std::uint16_t nearest(const aiNode* node) const {
+        for (; node != nullptr; node = node->mParent) {
+            const auto found = by_node.find(node);
+            if (found != by_node.end()) {
+                return found->second;
+            }
+        }
+        return amesh::kNoBone;
+    }
+};
+
+// AMESH keeps a bone's rest as a row-major 3x3 and a translation, as aiMatrix4x4's rows hold them.
+void StoreRest(amesh::Bone& bone, const aiMatrix4x4& rest) {
+    for (unsigned row = 0; row < 3; ++row) {
+        for (unsigned column = 0; column < 3; ++column) {
+            bone.m[row][column] = rest[row][column];
+        }
+    }
+    bone.t[0] = rest.a4, bone.t[1] = rest.b4, bone.t[2] = rest.c4;
+}
+
+// Each node's transform in the model's space, the root's own included.
+void GatherGlobals(const aiNode* node, const aiMatrix4x4& parent, std::map<const aiNode*, aiMatrix4x4>& out) {
+    const aiMatrix4x4 global = parent * node->mTransformation;
+    out[node] = global;
+    for (unsigned i = 0; i < node->mNumChildren; ++i) {
+        GatherGlobals(node->mChildren[i], global, out);
+    }
+}
+
+// The file's skeleton, empty when no mesh has bones. A bone rests where the
+// file binds it: the node drawing its mesh, times the inverse of the bone's
+// offset (from mesh space to the bone's). A node between bones that no mesh
+// is bound to rests where the scene has it.
+SkeletonTable BuildSkeleton(const aiScene& scene, const std::map<const aiNode*, aiMatrix4x4>& globals) {
+    SkeletonTable table;
+    std::map<std::string, aiMatrix4x4> rests;
+    for (const auto& [node, global] : globals) {
+        for (unsigned i = 0; i < node->mNumMeshes; ++i) {
+            const aiMesh* mesh = scene.mMeshes[node->mMeshes[i]];
+            for (unsigned b = 0; mesh != nullptr && b < mesh->mNumBones; ++b) {
+                const aiBone* bone = mesh->mBones[b];
+                aiMatrix4x4 offset = bone->mOffsetMatrix;
+                rests.emplace(bone->mName.C_Str(), global * offset.Inverse());
+            }
+        }
+    }
+    std::vector<const aiNode*> named;
+    for (const auto& entry : rests) {
+        if (const aiNode* node = scene.mRootNode->FindNode(entry.first.c_str())) {
+            named.push_back(node);
+        }
+    }
+    if (named.empty()) {
+        return table;
+    }
+    // The lowest node every named one hangs from: the longest path from the root they share.
+    const auto path_of = [](const aiNode* node) {
+        std::vector<const aiNode*> path;
+        for (; node != nullptr; node = node->mParent) {
+            path.push_back(node);
+        }
+        std::reverse(path.begin(), path.end());
+        return path;
+    };
+    std::vector<const aiNode*> shared = path_of(named.front());
+    for (const aiNode* node : named) {
+        const std::vector<const aiNode*> path = path_of(node);
+        std::size_t same = 0;
+        while (same < shared.size() && same < path.size() && shared[same] == path[same]) {
+            ++same;
+        }
+        shared.resize(same);
+    }
+    const aiNode* top = shared.back();
+    std::set<const aiNode*> kept;
+    for (const aiNode* node : named) {
+        for (; node != nullptr; node = node->mParent) {
+            kept.insert(node);
+            if (node == top) {
+                break;
+            }
+        }
+    }
+    std::set<std::string> taken;
+    std::vector<const aiNode*> walk{top};
+    while (!walk.empty()) {
+        const aiNode* node = walk.back();
+        walk.pop_back();
+        const auto index = static_cast<std::uint16_t>(table.bones.size());
+        amesh::Bone bone;
+        bone.name = UniqueName(node->mName.C_Str(), taken);
+        const auto parent = table.by_node.find(node->mParent);
+        bone.parent = node != top && parent != table.by_node.end() ? parent->second : amesh::kNoBone;
+        const auto rest = rests.find(node->mName.C_Str());
+        StoreRest(bone, rest != rests.end() ? rest->second : globals.at(node));
+        table.bones.push_back(bone);
+        table.by_node.emplace(node, index);
+        table.by_name.emplace(node->mName.C_Str(), index);
+        for (unsigned i = node->mNumChildren; i-- > 0;) {
+            if (kept.count(node->mChildren[i]) != 0) {
+                walk.push_back(node->mChildren[i]);
+            }
+        }
+    }
+    return table;
+}
+
+// Gives the vertices from base on their bones: a skinned mesh's four
+// heaviest, adding to 1, and any vertex without one (or every vertex of a mesh
+// without bones) bound wholly to rigid, when that is a bone.
+void BindVertices(amesh::Data& data, std::uint32_t base, const aiMesh& mesh, const SkeletonTable& skeleton,
+                  std::uint16_t rigid) {
+    std::vector<std::vector<std::pair<float, std::uint16_t>>> influences(mesh.mNumVertices);
+    for (unsigned b = 0; b < mesh.mNumBones; ++b) {
+        const aiBone* bone = mesh.mBones[b];
+        const auto found = skeleton.by_name.find(bone->mName.C_Str());
+        if (found == skeleton.by_name.end()) {
+            continue;
+        }
+        for (unsigned w = 0; w < bone->mNumWeights; ++w) {
+            const aiVertexWeight& weight = bone->mWeights[w];
+            if (weight.mVertexId >= mesh.mNumVertices || !(weight.mWeight > 0.f)) {
+                continue;
+            }
+            auto& list = influences[weight.mVertexId];
+            // One bone twice in a vertex is one influence.
+            const auto same = std::find_if(list.begin(), list.end(), [&](const auto& entry) {
+                return entry.second == found->second;
+            });
+            if (same != list.end()) {
+                same->first += weight.mWeight;
+            } else {
+                list.emplace_back(weight.mWeight, found->second);
+            }
+        }
+    }
+    for (unsigned i = 0; i < mesh.mNumVertices; ++i) {
+        auto& list = influences[i];
+        std::sort(list.begin(), list.end(), [](const auto& a, const auto& b) { return a.first > b.first; });
+        if (list.size() > 4) {
+            list.resize(4);
+        }
+        float total = 0.f;
+        for (const auto& entry : list) {
+            total += entry.first;
+        }
+        amesh::Vertex& vertex = data.vertices[base + i];
+        if (list.empty() || !(total > 0.f)) {
+            if (rigid != amesh::kNoBone) {
+                vertex.bone[0] = rigid;
+                vertex.weight[0] = 1.f;
+            }
+            continue;
+        }
+        for (std::size_t k = 0; k < list.size(); ++k) {
+            vertex.bone[k] = list[k].second;
+            vertex.weight[k] = list[k].first / total;
+        }
+    }
+}
+
+// Appends mesh to data, moved by transform into the model's space, and bound
+// to skeleton's bones when the file has some (BindVertices).
+void AppendMesh(amesh::Data& data, const aiMesh& mesh, const aiMatrix4x4& transform,
+                const SkeletonTable* skeleton = nullptr, std::uint16_t rigid = amesh::kNoBone) {
     const aiMatrix3x3 linear(transform);
     aiMatrix3x3 normal_matrix = linear;
     normal_matrix.Inverse().Transpose();
@@ -122,6 +296,9 @@ void AppendMesh(amesh::Data& data, const aiMesh& mesh, const aiMatrix4x4& transf
             vertex.rgba[2] = ToByte(color.b), vertex.rgba[3] = ToByte(color.a);
         }
         data.vertices.push_back(vertex);
+    }
+    if (skeleton != nullptr) {
+        BindVertices(data, base, mesh, *skeleton, rigid);
     }
     for (unsigned f = 0; f < mesh.mNumFaces; ++f) {
         const aiFace& face = mesh.mFaces[f];
@@ -478,7 +655,8 @@ std::optional<ImportedModel> import_model_file(const fs::path& resources_root, c
                                 aiProcess_CalcTangentSpace | aiProcess_SortByPType | aiProcess_FindDegenerates |
                                 aiProcess_FindInvalidData | aiProcess_GenUVCoords | aiProcess_TransformUVCoords |
                                 aiProcess_SplitLargeMeshes | aiProcess_ImproveCacheLocality |
-                                aiProcess_RemoveRedundantMaterials | aiProcess_ValidateDataStructure;
+                                aiProcess_RemoveRedundantMaterials | aiProcess_LimitBoneWeights |
+                                aiProcess_ValidateDataStructure;
     const aiScene* scene = importer.ReadFile(utf8_path(from), kSteps);
     if (scene == nullptr || scene->mRootNode == nullptr || (scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE) != 0) {
         error = importer.GetErrorString();
@@ -493,6 +671,11 @@ std::optional<ImportedModel> import_model_file(const fs::path& resources_root, c
     if (model.name.empty()) {
         model.name = "Model";
     }
+
+    // The skeleton every mesh shares, when any has bones.
+    std::map<const aiNode*, aiMatrix4x4> globals;
+    GatherGlobals(scene->mRootNode, aiMatrix4x4(), globals);
+    const SkeletonTable skeleton = BuildSkeleton(*scene, globals);
 
     // Each material's triangles, in the order the nodes first draw it, with
     // every node's transform baked in. A material too big for one AMESH goes on in another.
@@ -510,9 +693,6 @@ std::optional<ImportedModel> import_model_file(const fs::path& resources_root, c
             if (mesh == nullptr || (mesh->mPrimitiveTypes & aiPrimitiveType_TRIANGLE) == 0 || mesh->mNumFaces == 0) {
                 continue;
             }
-            if (mesh->HasBones()) {
-                Note(model, "Skinned meshes came in static, in their bind pose: bones are not imported yet");
-            }
             auto at = open.find(mesh->mMaterialIndex);
             if (at == open.end() ||
                 buckets[at->second].data.vertices.size() + mesh->mNumVertices > amesh::kMaxVertices ||
@@ -520,7 +700,37 @@ std::optional<ImportedModel> import_model_file(const fs::path& resources_root, c
                 buckets.push_back({mesh->mMaterialIndex, {}});
                 at = open.insert_or_assign(mesh->mMaterialIndex, buckets.size() - 1).first;
             }
-            AppendMesh(buckets[at->second].data, *mesh, transform);
+            if (skeleton.bones.empty()) {
+                AppendMesh(buckets[at->second].data, *mesh, transform);
+            } else {
+                // A mesh under a bone (a helmet under the head) follows it whole;
+                // a skinned vertex with no weight follows its mesh's bone, or the first.
+                std::uint16_t rigid = skeleton.nearest(node);
+                if (mesh->HasBones() && rigid == amesh::kNoBone) {
+                    rigid = 0;
+                }
+                AppendMesh(buckets[at->second].data, *mesh, transform, &skeleton, rigid);
+            }
+        }
+    }
+    if (!skeleton.bones.empty()) {
+        // Every mesh carries the whole table, so one pose moves them all;
+        // each bone's cull radius reaches every vertex it moves, in any of them.
+        std::vector<amesh::Bone> bones = skeleton.bones;
+        for (const Bucket& bucket : buckets) {
+            for (const amesh::Vertex& vertex : bucket.data.vertices) {
+                for (int k = 0; k < 4; ++k) {
+                    if (vertex.bone[k] >= bones.size() || !(vertex.weight[k] > 0.f)) {
+                        continue;
+                    }
+                    amesh::Bone& bone = bones[vertex.bone[k]];
+                    const float dx = vertex.p[0] - bone.t[0], dy = vertex.p[1] - bone.t[1], dz = vertex.p[2] - bone.t[2];
+                    bone.cull_radius = std::max(bone.cull_radius, std::sqrt(dx * dx + dy * dy + dz * dz));
+                }
+            }
+        }
+        for (Bucket& bucket : buckets) {
+            bucket.data.bones = bones;
         }
     }
     buckets.erase(std::remove_if(buckets.begin(), buckets.end(),

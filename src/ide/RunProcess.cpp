@@ -152,8 +152,16 @@ ProcessResult Run(const fs::path& program, const std::vector<std::string>& args,
     InitializeProcThreadAttributeList(nullptr, 1, 0, &size);
     std::vector<unsigned char> storage(size);
     auto* attributes = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(storage.data());
-    if (!InitializeProcThreadAttributeList(attributes, 1, 0, &size) ||
-        !UpdateProcThreadAttribute(attributes, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, inherited,
+    if (!InitializeProcThreadAttributeList(attributes, 1, 0, &size)) {
+        result.error = "Could not set up the child's handles: " + Describe(GetLastError());
+        return result;
+    }
+    // Freed on every path out of here, including the returns below.
+    struct AttributeList {
+        LPPROC_THREAD_ATTRIBUTE_LIST list;
+        ~AttributeList() { DeleteProcThreadAttributeList(list); }
+    } attribute_list{attributes};
+    if (!UpdateProcThreadAttribute(attributes, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, inherited,
                                    inherited_count * sizeof(HANDLE), nullptr, nullptr)) {
         result.error = "Could not set up the child's handles: " + Describe(GetLastError());
         return result;
@@ -182,7 +190,6 @@ ProcessResult Run(const fs::path& program, const std::vector<std::string>& args,
         CREATE_NO_WINDOW | CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT, nullptr,
         nullptr, &startup.StartupInfo, &process);
     const DWORD create_error = GetLastError();
-    DeleteProcThreadAttributeList(attributes);
     write_end.reset();
     nul.reset();
     if (!created) {

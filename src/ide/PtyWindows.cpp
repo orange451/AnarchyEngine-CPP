@@ -322,22 +322,25 @@ std::unique_ptr<Pty> Pty::spawn(PtyOptions options, std::string* error) {
     startup.lpAttributeList = attributes;
     PROCESS_INFORMATION process{};
     std::string failure;
-    if (!InitializeProcThreadAttributeList(attributes, 1, 0, &attribute_size) ||
-        !UpdateProcThreadAttribute(attributes, 0, kPseudoConsoleAttribute, console, sizeof(console), nullptr,
-                                   nullptr)) {
+    if (!InitializeProcThreadAttributeList(attributes, 1, 0, &attribute_size)) {
         failure = ErrorText("Can't attach the pseudo-console", GetLastError());
     } else {
-        std::wstring command_line;
-        AppendArgument(command_line, Wide(options.program));
-        for (const std::string& arg : options.args) {
-            AppendArgument(command_line, Wide(arg));
-        }
-        std::vector<wchar_t> environment = EnvironmentBlock(options.env);
-        const std::wstring cwd = Wide(options.cwd);
-        if (!CreateProcessW(nullptr, command_line.data(), nullptr, nullptr, FALSE,
-                            EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT, environment.data(),
-                            cwd.empty() ? nullptr : cwd.c_str(), &startup.StartupInfo, &process)) {
-            failure = ErrorText(("Can't start " + options.program).c_str(), GetLastError());
+        if (!UpdateProcThreadAttribute(attributes, 0, kPseudoConsoleAttribute, console, sizeof(console), nullptr,
+                                       nullptr)) {
+            failure = ErrorText("Can't attach the pseudo-console", GetLastError());
+        } else {
+            std::wstring command_line;
+            AppendArgument(command_line, Wide(options.program));
+            for (const std::string& arg : options.args) {
+                AppendArgument(command_line, Wide(arg));
+            }
+            std::vector<wchar_t> environment = EnvironmentBlock(options.env);
+            const std::wstring cwd = Wide(options.cwd);
+            if (!CreateProcessW(nullptr, command_line.data(), nullptr, nullptr, FALSE,
+                                EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT, environment.data(),
+                                cwd.empty() ? nullptr : cwd.c_str(), &startup.StartupInfo, &process)) {
+                failure = ErrorText(("Can't start " + options.program).c_str(), GetLastError());
+            }
         }
         DeleteProcThreadAttributeList(attributes);
     }

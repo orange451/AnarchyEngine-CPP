@@ -624,6 +624,14 @@ int main() {
             if (assets != nullptr) {
                 assets->openFolder(world.service("Prefabs"));
             }
+            if (auto* game_view = dynamic_cast<runner::GameView*>(view)) {
+                // A camera away from the origin, looking down -Z.
+                engine_core::Matrix4 camera = engine_core::matrix4_identity();
+                camera.m[12] = 3.f;
+                camera.m[13] = 4.f;
+                camera.m[14] = 5.f;
+                game_view->setViewForTests(camera, 70.f);
+            }
             drag(crate);
             expect(over == jadefx::Cursor::Copy, "a Prefab over the Scene View shows the plus");
             std::vector<engine_core::InstanceId> added;
@@ -639,6 +647,22 @@ int main() {
             expect(world.get_children(world.service("Prefabs")).size() == 1 && world.parent(crate) == world.service("Prefabs"),
                    "the Prefab stays in Prefabs");
             expect(added.size() == 1 && world.selection().get() == added, "the new GameObject is selected");
+            {
+                auto* game_view = dynamic_cast<runner::GameView*>(view);
+                engine_core::Matrix4 eye = engine_core::matrix4_identity();
+                float fov = 0.f;
+                bool ahead = false;
+                if (game_view != nullptr && game_view->paintedView(eye, fov) && object != nullptr) {
+                    const engine_core::Vec3 at = object->position();
+                    const float dx = at.x - eye.m[12];
+                    const float dy = at.y - eye.m[13];
+                    const float dz = at.z - eye.m[14];
+                    const float along = -(dx * eye.m[8] + dy * eye.m[9] + dz * eye.m[10]);
+                    const float off = std::sqrt(std::max(0.f, dx * dx + dy * dy + dz * dz - along * along));
+                    ahead = along > 1.f && off < 0.01f * along + 0.01f;
+                }
+                expect(ahead, "a Prefab dropped on the Scene View lands in front of the camera");
+            }
             layout.simulation().on_simulation([&](engine_core::DataModel& game) {
                 for (engine_core::InstanceId id : added) {
                     game.destroy_tree(id);

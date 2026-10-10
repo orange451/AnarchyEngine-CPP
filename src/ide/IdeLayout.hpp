@@ -481,8 +481,9 @@ private:
     // The Assets pane, over the place, with the explorers' actions.
     std::shared_ptr<IdePane> make_assets();
     // Add as GameObject: a GameObject in Workspace for each Prefab in prefabs,
-    // as one undo step, and they become the selection.
-    void add_as_game_objects(std::vector<engine_core::InstanceId> prefabs);
+    // as one undo step, and they become the selection. Each is placed in
+    // front of view's camera, or the main Scene View's with none.
+    void add_as_game_objects(std::vector<engine_core::InstanceId> prefabs, const runner::GameView* view = nullptr);
     // A drag from the Assets pane onto view that holds a Prefab adds each
     // Prefab in it as a GameObject. A drag with none is refused.
     void accept_prefab_drops(jadefx::Node& view);

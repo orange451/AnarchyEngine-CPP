@@ -105,6 +105,13 @@ public:
     bool pointerWanted() const;
     // A plugin is active: it hears the view's mouse and has the left button to itself.
     bool pluginHeld() const;
+    // The camera and field of view the last painted frame drew from. False
+    // before one has.
+    bool paintedView(engine_core::Matrix4& camera, float& fovDegrees) const {
+        camera = viewCamera_;
+        fovDegrees = viewFov_;
+        return viewFov_ > 0.f;
+    }
     // The camera and field of view rays leave from, as a painted frame sets them. For
     // headless tests, which never paint.
     void setViewForTests(const engine_core::Matrix4& camera, float fovDegrees) {

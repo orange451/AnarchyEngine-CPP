@@ -8,6 +8,7 @@
 #include "AssetInstances.hpp"
 #include "ChangeHistoryService.hpp"
 #include "GameExport.hpp"
+#include "GameObject.hpp"
 #include "IdeAssets.hpp"
 #include "IdeLayoutInternal.hpp"
 #include "LockWaits.hpp"
@@ -18,7 +19,9 @@
 #include "InstanceFile.hpp"
 #include "TextureImport.hpp"
 
+#include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <sstream>
 #include <fstream>
 #include <ctime>
@@ -81,15 +84,62 @@ std::shared_ptr<IdePane> IdeLayout::make_assets() {
     return pane;
 }
 
-void IdeLayout::add_as_game_objects(std::vector<engine_core::InstanceId> prefabs) {
-    runner_.simulation().on_simulation(
-        [this, alive = std::weak_ptr<int>(alive_), prefabs = std::move(prefabs)](engine_core::DataModel& world) {
+namespace {
+
+// Nearest a placed GameObject's middle comes to the camera, in units.
+constexpr float kMinPlaceDistance = 8.f;
+
+// Moves object, a new GameObject showing prefab, so the middle of the
+// Prefab's bounds sits in front of camera, far enough back that all of it
+// fits in a view fov_degrees tall.
+void PlaceInView(engine_core::DataModel& world, engine_core::InstanceId object, engine_core::InstanceId prefab,
+                 const engine_core::Matrix4& camera, float fov_degrees) {
+    auto* placed = dynamic_cast<engine_core::GameObject*>(world.instance(object));
+    const auto* source = dynamic_cast<const engine_core::Prefab*>(world.instance(prefab));
+    const engine_core::Vec3 look{-camera.m[8], -camera.m[9], -camera.m[10]};
+    const float length = std::sqrt(look.x * look.x + look.y * look.y + look.z * look.z);
+    if (placed == nullptr || source == nullptr || !(length > 0.f)) {
+        return;
+    }
+    float distance = kMinPlaceDistance;
+    engine_core::Vec3 low{};
+    engine_core::Vec3 high{};
+    if (source->bounds(low, high)) {
+        const float dx = high.x - low.x;
+        const float dy = high.y - low.y;
+        const float dz = high.z - low.z;
+        const float radius = 0.5f * std::sqrt(dx * dx + dy * dy + dz * dz);
+        const float half_fov = fov_degrees * 0.5f * 3.14159265f / 180.f;
+        distance = std::max(distance, radius / std::tan(half_fov) * 1.2f);
+    }
+    // The GameObject draws the Prefab at its origin, so its middle is origin_offset from there.
+    const engine_core::Vec3 middle = source->origin_offset();
+    const engine_core::Vec3 eye = engine_core::matrix4_position(camera);
+    const float step = distance / length;
+    placed->set_position({eye.x + look.x * step - middle.x, eye.y + look.y * step - middle.y,
+                          eye.z + look.z * step - middle.z});
+}
+
+}  // namespace
+
+void IdeLayout::add_as_game_objects(std::vector<engine_core::InstanceId> prefabs, const runner::GameView* view) {
+    if (view == nullptr) {
+        view = frame_view_;
+    }
+    engine_core::Matrix4 camera = engine_core::matrix4_identity();
+    float fov = 0.f;
+    const bool place = view != nullptr && view->paintedView(camera, fov);
+    runner_.simulation().on_simulation([this, alive = std::weak_ptr<int>(alive_), prefabs = std::move(prefabs), place,
+                                        camera, fov](engine_core::DataModel& world) {
             ScopedRecording step(world, "Add as GameObject");
             std::vector<engine_core::InstanceId> made;
             std::string error;
             for (engine_core::InstanceId prefab : prefabs) {
                 std::string refused;
                 if (const engine_core::InstanceId id = add_prefab_instance(world, prefab, refused)) {
+                    if (place) {
+                        PlaceInView(world, id, prefab, camera, fov);
+                    }
                     made.push_back(id);
                 } else if (error.empty()) {
                     error = std::move(refused);
@@ -162,6 +212,7 @@ constexpr std::size_t kListedImports = 12;
 }  // namespace
 
 void IdeLayout::accept_prefab_drops(jadefx::Node& view) {
+    const auto* game_view = dynamic_cast<const runner::GameView*>(&view);
     view.setOnDragOver([this](jadefx::DragEvent& event) {
         if (event.dragboard == nullptr || !event.dragboard->has(kInstanceDragFormat)) {
             return;
@@ -175,7 +226,7 @@ void IdeLayout::accept_prefab_drops(jadefx::Node& view) {
             event.consume();
         }
     });
-    view.setOnDragDropped([this](jadefx::DragEvent& event) {
+    view.setOnDragDropped([this, game_view](jadefx::DragEvent& event) {
         if (event.dragboard == nullptr || !event.dragboard->has(kInstanceDragFormat)) {
             return;
         }
@@ -192,7 +243,7 @@ void IdeLayout::accept_prefab_drops(jadefx::Node& view) {
         if (prefabs.empty()) {
             return;
         }
-        add_as_game_objects(std::move(prefabs));
+        add_as_game_objects(std::move(prefabs), game_view);
         event.setDropCompleted(true);
         event.consume();
     });

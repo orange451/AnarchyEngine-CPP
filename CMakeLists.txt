@@ -25,6 +25,12 @@ if(MSVC)
     set(USE_MSVC_RUNTIME_LIBRARY_DLL OFF CACHE BOOL "" FORCE)
 endif()
 
+# Compile the files of each project in parallel under Visual Studio. Set before
+# any dependency is added, so they build in parallel too.
+if(MSVC)
+    add_compile_options($<$<COMPILE_LANGUAGE:C,CXX>:/MP>)
+endif()
+
 # Editors (clangd, VS Code) read this so they use the same include paths as the build.
 # JadeFX lives outside this tree; without it, `#include "jadefx/jadefx.hpp"` looks missing.
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
@@ -1137,5 +1143,40 @@ foreach(suite engine-tests properties-tests console-tests studio-tests mcp-tests
               prefab-editor-tests terrain-editor-tests terminal-tests amesh-tests profiler-tests)
     if(TARGET ${suite})
         add_test(NAME ${suite} COMMAND ${suite} WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+    endif()
+endforeach()
+
+# Build speed. MSBuild compiles one file at a time inside a project unless /MP
+# is on; Ninja runs files in parallel already. The engine's own libraries share
+# a precompiled set of standard headers, which nearly every source includes.
+set(ANARCHY_OWN_LIBRARIES
+    profiler engine_datatypes engine_instances engine_services engine_core
+    studio_core studio amesh amesh_gl)
+set(ANARCHY_PCH_HEADERS
+    <algorithm> <atomic> <chrono> <cmath> <cstdint> <cstring> <filesystem> <functional>
+    <memory> <mutex> <optional> <string> <string_view> <unordered_map> <utility> <vector>)
+foreach(lib ${ANARCHY_OWN_LIBRARIES})
+    if(TARGET ${lib})
+        target_precompile_headers(${lib} PRIVATE ${ANARCHY_PCH_HEADERS})
+    endif()
+endforeach()
+
+# Test, demo, and check programs stay out of a plain build, so building the
+# studio builds only the studio and the player. Build them with the `tests`
+# target (cmake --build build --config Release --target tests), then run ctest.
+option(ANARCHY_TESTS_IN_ALL "Build every test and demo program in a plain build" OFF)
+set(ANARCHY_TEST_PROGRAMS
+    shell-tests explorer-tests assets-tests prefab-editor-tests terrain-editor-tests
+    console-tests properties-tests studio-tests mcp-tests profiler-tests mcp-setup-tests
+    engine-tests terminal-tests terminal-probe terminal-demo assets-demo billboard-demo
+    prefab-demo amesh-tests amesh-gl-check profiler-demo grid-check gpu-timer-check
+    scene-render-check sandbox)
+add_custom_target(tests)
+foreach(program ${ANARCHY_TEST_PROGRAMS})
+    if(TARGET ${program})
+        add_dependencies(tests ${program})
+        if(NOT ANARCHY_TESTS_IN_ALL)
+            set_target_properties(${program} PROPERTIES EXCLUDE_FROM_ALL TRUE)
+        endif()
     endif()
 endforeach()

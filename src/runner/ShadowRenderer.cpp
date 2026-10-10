@@ -94,7 +94,8 @@ bool ShadowRenderer::makeAtlas(int size, int pages) {
     // again. Past the GPU's limits, or its memory, glTexImage3D says so.
     // glGetError reports the oldest error still unread, which may be another
     // pass's: drain those first so only MakeDepth's own failure counts here.
-    while (glGetError() != GL_NO_ERROR) {
+    // The drain is bounded, so a lost context cannot spin it.
+    for (int i = 0; i < 16 && glGetError() != GL_NO_ERROR; ++i) {
     }
     unsigned texture = MakeDepth(size, pages, nullptr);
     bool made = glGetError() == GL_NO_ERROR;
@@ -120,7 +121,7 @@ bool ShadowRenderer::makeAtlas(int size, int pages) {
 void ShadowRenderer::refuse(int size, int pages) {
     if (!refused_) {
         std::fprintf(stderr,
-                     "This driver will not draw shadow maps (a %d x %d depth array with %d pages was refused); "
+                     "This driver will not draw shadow maps (a %d x %d depth array (%d pages) could not be drawn to); "
                      "lights are drawn without shadows.\n",
                      size, size, pages);
         refused_ = true;

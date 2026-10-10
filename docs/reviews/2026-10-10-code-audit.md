@@ -9,7 +9,17 @@
 
 ## Status
 
-Fixed on branch `audit-fixes` (plan: `docs/superpowers/plans/2026-10-10-audit-fixes.md`): B1-B8, B10-B13, B15, D1-D6, D8, and section 4 dead code. B9's header now states the real limit and a test pins it; `ancestry_changed` is kept and pinned by a test. Corrections found while fixing: `DirectionalLight` is not a PVInstance, lights do have a `Color`, `glGetTexParameteriv` is used by `scene-render-check`, and the render-side `VisualDynamicSky` defaults had drifted too. Deferred: B9's real fix (a render-thread hand-off point), B14, D7, exposing instance signals to Luau, `Lighting.Ambient`'s colour space, and section 5 duplication P1-P8. Pre-existing test failures on `main` that this branch does not address are listed in the branch's final report.
+Fixed on branch `audit-fixes` (plan: `docs/superpowers/plans/2026-10-10-audit-fixes.md`): B1-B8, B10-B13, B15, D1-D6, D8, and section 4 dead code. B9's header now states the real limit and a test pins it; `ancestry_changed` is kept and pinned by a test. Corrections found while fixing: `DirectionalLight` is not a PVInstance, lights do have a `Color`, `glGetTexParameteriv` is used by `scene-render-check`, and the render-side `VisualDynamicSky` defaults had drifted too. Deferred: B9's real fix (a render-thread hand-off point), B14, D7, exposing instance signals to Luau, `Lighting.Ambient`'s colour space, and section 5 duplication P1-P8. A Light's `Color` is sRGB like every `Color3`, so a coloured or grey light renders dimmer than it did before this change; white lights are unchanged.
+
+Pre-existing test failures on `main` that this branch does not address:
+
+- sandbox, 11 failures: tests.cpp (idle step rate above 120 Hz, machine-dependent); merge_tests.cpp (default_keys list still expects Camera as a GameObject); prefab_render_tests.cpp (roughness 0.4 against the new default 0.5); camera_tests.cpp (IsA GameObject, default camera transform, and one sun against the new DynamicSky default); light_tests.cpp (IsA GameObject for lights); physics_tests.cpp (two Mass-default-1 assertions, now 50); player_controller_tests.cpp (Mass default); brush_tests.cpp (BP3 body_mass).
+- sandbox MT8 and MT11 (move_tool_tests.cpp) crash with SIGSEGV.
+- engine-tests, 4: "a folder uses the plain actions", "a folder can be deleted", "the global BrushFace is highlighted as a datatype", "insert list is every creatable class, in clusters, each A to Z".
+- mcp-tests, 4: "save_place succeeds: folder must be an absolute path.", "a Save has no folder, and Save As its folder", "a refused folder never reaches the studio", "why the studio did not save comes back as the error".
+- properties-tests, 1: "a PointLight opens with Prefab, Enabled, Shadows".
+- scene-render-check, 1: the floor seen just past the cube's top edge is not shaded.
+- studio-tests: the "six frames recorded" flake.
 
 > **Bottom line.** The code is in good shape. Nothing found here crashes the studio, corrupts a project, or loses work; the eleven critical and high findings of the September review are fixed. What remains is one Medium rendering bug that can silently turn off point and spot shadows for a session, one Medium copy-paste omission that hides a revived Dragger, a handful of Low bugs, several places where the README, the tests, and the code disagree about defaults and class hierarchy, and a large amount of copy-pasted helper code (roughly 1,500 lines) that has already started to drift.
 

@@ -39,6 +39,9 @@ public:
     // there without a lock. Bind a render job once and keep it; each phase
     // holds the entries Engine reserved (64), and bind past that aborts.
     void unbind(JobId id);
+    // Read-only: jobs held in a phase (render entries stay after unbind) and the capacity reserved for it.
+    std::size_t bound_count(Phase phase) const { return jobs_[static_cast<int>(phase)].size(); }
+    std::size_t phase_capacity(Phase phase) const { return jobs_[static_cast<int>(phase)].capacity(); }
     // Dropped by stop_simulation. A script job uses this, not bind().
     void bind_session(Phase phase, Job job, int priority = 2000);
     void cancel_session_jobs();

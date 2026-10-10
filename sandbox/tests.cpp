@@ -5547,19 +5547,17 @@ TEST_CASE("RW2 the window signal binds with RunService and carries its own dt", 
 TEST_CASE("SCH1 a render-phase job's entry stays until shutdown, so a rig binds one and reuses it", "[scheduler]") {
     engine_core::Engine engine;
     engine_core::TaskScheduler& scheduler = engine.scheduler();
-    // Engine reserves 64 entries per phase, and its own ScriptRuntime binds one
-    // RenderStepped job (ScriptRuntime::attach), leaving 64 - 1 = 63 free. A
-    // render entry is kept after unbind (the render thread may be inside its
-    // closure), so each bind-unbind cycle uses a slot for good. This fills the
-    // phase to exactly its capacity; a 64th cycle would abort.
-    constexpr int kReserved = 64;
-    constexpr int kBoundByEngine = 1;
-    constexpr int kFree = kReserved - kBoundByEngine;
+    // A render entry is kept after unbind (the render thread may be inside its
+    // closure), so each bind-unbind cycle uses a slot for good. Measure what
+    // Engine already bound, then fill the phase to exactly its capacity; one
+    // more cycle would abort.
+    const engine_core::Phase phase = engine_core::Phase::RenderStepped;
+    const std::size_t kFree = scheduler.phase_capacity(phase) - scheduler.bound_count(phase);
     std::vector<engine_core::TaskScheduler::JobId> ids;
-    for (int cycle = 0; cycle < kFree; ++cycle) {
-        ids.push_back(scheduler.bind(engine_core::Phase::RenderStepped, [](double) {}));
+    for (std::size_t cycle = 0; cycle < kFree; ++cycle) {
+        ids.push_back(scheduler.bind(phase, [](double) {}));
         scheduler.unbind(ids.back());
     }
-    REQUIRE(ids.size() == static_cast<std::size_t>(kFree));
+    REQUIRE(ids.size() == kFree);
     REQUIRE(std::adjacent_find(ids.begin(), ids.end()) == ids.end());
 }

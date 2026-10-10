@@ -1,5 +1,6 @@
 #include "TextureCache.hpp"
 
+#include "AssetLoads.hpp"
 #include "gl.hpp"
 #include "texture/Atex.hpp"
 #include "texture/TexturePool.hpp"
@@ -453,6 +454,7 @@ void TextureCache::check(Streamed& streamed) {
         }
         streamed.visible = false;
         streamed.queue.clear();
+        engine_core::set_asset_loaded(engine_core::AssetKind::Texture, root_, streamed.path, false);
         if (was_there && report_) {
             report_("Texture " + streamed.path + " was not found in the resources folder");
         }
@@ -502,6 +504,7 @@ void TextureCache::show(Streamed& streamed) {
     const bool ready = streamed.alwaysLoaded ? streamed.validFirst == 0 : streamed.validFirst < streamed.levels;
     if (!ready) return;
     streamed.visible = true;
+    engine_core::set_asset_loaded(engine_core::AssetKind::Texture, root_, streamed.path, true);
     if (streamed.old != 0) glDeleteTextures(1, &streamed.old);
 }
 
@@ -518,6 +521,7 @@ void TextureCache::pump(std::size_t budgetBytes) {
         if (found == streamed_.end() || found->second.key != key) continue;
         Streamed& streamed = found->second;
         streamed.failed = true;
+        engine_core::set_asset_loaded(engine_core::AssetKind::Texture, root_, streamed.path, false);
         // A texture that stops reading stops drawing, rather than showing the old version.
         for (unsigned* texture : {&streamed.texture, &streamed.old}) {
             if (*texture != 0) glDeleteTextures(1, texture);

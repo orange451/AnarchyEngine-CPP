@@ -1,6 +1,7 @@
 #include "TerrainTextures.hpp"
 
 #include "AssetInstances.hpp"
+#include "AssetLoads.hpp"
 #include "Enum.hpp"
 #include "LuaApi.hpp"
 #include "Terrain.hpp"
@@ -308,6 +309,16 @@ void TerrainTextures::land(const std::string& key, const std::shared_ptr<const t
             slot.bytes_key = key;
             slot.revision = next_layer_revision_++;
             any = true;
+            // Texture.Loaded: terrain now shows something of each of its files.
+            if (!root_.empty()) {
+                const terrain::LayerSources& s = slot.sources;
+                for (const std::filesystem::path* file : {&s.diffuse, &s.normal, &s.roughness, &s.metalness, &s.height}) {
+                    if (!file->empty()) {
+                        set_asset_loaded(AssetKind::Texture, root_, file->lexically_relative(root_).generic_u8string(),
+                                         true);
+                    }
+                }
+            }
         }
         if (any && std::find(changed.begin(), changed.end(), id) == changed.end()) changed.push_back(id);
     }
@@ -359,6 +370,7 @@ void TerrainTextures::update(DataModel& game) {
     }
 
     const std::filesystem::path root = game.resources_root();
+    root_ = root;
     const auto now = std::chrono::steady_clock::now();
 
     for (InstanceId id : current) {

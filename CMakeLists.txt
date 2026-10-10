@@ -563,6 +563,7 @@ add_library(engine_datatypes STATIC
 )
 add_library(engine_instances STATIC
     src/engine_instances/AssetInstances.cpp
+    src/engine_instances/AssetLoads.cpp
     src/engine_instances/Camera.cpp
     src/engine_instances/MeshShapes.cpp
     src/engine_instances/Folder.cpp

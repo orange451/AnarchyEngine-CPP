@@ -496,3 +496,50 @@ TEST_CASE("TS22 atex files written at once to one path never mix their bytes", "
     }
     CHECK_FALSE(mixed);
 }
+
+// ---- Loaded: whether an asset's file is showing (or can play) yet ----
+
+#include "AssetLoads.hpp"
+
+TEST_CASE("TS23 Texture and Mesh Loaded follow what the renderer reports for their Path", "[texture]") {
+    SimRole role;
+    Game game;
+    TempDir dir;
+    game.set_resources_root(dir.path);
+    engine_core::clear_asset_loads();
+    Texture& texture = game.create<Texture>();
+    REQUIRE_FALSE(texture.set_path("textures/a.png"));
+    engine_core::Mesh& mesh = game.create<engine_core::Mesh>();
+    REQUIRE_FALSE(mesh.set_path("meshes/a.amesh"));
+    CHECK_FALSE(texture.loaded(dir.path));
+    CHECK_FALSE(mesh.loaded(dir.path));
+    engine_core::set_asset_loaded(engine_core::AssetKind::Texture, dir.path, "textures/a.png", true);
+    CHECK(texture.loaded(dir.path));
+    CHECK_FALSE(mesh.loaded(dir.path));   // kinds are apart
+    engine_core::set_asset_loaded(engine_core::AssetKind::Mesh, dir.path, "meshes/a.amesh", true);
+    CHECK(mesh.loaded(dir.path));
+    engine_core::set_asset_loaded(engine_core::AssetKind::Texture, dir.path, "textures/a.png", false);
+    CHECK_FALSE(texture.loaded(dir.path));
+    CHECK_FALSE(texture.loaded(dir.path / "elsewhere"));   // another project's root is another file
+}
+
+TEST_CASE("TS24 Sound Loaded is whether its file decodes", "[texture]") {
+    SimRole role;
+    Game game;
+    TempDir dir;
+    game.set_resources_root(dir.path);
+    engine_core::Sound& sound = game.create<engine_core::Sound>();
+    REQUIRE_FALSE(sound.set_path("audio/beep.wav"));
+    CHECK_FALSE(sound.loaded(dir.path));
+    // A tenth of a second of 8 kHz mono 16-bit silence.
+    std::filesystem::create_directories(dir.path / "audio");
+    std::ofstream out(dir.path / "audio" / "beep.wav", std::ios::binary);
+    const auto u32 = [&](std::uint32_t v) { out.write(reinterpret_cast<const char*>(&v), 4); };
+    const auto u16 = [&](std::uint16_t v) { out.write(reinterpret_cast<const char*>(&v), 2); };
+    const std::uint32_t samples = 800;
+    out.write("RIFF", 4); u32(36 + samples * 2); out.write("WAVEfmt ", 8); u32(16); u16(1); u16(1); u32(8000);
+    u32(16000); u16(2); u16(16); out.write("data", 4); u32(samples * 2);
+    for (std::uint32_t i = 0; i < samples; ++i) u16(0);
+    out.close();
+    CHECK(sound.loaded(dir.path));
+}

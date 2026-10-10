@@ -1,4 +1,5 @@
 #include "AssetInstances.hpp"
+#include "AssetLoads.hpp"
 
 #include "AudioWorld.hpp"
 #include "Contract.hpp"
@@ -131,6 +132,12 @@ std::optional<std::string> Texture::set_streaming(int value) {
     return std::nullopt;
 }
 const char* Mesh::class_name() const { return "Mesh"; }
+
+bool Mesh::loaded(const std::filesystem::path& root) const { return asset_loaded(AssetKind::Mesh, root, path()); }
+
+bool Texture::loaded(const std::filesystem::path& root) const {
+    return asset_loaded(AssetKind::Texture, root, path());
+}
 
 std::optional<std::string> Mesh::read_file(const std::filesystem::path& root, const std::string& path,
                                            anarchy::amesh::Data& out, bool allow_lods) const {
@@ -717,6 +724,21 @@ bool write_streaming(DataModel&, DataModel& object, LuaSlot& in) {
     return true;
 }
 
+// Loaded, of a Texture, Mesh, or Sound: read from what loaded it, never written or saved.
+bool read_loaded(DataModel& game, DataModel& object, LuaSlot& out) {
+    out.kind = LuaSlot::Kind::Bool;
+    if (const auto* texture = dynamic_cast<const Texture*>(&object)) {
+        out.flag = texture->loaded(game.resources_root());
+    } else if (const auto* mesh = dynamic_cast<const Mesh*>(&object)) {
+        out.flag = mesh->loaded(game.resources_root());
+    } else if (const auto* sound = dynamic_cast<const Sound*>(&object)) {
+        out.flag = sound->loaded(game.resources_root());
+    } else {
+        return false;
+    }
+    return true;
+}
+
 bool read_time_length(DataModel& game,DataModel& object, LuaSlot& out) {
     const auto* sound = dynamic_cast<const Sound*>(&object);
     if (sound == nullptr) {
@@ -849,20 +871,23 @@ ANARCHY_LUA_REGISTER(register_asset_instances_lua) {
         file_fields[0],
         lua_saved_property("FlipY", "boolean", read_flip_y, write_flip_y, "false"),
         lua_saved_enum("Streaming", texture_streaming_enum(), read_streaming, write_streaming, "\"Automatic\""),
+        lua_property("Loaded", "boolean", false, read_loaded, nullptr),
     };
-    register_lua_class("Texture", "FileAsset", texture_fields, 3);
+    register_lua_class("Texture", "FileAsset", texture_fields, 4);
     // OriginOffset is measured from the geometry, never written or saved.
     const LuaField mesh_fields[] = {
         file_fields[0],
         lua_property("OriginOffset", "Vector3", false, read_origin_offset, nullptr),
+        lua_property("Loaded", "boolean", false, read_loaded, nullptr),
     };
-    register_lua_class("Mesh", "FileAsset", mesh_fields, 2);
+    register_lua_class("Mesh", "FileAsset", mesh_fields, 3);
     // TimeLength is read from the file, never written or saved.
     const LuaField sound_fields[] = {
         file_fields[0],
         lua_property("TimeLength", "number", false, read_time_length, nullptr),
+        lua_property("Loaded", "boolean", false, read_loaded, nullptr),
     };
-    register_lua_class("Sound", "FileAsset", sound_fields, 2);
+    register_lua_class("Sound", "FileAsset", sound_fields, 3);
     register_lua_class("ReferenceAsset", "Instance", nullptr, 0);
     const LuaField material_fields[] = {
         lua_saved_property("DiffuseTexture", "Texture?", read_reference<0>, write_reference<0>, "null"),

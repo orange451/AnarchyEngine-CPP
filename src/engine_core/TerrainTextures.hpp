@@ -140,6 +140,7 @@ private:
     std::shared_ptr<Shared> shared_;
     std::unordered_map<InstanceId, TerrainRecord> terrains_;   // SimulationThread only
     std::uint64_t next_layer_revision_ = 1;                     // SimulationThread only
+    std::filesystem::path root_;                                // the last update()'s resources folder
 
     // Guards published_ and next_revision_, so published()/memory_bytes()
     // can be called from any thread while update() runs on SimulationThread.

@@ -453,6 +453,7 @@ TEST_CASE("TT6 memory_bytes matches layers * layer_bytes(size)", "[terrain][text
 
 #include "texture/BlockCompress.hpp"
 #include "texture/TexturePool.hpp"
+#include "AssetLoads.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -627,4 +628,18 @@ TEST_CASE("TT11 a project copied elsewhere (as a player unpacks a game) still re
     settle(textures, moved.game);
     const std::vector<JobPriority> seen = log.copy();
     CHECK(std::count(seen.begin(), seen.end(), JobPriority::TerrainBake) == 0);
+}
+
+TEST_CASE("TT12 a terrain layer's Textures read Loaded once its first look lands", "[terrain][textures]") {
+    SimRole role;
+    TempDir dir;
+    StreamingScene scene(dir, {200});
+    engine_core::clear_asset_loads();
+    const auto loaded = [&] {
+        return engine_core::asset_loaded(engine_core::AssetKind::Texture, dir.path / "resources", "d0.ppm");
+    };
+    TerrainTextures textures;
+    CHECK_FALSE(loaded());
+    settle(textures, scene.game);
+    CHECK(loaded());
 }

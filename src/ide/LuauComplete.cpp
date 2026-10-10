@@ -2601,7 +2601,7 @@ CompletionList complete_luau(std::string_view source, int caret, const std::vect
 }
 
 HoverInfo hover_luau(std::string_view source, int index, const std::vector<engine_core::LuaNode>& world,
-                     std::uint32_t script_id, bool script_global, engine_core::ScriptAnalysis* analysis,
+                     std::uint32_t script_id, engine_core::ScriptAnalysis* analysis,
                      std::chrono::milliseconds wait) {
     const HoverPlan plan = plan_hover(source, index);
     if (!plan.needs_luau) {

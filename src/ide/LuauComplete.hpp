@@ -190,8 +190,7 @@ CompletionList complete_luau(std::string_view source, int caret, const std::vect
                              engine_core::ScriptAnalysis* analysis = nullptr,
                              std::chrono::milliseconds wait = std::chrono::seconds(20));
 HoverInfo hover_luau(std::string_view source, int index, const std::vector<engine_core::LuaNode>& world = {},
-                     std::uint32_t script_id = 0, bool script_global = true,
-                     engine_core::ScriptAnalysis* analysis = nullptr,
+                     std::uint32_t script_id = 0, engine_core::ScriptAnalysis* analysis = nullptr,
                      std::chrono::milliseconds wait = std::chrono::seconds(20));
 
 }  // namespace ide

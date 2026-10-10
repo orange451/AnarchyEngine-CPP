@@ -35,6 +35,14 @@ LuaSlot space_slot(bool local) {
     return slot;
 }
 
+LuaSlot mode_slot(DraggerMode mode) {
+    LuaSlot slot;
+    slot.kind = LuaSlot::Kind::Enum;
+    slot.enum_type = &transform_mode_enum();
+    slot.number = static_cast<int>(mode);
+    return slot;
+}
+
 void require_thread(const DataModel& object) {
     if (!object.on_gameplay_thread()) {
         contract_fail("Dragger setters run on SimulationThread");
@@ -74,6 +82,21 @@ std::optional<std::string> Dragger::set_space(int space) {
     return std::nullopt;
 }
 
+std::optional<std::string> Dragger::set_transform_mode(int mode) {
+    require_thread(*this);
+    if (enum_item_name(transform_mode_enum(), mode) == nullptr) {
+        return std::string("TransformMode must be an Enum.TransformMode");
+    }
+    const auto next = static_cast<DraggerMode>(mode);
+    if (next == mode_) {
+        return std::nullopt;
+    }
+    const DraggerMode previous = mode_;
+    mode_ = next;
+    note_property_change("TransformMode", mode_slot(previous), mode_slot(next));
+    return std::nullopt;
+}
+
 std::optional<std::string> Dragger::set_increment(double increment) {
     require_thread(*this);
     if (!std::isfinite(increment) || increment < 0.0) {
@@ -100,6 +123,7 @@ void Dragger::set_drag(bool dragging, DraggerHandle handle) {
 void Dragger::on_reuse() {
     transform_ = matrix4_identity();
     local_ = false;
+    mode_ = DraggerMode::Translation;
     increment_ = 0.0;
     dragging_ = false;
     hovered_ = DraggerHandle::None;
@@ -153,6 +177,27 @@ bool write_space(DataModel&, DataModel& object, LuaSlot& in) {
     return refuse(in, dragger->set_space(static_cast<int>(in.number)));
 }
 
+bool read_transform_mode(DataModel&, DataModel& object, LuaSlot& out) {
+    const Dragger* dragger = dragger_of(object);
+    if (dragger == nullptr) {
+        return false;
+    }
+    out = mode_slot(dragger->transform_mode());
+    return true;
+}
+
+bool write_transform_mode(DataModel&, DataModel& object, LuaSlot& in) {
+    Dragger* dragger = dragger_of(object);
+    if (dragger == nullptr) {
+        return false;
+    }
+    if (in.kind != LuaSlot::Kind::Enum || in.enum_type != &transform_mode_enum()) {
+        in.error = "TransformMode must be an Enum.TransformMode";
+        return false;
+    }
+    return refuse(in, dragger->set_transform_mode(static_cast<int>(in.number)));
+}
+
 bool read_increment(DataModel&, DataModel& object, LuaSlot& out) {
     const Dragger* dragger = dragger_of(object);
     if (dragger == nullptr) {
@@ -186,7 +231,8 @@ bool read_dragging(DataModel&, DataModel& object, LuaSlot& out) {
 
 ANARCHY_LUA_REGISTER(register_dragger_lua) {
     static const LuaParam kHandleArgs[] = {{"handle", "EnumItem"}};
-    static const LuaParam kDraggedArgs[] = {{"handle", "EnumItem"}, {"offset", "Vector3"}};
+    // offset is a Vector3 in Translation and a Matrix4 in Rotation.
+    static const LuaParam kDraggedArgs[] = {{"handle", "EnumItem"}, {"offset", "Vector3 | Matrix4"}};
     static const std::string identity = [] {
         const Matrix4 value = matrix4_identity();
         return write_json(json_floats(value.m, 16));
@@ -194,6 +240,8 @@ ANARCHY_LUA_REGISTER(register_dragger_lua) {
     const LuaField fields[] = {
         lua_saved_property("Transform", "Matrix4", read_transform, write_transform, identity.c_str()),
         lua_saved_enum("Space", transform_space_enum(), read_space, write_space, "\"World\""),
+        lua_saved_enum("TransformMode", transform_mode_enum(), read_transform_mode, write_transform_mode,
+                       "\"Translation\""),
         lua_saved_property("Increment", "number", read_increment, write_increment, "0"),
         lua_property("Dragging", "boolean", false, read_dragging, nullptr),
         lua_event("DragBegan", kHandleArgs, 1),

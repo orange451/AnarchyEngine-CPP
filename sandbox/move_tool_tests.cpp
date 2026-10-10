@@ -453,7 +453,7 @@ TEST_CASE("MT13 a click on nothing clears the selection; Shift keeps it; a press
     REQUIRE(move.rig.game.selection().get().empty());
 }
 
-TEST_CASE("MT14 Select sits left of Move in its group; it selects with no handles, and the two take turns", "[MT14]") {
+TEST_CASE("MT14 Select, Move, and Rotate share a group; Select selects with no handles, and they take turns", "[MT14]") {
     MoveRig move;
     std::vector<std::string> keys;
     for (const engine_core::PluginToolbarState& bar : move.rig.runtime.plugin_ui().toolbars()) {
@@ -463,7 +463,7 @@ TEST_CASE("MT14 Select sits left of Move in its group; it selects with no handle
             }
         }
     }
-    REQUIRE(keys == std::vector<std::string>{"Select", "Move"});
+    REQUIRE(keys == std::vector<std::string>{"Select", "Move", "Rotate"});
     const InstanceId a = move.part_at("A", 0, 0, -10);
     // Move is on (the rig turns it on). Select takes over: no handles, still active.
     move.click_card("Select");
@@ -528,4 +528,48 @@ TEST_CASE("MT15 moving a GameObject carries its Attachments with it; their Offse
     move.rig.frames(1);
     at = handles_at(move.rig.game);
     REQUIRE((at && near(at->x, 2) && near(at->y, 1)));
+}
+
+TEST_CASE("MT16 Rotate turns the selection about its middle with rings, in 15 degree steps, as one undo step",
+          "[MT16]") {
+    MoveRig move;
+    const InstanceId a = move.part_at("A", -2, 0, -10);
+    const InstanceId b = move.part_at("B", 2, 0, -10);
+    move.rig.game.selection().set({a, b});
+    move.click_card("Rotate");
+    REQUIRE(move.lit("Rotate"));
+    REQUIRE_FALSE(move.lit("Move"));
+    const engine_core::Dragger* dragger = move_dragger(move.rig.game);
+    REQUIRE(dragger != nullptr);
+    REQUIRE(dragger->transform_mode() == engine_core::DraggerMode::Rotation);
+    REQUIRE(dragger->increment() == 15.0);
+    auto at = handles_at(move.rig.game);
+    REQUIRE((at && near(at->x, 0) && near(at->z, -10)));
+    // The Z ring faces the camera: from its upper right to its upper left is a
+    // quarter turn about +Z, which swings A down and B up.
+    const float r = engine_core::kRingPixels;
+    const float d = r * 0.70710678f;
+    move.post(true, 100 + d, 100 - d);
+    move.move(100, 100 - r);
+    move.move(100 - d, 100 - d);
+    move.post(false, 100 - d, 100 - d);
+    move.rig.frames(1);
+    INFO(move.rig.runtime.last_error());
+    const engine_core::Matrix4 turned_a = move.rig.game.spatial_object(a)->transform();
+    const engine_core::Matrix4 turned_b = move.rig.game.spatial_object(b)->transform();
+    REQUIRE((near(turned_a.m[12], 0) && near(turned_a.m[13], -2)));
+    REQUIRE((near(turned_b.m[12], 0) && near(turned_b.m[13], 2)));
+    // Each part turned with it, not only moved.
+    REQUIRE((near(turned_a.m[0], 0) && near(turned_a.m[1], 1)));
+    at = handles_at(move.rig.game);
+    REQUIRE((at && near(at->x, 0) && near(at->y, 0)));
+    REQUIRE(move.rig.game.history().can_undo().second == "Rotate");
+    move.rig.game.history().undo();
+    move.rig.frames(1);
+    REQUIRE(near(move.x_of(a), -2));
+    REQUIRE(near(move.rig.game.spatial_object(a)->transform().m[0], 1));
+    // Move takes its arrows back.
+    move.click_card("Move");
+    REQUIRE(move_dragger(move.rig.game)->transform_mode() == engine_core::DraggerMode::Translation);
+    REQUIRE(move_dragger(move.rig.game)->increment() == 1.0);
 }

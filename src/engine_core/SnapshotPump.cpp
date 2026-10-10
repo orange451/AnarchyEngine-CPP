@@ -660,6 +660,7 @@ void SnapshotPump::resolve_draggers(DataModel& game) {
         }
         VisualDragger row;
         row.frame = dragger_frame(dragger->transform(), dragger->local_space());
+        row.mode = dragger->transform_mode();
         row.hovered = dragger->hovered();
         row.active = dragger->active_handle();
         base_.draggers.push_back(row);

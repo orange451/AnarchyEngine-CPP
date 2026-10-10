@@ -1039,7 +1039,7 @@ void GameView::collectHandles(const engine_core::VisualSnapshot& snapshot) {
         view.fov_degrees = viewFov_;
         view.size = engine_core::Vec2{static_cast<float>(getWidth()), static_cast<float>(getHeight())};
         for (const engine_core::VisualDragger& row : snapshot.draggers) {
-            engine_core::handle_mesh(row.frame, view, row.hovered, row.active, handleScratch_);
+            engine_core::handle_mesh(row.frame, view, row.hovered, row.active, handleScratch_, row.mode);
             handleVertices_.insert(handleVertices_.end(), handleScratch_.begin(), handleScratch_.end());
         }
     }

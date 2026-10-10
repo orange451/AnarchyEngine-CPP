@@ -104,6 +104,11 @@ float snapped(float value, double increment) {
     return static_cast<float>(std::round(value / step) * step);
 }
 
+// The Rotation handles, defined below beside the drawing they share.
+DraggerHandle pick_ring(const DraggerFrame& frame, const DraggerView& view, Vec2 point, float* depth);
+bool begin_ring(const DraggerFrame& frame, const DraggerView& view, Vec2 point, DraggerHandle handle,
+                DragStart& out);
+
 float segment_distance(Vec2 point, Vec2 a, Vec2 b, float& along) {
     const float dx = b.x - a.x;
     const float dy = b.y - a.y;
@@ -162,7 +167,11 @@ bool handle_visible(const DraggerFrame& frame, const DraggerView& view, DraggerH
     return std::abs(dot(frame.axes[normal], toward)) >= 0.1f;
 }
 
-DraggerHandle pick_handle(const DraggerFrame& frame, const DraggerView& view, Vec2 point, float* depth) {
+DraggerHandle pick_handle(const DraggerFrame& frame, const DraggerView& view, Vec2 point, float* depth,
+                          DraggerMode mode) {
+    if (mode == DraggerMode::Rotation) {
+        return pick_ring(frame, view, point, depth);
+    }
     const DraggerRay ray = viewport_ray(view, point);
     const float arrow = kArrowPixels * handle_scale(view, frame.origin);
     if (arrow <= 0.f) {
@@ -228,7 +237,10 @@ DraggerHandle pick_handle(const DraggerFrame& frame, const DraggerView& view, Ve
 }
 
 bool begin_drag(const DraggerFrame& frame, const DraggerView& view, Vec2 point, DraggerHandle handle,
-                DragStart& out) {
+                DragStart& out, DraggerMode mode) {
+    if (mode == DraggerMode::Rotation) {
+        return begin_ring(frame, view, point, handle, out);
+    }
     if (handle == DraggerHandle::None) {
         return false;
     }
@@ -357,13 +369,206 @@ void perpendiculars(Vec3 axis, Vec3& u, Vec3& v) {
     v = cross(axis, u);
 }
 
+// The rings. Each is kRingSegments straight pieces about its axis, kRingPixels
+// across from the middle; one seen nearly edge on turns by how far the
+// pointer moves along it on screen instead of by the angle it sweeps.
+constexpr int kRingSegments = 64;
+constexpr float kRingWidthPixels = 4.f;
+constexpr float kFacing = 0.3f;
+constexpr float kPi = 3.14159265f;
+
+DraggerHandle ring_handle(int axis) { return static_cast<DraggerHandle>(axis); }
+
+// The ring about axis: point i of kRingSegments, wrapping.
+struct Ring {
+    Vec3 origin;
+    Vec3 u;
+    Vec3 v;
+    float radius;
+    Vec3 point(int i) const {
+        const float angle = 2.f * kPi * static_cast<float>(i % kRingSegments) / kRingSegments;
+        return add(origin, add(scale(u, std::cos(angle) * radius), scale(v, std::sin(angle) * radius)));
+    }
+};
+
+Ring ring_of(const DraggerFrame& frame, const DraggerView& view, int axis) {
+    Ring ring;
+    ring.origin = frame.origin;
+    perpendiculars(frame.axes[axis], ring.u, ring.v);
+    ring.radius = kRingPixels * handle_scale(view, frame.origin);
+    return ring;
+}
+
+// The point of ring nearest point on screen, within kPickPixels, nearest the
+// camera when two are: where the press is on it. False when none is that near.
+bool ring_hit(const Ring& ring, const DraggerView& view, Vec2 point, Vec3& hit, float& depth) {
+    const Vec3 eye = eye_of(view).position;
+    bool found = false;
+    for (int i = 0; i < kRingSegments; ++i) {
+        const Vec3 a = ring.point(i);
+        const Vec3 b = ring.point(i + 1);
+        Vec2 sa;
+        Vec2 sb;
+        if (!project_point(view, a, sa) || !project_point(view, b, sb)) {
+            continue;
+        }
+        float along = 0.f;
+        if (segment_distance(point, sa, sb, along) > kPickPixels) {
+            continue;
+        }
+        const Vec3 at = add(a, scale(sub(b, a), along));
+        const float distance = length(sub(at, eye));
+        if (!found || distance < depth) {
+            found = true;
+            hit = at;
+            depth = distance;
+        }
+    }
+    return found;
+}
+
+DraggerHandle pick_ring(const DraggerFrame& frame, const DraggerView& view, Vec2 point, float* depth) {
+    if (handle_scale(view, frame.origin) <= 0.f) {
+        return DraggerHandle::None;
+    }
+    DraggerHandle best = DraggerHandle::None;
+    float best_depth = 0.f;
+    for (int axis = 0; axis < 3; ++axis) {
+        Vec3 hit;
+        float distance = 0.f;
+        if (ring_hit(ring_of(frame, view, axis), view, point, hit, distance) &&
+            (best == DraggerHandle::None || distance < best_depth)) {
+            best = ring_handle(axis);
+            best_depth = distance;
+        }
+    }
+    if (best != DraggerHandle::None && depth != nullptr) {
+        *depth = best_depth;
+    }
+    return best;
+}
+
+bool begin_ring(const DraggerFrame& frame, const DraggerView& view, Vec2 point, DraggerHandle handle,
+                DragStart& out) {
+    if (!is_arrow(handle)) {
+        return false;
+    }
+    const int index = arrow_axis(handle);
+    const Vec3 axis = frame.axes[index];
+    const Ring ring = ring_of(frame, view, index);
+    DragStart start;
+    start.frame = frame;
+    start.handle = handle;
+    start.mode = DraggerMode::Rotation;
+    start.press = point;
+    float depth = 0.f;
+    if (!ring_hit(ring, view, point, start.hit, depth)) {
+        return false;
+    }
+    const Vec3 toward = normalize(sub(frame.origin, eye_of(view).position));
+    start.facing = std::abs(dot(axis, toward)) >= kFacing;
+    Vec3 spoke = sub(start.hit, frame.origin);
+    if (start.facing) {
+        Vec3 hit;
+        float t = 0.f;
+        if (ray_plane(viewport_ray(view, point), frame.origin, axis, hit, t)) {
+            spoke = sub(hit, frame.origin);
+        } else {
+            start.facing = false;
+        }
+    }
+    spoke = sub(spoke, scale(axis, dot(spoke, axis)));
+    if (length(spoke) <= 0.f) {
+        return false;
+    }
+    start.spoke = normalize(spoke);
+    // The way the ring runs at the press, on screen: turning forward moves along it.
+    const Vec3 forward = cross(axis, normalize(sub(start.hit, frame.origin)));
+    Vec2 a;
+    Vec2 b;
+    start.tangent = {1.f, 0.f};
+    if (project_point(view, start.hit, a) && project_point(view, add(start.hit, scale(forward, ring.radius * 0.1f)), b)) {
+        const float dx = b.x - a.x;
+        const float dy = b.y - a.y;
+        const float n = std::sqrt(dx * dx + dy * dy);
+        if (n > 1e-4f) {
+            start.tangent = {dx / n, dy / n};
+        }
+    }
+    out = start;
+    return true;
+}
+
+void ring_mesh(const DraggerFrame& frame, const DraggerView& view, DraggerHandle hovered, DraggerHandle active,
+               std::vector<HandleVertex>& out) {
+    const float half = kRingWidthPixels * 0.5f * handle_scale(view, frame.origin);
+    const Vec3 eye = eye_of(view).position;
+    for (int axis = 0; axis < 3; ++axis) {
+        const Ring ring = ring_of(frame, view, axis);
+        const Rgba color = handle_color(ring_handle(axis), hovered, active);
+        for (int i = 0; i < kRingSegments; ++i) {
+            const Vec3 a = ring.point(i);
+            const Vec3 b = ring.point(i + 1);
+            // Each piece faces the camera, so the ring keeps its width seen edge on.
+            const Vec3 middle = scale(add(a, b), 0.5f);
+            const Vec3 side = scale(normalize(cross(sub(b, a), normalize(sub(eye, middle)))), half);
+            push_triangle(out, sub(a, side), add(a, side), add(b, side), color);
+            push_triangle(out, sub(a, side), add(b, side), sub(b, side), color);
+        }
+    }
+}
+
 }  // namespace
 
+std::optional<float> drag_angle(DragStart& start, const DraggerView& view, Vec2 point, double increment) {
+    if (start.mode != DraggerMode::Rotation || !is_arrow(start.handle)) {
+        return std::nullopt;
+    }
+    const DraggerFrame& frame = start.frame;
+    const Vec3 axis = frame.axes[arrow_axis(start.handle)];
+    if (start.facing) {
+        Vec3 hit;
+        float t = 0.f;
+        if (!ray_plane(viewport_ray(view, point), frame.origin, axis, hit, t)) {
+            return std::nullopt;
+        }
+        Vec3 spoke = sub(hit, frame.origin);
+        spoke = sub(spoke, scale(axis, dot(spoke, axis)));
+        if (length(spoke) <= 0.f) {
+            return std::nullopt;
+        }
+        spoke = normalize(spoke);
+        const float raw = std::atan2(dot(cross(start.spoke, spoke), axis), dot(start.spoke, spoke));
+        float step = raw - start.last;
+        while (step > kPi) {
+            step -= 2.f * kPi;
+        }
+        while (step < -kPi) {
+            step += 2.f * kPi;
+        }
+        start.turned += step;
+        start.last = raw;
+    } else {
+        // One ring's worth of pixels along it is one radian.
+        const float along = (point.x - start.press.x) * start.tangent.x + (point.y - start.press.y) * start.tangent.y;
+        start.turned = along / kRingPixels;
+    }
+    if (increment > 0.0) {
+        const double step = increment * static_cast<double>(kDegree);
+        return static_cast<float>(std::round(start.turned / step) * step);
+    }
+    return start.turned;
+}
+
 void handle_mesh(const DraggerFrame& frame, const DraggerView& view, DraggerHandle hovered, DraggerHandle active,
-                 std::vector<HandleVertex>& out) {
+                 std::vector<HandleVertex>& out, DraggerMode mode) {
     out.clear();
     Vec2 ignored;
     if (!project_point(view, frame.origin, ignored)) {
+        return;
+    }
+    if (mode == DraggerMode::Rotation) {
+        ring_mesh(frame, view, hovered, active, out);
         return;
     }
     const float pixel = handle_scale(view, frame.origin);

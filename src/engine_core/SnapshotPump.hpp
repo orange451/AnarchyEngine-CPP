@@ -77,6 +77,7 @@ struct VisualDragger {
     DraggerFrame frame{};
     DraggerHandle hovered = DraggerHandle::None;
     DraggerHandle active = DraggerHandle::None;
+    DraggerMode mode = DraggerMode::Translation;
 };
 
 // A BillboardGui runner::GuiLayer draws: drawn() and Visible. anchor is its

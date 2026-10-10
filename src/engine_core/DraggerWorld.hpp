@@ -22,9 +22,10 @@ class Dragger;
 // each move reports how far the drag has gone, and the release ends it, each
 // firing the Dragger's event. It moves nothing itself: the listeners do. The
 // records a drag uses are marked processed. One drag runs at a
-// time. In edit mode a drag is one undo step, "Move", which closes at the
-// next dispatch after it ends: events are deferred, so what the ending
-// step's handlers move joins it. SimulationThread only.
+// time. In edit mode a drag is one undo step, "Move" (or "Rotate" for a
+// Dragger in Rotation), which closes at the next dispatch after it ends:
+// events are deferred, so what the ending step's handlers move joins it.
+// SimulationThread only.
 class DraggerWorld {
 public:
     void dispatch(DataModel& game, std::vector<InputRecord>& records);

@@ -8,20 +8,25 @@
 
 namespace engine_core {
 
-// Translate handles at its own Transform: three arrows and three plane
-// squares. Dragging them moves nothing. DraggerWorld turns the drag into
-// events, and whoever listens moves what it likes, the Dragger included.
-// Active anywhere under game; the studio's Move tool keeps one in Core, and
-// a game may make its own.
+// Handles at its own Transform: in Translation, three arrows and three plane
+// squares; in Rotation, a ring about each axis. Dragging them moves nothing.
+// DraggerWorld turns the drag into events, and whoever listens moves what it
+// likes, the Dragger included. Active anywhere under game; the studio's Move
+// and Rotate tools keep one in Core, and a game may make its own.
 //
-// Transform  Matrix4             identity. Saved. Where the handles sit.
-// Space      Enum.TransformSpace   World. Saved. Local follows the Transform's rotation.
-// Increment  number              0. Saved. Snap step in units; 0 is none.
-// Dragging   boolean             read-only.
+// Transform      Matrix4              identity. Saved. Where the handles sit.
+// Space          Enum.TransformSpace  World. Saved. Local follows the Transform's rotation.
+// TransformMode  Enum.TransformMode   Translation. Saved. Arrows and squares, or rings.
+// Increment      number               0. Saved. Snap step: units in Translation,
+//                                     degrees in Rotation; 0 is none.
+// Dragging       boolean              read-only.
 //
 // DragBegan(handle), Dragged(handle, offset), DragEnded(handle): handle an
 // Enum.DraggerHandle, offset the total world move since the drag began,
 // after snapping, measured from the Transform the Dragger had at the press.
+// In Rotation, offset is a Matrix4 instead: the turn about the Dragger's
+// position at the press, so offset * start is where a thing that was at
+// start goes. A drag in edit mode is one undo step, "Move" or "Rotate".
 class Dragger : public PVInstance {
 public:
     Dragger(DataModel::ChildTag tag, DataModel::State& state, InstanceId id) : PVInstance(tag, state, id) {}
@@ -31,6 +36,7 @@ public:
 
     Matrix4 transform() const override { return transform_; }
     bool local_space() const { return local_; }
+    DraggerMode transform_mode() const { return mode_; }
     double increment() const { return increment_; }
     bool dragging() const { return dragging_; }
     DraggerHandle hovered() const { return hovered_; }
@@ -40,6 +46,7 @@ public:
     std::optional<std::string> set_transform(const Matrix4& transform);
     std::optional<std::string> set_pv_transform(const Matrix4& transform) override { return set_transform(transform); }
     std::optional<std::string> set_space(int space);
+    std::optional<std::string> set_transform_mode(int mode);
     std::optional<std::string> set_increment(double increment);
 
     // DraggerWorld's own writes: not edits, so no history and no saving.
@@ -52,6 +59,7 @@ protected:
 private:
     Matrix4 transform_ = matrix4_identity();
     bool local_ = false;
+    DraggerMode mode_ = DraggerMode::Translation;
     double increment_ = 0.0;
     bool dragging_ = false;
     DraggerHandle hovered_ = DraggerHandle::None;

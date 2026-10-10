@@ -1,21 +1,26 @@
--- The studio's Select and Move tools, one group on the Home tab. While either is
--- on, clicking in the Scene View selects what is under the pointer (Shift or Ctrl adds it or takes
--- it away, and clicking nothing clears the selection). With Move, translate handles
--- also sit at the middle of the PVInstances selected or inside what is selected,
--- while the place is not playing, so selecting a Folder moves everything in
--- it. Dragging them moves the Dragger and each of those PVInstances by the
--- same offset, as one undo step. The Dragger lives in Core, so it is never
--- saved and its own moves are never undo steps. Turning on another tool, or
--- Play, turns it off.
+-- The studio's Select, Move, and Rotate tools, one group on the Home tab. While
+-- any is on, clicking in the Scene View selects what is under the pointer
+-- (Shift or Ctrl adds it or takes it away, and clicking nothing clears the
+-- selection). With Move, translate handles also sit at the middle of the
+-- PVInstances selected or inside what is selected, while the place is not
+-- playing, so selecting a Folder moves everything in it. Dragging them moves
+-- the Dragger and each of those PVInstances by the same offset, as one undo
+-- step. With Rotate the handles are rings instead, and dragging one turns each
+-- of them about that middle, in steps of 15 degrees. The Dragger lives in
+-- Core, so it is never saved and its own moves are never undo steps. Turning
+-- on another tool, or Play, turns it off.
 local RunService = game:GetService("RunService")
 local Selection = game:GetService("Selection")
 local Core = game:GetService("Core")
 
 local SPACE = Enum.TransformSpace.World
-local INCREMENT = 1 -- units
+-- Each card's snap step: units for Move, degrees for Rotate.
+local INCREMENT = { Move = 1, Rotate = 15 }
+local TRANSFORM_MODE = { Move = Enum.TransformMode.Translation, Rotate = Enum.TransformMode.Rotation }
 
 local active = false
--- Which card is on: "Select", which only selects, or "Move", which shows the handles too.
+-- Which card is on: "Select", which only selects, "Move", which shows the
+-- arrows too, or "Rotate", which shows the rings.
 local mode = "Move"
 local dragger
 -- Where each moved instance was when the drag began, the Dragger included.
@@ -83,7 +88,6 @@ local function make_dragger()
 	local made = Instance.new("Dragger")
 	made.Name = "MoveTool"
 	made.Space = SPACE
-	made.Increment = INCREMENT
 	made.Parent = Core
 	made.DragBegan:Connect(function()
 		starts = { [made] = made.Transform }
@@ -91,10 +95,12 @@ local function make_dragger()
 			starts[item] = item.Transform
 		end
 	end)
+	-- Move's offset is a Vector3 to add; Rotate's a Matrix4, the turn about the middle.
 	made.Dragged:Connect(function(_, offset)
+		local turning = typeof(offset) == "Matrix4"
 		for item, start in starts do
 			if item.Parent ~= nil then
-				item.Transform = start + offset
+				item.Transform = if turning then offset * start else start + offset
 			end
 		end
 	end)
@@ -116,7 +122,7 @@ local function place()
 	if dragger ~= nil and dragger.Dragging then
 		return
 	end
-	local list = if active and mode == "Move" then selected() else {}
+	local list = if active and mode ~= "Select" then selected() else {}
 	if #list == 0 then
 		drop_dragger()
 		return
@@ -124,6 +130,8 @@ local function place()
 	if dragger == nil or dragger.Parent == nil then
 		dragger = make_dragger()
 	end
+	dragger.TransformMode = TRANSFORM_MODE[mode]
+	dragger.Increment = INCREMENT[mode]
 	dragger.Transform = Matrix4.new(middle(list))
 end
 
@@ -133,7 +141,7 @@ local function update()
 		connection:Disconnect()
 	end
 	watching = {}
-	if active and mode == "Move" then
+	if active and mode ~= "Select" then
 		for _, item in selected() do
 			table.insert(watching, item.Changed:Connect(function(property)
 				if property == "Transform" then
@@ -178,11 +186,18 @@ end)
 
 -- Turning on and off ----------------------------------------------------------
 
--- Two cards in one group: Select picks with no handles, Move picks and moves.
+-- Three cards in one group: Select picks with no handles, Move picks and
+-- moves, Rotate picks and turns.
 local toolbar = plugin:CreateToolbar("Move")
 local cards = {
 	Select = toolbar:CreateButton("Select", "Select anything in the Scene View", "icons/cursor.png", "Select"),
 	Move = toolbar:CreateButton("Move", "Select and move parts in the Scene View", "icons/Dragger.png", "Move"),
+	Rotate = toolbar:CreateButton(
+		"Rotate",
+		"Select and rotate parts in the Scene View",
+		"icons/edit-rotate.png",
+		"Rotate"
+	),
 }
 
 local function light()

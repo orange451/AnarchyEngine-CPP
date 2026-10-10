@@ -1168,17 +1168,41 @@ Signal& DataModel::event_signal(InstanceId id, std::string_view name) {
 
 namespace {
 
+bool type_fits(std::string_view type, const LuaSlot& slot);
+
 // Whether slot is a value an event argument declared as param may carry. A
-// type ending in ? also takes nil.
+// type ending in ? also takes nil, and a union such as "Vector3 | Matrix4"
+// takes what any of its types takes.
 bool event_arg_fits(const LuaParam& param, const LuaSlot& slot) {
     std::string_view type = param.type_name != nullptr ? param.type_name : "";
-    using Kind = LuaSlot::Kind;
     if (!type.empty() && type.back() == '?') {
-        if (slot.kind == Kind::Nil) {
+        if (slot.kind == LuaSlot::Kind::Nil) {
             return true;
         }
         type.remove_suffix(1);
     }
+    while (!type.empty()) {
+        const std::size_t bar = type.find('|');
+        std::string_view part = type.substr(0, bar);
+        while (!part.empty() && part.front() == ' ') {
+            part.remove_prefix(1);
+        }
+        while (!part.empty() && part.back() == ' ') {
+            part.remove_suffix(1);
+        }
+        if (type_fits(part, slot)) {
+            return true;
+        }
+        if (bar == std::string_view::npos) {
+            break;
+        }
+        type.remove_prefix(bar + 1);
+    }
+    return false;
+}
+
+bool type_fits(std::string_view type, const LuaSlot& slot) {
+    using Kind = LuaSlot::Kind;
     if (type == "number") {
         return slot.kind == Kind::Number;
     }

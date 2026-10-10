@@ -20,6 +20,13 @@ LuaSlot handle_slot(DraggerHandle handle) {
     return slot;
 }
 
+LuaSlot matrix_slot(const Matrix4& value) {
+    LuaSlot slot;
+    slot.kind = LuaSlot::Kind::Matrix4;
+    slot.transform = value;
+    return slot;
+}
+
 LuaSlot vector_slot(Vec3 value) {
     LuaSlot slot;
     slot.kind = LuaSlot::Kind::Vec3;
@@ -95,7 +102,7 @@ Dragger* DraggerWorld::pick(DataModel& game, const DraggerView& view, Vec2 point
         }
         float depth = 0.f;
         const DraggerFrame frame = dragger_frame(dragger->transform(), dragger->local_space());
-        const DraggerHandle hit = pick_handle(frame, view, point, &depth);
+        const DraggerHandle hit = pick_handle(frame, view, point, &depth, dragger->transform_mode());
         if (hit != DraggerHandle::None && (best == nullptr || depth < best_depth)) {
             best = dragger;
             best_depth = depth;
@@ -127,12 +134,14 @@ bool DraggerWorld::begin(DataModel& game, const DraggerView& view, Vec2 point) {
     drag.playing = game.simulation_running();
     // The drag is measured from where the handles sat at the press, wherever
     // the listeners move the Dragger after.
-    if (!begin_drag(dragger_frame(dragger->transform(), dragger->local_space()), view, point, handle, drag.start)) {
+    if (!begin_drag(dragger_frame(dragger->transform(), dragger->local_space()), view, point, handle, drag.start,
+                    dragger->transform_mode())) {
         return false;
     }
     // Edit mode only: play writes are not edits.
     if (!game.simulation_running()) {
-        if (std::optional<std::string> id = game.history().try_begin_recording("Move")) {
+        const char* step = dragger->transform_mode() == DraggerMode::Rotation ? "Rotate" : "Move";
+        if (std::optional<std::string> id = game.history().try_begin_recording(step)) {
             drag.recording = std::move(*id);
         }
     }
@@ -146,6 +155,21 @@ void DraggerWorld::move(DataModel& game, const DraggerView& view, Vec2 point) {
     auto* dragger = dynamic_cast<Dragger*>(game.instance(drag_->dragger));
     if (dragger == nullptr) {
         end(game);
+        return;
+    }
+    if (drag_->start.mode == DraggerMode::Rotation) {
+        const std::optional<float> angle = drag_angle(drag_->start, view, point, dragger->increment());
+        if (!angle) {
+            return;
+        }
+        // The turn about where the handles sat at the press.
+        const DraggerFrame& frame = drag_->start.frame;
+        const Vec3 axis = frame.axes[static_cast<int>(drag_->start.handle)];
+        const Vec3 at = frame.origin;
+        const Matrix4 turn = matrix4_multiply(
+            matrix4_multiply(matrix4_translation(at.x, at.y, at.z), matrix4_axis_angle(axis, *angle)),
+            matrix4_translation(-at.x, -at.y, -at.z));
+        game.fire_event(dragger->id(), "Dragged", {handle_slot(drag_->start.handle), matrix_slot(turn)});
         return;
     }
     const std::optional<Vec3> offset = drag_offset(drag_->start, view, point, dragger->increment());

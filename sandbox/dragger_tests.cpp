@@ -652,3 +652,133 @@ TEST_CASE("DR20 a Dragger deleted and undone is in the dragger query again", "[D
     // but never hovered, dragged, or drawn.
     REQUIRE(std::find(found.begin(), found.end(), drag.dragger) != found.end());
 }
+
+// Rotation: rings about the frame's axes, kRingPixels across from the middle.
+// At (0, 0, -10) in a 200 x 200 view a pixel is 0.1 units, so the Z ring,
+// facing the camera, is a circle of 70 pixels about the view's middle; the X
+// and Y rings are seen edge on, along x = 100 and y = 100.
+namespace {
+constexpr auto kRotation = engine_core::DraggerMode::Rotation;
+constexpr float kQuarterTurn = 1.5707963f;
+}  // namespace
+
+TEST_CASE("DR24 in Rotation a ring picks within 8 pixels of itself, and there are no plane squares", "[DR24]") {
+    const auto view = view_of(200, 200);
+    const auto frame = world_frame({0, 0, -10});
+    const float r = engine_core::kRingPixels;
+    const float d = r * 0.70710678f;
+    REQUIRE(engine_core::pick_handle(frame, view, {100 + d, 100 - d}, nullptr, kRotation) == engine_core::DraggerHandle::Z);
+    REQUIRE(engine_core::pick_handle(frame, view, {100 + d + 7, 100 - d - 1}, nullptr, kRotation) ==
+            engine_core::DraggerHandle::Z);
+    REQUIRE(engine_core::pick_handle(frame, view, {100 + d * 0.5f, 100 - d * 0.5f}, nullptr, kRotation) ==
+            engine_core::DraggerHandle::None);
+    REQUIRE(engine_core::pick_handle(frame, view, {130, 100}, nullptr, kRotation) == engine_core::DraggerHandle::Y);
+    REQUIRE(engine_core::pick_handle(frame, view, {100, 130}, nullptr, kRotation) == engine_core::DraggerHandle::X);
+    // Where the XY square would be in Translation, nothing.
+    REQUIRE(engine_core::pick_handle(frame, view, {115, 88}, nullptr, kRotation) == engine_core::DraggerHandle::None);
+}
+
+TEST_CASE("DR25 a ring drag turns by the angle the pointer swept about the middle", "[DR25]") {
+    const auto view = view_of(200, 200);
+    const auto frame = world_frame({0, 0, -10});
+    const float r = engine_core::kRingPixels;
+    const float d = r * 0.70710678f;
+    engine_core::DragStart start;
+    REQUIRE(engine_core::begin_drag(frame, view, {100 + d, 100 - d}, engine_core::DraggerHandle::Z, start, kRotation));
+    // From 45 degrees to straight up: a quarter of that, counterclockwise, which is +Z.
+    auto angle = engine_core::drag_angle(start, view, {100, 100 - r}, 0);
+    REQUIRE(angle);
+    REQUIRE(close(*angle, kQuarterTurn / 2));
+    // Anywhere along that spoke, near the middle or far past the ring.
+    angle = engine_core::drag_angle(start, view, {100, 100 - 3 * r}, 0);
+    REQUIRE((angle && close(*angle, kQuarterTurn / 2)));
+    angle = engine_core::drag_angle(start, view, {100 + r, 100}, 0);
+    REQUIRE((angle && close(*angle, -kQuarterTurn / 2)));
+    // Snapped to whole steps of Increment degrees: 90 swept is 80 in steps of 40.
+    angle = engine_core::drag_angle(start, view, {100 - d, 100 - d}, 40);
+    REQUIRE((angle && close(*angle, 80.f * 0.01745329f)));
+    // Past a half turn it keeps counting rather than jumping back.
+    angle = engine_core::drag_angle(start, view, {100 - d, 100 + d}, 0);
+    REQUIRE((angle && close(*angle, 2 * kQuarterTurn)));
+    angle = engine_core::drag_angle(start, view, {100 + d, 100 + d}, 0);
+    REQUIRE((angle && (close(*angle, 3 * kQuarterTurn) || close(*angle, -kQuarterTurn))));
+}
+
+TEST_CASE("DR26 a ring seen edge on turns as the pointer moves along it", "[DR26]") {
+    const auto view = view_of(200, 200);
+    const auto frame = world_frame({0, 0, -10});
+    engine_core::DragStart start;
+    REQUIRE(engine_core::begin_drag(frame, view, {130, 100}, engine_core::DraggerHandle::Y, start, kRotation));
+    REQUIRE(close(*engine_core::drag_angle(start, view, {130, 100}, 0), 0));
+    const auto forward = engine_core::drag_angle(start, view, {150, 100}, 0);
+    const auto back = engine_core::drag_angle(start, view, {110, 100}, 0);
+    REQUIRE((forward && back));
+    REQUIRE(std::isfinite(*forward));
+    REQUIRE(std::abs(*forward) > 0.1f);
+    REQUIRE(close(*back, -*forward, 1e-2f));
+}
+
+TEST_CASE("RD4 in Rotation handle_mesh draws three rings, each its axis's color, and no squares", "[RD4]") {
+    const auto view = view_of(200, 200);
+    const auto frame = world_frame({0, 0, -10});
+    std::vector<engine_core::HandleVertex> mesh;
+    engine_core::handle_mesh(frame, view, engine_core::DraggerHandle::None, engine_core::DraggerHandle::None, mesh,
+                             kRotation);
+    REQUIRE(!mesh.empty());
+    REQUIRE(mesh.size() % 3 == 0);
+    REQUIRE(count_color(mesh, 0.90f, 0.20f, 0.20f) > 0);
+    REQUIRE(count_color(mesh, 0.30f, 0.85f, 0.30f) > 0);
+    REQUIRE(count_color(mesh, 0.25f, 0.45f, 0.95f) > 0);
+    for (const engine_core::HandleVertex& vertex : mesh) {
+        REQUIRE(std::isfinite(vertex.position[0]));
+        REQUIRE(vertex.color[3] > 0.5f);
+    }
+    engine_core::handle_mesh(frame, view, engine_core::DraggerHandle::None, engine_core::DraggerHandle::Z, mesh,
+                             kRotation);
+    REQUIRE(count_color(mesh, 1.0f, 0.85f, 0.2f) > 0);
+}
+
+TEST_CASE("DR27 TransformMode is a saved enum; in Rotation, Dragged passes the turn about the Dragger", "[DR27]") {
+    DragRig drag;
+    REQUIRE(drag.handles().transform_mode() == engine_core::DraggerMode::Translation);
+    drag.rig.runtime.run_chunk(R"(
+        local dragger = workspace:FindFirstChild("Dragger")
+        print("mode", dragger.TransformMode == Enum.TransformMode.Translation)
+        dragger.TransformMode = Enum.TransformMode.Rotation
+        print("bad", pcall(function() dragger.TransformMode = Enum.TransformSpace.Local end))
+        local part = workspace.Part
+        local start = part.Transform
+        dragger.Dragged:Connect(function(handle, offset)
+            part.Transform = offset * start
+            print("dragged", handle.Name, typeof(offset))
+        end)
+    )");
+    drag.rig.frames(1);
+    const auto output = drag.rig.runtime.drain_output();
+    INFO(drag.rig.runtime.last_error());
+    REQUIRE(has_line(output, "mode\ttrue\n"));
+    bool refused = false;
+    for (const auto& line : output.lines) {
+        refused = refused || line.text.rfind("bad\tfalse", 0) == 0;
+    }
+    REQUIRE(refused);
+    REQUIRE(drag.handles().transform_mode() == kRotation);
+    const float r = engine_core::kRingPixels;
+    const float d = r * 0.70710678f;
+    // The part sits 5 units above the Dragger: an eighth of a turn about +Z, twice, swings it left.
+    drag.press(100 + d, 100 - d);
+    REQUIRE(drag.handles().dragging());
+    drag.move(100, 100 - r);
+    drag.move(100 - d, 100 - d);
+    drag.release(100 - d, 100 - d);
+    const engine_core::Matrix4 moved = drag.transform(drag.part);
+    REQUIRE(close(moved.m[12], -5));
+    REQUIRE(close(moved.m[13], 0));
+    REQUIRE(close(moved.m[14], -10));
+    REQUIRE(close(moved.m[0], 0));
+    REQUIRE(close(moved.m[1], 1));
+    REQUIRE(has_line(drag.rig.runtime.drain_output(), "dragged\tZ\tMatrix4\n"));
+    // The step closes at the next dispatch after the drag ends.
+    drag.step();
+    REQUIRE(drag.rig.game.history().can_undo().second == "Rotate");
+}

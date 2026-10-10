@@ -59,6 +59,9 @@ struct ShadowCaster {
     // uploaded again in place, a file's or a play session's.
     std::uint64_t mesh = 0;
     std::uint64_t revision = 0;
+    // Its pose's revision (engine_core::Pose::revision), which changes whenever a
+    // skinned caster is posed again; 0 for one that is not skinned.
+    std::uint64_t pose = 0;
     // The instance that draws it: a light never shadows itself.
     std::uint64_t owner = 0;
     engine_core::Matrix4 model = engine_core::matrix4_identity();

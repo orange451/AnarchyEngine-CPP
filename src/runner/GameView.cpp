@@ -511,6 +511,7 @@ void GameView::collectMeshes() {
             if (draw.skinned && row.pose != nullptr && !row.pose->palette.empty()) {
                 draw.bones = row.pose->palette.data();
                 draw.boneCount = static_cast<int>(row.pose->palette.size() / 12);
+                draw.poseRevision = row.pose->revision;
                 const float* low = draw.mesh->bounds_min();
                 const float* high = draw.mesh->bounds_max();
                 const float poseLow[3] = {row.pose->low.x, row.pose->low.y, row.pose->low.z};

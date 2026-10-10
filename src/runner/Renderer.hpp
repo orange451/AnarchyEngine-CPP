@@ -112,6 +112,9 @@ struct MeshDraw {
     // bone, valid for the frame; null draws the mesh unposed, in its bind
     // pose. Draws that share a palette pack it once.
     const float* bones = nullptr;
+    // That pose's revision (engine_core::Pose::revision), which a cached
+    // shadow map folds in; 0 without bones.
+    std::uint64_t poseRevision = 0;
     int boneCount = 0;
     // With bones: the mesh's own box grown to take in the posed bones (each
     // origin and its cull radius), in the mesh's space, which culling reads

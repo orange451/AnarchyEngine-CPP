@@ -3,6 +3,7 @@
 #include "amesh.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <cstring>
 
 namespace engine_core {
@@ -21,13 +22,9 @@ void mix(std::uint64_t& hash, const void* bytes, std::size_t size) {
 
 }  // namespace
 
-int Skeleton::find(std::string_view name) const {
-    for (std::size_t b = 0; b < bones.size(); ++b) {
-        if (bones[b].name == name) {
-            return static_cast<int>(b);
-        }
-    }
-    return -1;
+int Skeleton::find(const std::string& name) const {
+    const auto found = by_name.find(name);
+    return found != by_name.end() ? static_cast<int>(found->second) : -1;
 }
 
 std::shared_ptr<const Skeleton> make_skeleton(const std::vector<anarchy::amesh::Bone>& table) {
@@ -51,6 +48,7 @@ std::shared_ptr<const Skeleton> make_skeleton(const std::vector<anarchy::amesh::
         }
         to.rest.m[12] = from.t[0], to.rest.m[13] = from.t[1], to.rest.m[14] = from.t[2];
         to.inverse_bind = matrix4_inverse(to.rest);
+        skeleton->by_name.emplace(to.name, static_cast<std::uint16_t>(b));
         mix(hash, to.name.data(), to.name.size());
         mix(hash, "\0", 1);
         mix(hash, &to.parent, sizeof(to.parent));
@@ -86,7 +84,9 @@ std::shared_ptr<const Skeleton> make_skeleton(const std::vector<anarchy::amesh::
 }
 
 Pose compute_pose(std::shared_ptr<const Skeleton> skeleton, const std::vector<PoseInput>& inputs) {
+    static std::atomic<std::uint64_t> next_revision{1};
     Pose pose;
+    pose.revision = next_revision.fetch_add(1, std::memory_order_relaxed);
     pose.skeleton = std::move(skeleton);
     if (pose.skeleton == nullptr) {
         return pose;

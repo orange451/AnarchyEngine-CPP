@@ -6,7 +6,7 @@
 #include <cstdint>
 #include <memory>
 #include <string>
-#include <string_view>
+#include <unordered_map>
 #include <vector>
 
 namespace anarchy::amesh {
@@ -39,8 +39,11 @@ struct Skeleton {
     // same one, so meshes cut from one skeleton can share a pose.
     std::uint64_t signature = 0;
 
+    // The first bone with each name.
+    std::unordered_map<std::string, std::uint16_t> by_name;
+
     // The first bone with this name, or -1.
-    int find(std::string_view name) const;
+    int find(const std::string& name) const;
 };
 
 // The skeleton of an AMESH bone table, whose m and t are each bone's rest
@@ -72,6 +75,9 @@ struct Pose {
     // Model space: every bone's origin, grown by its cull radius.
     Vec3 low{};
     Vec3 high{};
+    // Unique to this pose among every one compute_pose made, so a shadow map
+    // cached from it can tell when it is posed again. Never 0.
+    std::uint64_t revision = 0;
 };
 
 // skeleton posed by inputs, each bone's Offset after its local transform. A

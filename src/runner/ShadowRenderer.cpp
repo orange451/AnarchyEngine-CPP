@@ -219,6 +219,7 @@ bool ShadowRenderer::draw(const std::vector<ShadowRequest>& requests, const Mesh
         ShadowCaster caster;
         caster.mesh = reinterpret_cast<std::uintptr_t>(mesh.mesh);
         caster.revision = mesh.mesh->generation();
+        caster.pose = mesh.bones != nullptr ? mesh.poseRevision : 0;
         caster.owner = mesh.owner;
         caster.model = mesh.model;
         caster.bounds = spheres[index];

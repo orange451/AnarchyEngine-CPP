@@ -13,6 +13,7 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -452,10 +453,20 @@ std::shared_ptr<const Skeleton> Mesh::skeleton() const {
     if (session.data != nullptr) {
         skeleton_ = make_skeleton(session.data->bones);
     } else if (!file.empty()) {
-        // A file with LODs still has its bones.
-        anarchy::amesh::Data read;
-        read_file(resources_root(), path(), read, true);
-        skeleton_ = make_skeleton(read.bones);
+        // Most meshes have no bones: their header says so, and the rest of the file is not read.
+        anarchy::amesh::AEHeader header{};
+        std::ifstream in(file, std::ios::binary);
+        const bool skinned = in.read(reinterpret_cast<char*>(&header), sizeof(header)) &&
+                             std::memcmp(header.magic, anarchy::amesh::kMagic, sizeof(header.magic)) == 0 &&
+                             (header.flags & anarchy::amesh::FLAG_SKINNED) != 0;
+        in.close();
+        skeleton_.reset();
+        if (skinned) {
+            // A file with LODs still has its bones.
+            anarchy::amesh::Data read;
+            read_file(resources_root(), path(), read, true);
+            skeleton_ = make_skeleton(read.bones);
+        }
     } else {
         skeleton_.reset();
     }

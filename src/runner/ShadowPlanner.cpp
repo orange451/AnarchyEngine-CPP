@@ -30,13 +30,15 @@ private:
 };
 
 // Each caster's own fingerprint, worked out once a call: which geometry, which
-// upload of it, and where. A light or cascade folds in these, not their bytes.
+// upload of it, how it is posed, and where. A light or cascade folds in these,
+// not their bytes.
 void HashCasters(const std::vector<ShadowCaster>& casters, std::vector<std::uint64_t>& out) {
     out.resize(casters.size());
     for (std::size_t c = 0; c < casters.size(); ++c) {
         Hasher hash;
         hash.add(casters[c].mesh);
         hash.add(casters[c].revision);
+        hash.add(casters[c].pose);
         hash.add(casters[c].model);
         out[c] = hash.value();
     }

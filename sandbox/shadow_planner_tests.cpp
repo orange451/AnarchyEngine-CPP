@@ -868,3 +868,24 @@ TEST_CASE("PN22 maps forgotten, as when the atlas texture is made again, read as
     const AtlasTile now = TilesOf(planner, 1).at(0);
     REQUIRE((now.x == held.x && now.y == held.y && now.page == held.page && now.size == held.size));
 }
+
+TEST_CASE("PN9 a skinned caster that holds still but changes its pose redraws its light and the sun", "[shadow]") {
+    ShadowPlanner planner;
+    const CameraView camera = Camera({0.f, 2.f, 10.f}, {0.f, 0.f, 0.f});
+    const std::vector<ShadowRequest> lights = {Point(1, {0.f, 1.f, 0.f}, 5.f)};
+    ShadowCaster bent = Box(100, {1.f, 0.f, 0.f});
+    bent.pose = 7;
+    Frame(planner, lights, {bent}, camera, Small());
+    REQUIRE(Frame(planner, lights, {bent}, camera, Small()).draws.empty());
+    bent.pose = 8;
+    REQUIRE(Draws(Frame(planner, lights, {bent}, camera, Small()), 1) > 0);
+
+    SunRequest sun;
+    sun.shine = Normalize({0.3f, -1.f, 0.2f});
+    sun.shadowDistance = 20.f;
+    REQUIRE_FALSE(planner.planCascades(&sun, {bent}, camera, Small()).empty());
+    planner.commitCascades();
+    REQUIRE(planner.planCascades(&sun, {bent}, camera, Small()).empty());
+    bent.pose = 9;
+    REQUIRE_FALSE(planner.planCascades(&sun, {bent}, camera, Small()).empty());
+}

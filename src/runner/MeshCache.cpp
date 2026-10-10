@@ -1,5 +1,7 @@
 #include "MeshCache.hpp"
 
+#include "AssetLoads.hpp"
+
 #include <fstream>
 #include <system_error>
 #include <utility>
@@ -179,6 +181,8 @@ const anarchy::amesh::GpuMesh* MeshCache::get(const std::string& path) {
     if (!entry.tried || now - entry.checked >= kRecheck) {
         entry.checked = now;
         load(path, entry);
+        // Mesh.Loaded: shown, or its file is missing or will not read.
+        engine_core::set_asset_loaded(engine_core::AssetKind::Mesh, root_, path, entry.mesh.valid());
     }
     return entry.mesh.valid() ? &entry.mesh : nullptr;
 }

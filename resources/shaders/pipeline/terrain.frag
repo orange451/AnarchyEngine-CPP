@@ -21,6 +21,7 @@ in vec4 vWeights;
 uniform sampler2D uTerrainLook;
 uniform sampler2DArray uSurfaceA;
 uniform sampler2DArray uSurfaceB;
+uniform sampler2DArray uSurfaceC;
 uniform sampler2D uNoise;
 // Whether a per-Terrain array pair is bound and ready: 0 draws flat colors
 // from the look table alone, as the pre-Task-6 shader always did.
@@ -158,7 +159,8 @@ void sampleMaterialTriplanar(float layer, float scale, vec3 n, vec3 localPos, ve
             uv += (noiseSample.rg - 0.5) * 0.5;
         }
         vec4 a = textureGrad(uSurfaceA, vec3(uv, layer), ddxUv, ddyUv);
-        vec4 b = textureGrad(uSurfaceB, vec3(uv, layer), ddxUv, ddyUv);
+        vec4 b = vec4(textureGrad(uSurfaceB, vec3(uv, layer), ddxUv, ddyUv).rg,
+                      textureGrad(uSurfaceC, vec3(uv, layer), ddxUv, ddyUv).rg);
         color += aw.x * a.rgb;
         height += aw.x * a.a;
         rough += aw.x * b.b;
@@ -176,7 +178,8 @@ void sampleMaterialTriplanar(float layer, float scale, vec3 n, vec3 localPos, ve
             uv += (noiseSample.rg - 0.5) * 0.5;
         }
         vec4 a = textureGrad(uSurfaceA, vec3(uv, layer), ddxUv, ddyUv);
-        vec4 b = textureGrad(uSurfaceB, vec3(uv, layer), ddxUv, ddyUv);
+        vec4 b = vec4(textureGrad(uSurfaceB, vec3(uv, layer), ddxUv, ddyUv).rg,
+                      textureGrad(uSurfaceC, vec3(uv, layer), ddxUv, ddyUv).rg);
         color += aw.y * a.rgb;
         height += aw.y * a.a;
         rough += aw.y * b.b;
@@ -194,7 +197,8 @@ void sampleMaterialTriplanar(float layer, float scale, vec3 n, vec3 localPos, ve
             uv += (noiseSample.rg - 0.5) * 0.5;
         }
         vec4 a = textureGrad(uSurfaceA, vec3(uv, layer), ddxUv, ddyUv);
-        vec4 b = textureGrad(uSurfaceB, vec3(uv, layer), ddxUv, ddyUv);
+        vec4 b = vec4(textureGrad(uSurfaceB, vec3(uv, layer), ddxUv, ddyUv).rg,
+                      textureGrad(uSurfaceC, vec3(uv, layer), ddxUv, ddyUv).rg);
         color += aw.z * a.rgb;
         height += aw.z * a.a;
         rough += aw.z * b.b;

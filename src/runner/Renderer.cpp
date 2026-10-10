@@ -7,6 +7,9 @@
 #include "ShaderFile.hpp"
 #include "TerrainTextures.hpp"
 #include "TerrainWorld.hpp"
+#include "terrain/LayerBuilder.hpp"
+#include "texture/BlockCompress.hpp"
+#include "texture/TextureBake.hpp"
 #include "amesh.hpp"
 #include "gl.hpp"
 
@@ -100,6 +103,9 @@ constexpr int kUnitReflections = kUnitScene;
 constexpr int kUnitOcclusion = kUnitMetalnessMap;
 // The terrain program reads no Material, so a Terrain's look table takes the diffuse unit.
 constexpr int kUnitTerrainLook = kUnitDiffuse;
+// The terrain program's third array (roughness + metalness) takes the unit
+// Materials' emissive maps use; the terrain pass binds no Material.
+constexpr int kUnitTerrainSurfaceC = kUnitEmissiveMap;
 // A light with no instance names its map for one frame only.
 constexpr std::uint64_t kUncachedShadowKey = 1ull << 63;
 // A ViewLight's shadow: the sun's cascades.
@@ -374,9 +380,10 @@ bool Renderer::buildProgram(Program& program, const char* name, const char* vert
     sampler("uSunTexture", kUnitDiffuse);
     sampler("uMoonTexture", kUnitNormalMap);
     sampler("uTerrainLook", kUnitTerrainLook);
-    // Task 6: the terrain program's own two arrays and anti-tiling noise.
+    // The terrain program's own three arrays and anti-tiling noise.
     sampler("uSurfaceA", kUnitNormalMap);
     sampler("uSurfaceB", kUnitRoughnessMap);
+    sampler("uSurfaceC", kUnitTerrainSurfaceC);
     sampler("uNoise", kUnitMetalnessMap);
     if (&program == &merge_) {
         sampler("uEmissive", kUnitEmissive);
@@ -487,7 +494,8 @@ bool Renderer::initialize() {
         GLint extensionCount = 0;
         glGetIntegerv(RT_GL_NUM_EXTENSIONS, &extensionCount);
         bool hasAnisotropic = false;
-        for (GLint i = 0; i < extensionCount && !hasAnisotropic; ++i) {
+        bool hasS3tc = false;
+        for (GLint i = 0; i < extensionCount; ++i) {
             const GLubyte* name = glGetStringi(RT_GL_EXTENSIONS, static_cast<GLuint>(i));
             if (name == nullptr) {
                 continue;
@@ -497,7 +505,12 @@ bool Renderer::initialize() {
                 std::strcmp(text, "GL_ARB_texture_filter_anisotropic") == 0) {
                 hasAnisotropic = true;
             }
+            if (std::strcmp(text, "GL_EXT_texture_compression_s3tc") == 0) {
+                hasS3tc = true;
+            }
         }
+        // Baked textures use BC1/BC3 only where the driver draws them; RGBA8 otherwise.
+        engine_core::texture::set_s3tc_available(hasS3tc);
         if (hasAnisotropic) {
             GLint maxAniso = 1;
             glGetIntegerv(RT_GL_MAX_TEXTURE_MAX_ANISOTROPY, &maxAniso);
@@ -1508,19 +1521,45 @@ void FillTerrainLookTexture(unsigned texture, const float* rgba256x4) {
     glBindTexture(GL_TEXTURE_2D, 0);
 }
 
-// An empty GL_TEXTURE_2D_ARRAY, size by size, layerCount layers, levels mip
-// levels allocated (undefined contents until UploadTerrainLayer fills them).
-unsigned CreateTerrainArray(int size, int layerCount, int levels, float anisotropy) {
+// The GL internal format a terrain plane's PixelFormat uploads as; 0 for RGBA8,
+// which goes through glTexImage3D instead of the compressed calls.
+GLenum TerrainPlaneFormat(engine_core::texture::PixelFormat format) {
+    switch (format) {
+        case engine_core::texture::PixelFormat::BC1: return RT_GL_COMPRESSED_RGBA_S3TC_DXT1;
+        case engine_core::texture::PixelFormat::BC3: return RT_GL_COMPRESSED_RGBA_S3TC_DXT5;
+        case engine_core::texture::PixelFormat::BC4: return RT_GL_COMPRESSED_RED_RGTC1;
+        case engine_core::texture::PixelFormat::BC5: return RT_GL_COMPRESSED_RG_RGTC2;
+        case engine_core::texture::PixelFormat::RGBA8: break;
+    }
+    return 0;
+}
+
+// An empty GL_TEXTURE_2D_ARRAY in format, size by size, layerCount layers,
+// every level of the chain allocated (undefined until UploadTerrainLevel
+// fills them). BASE_LEVEL starts at the coarsest level; terrainArrays lowers
+// it as finer levels land.
+unsigned CreateTerrainArray(engine_core::texture::PixelFormat format, int size, int layerCount, int levels,
+                            float anisotropy) {
     unsigned texture = 0;
     glGenTextures(1, &texture);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(RT_GL_TEXTURE_2D_ARRAY, texture);
+    const GLenum compressed = TerrainPlaneFormat(format);
     int levelSize = size;
     for (int level = 0; level < levels; ++level) {
-        glTexImage3D(RT_GL_TEXTURE_2D_ARRAY, level, static_cast<GLint>(GL_RGBA8), levelSize, levelSize, layerCount, 0,
-                     GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
-        levelSize = std::max(levelSize / 2, 1);
+        if (compressed != 0) {
+            const std::size_t bytes = engine_core::texture::level_bytes(format, levelSize, levelSize) *
+                                      static_cast<std::size_t>(layerCount);
+            glCompressedTexImage3D(RT_GL_TEXTURE_2D_ARRAY, level, compressed, levelSize, levelSize, layerCount, 0,
+                                   static_cast<GLsizei>(bytes), nullptr);
+        } else {
+            glTexImage3D(RT_GL_TEXTURE_2D_ARRAY, level, static_cast<GLint>(GL_RGBA8), levelSize, levelSize,
+                         layerCount, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+        }
+        levelSize = std::max((levelSize + 1) / 2, 1);
     }
+    glTexParameteri(RT_GL_TEXTURE_2D_ARRAY, RT_GL_TEXTURE_BASE_LEVEL, levels - 1);
+    glTexParameteri(RT_GL_TEXTURE_2D_ARRAY, RT_GL_TEXTURE_MAX_LEVEL, levels - 1);
     glTexParameteri(RT_GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, static_cast<GLint>(GL_LINEAR_MIPMAP_LINEAR));
     glTexParameteri(RT_GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, static_cast<GLint>(GL_LINEAR));
     glTexParameteri(RT_GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_S, static_cast<GLint>(GL_REPEAT));
@@ -1532,30 +1571,43 @@ unsigned CreateTerrainArray(int size, int layerCount, int levels, float anisotro
     return texture;
 }
 
-// One Material's layer (every mip of both arrays) into arrayA/arrayB's
-// layerIndex. RenderThread, at most kLayersPerFrame calls a frame per Terrain
-// (Renderer::terrainArrays).
-void UploadTerrainLayer(unsigned arrayA, unsigned arrayB, int layerIndex,
+// One level of one layer, all three planes, into the arrays. RenderThread.
+void UploadTerrainLevel(const unsigned arrays[3], int layerIndex, int level, int levelSize,
                         const engine_core::terrain::LayerBytes& layer) {
+    const std::array<engine_core::texture::PixelFormat, 3> formats = engine_core::terrain::layer_formats();
     glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
     glActiveTexture(GL_TEXTURE0);
-    glBindTexture(RT_GL_TEXTURE_2D_ARRAY, arrayA);
-    int levelSize = layer.size;
-    for (std::size_t level = 0; level < layer.a_mips.size(); ++level) {
-        glTexSubImage3D(RT_GL_TEXTURE_2D_ARRAY, static_cast<GLint>(level), 0, 0, layerIndex, levelSize, levelSize, 1,
-                        GL_RGBA, GL_UNSIGNED_BYTE, layer.a_mips[level].data());
-        levelSize = std::max(levelSize / 2, 1);
-    }
-    glBindTexture(RT_GL_TEXTURE_2D_ARRAY, arrayB);
-    levelSize = layer.size;
-    for (std::size_t level = 0; level < layer.b_mips.size(); ++level) {
-        glTexSubImage3D(RT_GL_TEXTURE_2D_ARRAY, static_cast<GLint>(level), 0, 0, layerIndex, levelSize, levelSize, 1,
-                        GL_RGBA, GL_UNSIGNED_BYTE, layer.b_mips[level].data());
-        levelSize = std::max(levelSize / 2, 1);
+    for (std::size_t p = 0; p < 3; ++p) {
+        const std::vector<std::uint8_t>& bytes = layer.planes[p][static_cast<std::size_t>(level)];
+        glBindTexture(RT_GL_TEXTURE_2D_ARRAY, arrays[p]);
+        const GLenum compressed = TerrainPlaneFormat(formats[p]);
+        if (compressed != 0) {
+            glCompressedTexSubImage3D(RT_GL_TEXTURE_2D_ARRAY, level, 0, 0, layerIndex, levelSize, levelSize, 1,
+                                      compressed, static_cast<GLsizei>(bytes.size()), bytes.data());
+        } else {
+            glTexSubImage3D(RT_GL_TEXTURE_2D_ARRAY, level, 0, 0, layerIndex, levelSize, levelSize, 1, GL_RGBA,
+                            GL_UNSIGNED_BYTE, bytes.data());
+        }
     }
     glBindTexture(RT_GL_TEXTURE_2D_ARRAY, 0);
     glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
 }
+
+// Whether layer holds every plane's level at the size layer_formats says,
+// so an upload never reads past it (a layer made before the s3tc check
+// changed the formats is skipped instead).
+bool TerrainLevelFits(const engine_core::terrain::LayerBytes& layer, int level, int levelSize) {
+    const std::array<engine_core::texture::PixelFormat, 3> formats = engine_core::terrain::layer_formats();
+    for (std::size_t p = 0; p < 3; ++p) {
+        if (static_cast<std::size_t>(level) >= layer.planes[p].size() ||
+            layer.planes[p][static_cast<std::size_t>(level)].size() !=
+                engine_core::texture::level_bytes(formats[p], levelSize, levelSize)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 
 }  // namespace
 
@@ -1635,64 +1687,110 @@ void Renderer::sweepTerrainLooks() {
 }
 
 void Renderer::terrainArrays(engine_core::InstanceId terrain,
-                             const std::shared_ptr<const engine_core::TerrainTextureSet>& set, unsigned& outSurfaceA,
-                             unsigned& outSurfaceB, int& outLayerCount) {
+                             const std::shared_ptr<const engine_core::TerrainTextureSet>& set, unsigned outSurface[3],
+                             int& outLayerCount) {
     TerrainArrayEntry& entry = terrainArrays_[terrain];
     entry.asked = true;
-    if (set != nullptr && !set->layers.empty() && set->revision != entry.currentRevision &&
-        set->revision != entry.buildingRevision) {
-        // A newer revision supersedes whatever was still mid-build.
-        DeleteTexture(entry.pendingA);
-        DeleteTexture(entry.pendingB);
+    if (set != nullptr && !set->layers.empty() && set->revision != entry.seenRevision) {
+        entry.seenRevision = set->revision;
         const int layerCount = std::min(static_cast<int>(set->layers.size()), maxArrayLayers_);
-        const int levels =
-            set->layers[0] != nullptr ? std::max(static_cast<int>(set->layers[0]->a_mips.size()), 1) : 1;
-        entry.pendingA = CreateTerrainArray(set->size, layerCount, levels, terrainAnisotropy_);
-        entry.pendingB = CreateTerrainArray(set->size, layerCount, levels, terrainAnisotropy_);
-        entry.pendingLayerCount = layerCount;
-        entry.uploadedLayers = 0;
-        entry.buildingRevision = set->revision;
-        entry.buildingSet = set;
-    }
-    if (entry.buildingSet != nullptr && entry.uploadedLayers < entry.pendingLayerCount) {
-        // At most 4 layers (both arrays, every mip) a frame: the old pair
-        // keeps drawing until this one finishes.
-        constexpr int kLayersPerFrame = 4;
-        int budget = kLayersPerFrame;
-        while (budget > 0 && entry.uploadedLayers < entry.pendingLayerCount) {
-            const auto& layer = entry.buildingSet->layers[static_cast<std::size_t>(entry.uploadedLayers)];
-            if (layer != nullptr) {
-                UploadTerrainLayer(entry.pendingA, entry.pendingB, entry.uploadedLayers, *layer);
+        int levels = 1;
+        for (int w = set->size; w > 1; w = std::max((w + 1) / 2, 1)) ++levels;
+        TerrainArrays* target = entry.pending.surface[0] != 0 ? &entry.pending : &entry.current;
+        if (target->surface[0] == 0 || target->size != set->size || target->layerCount != layerCount) {
+            // A new size or layer count needs new arrays: built beside the
+            // ones drawing now, which keep drawing until these can take over.
+            DeleteTexture(entry.pending.surface[0]);
+            DeleteTexture(entry.pending.surface[1]);
+            DeleteTexture(entry.pending.surface[2]);
+            entry.pending = TerrainArrays{};
+            const std::array<engine_core::texture::PixelFormat, 3> formats = engine_core::terrain::layer_formats();
+            for (std::size_t p = 0; p < 3; ++p) {
+                entry.pending.surface[p] = CreateTerrainArray(formats[p], set->size, layerCount, levels, terrainAnisotropy_);
             }
-            ++entry.uploadedLayers;
-            --budget;
+            entry.pending.size = set->size;
+            entry.pending.levels = levels;
+            entry.pending.layerCount = layerCount;
+            entry.pending.layers.assign(static_cast<std::size_t>(layerCount), TerrainArrayLayer{});
+            for (TerrainArrayLayer& layer : entry.pending.layers) layer.validFirst = levels;
+            target = &entry.pending;
         }
-        if (entry.uploadedLayers >= entry.pendingLayerCount) {
-            DeleteTexture(entry.surfaceA);
-            DeleteTexture(entry.surfaceB);
-            entry.surfaceA = entry.pendingA;
-            entry.surfaceB = entry.pendingB;
-            entry.layerCount = entry.pendingLayerCount;
-            entry.currentRevision = entry.buildingRevision;
-            entry.pendingA = 0;
-            entry.pendingB = 0;
-            entry.pendingLayerCount = 0;
-            entry.buildingSet.reset();
+        // Each layer whose bytes changed uploads again, smallest level first;
+        // the levels it already has keep drawing meanwhile, so a layer never
+        // goes blurrier than it was.
+        for (int i = 0; i < layerCount; ++i) {
+            TerrainArrayLayer& layer = target->layers[static_cast<std::size_t>(i)];
+            const std::uint64_t revision =
+                static_cast<std::size_t>(i) < set->layer_revisions.size() ? set->layer_revisions[i] : set->revision;
+            if (layer.revision == revision && layer.bytes != nullptr) continue;
+            layer.revision = revision;
+            layer.bytes = set->layers[static_cast<std::size_t>(i)];
+            layer.nextLevel = levels - 1;
+        }
+        if (target == &entry.current) entry.current.dirty = true;
+    }
+
+    // Upload within this frame's budget, smallest levels first across every
+    // layer, into the arrays still filling (pending, else current).
+    TerrainArrays& filling = entry.pending.surface[0] != 0 ? entry.pending : entry.current;
+    if (filling.surface[0] != 0) {
+        constexpr std::size_t kBudgetBytes = std::size_t(16) << 20;
+        std::size_t spent = 0;
+        bool any = false;
+        for (int level = filling.levels - 1; level >= 0 && spent < kBudgetBytes; --level) {
+            const int levelSize = std::max(filling.size >> level, 1);
+            for (int i = 0; i < filling.layerCount && spent < kBudgetBytes; ++i) {
+                TerrainArrayLayer& layer = filling.layers[static_cast<std::size_t>(i)];
+                if (layer.bytes == nullptr || layer.nextLevel != level || level < layer.bytes->first_level) continue;
+                if (TerrainLevelFits(*layer.bytes, level, levelSize)) {
+                    UploadTerrainLevel(filling.surface, i, level, levelSize, *layer.bytes);
+                    for (const auto& plane : layer.bytes->planes) spent += plane[static_cast<std::size_t>(level)].size();
+                    if (level == layer.validFirst - 1) layer.validFirst = level;
+                }
+                layer.nextLevel = level - 1;
+                any = true;
+            }
+        }
+        if (any || filling.dirty) {
+            filling.dirty = false;
+            // The finest level every layer has: what the arrays sample from.
+            int base = 0;
+            for (const TerrainArrayLayer& layer : filling.layers) base = std::max(base, layer.validFirst);
+            base = std::min(base, filling.levels - 1);
+            for (unsigned surface : filling.surface) {
+                glBindTexture(RT_GL_TEXTURE_2D_ARRAY, surface);
+                glTexParameteri(RT_GL_TEXTURE_2D_ARRAY, RT_GL_TEXTURE_BASE_LEVEL, base);
+            }
+            glBindTexture(RT_GL_TEXTURE_2D_ARRAY, 0);
+            filling.base = base;
         }
     }
-    outSurfaceA = entry.surfaceA;
-    outSurfaceB = entry.surfaceB;
-    outLayerCount = entry.layerCount;
+
+    // New arrays take over once every layer has at least its small levels
+    // (64 a side and below), so terrain never goes blank while they fill.
+    if (entry.pending.surface[0] != 0) {
+        int small = 0;
+        for (int w = entry.pending.size; w > 64; w = std::max((w + 1) / 2, 1)) ++small;
+        bool ready = true;
+        for (const TerrainArrayLayer& layer : entry.pending.layers) ready = ready && layer.validFirst <= small;
+        if (ready) {
+            DeleteTexture(entry.current.surface[0]);
+            DeleteTexture(entry.current.surface[1]);
+            DeleteTexture(entry.current.surface[2]);
+            entry.current = std::move(entry.pending);
+            entry.pending = TerrainArrays{};
+        }
+    }
+    for (std::size_t p = 0; p < 3; ++p) outSurface[p] = entry.current.surface[p];
+    outLayerCount = entry.current.surface[0] != 0 ? entry.current.layerCount : 0;
 }
 
 void Renderer::sweepTerrainArrays() {
     for (auto it = terrainArrays_.begin(); it != terrainArrays_.end();) {
         if (!it->second.asked) {
-            DeleteTexture(it->second.surfaceA);
-            DeleteTexture(it->second.surfaceB);
-            DeleteTexture(it->second.pendingA);
-            DeleteTexture(it->second.pendingB);
-            it->second.buildingSet.reset();
+            for (TerrainArrays* arrays : {&it->second.current, &it->second.pending}) {
+                for (unsigned& surface : arrays->surface) DeleteTexture(surface);
+            }
             it = terrainArrays_.erase(it);
         } else {
             it->second.asked = false;
@@ -2053,6 +2151,7 @@ bool Renderer::geometryPass(const MeshDraw* meshes, const float* projection) {
             if (draw.terrainSurfaceB != 0 && terrainAnisotropy_ > 1.f) {
                 glTexParameterf(RT_GL_TEXTURE_2D_ARRAY, RT_GL_TEXTURE_MAX_ANISOTROPY, terrainAniso);
             }
+            BindArray(kUnitTerrainSurfaceC, draw.terrainSurfaceC);
             BindTexture(kUnitMetalnessMap, terrainNoiseTexture_);
             glUniform1f(terrain_.fade, draw.terrainFade);
             glUniform1i(terrain_.fadeIn, draw.terrainFadeIn ? 1 : 0);
@@ -2632,11 +2731,9 @@ void Renderer::shutdown() {
     }
     terrainLooks_.clear();
     for (auto& [terrain, entry] : terrainArrays_) {
-        DeleteTexture(entry.surfaceA);
-        DeleteTexture(entry.surfaceB);
-        DeleteTexture(entry.pendingA);
-        DeleteTexture(entry.pendingB);
-        entry.buildingSet.reset();
+        for (TerrainArrays* arrays : {&entry.current, &entry.pending}) {
+            for (unsigned& surface : arrays->surface) DeleteTexture(surface);
+        }
     }
     terrainArrays_.clear();
     DeleteTexture(terrainNoiseTexture_);

@@ -57,6 +57,8 @@ const char* const kResourceKinds[] = {"textures", "meshes", "audio"};
 
 constexpr const char* kGitignore =
     ".studio/\n"
+    // Baked textures: made again from resources/ whenever they are missing.
+    ".cache/\n"
     "*.tmp\n"
     ".DS_Store\n";
 
@@ -216,6 +218,32 @@ void write_file(const fs::path& path, const std::string& bytes) {
     if (!engine_core::write_file(path, bytes, error)) {
         fail(error);
     }
+}
+
+// A project made before the texture cache has a .gitignore without .cache/:
+// adds the line, once. A project with no .gitignore is left without one, and
+// a file that cannot be read or written is left as it is.
+void ignore_texture_cache(const fs::path& root) {
+    const fs::path path = root / ".gitignore";
+    std::string text;
+    std::string error;
+    if (!fs::is_regular_file(path) || !engine_core::read_file(path, text, error)) {
+        return;
+    }
+    std::size_t start = 0;
+    while (start <= text.size()) {
+        std::size_t end = text.find('\n', start);
+        if (end == std::string::npos) end = text.size();
+        std::string line = text.substr(start, end - start);
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        if (line == ".cache/" || line == ".cache" || line == "/.cache/" || line == "/.cache") {
+            return;
+        }
+        start = end + 1;
+    }
+    if (!text.empty() && text.back() != '\n') text += '\n';
+    text += ".cache/\n";
+    engine_core::write_file(path, text, error);
 }
 
 void move_file(const fs::path& from, const fs::path& to) {
@@ -1357,6 +1385,7 @@ void Project::read_into_game(const fs::path& root, bool replace) {
     root_ = root;
     Layout layout;
     read_project_json(root, name_, layout);
+    ignore_texture_cache(root);
     src_ = layout.src;
     resources_ = layout.resources;
     const std::vector<PlanNode> plan = PlanReader(root, layout).read();

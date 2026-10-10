@@ -4,6 +4,7 @@
 // state; Task 5's cache consumes it.
 
 #include "terrain/LayerBuilder.hpp"
+#include "texture/TextureBake.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -16,7 +17,7 @@
 
 using engine_core::terrain::build_layer;
 using engine_core::terrain::layer_bytes;
-using engine_core::terrain::LayerBytes;
+using engine_core::terrain::LayerPixels;
 using engine_core::terrain::LayerSources;
 
 namespace {
@@ -116,7 +117,7 @@ TEST_CASE("LBR1 A 300x200 diffuse resizes to size^2 with every mip present and t
     for (const int size : {256, 512}) {
         LayerSources sources;
         sources.diffuse = diffuse;
-        const LayerBytes layer = build_layer(sources, size);
+        const LayerPixels layer = build_layer(sources, size);
 
         REQUIRE(layer.warning.empty());
         REQUIRE(layer.size == size);
@@ -145,7 +146,7 @@ TEST_CASE("LBR2 Packing round-trips each channel within 1/255 at level 0", "[ter
     sources.metalness = write_ppm(dir.path, "metalness.ppm", size, size, flat_rgb(size, size, 190, 190, 190));
     sources.height = write_ppm(dir.path, "height.ppm", size, size, flat_rgb(size, size, 240, 240, 240));
 
-    const LayerBytes layer = build_layer(sources, size);
+    const LayerPixels layer = build_layer(sources, size);
     REQUIRE(layer.warning.empty());
     REQUIRE(layer.a_mips.front().size() == size_t(size) * size_t(size) * 4);
 
@@ -178,7 +179,7 @@ TEST_CASE("LBR3 A missing normal map falls back to flat + luminance height; a mi
         LayerSources sources;
         sources.diffuse = write_ppm(dir.path, "diffuse.ppm", size, size, checker_rgb(size, size));
 
-        const LayerBytes layer = build_layer(sources, size);
+        const LayerPixels layer = build_layer(sources, size);
         REQUIRE(layer.warning.empty());
 
         const std::vector<std::uint8_t>& b0 = layer.b_mips.front();
@@ -208,7 +209,7 @@ TEST_CASE("LBR3 A missing normal map falls back to flat + luminance height; a mi
         sources.diffuse = write_ppm(dir.path, "diffuse2.ppm", size, size, flat_rgb(size, size, 1, 2, 3));
         sources.roughness = dir.path / "does-not-exist.ppm";
 
-        const LayerBytes layer = build_layer(sources, size);
+        const LayerPixels layer = build_layer(sources, size);
         REQUIRE_FALSE(layer.warning.empty());
         REQUIRE(layer.warning.find("does-not-exist.ppm") != std::string::npos);
 
@@ -223,7 +224,7 @@ TEST_CASE("LBR4 Mip color averages in linear space: a black/white checker's 1x1 
     LayerSources sources;
     sources.diffuse = write_ppm(dir.path, "checker.ppm", 2, 2, checker_rgb(2, 2));
 
-    const LayerBytes layer = build_layer(sources, 2);
+    const LayerPixels layer = build_layer(sources, 2);
     REQUIRE(layer.a_mips.size() == 2);  // 2x2, then 1x1
     const std::vector<std::uint8_t>& mip1 = layer.a_mips.back();
     REQUIRE(mip1.size() == 4);
@@ -238,13 +239,14 @@ TEST_CASE("LBR4 Mip color averages in linear space: a black/white checker's 1x1 
     }
 }
 
-TEST_CASE("LBR5 layer_bytes(1024) matches 1024^2 * 4 * 2 * 4/3 within one mip level's rounding",
+TEST_CASE("LBR5 layer_bytes(1024) matches 1024^2 * 3 * 4/3 (BC3 + BC5 + BC5, a byte a texel each) within the "
+          "small levels' block rounding",
           "[terrain][textures]") {
+    engine_core::texture::set_s3tc_available(true);
     const std::size_t actual = layer_bytes(1024);
-    const double ideal = 1024.0 * 1024.0 * 4.0 * 2.0 * 4.0 / 3.0;
-    // One mip level's worth of slack for both arrays at the small end of
-    // the chain (2x2, the level just above the 1x1 base): 2*2*4*2 bytes.
-    const double tolerance = 2.0 * 2.0 * 4.0 * 2.0;
+    const double ideal = 1024.0 * 1024.0 * 3.0 * 4.0 / 3.0;
+    // Levels 2x2 and 1x1 each still take a whole 4x4 block in each plane.
+    const double tolerance = 3.0 * 16.0 * 3.0;
     INFO("actual=" << actual << " ideal=" << ideal);
     REQUIRE(std::abs(double(actual) - ideal) <= tolerance);
 }
@@ -256,7 +258,7 @@ TEST_CASE("LBR6 build_layer at 1024 stays fast enough to run off the render/simu
     sources.diffuse = write_ppm(dir.path, "diffuse.ppm", 1024, 1024, checker_rgb(1024, 1024));
 
     const auto started = std::chrono::steady_clock::now();
-    const LayerBytes layer = build_layer(sources, 1024);
+    const LayerPixels layer = build_layer(sources, 1024);
     const auto elapsed = std::chrono::steady_clock::now() - started;
     const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count();
     INFO("build_layer(1024) took " << ms << " ms");
@@ -283,7 +285,7 @@ TEST_CASE("LBR7 Toksvig: a mip box of diverging normals gets rougher; one of coh
                                     checker2_rgb(size, size, 230, 128, 0, 25, 128, 0));
         sources.roughness = write_ppm(dir.path, "roughness_divergent.ppm", size, size, flat_rgb(size, size, 128, 128, 128));
 
-        const LayerBytes layer = build_layer(sources, size);
+        const LayerPixels layer = build_layer(sources, size);
         REQUIRE(layer.warning.empty());
         REQUIRE(layer.b_mips.size() == 2);  // 2x2, then 1x1
         const std::vector<std::uint8_t>& mip1 = layer.b_mips.back();
@@ -309,7 +311,7 @@ TEST_CASE("LBR7 Toksvig: a mip box of diverging normals gets rougher; one of coh
         sources.normal = write_ppm(dir.path, "normal_coherent.ppm", size, size, flat_rgb(size, size, 230, 128, 0));
         sources.roughness = write_ppm(dir.path, "roughness_coherent.ppm", size, size, flat_rgb(size, size, 128, 128, 128));
 
-        const LayerBytes layer = build_layer(sources, size);
+        const LayerPixels layer = build_layer(sources, size);
         REQUIRE(layer.warning.empty());
         const std::vector<std::uint8_t>& mip1 = layer.b_mips.back();
         REQUIRE(mip1.size() == 4);

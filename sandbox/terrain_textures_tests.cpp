@@ -448,3 +448,198 @@ TEST_CASE("TT6 memory_bytes matches layers * layer_bytes(size)", "[terrain][text
     const std::size_t expected = 2u * engine_core::terrain::layer_bytes(256);
     REQUIRE(textures.memory_bytes(t.id()) == expected);
 }
+
+// ---- Streaming: placeholders at once, previews before bakes, the cache ----
+
+#include "texture/BlockCompress.hpp"
+#include "texture/TexturePool.hpp"
+#include "AssetLoads.hpp"
+
+#include <algorithm>
+#include <atomic>
+#include <future>
+#include <mutex>
+
+namespace {
+
+using engine_core::texture::JobPriority;
+using engine_core::texture::TexturePool;
+
+// Records every priority submitted to pool, in order.
+struct PriorityLog {
+    std::mutex mutex;
+    std::vector<JobPriority> seen;
+    explicit PriorityLog(TexturePool& pool) {
+        pool.set_on_submit([this](JobPriority p) {
+            std::lock_guard<std::mutex> lock(mutex);
+            seen.push_back(p);
+        });
+    }
+    std::vector<JobPriority> copy() {
+        std::lock_guard<std::mutex> lock(mutex);
+        return seen;
+    }
+};
+
+// The red of layer's first texel, at its finest level present.
+int first_red(const engine_core::terrain::LayerBytes& layer) {
+    const auto formats = engine_core::terrain::layer_formats();
+    const int level = layer.first_level;
+    const int side = std::max(1, layer.size >> level);
+    const auto rgba =
+        engine_core::texture::decode_level(formats[0], layer.planes[0][std::size_t(level)].data(), side, side);
+    return rgba[0];
+}
+
+// A Terrain at Medium (512) with one textured Material per color, its
+// resources folder under dir/resources so its cache lands in dir/.cache.
+struct StreamingScene {
+    Game game;
+    Terrain* terrain = nullptr;
+    std::vector<Material*> materials;
+    // write false reuses the files an earlier scene wrote, keeping their times.
+    StreamingScene(const TempDir& dir, const std::vector<std::uint8_t>& reds, bool write = true) {
+        const std::filesystem::path resources = dir.path / "resources";
+        game.set_resources_root(resources);
+        terrain = &add_terrain(game);
+        REQUIRE_FALSE(terrain->set_texture_size(static_cast<int>(TextureSize::Medium)));
+        for (std::size_t i = 0; i < reds.size(); ++i) {
+            const std::string name = "d" + std::to_string(i) + ".ppm";
+            if (write) write_ppm(resources, name.c_str(), 128, 128, flat_rgb(128, 128, reds[i], 20, 20));
+            Material& m = add_material(game, ("M" + std::to_string(i)).c_str());
+            set_diffuse(m, add_texture(game, ("T" + std::to_string(i)).c_str(), name.c_str()));
+            TerrainMaterial* entry = nullptr;
+            REQUIRE_FALSE(terrain->add_material(m.id(), entry));
+            materials.push_back(&m);
+        }
+    }
+};
+
+}  // namespace
+
+TEST_CASE("TT7 every layer publishes at once as a grey placeholder, before anything is built", "[terrain][textures]") {
+    SimRole role;
+    TempDir dir;
+    StreamingScene scene(dir, {200, 40});
+    TexturePool pool(1);
+    std::promise<void> gate;
+    std::shared_future<void> opened = gate.get_future().share();
+    pool.submit(JobPriority::TerrainPreview, [opened] { opened.wait(); });   // nothing builds yet
+    TerrainTextures textures(pool);
+    textures.update(scene.game);
+    const auto set = textures.published(scene.terrain->id());
+    REQUIRE(set != nullptr);
+    REQUIRE(set->layers.size() == 3u);
+    REQUIRE(set->layer_revisions.size() == 3u);
+    for (std::size_t i = 1; i < 3; ++i) {
+        REQUIRE(set->layers[i] != nullptr);
+        CHECK(set->layers[i]->first_level == 3);   // 512 -> 64
+        CHECK(std::abs(first_red(*set->layers[i]) - 128) <= 2);   // grey, not white
+    }
+    CHECK(first_red(*set->layers[0]) >= 250);   // layer 0, the untextured default, stays white
+    gate.set_value();
+    pool.wait_idle();
+}
+
+TEST_CASE("TT8 on a cold cache every layer previews before any full bake starts", "[terrain][textures]") {
+    SimRole role;
+    TempDir dir;
+    StreamingScene scene(dir, {200, 40, 90});
+    TexturePool pool(1);
+    PriorityLog log(pool);
+    TerrainTextures textures(pool);
+    settle(textures, scene.game);
+    const std::vector<JobPriority> seen = log.copy();
+    const auto first_bake = std::find(seen.begin(), seen.end(), JobPriority::TerrainBake);
+    REQUIRE(first_bake != seen.end());
+    CHECK(std::count(seen.begin(), first_bake, JobPriority::TerrainPreview) == 3);
+    const auto set = textures.published(scene.terrain->id());
+    REQUIRE(set != nullptr);
+    CHECK(set->layers[1]->first_level == 0);
+    CHECK(std::abs(first_red(*set->layers[1]) - 200) <= 4);
+    CHECK(std::abs(first_red(*set->layers[2]) - 40) <= 4);
+    CHECK(std::filesystem::exists(dir.path / ".cache" / "textures"));
+}
+
+TEST_CASE("TT9 a warm cache reads levels and bakes nothing", "[terrain][textures]") {
+    SimRole role;
+    TempDir dir;
+    {
+        StreamingScene scene(dir, {200, 40});
+        TerrainTextures textures;
+        settle(textures, scene.game);
+    }
+    StreamingScene again(dir, {200, 40}, false);   // the same files, at the same times
+    TexturePool pool(1);
+    PriorityLog log(pool);
+    TerrainTextures textures(pool);
+    settle(textures, again.game);
+    const std::vector<JobPriority> seen = log.copy();
+    CHECK(std::count(seen.begin(), seen.end(), JobPriority::TerrainBake) == 0);
+    CHECK(std::count(seen.begin(), seen.end(), JobPriority::TerrainLargeLevels) > 0);
+    const auto set = textures.published(again.terrain->id());
+    REQUIRE(set != nullptr);
+    CHECK(set->layers[1]->first_level == 0);
+    CHECK(std::abs(first_red(*set->layers[1]) - 200) <= 4);
+}
+
+TEST_CASE("TT10 a reference changed while its layer builds drops the stale build", "[terrain][textures]") {
+    SimRole role;
+    TempDir dir;
+    StreamingScene scene(dir, {200});
+    write_ppm(dir.path / "resources", "other.ppm", 128, 128, flat_rgb(128, 128, 10, 20, 20));
+    const engine_core::InstanceId other = add_texture(scene.game, "Other", "other.ppm");
+    TexturePool pool(1);
+    std::promise<void> gate;
+    std::shared_future<void> opened = gate.get_future().share();
+    pool.submit(JobPriority::TerrainPreview, [opened] { opened.wait(); });
+    TerrainTextures textures(pool);
+    textures.update(scene.game);              // queues a build of the red diffuse
+    set_diffuse(*scene.materials[0], other);  // and now it is another texture
+    textures.update(scene.game);
+    gate.set_value();
+    settle(textures, scene.game);
+    const auto set = textures.published(scene.terrain->id());
+    REQUIRE(set != nullptr);
+    CHECK(std::abs(first_red(*set->layers[1]) - 10) <= 4);
+}
+
+TEST_CASE("TT11 a project copied elsewhere (as a player unpacks a game) still reads its texture cache",
+          "[terrain][textures]") {
+    SimRole role;
+    TempDir first;
+    {
+        StreamingScene scene(first, {200, 40});
+        TerrainTextures textures;
+        settle(textures, scene.game);
+    }
+    TempDir second;
+    std::filesystem::copy(first.path, second.path, std::filesystem::copy_options::recursive);
+    // Unpacking gives every file a new time, too.
+    for (const auto& entry : std::filesystem::recursive_directory_iterator(second.path / "resources")) {
+        if (entry.is_regular_file()) {
+            std::filesystem::last_write_time(entry.path(), std::filesystem::file_time_type::clock::now());
+        }
+    }
+    StreamingScene moved(second, {200, 40}, false);
+    TexturePool pool(1);
+    PriorityLog log(pool);
+    TerrainTextures textures(pool);
+    settle(textures, moved.game);
+    const std::vector<JobPriority> seen = log.copy();
+    CHECK(std::count(seen.begin(), seen.end(), JobPriority::TerrainBake) == 0);
+}
+
+TEST_CASE("TT12 a terrain layer's Textures read Loaded once its first look lands", "[terrain][textures]") {
+    SimRole role;
+    TempDir dir;
+    StreamingScene scene(dir, {200});
+    engine_core::clear_asset_loads();
+    const auto loaded = [&] {
+        return engine_core::asset_loaded(engine_core::AssetKind::Texture, dir.path / "resources", "d0.ppm");
+    };
+    TerrainTextures textures;
+    CHECK_FALSE(loaded());
+    settle(textures, scene.game);
+    CHECK(loaded());
+}

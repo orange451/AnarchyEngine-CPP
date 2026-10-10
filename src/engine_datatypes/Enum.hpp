@@ -63,6 +63,12 @@ enum class EffectQuality { Low = 0, Medium = 1, High = 2 };
 const EnumType& texture_size_enum();
 // texture_size_enum's items, by value.
 enum class TextureSize { Small = 0, Medium = 1, Large = 2, Max = 3 };
+// How a Texture loads: Automatic 0 draws its smallest mips first and sharpens
+// to full resolution; AlwaysLoaded 1 keeps its placeholder until every mip is
+// uploaded. Texture.Streaming.
+const EnumType& texture_streaming_enum();
+// texture_streaming_enum's items, by value.
+enum class TextureStreaming { Automatic = 0, AlwaysLoaded = 1 };
 
 // Every type the Enum global holds, for script analysis to declare.
 int enum_type_count();

@@ -383,6 +383,25 @@ TEST_CASE("P7 a children array orders siblings; without one they sort by GUID", 
     }
 }
 
+TEST_CASE("P8b loading a project whose .gitignore lacks .cache/ adds it, once", "[P8][project]") {
+    SimRole role;
+    TempDir dir;
+    { Project created = Project::create(dir.path / "Old"); }
+    const fs::path root = dir.path / "Old";
+    { std::ofstream(root / ".gitignore", std::ios::binary) << ".studio/\nmine.txt\n"; }
+    { Project loaded = Project::load(root); }
+    { Project again = Project::load(root); }
+    const std::string text = read_file(root / ".gitignore");
+    REQUIRE(text.find("mine.txt") != std::string::npos);
+    const std::size_t first = text.find(".cache/");
+    REQUIRE(first != std::string::npos);
+    REQUIRE(text.find(".cache/", first + 1) == std::string::npos);
+    // A project with no .gitignore is left without one.
+    fs::remove(root / ".gitignore");
+    { Project loaded = Project::load(root); }
+    REQUIRE_FALSE(fs::exists(root / ".gitignore"));
+}
+
 TEST_CASE("P8 create writes the project skeleton", "[P8][project]") {
     SimRole role;
     TempDir dir;
@@ -404,6 +423,7 @@ TEST_CASE("P8 create writes the project skeleton", "[P8][project]") {
     REQUIRE(readme.find("project.json") != std::string::npos);
     REQUIRE(readme.find("must not rewrite") != std::string::npos);
     REQUIRE(read_file(root / ".gitignore").find(".studio/") != std::string::npos);
+    REQUIRE(read_file(root / ".gitignore").find(".cache/") != std::string::npos);   // baked textures
     REQUIRE(read_file(root / ".gitattributes").find("*.luau text eol=lf") != std::string::npos);
     REQUIRE(fs::is_regular_file(root / "src" / "init.json"));
     // The root is game, class Game.

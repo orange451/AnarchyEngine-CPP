@@ -807,14 +807,14 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
         {P("h", "number"), P("s", "number"), P("v", "number")});
     add("Color3", "fromHex", "A color from a hex code: RGB or RRGGBB, with or without #.", "Color3", false,
         {P("hex", "string")});
-    add("Color3", "toHSV", "The hue, saturation, and value of a color, each 0 to 1.", "number", false,
+    add("Color3", "toHSV", "The hue, saturation, and value of a color, each 0 to 1.", "number,number,number", false,
         {P("color", "Color3")});
     add("Color3", "R", "The red channel, 0 to 1.", "number", false, {});
     add("Color3", "G", "The green channel, 0 to 1.", "number", false, {});
     add("Color3", "B", "The blue channel, 0 to 1.", "number", false, {});
     add("Color3", "Lerp", "A linear blend toward goal. alpha 0 returns this color and alpha 1 returns goal.", "Color3",
         false, {P("goal", "Color3"), P("alpha", "number")});
-    add("Color3", "ToHSV", "The hue, saturation, and value, each 0 to 1.", "number", false, {});
+    add("Color3", "ToHSV", "The hue, saturation, and value, each 0 to 1.", "number,number,number", false, {});
     add("Color3", "ToHex", "The hex code, RRGGBB in capitals without #.", "string", false, {});
 
     add("", "Vector2", "A 2D vector, such as a point on the screen. new builds one. Omitted components are 0.", nullptr, false,

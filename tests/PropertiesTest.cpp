@@ -1649,8 +1649,8 @@ void TestRowsScroll() {
     // Shift+Tab from the first field wraps to the last, at the bottom.
     rig.scene->noteKey(jadefx::Key::Tab, true, false, jadefx::Key::ModShift);
     frame();
-    jadefx::TextField* last = rig.field("Transparency");
-    Expect(last != nullptr && last->isFocused(), "Shift+Tab wraps to Transparency");
+    jadefx::TextField* last = rig.field("HeightStrength");
+    Expect(last != nullptr && last->isFocused(), "Shift+Tab wraps to HeightStrength");
     Expect(scroll->getVvalue() > scroll->getVmin(), "and scrolls down to it");
     const double view_top = scroll->getAbsoluteY();
     const double view_bottom = view_top + scroll->getViewportBounds().height;
@@ -1662,6 +1662,61 @@ void TestRowsScroll() {
 
 // Clicking a category's header folds it: its rows go, what was typed in them
 // is kept, Tab passes them over, and it stays folded for the next selection.
+std::vector<std::string> RowOrder(const ide::PropertySheet& sheet) {
+    std::vector<std::string> names;
+    for (const ide::PropertyRow& row : sheet.rows) {
+        names.push_back(row.group + ":" + row.name);
+    }
+    return names;
+}
+
+void TestSheetGroupOrder() {
+    RegisterGroups();
+    Rig rig;
+    const InstanceId kid = rig.add<GroupKid>("Kid");
+    const std::vector<std::string> expected = {
+        "Instance:Name", "Instance:Parent", "Instance:ClassName", "Look:Zeta", "Look:Kappa",
+        "Extra:Alpha",   "Extra:Beta",      "Feel:Mid",           "Data:Loose",
+    };
+    Expect(RowOrder(ide::read_sheet(rig.game, {kid})) == expected,
+           "Instance, then groups by first appearance with base rows first, then Data");
+
+    // Mixed classes: the first instance's groups, no repeated header.
+    const InstanceId base = rig.add<GroupBase>("Base");
+    const std::vector<std::string> mixed_expected = {
+        "Instance:Name", "Instance:Parent", "Instance:ClassName", "Look:Zeta", "Look:Alpha", "Feel:Mid",
+    };
+    Expect(RowOrder(ide::read_sheet(rig.game, {base, kid})) == mixed_expected,
+           "a mixed selection uses the first class's groups");
+}
+
+void TestGroupTitlesAndEmptyGroups() {
+    engine_core::set_thread_role(engine_core::ThreadRole::Simulation);
+    RegisterGroups();
+    Rig rig;
+    const InstanceId kid = rig.add<GroupKid>("Kid");
+    const InstanceId base = rig.add<GroupBase>("Base");
+    rig.select({kid});
+    rig.frame();
+    const std::vector<std::string> titles = {"Instance", "Look", "Extra", "Feel", "Data"};
+    Expect(rig.panel.group_titles() == titles, "one header per group, in sheet order");
+
+    rig.click(rig.panel.group_header("Look"));
+    rig.frame();
+    Expect(!rig.panel.editor("Zeta")->isVisible(), "a named group folds");
+    rig.select({base, kid});
+    rig.frame();
+    const std::vector<std::string> mixed_titles = {"Instance", "Look", "Feel"};
+    Expect(rig.panel.group_titles() == mixed_titles, "a group with no rows left has no header");
+    Expect(!rig.panel.editor("Zeta")->isVisible(), "Look stays folded across selections");
+    rig.select({kid});
+    rig.frame();
+    Expect(!rig.panel.editor("Kappa")->isVisible(), "and when coming back");
+    rig.click(rig.panel.group_header("Look"));
+    rig.frame();
+    engine_core::set_thread_role(engine_core::ThreadRole::Unknown);
+}
+
 void TestGroupsFold() {
     engine_core::set_thread_role(engine_core::ThreadRole::Simulation);
     Rig rig;
@@ -1671,14 +1726,14 @@ void TestGroupsFold() {
     rig.frame();
     jadefx::ScrollPane* scroll = rig.panel.scroll_pane();
     const double open_height = scroll->getContentBounds().height;
-    Expect(rig.panel.editor("Roughness")->isVisible(), "Data's rows show");
+    Expect(rig.panel.editor("Roughness")->isVisible(), "Modifier's rows show");
 
     rig.typeInto("Roughness", "0.25");
-    rig.click(rig.panel.group_header("Data"));
+    rig.click(rig.panel.group_header("Modifier"));
     rig.frame();
     rig.frame();
     Expect(!rig.panel.editor("Roughness")->isVisible() && !rig.panel.editor("Color")->isVisible(),
-           "clicking Data folds its rows");
+           "clicking Modifier folds its rows");
     Expect(rig.panel.editor("Name")->isVisible(), "and leaves Instance's");
     auto* material = dynamic_cast<engine_core::Material*>(rig.game.instance(wall));
     Expect(material != nullptr && std::fabs(material->roughness() - 0.25) < 1e-6, "keeping what was typed");
@@ -1691,8 +1746,8 @@ void TestGroupsFold() {
 
     rig.select({floor});
     rig.frame();
-    Expect(!rig.panel.editor("Roughness")->isVisible(), "another selection keeps Data folded");
-    rig.click(rig.panel.group_header("Data"));
+    Expect(!rig.panel.editor("Roughness")->isVisible(), "another selection keeps Modifier folded");
+    rig.click(rig.panel.group_header("Modifier"));
     rig.frame();
     Expect(rig.panel.editor("Roughness")->isVisible(), "and a second click opens it");
 
@@ -1708,6 +1763,8 @@ void TestGroupsFold() {
 
 int main() {
     TestGroupMarkersRegister();
+    TestSheetGroupOrder();
+    TestGroupTitlesAndEmptyGroups();
     TestGroupsFold();
     TestRowsScroll();
     TestAssetPreview();

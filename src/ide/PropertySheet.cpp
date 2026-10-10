@@ -23,7 +23,8 @@ using engine_core::InstanceId;
 using engine_core::LuaField;
 using engine_core::LuaSlot;
 
-// Instance rows, in the order they are shown. Every other row is Data.
+// Instance rows, in the order they are shown. Every other row takes its
+// field's group, or Data.
 constexpr const char* kInstanceRows[] = {"Name", "Parent", "ClassName"};
 
 int instance_rank(const std::string& name) {
@@ -374,7 +375,7 @@ PropertySheet read_sheet(DataModel& world, const std::vector<InstanceId>& select
         row.name = field.name;
         row.type_name = field.type_name;
         row.kind = kind;
-        row.group = instance_rank(row.name) >= 0 ? PropertyGroup::Instance : PropertyGroup::Data;
+        row.group = instance_rank(row.name) >= 0 ? "Instance" : field.group != nullptr ? field.group : "Data";
         row.writable = field.writable && field.write != nullptr && kind != PropertyKind::ReadOnlyText;
         if (kind == PropertyKind::Number && field.slider()) {
             row.slider_min = field.slider_min;
@@ -425,14 +426,31 @@ PropertySheet read_sheet(DataModel& world, const std::vector<InstanceId>& select
         sheet.rows.push_back(std::move(row));
     }
 
-    std::stable_sort(sheet.rows.begin(), sheet.rows.end(), [](const PropertyRow& a, const PropertyRow& b) {
-        if (a.group != b.group) {
-            return a.group == PropertyGroup::Instance;
+    // Instance first, then groups in the order the member list first names
+    // them, then Data. Rows in a group keep member order, base fields first.
+    std::vector<std::string> order;
+    for (const PropertyRow& row : sheet.rows) {
+        if (row.group != "Instance" && row.group != "Data" &&
+            std::find(order.begin(), order.end(), row.group) == order.end()) {
+            order.push_back(row.group);
         }
-        if (a.group == PropertyGroup::Instance) {
-            return instance_rank(a.name) < instance_rank(b.name);
+    }
+    const auto rank = [&order](const PropertyRow& row) -> std::size_t {
+        if (row.group == "Instance") {
+            return 0;
         }
-        return a.name < b.name;
+        if (row.group == "Data") {
+            return order.size() + 1;
+        }
+        return 1 + static_cast<std::size_t>(std::find(order.begin(), order.end(), row.group) - order.begin());
+    };
+    std::stable_sort(sheet.rows.begin(), sheet.rows.end(), [&](const PropertyRow& a, const PropertyRow& b) {
+        const std::size_t ra = rank(a);
+        const std::size_t rb = rank(b);
+        if (ra != rb) {
+            return ra < rb;
+        }
+        return ra == 0 && instance_rank(a.name) < instance_rank(b.name);
     });
     return sheet;
 }

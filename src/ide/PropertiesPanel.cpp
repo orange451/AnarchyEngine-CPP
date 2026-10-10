@@ -35,6 +35,7 @@
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
+#include <map>
 #include <set>
 #include <utility>
 #include <vector>
@@ -72,11 +73,8 @@ constexpr const char* kSoundButtonIcon[kSoundButtons] = {"Play.png", "Pause.png"
 constexpr double kSoundButtonWidth = 84;
 // The time beside the track, as "1:05 / 2:30".
 constexpr double kSoundTimeWidth = 84;
-// The categories, each under a header that folds it: a row's PropertyGroup,
-// then the Preview section.
-constexpr int kGroups = 3;
-constexpr int kPreviewGroup = 2;
-constexpr const char* kGroupTitles[kGroups] = {"Instance", "Data", "Preview"};
+// The panel's own last section, after every property group.
+constexpr const char* kPreviewGroup = "Preview";
 // A Transform's two lines, under its name when it is open.
 constexpr const char* kTransformLines[2] = {"Position", "Orientation"};
 
@@ -579,12 +577,17 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
 
     std::shared_ptr<PropertiesPane> pane;
     std::shared_ptr<jadefx::Label> empty;
-    // Each category's header, Instance, Data, and Preview, and the arrow that
-    // folds it. A category is open until folded, and stays folded across
-    // selections for the session.
-    std::shared_ptr<jadefx::Label> headers[kGroups];
-    std::shared_ptr<PropertyDisclosure> header_arrows[kGroups];
-    bool group_folded[kGroups] = {};
+    // A section header: its title and the arrow that folds it. Made the
+    // first time a sheet names the group, then kept. A group is open until
+    // folded, and stays folded by title across selections for the session.
+    struct GroupHeader {
+        std::shared_ptr<jadefx::Label> label;
+        std::shared_ptr<PropertyDisclosure> arrow;
+    };
+    std::map<std::string, GroupHeader> headers;
+    std::set<std::string> folded_groups;
+    // The headers placed by the last layout, top to bottom.
+    std::vector<std::string> shown_groups;
     std::shared_ptr<jadefx::Label> status_label;
     std::vector<std::shared_ptr<RowView>> rows;
     PropertySheet sheet;
@@ -658,31 +661,7 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
         empty->getClassList().add("properties-empty");
         empty->setStyle("color: var(--ide-muted-text-color);");
         body->getChildren().add(empty);
-        std::weak_ptr<Impl> weak_self = weak_from_this();
-        for (int index = 0; index < kGroups; ++index) {
-            // The title and its arrow both fold it.
-            auto fold = [weak_self, index](const jadefx::MouseEvent&) {
-                if (const auto self = weak_self.lock()) {
-                    self->toggle_group(index);
-                }
-            };
-            headers[index] = jadefx::make<jadefx::Label>(kGroupTitles[index]);
-            headers[index]->getClassList().add("properties-group");
-            headers[index]->setStyle(
-                "padding: 0 6px 0 20px; background-color: var(--ide-properties-group-color); "
-                "color: var(--ide-properties-group-text-color);");
-            headers[index]->setCursor(jadefx::Cursor::Pointer);
-            headers[index]->setOnMouseClicked(fold);
-            headers[index]->setVisible(false);
-            body->getChildren().add(headers[index]);
-            // After the title, so it paints over the title's background.
-            header_arrows[index] = jadefx::make<PropertyDisclosure>();
-            header_arrows[index]->setStyle("color: var(--ide-properties-group-text-color);");
-            header_arrows[index]->setOnMouseClicked(fold);
-            header_arrows[index]->setVisible(false);
-            body->getChildren().add(header_arrows[index]);
-        }
-        preview_header = headers[kPreviewGroup];
+        preview_header = header(kPreviewGroup).label;
         status_label = jadefx::make<jadefx::Label>("");
         status_label->getClassList().add("properties-status");
         status_label->setStyle(kErrorStyle);
@@ -1322,21 +1301,54 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
 
     // Whether a row's fields show: its category is open, and a Transform is unfolded.
     bool open(const RowView& view) const {
-        return !group_folded[group_index(view.row.group)] &&
+        return !folded_groups.count(view.row.group) &&
                (view.row.kind != PropertyKind::Transform || !folded.count(view.row.name));
     }
 
-    static int group_index(PropertyGroup group) { return group == PropertyGroup::Instance ? 0 : 1; }
+    // The header titled `title`, made and added to body the first time.
+    GroupHeader& header(const std::string& title) {
+        const auto found = headers.find(title);
+        if (found != headers.end()) {
+            return found->second;
+        }
+        std::weak_ptr<Impl> weak_self = weak_from_this();
+        // The title and its arrow both fold it.
+        auto fold = [weak_self, title](const jadefx::MouseEvent&) {
+            if (const auto self = weak_self.lock()) {
+                self->toggle_group(title);
+            }
+        };
+        GroupHeader made;
+        made.label = jadefx::make<jadefx::Label>(title);
+        made.label->getClassList().add("properties-group");
+        made.label->setStyle(
+            "padding: 0 6px 0 20px; background-color: var(--ide-properties-group-color); "
+            "color: var(--ide-properties-group-text-color);");
+        made.label->setCursor(jadefx::Cursor::Pointer);
+        made.label->setOnMouseClicked(fold);
+        made.label->setVisible(false);
+        body->getChildren().add(made.label);
+        // After the title, so it paints over the title's background.
+        made.arrow = jadefx::make<PropertyDisclosure>();
+        made.arrow->setStyle("color: var(--ide-properties-group-text-color);");
+        made.arrow->setOnMouseClicked(fold);
+        made.arrow->setVisible(false);
+        body->getChildren().add(made.arrow);
+        return headers.emplace(title, std::move(made)).first->second;
+    }
 
-    // Folding a category leaves any field in it, keeping what was typed, and
+    // Folding a group leaves any field in it, keeping what was typed, and
     // closes a color chooser open in it.
-    void toggle_group(int index) {
-        group_folded[index] = !group_folded[index];
-        if (!group_folded[index] || index == kPreviewGroup) {
+    void toggle_group(const std::string& title) {
+        if (folded_groups.erase(title) != 0) {
+            return;
+        }
+        folded_groups.insert(title);
+        if (title == kPreviewGroup) {
             return;
         }
         for (const auto& view : rows) {
-            if (group_index(view->row.group) != index) {
+            if (view->row.group != title) {
                 continue;
             }
             finish_typing(*view);
@@ -1354,13 +1366,16 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
         }
     }
 
-    // Puts a category's header, with its arrow, at y. True while it is open.
+    // Puts a group's header, with its arrow, at y. True while it is open.
     template <typename Place>
-    bool place_header(Place& place, int index, double left, double width) {
-        place(*headers[index], left, width, kRowHeight - 2);
-        place(*header_arrows[index], left + 4, kDisclosureWidth, kRowHeight - 2);
-        header_arrows[index]->open = !group_folded[index];
-        return !group_folded[index];
+    bool place_header(Place& place, const std::string& title, double left, double width) {
+        GroupHeader& placed = header(title);
+        place(*placed.label, left, width, kRowHeight - 2);
+        place(*placed.arrow, left + 4, kDisclosureWidth, kRowHeight - 2);
+        const bool is_open = !folded_groups.count(title);
+        placed.arrow->open = is_open;
+        shown_groups.push_back(title);
+        return is_open;
     }
 
     // Folding a row leaves any field in it, keeping what was typed.
@@ -1967,18 +1982,19 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
         } else {
             empty->setVisible(false);
         }
-        for (int index = 0; index < kGroups; ++index) {
-            headers[index]->setVisible(false);
-            header_arrows[index]->setVisible(false);
+        for (auto& [title, hidden] : headers) {
+            hidden.label->setVisible(false);
+            hidden.arrow->setVisible(false);
         }
-        PropertyGroup group = PropertyGroup::Instance;
+        shown_groups.clear();
+        std::string group;
         bool any = false;
         bool group_open = true;
         for (const auto& view : rows) {
             if (!any || view->row.group != group) {
                 group = view->row.group;
                 any = true;
-                group_open = place_header(place, group_index(group), left, width);
+                group_open = place_header(place, group, left, width);
                 y += kRowHeight - 2 + kRowGap;
             }
             view->top = y;
@@ -2334,13 +2350,11 @@ std::string PropertiesPanel::preview_class() const {
 jadefx::ScrollPane* PropertiesPanel::scroll_pane() const { return impl_->scroller.get(); }
 
 jadefx::Node* PropertiesPanel::group_header(const std::string& title) const {
-    for (int index = 0; index < kGroups; ++index) {
-        if (title == kGroupTitles[index]) {
-            return impl_->headers[index].get();
-        }
-    }
-    return nullptr;
+    const auto found = impl_->headers.find(title);
+    return found != impl_->headers.end() ? found->second.label.get() : nullptr;
 }
+
+std::vector<std::string> PropertiesPanel::group_titles() const { return impl_->shown_groups; }
 
 void PropertiesPanel::stop_sound() {
     if (impl_->sound) {

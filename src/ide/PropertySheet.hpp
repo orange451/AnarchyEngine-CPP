@@ -33,9 +33,6 @@ inline int vector_axes(PropertyKind kind) { return kind == PropertyKind::Vector2
 // A Transform row's parts: Position's X, Y, and Z, then Orientation's.
 inline constexpr int kTransformParts = 6;
 
-// Instance rows come first in a fixed order, then Data rows by name.
-enum class PropertyGroup { Instance, Data };
-
 // One value in the panel. Only the fields for its kind mean anything.
 // A Ref with ref == DataModel::kNoParent is nil. A Transform keeps the matrix
 // in transform, its translation in vec, and its Orientation in orientation.
@@ -69,7 +66,8 @@ struct PropertyRow {
     std::string name;
     std::string type_name;
     PropertyKind kind = PropertyKind::String;
-    PropertyGroup group = PropertyGroup::Data;
+    // "Instance", the field's registered group (lua_group), or "Data".
+    std::string group = "Data";
     double slider_min = 0;
     double slider_max = 0;
     const engine_core::EnumType* enum_type = nullptr;

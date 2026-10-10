@@ -69,8 +69,9 @@ using PropertiesRun = std::function<void(std::function<void(engine_core::DataMod
 // Prefab editor's slots use: every asset of that class under Assets, filtered
 // as you type. A pick is one undo step; None, there while one is set, sets nil.
 //
-// The rows come in categories, Instance and Data, each under a header with an
-// arrow. Clicking either folds the category, and it stays folded across
+// The rows come in groups: Instance, then the groups the class registers
+// (lua_group) in registration order, then Data, each under a header with an
+// arrow. Clicking either folds the group, and it stays folded by title across
 // selections for the session; folding commits what was typed in it, and Tab
 // passes over its fields. The Preview section folds the same way.
 //
@@ -129,8 +130,11 @@ public:
     std::string preview_class() const;
     // The scroll pane the rows are in.
     jadefx::ScrollPane* scroll_pane() const;
-    // A category's header, "Instance", "Data", or "Preview", which a click folds.
+    // A group's header, such as "Instance", "Data", or "Preview", which a click
+    // folds. Null for a title no sheet has shown.
     jadefx::Node* group_header(const std::string& title) const;
+    // The section headers the last layout showed, top to bottom.
+    std::vector<std::string> group_titles() const;
     // Silences the Preview's sound, as a test starting or stopping does, so
     // it is never heard over the game, nor left from before it.
     void stop_sound();

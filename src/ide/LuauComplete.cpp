@@ -191,6 +191,7 @@ Scan Tokenize(const std::u32string& text, int caret) {
             continue;
         }
         if (code == U'`') {
+            const int start = i;
             ++i;
             while (i < caret && text[static_cast<std::size_t>(i)] != U'`') {
                 ++i;
@@ -200,7 +201,7 @@ Scan Tokenize(const std::u32string& text, int caret) {
                 return scan;
             }
             ++i;
-            emit(Token::String, 0, i, {});
+            emit(Token::String, start, i, {});
             continue;
         }
         if (IsDigit(code) || (code == U'.' && i + 1 < caret && IsDigit(text[static_cast<std::size_t>(i + 1)]))) {

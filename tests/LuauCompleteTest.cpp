@@ -1421,6 +1421,21 @@ void testHover() {
         fail("the keyword of a named function shows a tip");
     }
 
+    {
+        // A backtick string's token begins at its backtick, not at the start of
+        // the file; otherwise a hover over earlier whitespace lands on it.
+        const std::string source = "local count = 1\nlocal text = `n {count}`\n";
+        const int gap = static_cast<int>(source.find("= 1")) + 3;  // the space after "1"
+        const ide::HoverInfo info = ide::hover_luau(source, gap);
+        if (info.found) {
+            fail("whitespace before a backtick string shows a tip");
+        }
+        if (info.begin <= gap && gap < info.end) {
+            fail("whitespace before a backtick string is reported inside its token " + std::to_string(info.begin) + ".." +
+                 std::to_string(info.end));
+        }
+    }
+
     const char* untyped = "local value\nprint(value)";
     const ide::HoverInfo blank = ide::hover_luau(untyped, find_nth(untyped, "value", 1));
     expect_hover(blank, "value", "local", nullptr, "untyped local");

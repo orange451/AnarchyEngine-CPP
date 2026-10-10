@@ -453,6 +453,9 @@ TEST_CASE("P14 scripts set Shape by item, name, or value, and nothing else", "[p
             and not pcall(function() body.Shape = Enum.KeyCode.A end)
             and not pcall(function() body.Shape = Vector3.new() end)
             and body.Shape == Enum.PhysicsShape.Hull
+        _G.whole_only = not pcall(function() body.Shape = 1.9 end)
+            and not pcall(function() body.Shape = 0 / 0 end)
+            and body.Shape == Enum.PhysicsShape.Hull
         local part = Instance.new("GameObject", workspace)
         body.GameObject = part
         _G.ref = body.GameObject == part
@@ -463,6 +466,11 @@ TEST_CASE("P14 scripts set Shape by item, name, or value, and nothing else", "[p
     rig.game.start_simulation();
     rig.frames(1, 0.05);
     INFO(rig.runtime.last_error());
+    {
+        bool whole_only = false;
+        REQUIRE(rig.runtime.global_boolean("whole_only", whole_only));
+        REQUIRE(whole_only);
+    }
     for (const char* name : {"default", "item", "name", "value", "refused", "ref", "mass"}) {
         INFO(name);
         bool value = false;

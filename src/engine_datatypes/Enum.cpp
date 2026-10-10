@@ -5,6 +5,8 @@
 
 #include "lualib.h"
 
+#include <climits>
+#include <cmath>
 #include <cstring>
 
 namespace engine_core {
@@ -405,9 +407,13 @@ int check_enum_arg(lua_State* state, int index, const EnumType& type) {
             }
         }
     } else if (lua_type(state, index) == LUA_TNUMBER) {
-        const int value = static_cast<int>(lua_tointeger(state, index));
-        if (enum_item_name(type, value) != nullptr) {
-            return value;
+        // Only a whole number names an item: 1.9 is not item 1.
+        const double number = lua_tonumber(state, index);
+        if (std::isfinite(number) && number == std::floor(number) && number >= INT_MIN && number <= INT_MAX) {
+            const int value = static_cast<int>(number);
+            if (enum_item_name(type, value) != nullptr) {
+                return value;
+            }
         }
     }
     const char* expected = lua_pushfstring(state, "Enum.%s", type.name);

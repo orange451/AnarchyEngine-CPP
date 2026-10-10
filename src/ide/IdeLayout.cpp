@@ -593,6 +593,24 @@ void IdeLayout::flushFrame() {
     if (check_pending_ && !in_test() && !editing_field()) {
         check_disk();
     }
+    // The place and size to keep while maximized: the last ones it had when it was not.
+    if (mainStage_ != nullptr && !jadefx::isStageMaximized(*mainStage_) && saved_splits_wait_ == 0) {
+        double x = 0;
+        double y = 0;
+        // A minimized window has no size worth keeping.
+        if (mainStage_->getWidth() >= 200 && mainStage_->getHeight() >= 150 &&
+            jadefx::stageToScreen(*mainStage_, 0, 0, x, y)) {
+            normal_window_ = WindowPlace{x, y, static_cast<double>(mainStage_->getWidth()),
+                                         static_cast<double>(mainStage_->getHeight())};
+        }
+    }
+    if (saved_splits_wait_ > 0) {
+        if (mainStage_ != nullptr && jadefx::isStageMaximized(*mainStage_)) {
+            window_maximized();
+        } else if (--saved_splits_wait_ == 0) {
+            saved_splits_.clear();
+        }
+    }
     poll_plugins(false);
     refresh_plugin_ribbon();
     sync_plugin_widgets();

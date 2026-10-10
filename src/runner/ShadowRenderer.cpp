@@ -92,6 +92,10 @@ bool ShadowRenderer::makeAtlas(int size, int pages) {
     atlasTexturePages_ = 0;
     // GL cannot add a layer in place, so a new page makes the whole array
     // again. Past the GPU's limits, or its memory, glTexImage3D says so.
+    // glGetError reports the oldest error still unread, which may be another
+    // pass's: drain those first so only MakeDepth's own failure counts here.
+    while (glGetError() != GL_NO_ERROR) {
+    }
     unsigned texture = MakeDepth(size, pages, nullptr);
     bool made = glGetError() == GL_NO_ERROR;
     glBindFramebuffer(RT_GL_FRAMEBUFFER, atlasFbo_);
@@ -113,9 +117,12 @@ bool ShadowRenderer::makeAtlas(int size, int pages) {
     return true;
 }
 
-void ShadowRenderer::refuse() {
+void ShadowRenderer::refuse(int size, int pages) {
     if (!refused_) {
-        std::fprintf(stderr, "This driver will not draw shadow maps; lights are drawn without shadows.\n");
+        std::fprintf(stderr,
+                     "This driver will not draw shadow maps (a %d x %d depth array with %d pages was refused); "
+                     "lights are drawn without shadows.\n",
+                     size, size, pages);
         refused_ = true;
     }
 }
@@ -225,7 +232,7 @@ bool ShadowRenderer::draw(const std::vector<ShadowRequest>& requests, const Mesh
         if (!makeAtlas(size, pages)) {
             // Even the smallest will not do: no shadows, said once.
             if ((size == workingSize && pages == workingPages) || !makeAtlas(workingSize, workingPages)) {
-                refuse();
+                refuse(workingSize, workingPages);
                 return true;
             }
             // Kept at what works, with the lights fitted to it.
@@ -353,7 +360,7 @@ bool ShadowRenderer::drawSun(const SunRequest* sun, const MeshDraw* meshes, cons
         const CascadeDraw& draw = draws[c];
         glFramebufferTextureLayer(RT_GL_FRAMEBUFFER, RT_GL_DEPTH_ATTACHMENT, cascades_, 0, draw.layer);
         if (glCheckFramebufferStatus(RT_GL_FRAMEBUFFER) != RT_GL_FRAMEBUFFER_COMPLETE) {
-            refuse();
+            refuse(size, 1);
             end();
             return true;
         }

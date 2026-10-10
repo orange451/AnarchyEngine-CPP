@@ -19,7 +19,7 @@ void main() {
         discard;
     }
     vec3 viewDirection = normalize(viewPositionAt(vUv, depth));
-    vec3 N = texture(uNormal, vUv).rgb;
+    vec3 N = decodeNormal(texture(uNormal, vUv));
     vec3 material = texture(uMaterial, vUv).rgb;
     vec3 albedo = texture(uAlbedo, vUv).rgb;
     float occlusion = occlusionAt(vUv, depth);

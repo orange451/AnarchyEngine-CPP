@@ -294,6 +294,8 @@ bool Renderer::buildProgram(Program& program, const char* name, const char* vert
     program.lightCones = at("uLightCone");
     program.exposure = at("uExposure");
     program.inverseGamma = at("uInverseGamma");
+    program.cinematic = at("uCinematic");
+    program.fastShading = at("uFastShading");
     program.saturation = at("uSaturation");
     program.prefilter = at("uPrefilter");
     program.threshold = at("uThreshold");
@@ -402,22 +404,22 @@ bool Renderer::initialize() {
 
     const bool built =
         buildProgram(geometry_, "G-buffer", "pipeline/geometry.vert", "pipeline/deferred.frag",
-                     {"pipeline/surface.glsl"}) &&
-        buildProgram(terrain_, "Terrain", "pipeline/terrain.vert", "pipeline/terrain.frag", {}) &&
+                     {"pipeline/gbuffer.glsl", "pipeline/surface.glsl"}) &&
+        buildProgram(terrain_, "Terrain", "pipeline/terrain.vert", "pipeline/terrain.frag", {"pipeline/gbuffer.glsl"}) &&
         buildProgram(forward_, "Transparency", "pipeline/geometry.vert", "pipeline/forward.frag",
                      {"pipeline/surface.glsl", "pipeline/lighting.glsl", "pipeline/environment.glsl",
                       "pipeline/image_lighting.glsl"}) &&
         buildProgram(ibl_, "IBL", "pipeline/fullscreen.vert", "pipeline/ibl.frag",
-                     {"pipeline/lighting.glsl", "pipeline/environment.glsl", "pipeline/occlusion.glsl",
+                     {"pipeline/gbuffer.glsl", "pipeline/lighting.glsl", "pipeline/environment.glsl", "pipeline/occlusion.glsl",
                       "pipeline/image_lighting.glsl"}) &&
         buildProgram(sky_, "Sky", "pipeline/fullscreen.vert", "pipeline/sky.frag",
                      {"pipeline/lighting.glsl", "pipeline/environment.glsl"}) &&
         buildProgram(light_, "Light", "pipeline/light.vert", "pipeline/light.frag",
-                     {"pipeline/lighting.glsl", "pipeline/shadow.glsl"}) &&
+                     {"pipeline/gbuffer.glsl", "pipeline/lighting.glsl", "pipeline/shadow.glsl"}) &&
         buildProgram(sun_, "Directional light", "pipeline/fullscreen.vert", "pipeline/light.frag",
-                     {"pipeline/lighting.glsl", "pipeline/shadow.glsl"}) &&
+                     {"pipeline/gbuffer.glsl", "pipeline/lighting.glsl", "pipeline/shadow.glsl"}) &&
         buildProgram(merge_, "Merge", "pipeline/fullscreen.vert", "pipeline/merge.frag",
-                     {"pipeline/lighting.glsl", "pipeline/environment.glsl", "pipeline/occlusion.glsl",
+                     {"pipeline/gbuffer.glsl", "pipeline/lighting.glsl", "pipeline/environment.glsl", "pipeline/occlusion.glsl",
                       "pipeline/image_lighting.glsl"}) &&
         buildProgram(tonemap_, "Tone map", "pipeline/fullscreen.vert", "pipeline/tonemap.frag",
                      {"pipeline/bloom.glsl"}) &&
@@ -429,12 +431,12 @@ bool Renderer::initialize() {
         buildProgram(ssrBlur_, "Reflections blur", "pipeline/fullscreen.vert", "pipeline/ssr_blur.frag",
                      {"pipeline/ssr.glsl"}) &&
         buildProgram(ssr_, "Reflections", "pipeline/fullscreen.vert", "pipeline/ssr.frag",
-                     {"pipeline/lighting.glsl", "pipeline/environment.glsl", "pipeline/image_lighting.glsl",
+                     {"pipeline/gbuffer.glsl", "pipeline/lighting.glsl", "pipeline/environment.glsl", "pipeline/image_lighting.glsl",
                       "pipeline/ssr.glsl"}) &&
         buildProgram(gtao_, "Ambient occlusion", "pipeline/fullscreen.vert", "pipeline/gtao.frag",
-                     {"pipeline/lighting.glsl"}) &&
+                     {"pipeline/gbuffer.glsl", "pipeline/lighting.glsl"}) &&
         buildProgram(aoBlur_, "Occlusion blur", "pipeline/fullscreen.vert", "pipeline/ao_blur.frag",
-                     {"pipeline/lighting.glsl"}) &&
+                     {"pipeline/gbuffer.glsl", "pipeline/lighting.glsl"}) &&
         buildProgram(grid_, "Grid", "pipeline/fullscreen.vert", "pipeline/grid.frag", {}) &&
         buildProgram(gridBands_, "Grid bands", "pipeline/grid_band.vert", "pipeline/grid.frag", {}) &&
         buildProgram(outline_, "Outline", "pipeline/outline.vert", "pipeline/outline.frag", {}) &&
@@ -653,10 +655,10 @@ bool Renderer::ensureTargets(int width, int height) {
     destroyTargets();
     targetWidth_ = width;
     targetHeight_ = height;
-    albedoTexture_ = MakeTarget(RT_GL_RGBA16F, GL_RGBA, RT_GL_HALF_FLOAT, width, height);
-    normalTexture_ = MakeTarget(RT_GL_RGBA16F, GL_RGBA, RT_GL_HALF_FLOAT, width, height);
+    albedoTexture_ = MakeTarget(RT_GL_SRGB8_ALPHA8, GL_RGBA, GL_UNSIGNED_BYTE, width, height);
+    normalTexture_ = MakeTarget(RT_GL_RG16, RT_GL_RG, GL_UNSIGNED_SHORT, width, height);
     materialTexture_ = MakeTarget(GL_RGBA8, GL_RGBA, GL_UNSIGNED_BYTE, width, height);
-    emissiveTexture_ = MakeTarget(RT_GL_RGBA16F, GL_RGBA, RT_GL_HALF_FLOAT, width, height);
+    emissiveTexture_ = MakeTarget(RT_GL_R11F_G11F_B10F, RT_GL_RGB, RT_GL_UNSIGNED_INT_10F_11F_11F_REV, width, height);
     depthTexture_ = MakeTarget(RT_GL_DEPTH_COMPONENT24, RT_GL_DEPTH_COMPONENT, GL_UNSIGNED_INT, width, height);
     accumulationTexture_ = MakeTarget(RT_GL_RGBA16F, GL_RGBA, RT_GL_HALF_FLOAT, width, height);
     transparencyTexture_ = MakeTarget(RT_GL_RGBA16F, GL_RGBA, RT_GL_HALF_FLOAT, width, height);
@@ -1958,6 +1960,9 @@ bool Renderer::geometryPass(const MeshDraw* meshes, const float* projection) {
     glDepthMask(GL_TRUE);
     glClearColor(0.f, 0.f, 0.f, 0.f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    // The albedo target is sRGB: shaders write linear albedo and the hardware
+    // encodes it. Only on here, so no other pass's writes are converted.
+    glEnable(RT_GL_FRAMEBUFFER_SRGB);
 
     // Every instance of the frame, opaque and see-through, in one upload.
     instances_.upload(batches_.instances.data(), static_cast<int>(batches_.instances.size()));
@@ -2072,6 +2077,7 @@ bool Renderer::geometryPass(const MeshDraw* meshes, const float* projection) {
             ++stats_.instancedCalls;
         }
     }
+    glDisable(RT_GL_FRAMEBUFFER_SRGB);
     glDisable(RT_GL_CULL_FACE);
     glCullFace(RT_GL_BACK);
     return ok;
@@ -2176,6 +2182,7 @@ bool Renderer::lightPass(const float* projection, const float* inverseProjection
         glUseProgram(program.id);
         bindGBuffer(program);
         glUniformMatrix4fv(program.inverseProjection, 1, GL_FALSE, inverseProjection);
+        glUniform1i(program.fastShading, lighting_.fastShading ? 1 : 0);
         glUniform2f(program.texel, 1.f / static_cast<float>(targetWidth_), 1.f / static_cast<float>(targetHeight_));
         glUniformMatrix4fv(program.inverseView, 1, GL_FALSE, inverseView.m);
         // Each shadow sampler gets a texture before CanDraw asks.
@@ -2388,6 +2395,7 @@ bool Renderer::transparencyPass(const MeshDraw* meshes, const float* projection,
     glUniformMatrix4fv(forward_.view, 1, GL_FALSE, view_.m);
     glUniformMatrix4fv(forward_.projection, 1, GL_FALSE, projection);
     glUniformMatrix4fv(forward_.inverseProjection, 1, GL_FALSE, inverseProjection);
+    glUniform1i(forward_.fastShading, lighting_.fastShading ? 1 : 0);
     glUniform3f(forward_.ambient, lighting_.ambient[0], lighting_.ambient[1], lighting_.ambient[2]);
     glUniform3f(forward_.skyRadiance, kSkyRadiance, kSkyRadiance, kSkyRadiance);
     bindSky(forward_);
@@ -2534,6 +2542,7 @@ bool Renderer::toneMapPass(int bloomLevels) {
     BindTexture(kUnitScene, mergeTexture_);
     glUniform1f(tonemap_.exposure, std::max(lighting_.exposure, 0.f));
     glUniform1f(tonemap_.inverseGamma, 1.f / std::max(lighting_.gamma, 0.01f));
+    glUniform1i(tonemap_.cinematic, lighting_.cinematicToneMapping ? 1 : 0);
     glUniform1f(tonemap_.saturation, std::max(lighting_.saturation, 0.f));
     // With no bloom the shader skips it; any texture keeps the sampler loadable.
     BindTexture(kUnitBloom, bloomLevels > 0 ? bloomTextures_[0] : whiteTexture_);

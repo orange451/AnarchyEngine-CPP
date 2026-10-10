@@ -88,7 +88,11 @@ layout (location = 1) out vec4 gNormal;
 layout (location = 2) out vec4 gMaterial;
 layout (location = 3) out vec4 gEmissive;
 
-vec3 toLinear(vec3 srgb) { return pow(max(srgb, vec3(0.0)), vec3(2.2)); }
+// The exact sRGB curve, as surface.glsl has it.
+vec3 toLinear(vec3 srgb) {
+    srgb = max(srgb, vec3(0.0));
+    return mix(pow((srgb + 0.055) / 1.055, vec3(2.4)), srgb / 12.92, lessThanEqual(srgb, vec3(0.04045)));
+}
 
 struct Look {
     vec3 color;
@@ -221,7 +225,7 @@ void main() {
         vec3 N = normalize(vViewNormal);
         if (!gl_FrontFacing) N = -N;
         gAlbedo = vec4(toLinear(albedo), 1.0);
-        gNormal = vec4(N, 1.0);
+        gNormal = encodeNormal(N);
         gMaterial = vec4(look0.metalness, look0.roughness, look0.reflectivity, 1.0);
         gEmissive = vec4(0.0, 0.0, 0.0, 1.0);
         return;
@@ -284,7 +288,7 @@ void main() {
         vec3 debugColor = activeCount <= 1 ? vec3(1.0, 0.0, 0.0)
                                             : (activeCount == 2 ? vec3(0.0, 1.0, 0.0) : vec3(0.0, 0.0, 1.0));
         gAlbedo = vec4(0.0, 0.0, 0.0, 1.0);
-        gNormal = vec4(normalize(vViewNormal), 1.0);
+        gNormal = encodeNormal(normalize(vViewNormal));
         gMaterial = vec4(0.0, 1.0, 0.0, 1.0);
         gEmissive = vec4(debugColor, 1.0);
         return;
@@ -390,7 +394,7 @@ void main() {
     }
 
     gAlbedo = vec4(toLinear(albedo), 1.0);
-    gNormal = vec4(Nview, 1.0);
+    gNormal = encodeNormal(Nview);
     gMaterial = vec4(metalOut, max(0.05, roughOut), reflOut, 1.0);
     gEmissive = vec4(0.0, 0.0, 0.0, 1.0);
 }

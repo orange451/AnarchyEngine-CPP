@@ -568,6 +568,8 @@ void GameView::collectMeshes() {
     lighting.terrainQuality = snapshot.lighting.terrain_quality == 0   ? SceneQuality::Low
                               : snapshot.lighting.terrain_quality == 2 ? SceneQuality::High
                                                                        : SceneQuality::Medium;
+    lighting.cinematicToneMapping = snapshot.lighting.tone_mapping == 1;
+    lighting.fastShading = snapshot.lighting.shading_model == 1;
     // The Skybox's images, uploaded linear; a missing or unreadable one draws no sky.
     const engine_core::VisualSky& sky = snapshot.sky;
     if (sky.present) {

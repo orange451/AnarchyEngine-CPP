@@ -28,7 +28,7 @@ void main() {
         discard;
     }
     vec3 P = viewPositionAt(uv, depth);
-    vec3 N = texture(uNormal, uv).rgb;
+    vec3 N = decodeNormal(texture(uNormal, uv));
     vec3 material = texture(uMaterial, uv).rgb;
     vec3 albedo = texture(uAlbedo, uv).rgb;
     vec3 shade = shadeLight(N, P, albedo, material.x, material.y, uLightPosition, uLightDirection, uLightCone,

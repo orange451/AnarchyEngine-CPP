@@ -63,6 +63,16 @@ enum class EffectQuality { Low = 0, Medium = 1, High = 2 };
 const EnumType& texture_size_enum();
 // texture_size_enum's items, by value.
 enum class TextureSize { Small = 0, Medium = 1, Large = 2, Max = 3 };
+// The curve from scene light to screen color: Classic 0 (Hable, then
+// Lighting.Gamma), Cinematic 1 (fitted ACES, then sRGB). Lighting.ToneMapping.
+const EnumType& tone_mapping_mode_enum();
+// tone_mapping_mode_enum's items, by value.
+enum class ToneMappingMode { Classic = 0, Cinematic = 1 };
+// How surfaces answer a light: Standard 0 (Cook-Torrance), Fast 1 (normalized
+// Blinn-Phong). Lighting.ShadingModel.
+const EnumType& shading_model_enum();
+// shading_model_enum's items, by value.
+enum class ShadingModel { Standard = 0, Fast = 1 };
 
 // Every type the Enum global holds, for script analysis to declare.
 int enum_type_count();

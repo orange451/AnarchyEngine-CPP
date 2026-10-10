@@ -1088,6 +1088,14 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
     add("Lighting", "TerrainQuality",
         "Enum.EffectQuality: how much terrain texturing spends for how good it looks (Low, Medium, High).",
         "Enum.EffectQuality", false, {});
+    add("Lighting", "ToneMapping",
+        "Enum.ToneMappingMode: the curve from scene light to screen color. Classic is Hable's filmic curve "
+        "corrected by Gamma; Cinematic is a fitted ACES curve with a true sRGB encode, which Gamma adjusts around 2.2.",
+        "Enum.ToneMappingMode", false, {});
+    add("Lighting", "ShadingModel",
+        "Enum.ShadingModel: how surfaces answer a light. Standard is Cook-Torrance (GGX); Fast is normalized "
+        "Blinn-Phong, cheaper on low-end GPUs.",
+        "Enum.ShadingModel", false, {});
     add("BloomEffect", "Enabled", "When false, this BloomEffect draws no bloom.", "boolean", false, {});
     add("BloomEffect", "Intensity",
         "How much of the image moves into its blurred copy, from 0 to 1. 0 draws no bloom.", "number", false, {});

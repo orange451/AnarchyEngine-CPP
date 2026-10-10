@@ -11,8 +11,8 @@ namespace engine_core {
 // How the scene is lit, set through its properties. Each is a saved registry
 // property (lua_saved_property), so DataModel saves, loads, undoes, and
 // restores it at Stop; this class keeps the values and checks them. The render
-// snapshot carries Ambient, Exposure, Saturation, Gamma, and Antialiasing
-// (VisualLighting); the renderer does not read Brightness yet.
+// snapshot carries Ambient, Exposure, Saturation, Gamma, Antialiasing,
+// ToneMapping, and ShadingModel (VisualLighting); the renderer does not read Brightness yet.
 //
 // Ambient     Color3  the light every surface gets, from no direction.
 // Brightness  number  how strong the sun is. Not below 0.
@@ -22,6 +22,8 @@ namespace engine_core {
 // Antialiasing  Enum.AntialiasingMode  how the 3D scene's edges are smoothed. FXAA.
 // TerrainQuality  Enum.EffectQuality  how much terrain texturing spends for
 //                 how good it looks, settable by scripts at runtime. High.
+// ToneMapping  Enum.ToneMappingMode  the curve from scene light to screen color. Classic.
+// ShadingModel  Enum.ShadingModel  how surfaces answer a light. Standard.
 class Lighting : public SceneService {
 public:
     static constexpr ColorRgb kDefaultAmbient{0.5f, 0.5f, 0.5f, 1.f};
@@ -31,6 +33,8 @@ public:
     static constexpr double kDefaultGamma = 2.2;
     static constexpr AntialiasingMode kDefaultAntialiasing = AntialiasingMode::FXAA;
     static constexpr EffectQuality kDefaultTerrainQuality = EffectQuality::High;
+    static constexpr ToneMappingMode kDefaultToneMapping = ToneMappingMode::Classic;
+    static constexpr ShadingModel kDefaultShadingModel = ShadingModel::Standard;
 
     using SceneService::SceneService;
     const char* class_name() const override;
@@ -53,6 +57,12 @@ public:
     EffectQuality terrain_quality() const { return terrain_quality_; }
     // An Enum.EffectQuality's value; any other is refused.
     std::optional<std::string> set_terrain_quality(int quality);
+    ToneMappingMode tone_mapping() const { return tone_mapping_; }
+    // An Enum.ToneMappingMode's value; any other is refused.
+    std::optional<std::string> set_tone_mapping(int mode);
+    ShadingModel shading_model() const { return shading_model_; }
+    // An Enum.ShadingModel's value; any other is refused.
+    std::optional<std::string> set_shading_model(int model);
 
 private:
     std::optional<std::string> set_number(const char* property, double& slot, double value);
@@ -65,6 +75,8 @@ private:
     double gamma_ = kDefaultGamma;
     AntialiasingMode antialiasing_ = kDefaultAntialiasing;
     EffectQuality terrain_quality_ = kDefaultTerrainQuality;
+    ToneMappingMode tone_mapping_ = kDefaultToneMapping;
+    ShadingModel shading_model_ = kDefaultShadingModel;
 };
 
 }  // namespace engine_core

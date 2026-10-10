@@ -44,8 +44,10 @@ mat3 cotangentFrame(vec3 N, vec3 p, vec2 uv) {
 
 // Colors arrive as the sRGB values a picker and an image hold. Lighting is
 // done linear, and the tone map puts gamma back.
+// The exact sRGB curve, not a 2.2 power, so darks are not crushed.
 vec3 toLinear(vec3 srgb) {
-    return pow(max(srgb, vec3(0.0)), vec3(2.2));
+    srgb = max(srgb, vec3(0.0));
+    return mix(pow((srgb + 0.055) / 1.055, vec3(2.4)), srgb / 12.92, lessThanEqual(srgb, vec3(0.04045)));
 }
 
 Surface readSurface(vec3 viewPosition, vec3 viewNormal, vec2 uv, vec4 vertexColor, bool frontFacing) {

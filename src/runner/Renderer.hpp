@@ -295,6 +295,10 @@ struct SceneLighting {
     SceneAntialiasing antialiasing = SceneAntialiasing::FXAA;
     // How much terrain texturing spends for how good it looks.
     SceneQuality terrainQuality = SceneQuality::High;
+    // Enum.ToneMappingMode Cinematic: fitted ACES and a true sRGB encode, not Hable and Gamma.
+    bool cinematicToneMapping = false;
+    // Enum.ShadingModel Fast: normalized Blinn-Phong, not Cook-Torrance.
+    bool fastShading = false;
     SceneSky sky;
     SceneDynamicSky dynamicSky;
     SceneBloom bloom;
@@ -542,6 +546,10 @@ private:
         // Tone map.
         int exposure = -1;
         int inverseGamma = -1;
+        // Lighting.ToneMapping is Cinematic.
+        int cinematic = -1;
+        // Lighting.ShadingModel is Fast (lighting.glsl).
+        int fastShading = -1;
         int saturation = -1;
         // Bloom (bloom_down.frag, bloom_up.frag) and its mix in the tone map.
         int prefilter = -1;

@@ -66,7 +66,7 @@ void main() {
     }
     vec3 P = viewPositionAt(uv, depth);
     vec3 V = normalize(-P);
-    vec3 N = normalize(texelFetch(uNormal, pixel, 0).xyz);
+    vec3 N = decodeNormal(texelFetch(uNormal, pixel, 0));
 
     float radiusPixels = min(uOcclusionRadius * uProjectionScale / -P.z, kMaxRadiusFraction / uTexel.y);
     if (radiusPixels < 1.0) {

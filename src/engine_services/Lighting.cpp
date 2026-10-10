@@ -32,6 +32,14 @@ LuaSlot quality_slot(EffectQuality quality) {
     return slot;
 }
 
+LuaSlot enum_slot(const EnumType& type, int value) {
+    LuaSlot slot;
+    slot.kind = LuaSlot::Kind::Enum;
+    slot.enum_type = &type;
+    slot.number = value;
+    return slot;
+}
+
 LuaSlot color_slot(ColorRgb color) {
     LuaSlot slot;
     slot.kind = LuaSlot::Kind::Color;
@@ -128,6 +136,42 @@ std::optional<std::string> Lighting::set_terrain_quality(int quality) {
     return std::nullopt;
 }
 
+std::optional<std::string> Lighting::set_tone_mapping(int mode) {
+    if (!on_gameplay_thread()) {
+        contract_fail("Lighting setters run on SimulationThread");
+    }
+    if (enum_item_name(tone_mapping_mode_enum(), mode) == nullptr) {
+        return std::string("ToneMapping must be an Enum.ToneMappingMode");
+    }
+    const ToneMappingMode next = static_cast<ToneMappingMode>(mode);
+    if (next == tone_mapping_) {
+        return std::nullopt;
+    }
+    const ToneMappingMode previous = tone_mapping_;
+    tone_mapping_ = next;
+    note_property_change("ToneMapping", enum_slot(tone_mapping_mode_enum(), static_cast<int>(previous)),
+                         enum_slot(tone_mapping_mode_enum(), mode));
+    return std::nullopt;
+}
+
+std::optional<std::string> Lighting::set_shading_model(int model) {
+    if (!on_gameplay_thread()) {
+        contract_fail("Lighting setters run on SimulationThread");
+    }
+    if (enum_item_name(shading_model_enum(), model) == nullptr) {
+        return std::string("ShadingModel must be an Enum.ShadingModel");
+    }
+    const ShadingModel next = static_cast<ShadingModel>(model);
+    if (next == shading_model_) {
+        return std::nullopt;
+    }
+    const ShadingModel previous = shading_model_;
+    shading_model_ = next;
+    note_property_change("ShadingModel", enum_slot(shading_model_enum(), static_cast<int>(previous)),
+                         enum_slot(shading_model_enum(), model));
+    return std::nullopt;
+}
+
 namespace {
 
 Lighting* lighting_of(DataModel& object) { return dynamic_cast<Lighting*>(&object); }
@@ -214,6 +258,33 @@ bool write_terrain_quality(DataModel&, DataModel& object, LuaSlot& in) {
     return refuse(in, lighting->set_terrain_quality(static_cast<int>(in.number)));
 }
 
+// An enum property's reader and writer: Get and Set are the Lighting accessors,
+// Type the Enum.<Type> the property holds, Message what a wrong value is told.
+template <typename E, E (Lighting::*Get)() const, std::optional<std::string> (Lighting::*Set)(int),
+          const EnumType& (*Type)()>
+bool read_enum(DataModel&, DataModel& object, LuaSlot& out) {
+    Lighting* lighting = lighting_of(object);
+    if (lighting == nullptr) {
+        return false;
+    }
+    out = enum_slot(Type(), static_cast<int>((lighting->*Get)()));
+    return true;
+}
+
+template <typename E, E (Lighting::*Get)() const, std::optional<std::string> (Lighting::*Set)(int),
+          const EnumType& (*Type)()>
+bool write_enum(DataModel&, DataModel& object, LuaSlot& in) {
+    Lighting* lighting = lighting_of(object);
+    if (lighting == nullptr) {
+        return false;
+    }
+    if (in.kind != LuaSlot::Kind::Enum || in.enum_type != &Type()) {
+        in.error = std::string("must be an Enum.") + Type().name;
+        return false;
+    }
+    return refuse(in, (lighting->*Set)(static_cast<int>(in.number)));
+}
+
 std::string number_json(double value) { return write_json(JsonValue::number(value)); }
 
 std::string color_json(ColorRgb color) {
@@ -245,6 +316,14 @@ ANARCHY_LUA_REGISTER(register_lighting_lua) {
         lua_saved_enum("Antialiasing", antialiasing_mode_enum(), read_antialiasing, write_antialiasing, "\"FXAA\""),
         lua_saved_enum("TerrainQuality", effect_quality_enum(), read_terrain_quality, write_terrain_quality,
                       "\"High\""),
+        lua_saved_enum("ToneMapping", tone_mapping_mode_enum(),
+                       read_enum<ToneMappingMode, &Lighting::tone_mapping, &Lighting::set_tone_mapping, &tone_mapping_mode_enum>,
+                       write_enum<ToneMappingMode, &Lighting::tone_mapping, &Lighting::set_tone_mapping, &tone_mapping_mode_enum>,
+                       "\"Classic\""),
+        lua_saved_enum("ShadingModel", shading_model_enum(),
+                       read_enum<ShadingModel, &Lighting::shading_model, &Lighting::set_shading_model, &shading_model_enum>,
+                       write_enum<ShadingModel, &Lighting::shading_model, &Lighting::set_shading_model, &shading_model_enum>,
+                       "\"Standard\""),
     };
     register_lua_class("Lighting", "SceneService", fields, static_cast<int>(sizeof(fields) / sizeof(fields[0])));
 }

@@ -1,9 +1,14 @@
 // Lighting math shared by the light, IBL, and transparency passes: the
 // legacy pbr.frag, pointlight.frag, and fresnel.frag, plus a SpotLight's cone.
 // No #version: Renderer puts it in after the main file's. Everything is in
-// view space, where the camera is at the origin.
+// view space, where the camera is at the origin. Diffuse and specular both
+// leave out 1/pi, so their balance is right and a light's Intensity is in
+// pi-scaled units.
 
 uniform mat4 uInverseProjection;
+// Lighting.ShadingModel is Fast: normalized Blinn-Phong with Kelemen's
+// visibility instead of GGX and Smith. 0 is Standard.
+uniform int uFastShading;
 
 // The view-space point a G-buffer depth sample came from.
 vec3 viewPositionAt(vec2 uv, float depth) {
@@ -37,7 +42,7 @@ vec3 fresnelSchlick(float cosTheta, vec3 F0) {
 
 // One light's Cook-Torrance contribution at P. cone is a SpotLight's cosines,
 // outer then inner, around direction (where it points). A PointLight passes x
-// below -1.5 and has no cone. Both fade linearly to nothing at radius. A
+// below -1.5 and has no cone. Both fall off as inverse square, to nothing at radius. A
 // DirectionalLight passes x below -3: it shines down direction on everything,
 // with no position, radius, or falloff.
 vec3 shadeLight(vec3 N, vec3 P, vec3 albedo, float metallic, float roughness, vec3 lightPosition,
@@ -53,8 +58,12 @@ vec3 shadeLight(vec3 N, vec3 P, vec3 albedo, float metallic, float roughness, ve
             return vec3(0.0);
         }
         L = toLight / distance;
-        // The legacy falloff, kept from blowing up right at the light.
-        attenuation = (1.0 - distance / radius) / max(distance, 0.25);
+        // Inverse square, as light really falls off, windowed so it reaches
+        // exactly nothing at radius (Karis 2013). Kept from blowing up right
+        // at the light.
+        float ratio = distance / radius;
+        float window = clamp(1.0 - ratio * ratio * ratio * ratio, 0.0, 1.0);
+        attenuation = window * window / max(distance * distance, 0.0625);
     }
     float NdotL = max(dot(N, L), 0.0);
     if (NdotL <= 0.0) {
@@ -71,10 +80,22 @@ vec3 shadeLight(vec3 N, vec3 P, vec3 albedo, float metallic, float roughness, ve
     vec3 F0 = mix(vec3(0.04), albedo, metallic);
     vec3 V = normalize(-P);
     vec3 H = normalize(L + V);
-    float NDF = distributionGGX(N, H, roughness);
-    float G = geometrySmith(N, V, L, roughness);
-    vec3 F = fresnelSchlick(max(dot(H, V), 0.0), F0);
-    vec3 specular = (NDF * G * F) / max(4.0 * max(dot(N, V), 0.0) * NdotL, 0.01);
+    float VdotH = max(dot(H, V), 0.0);
+    vec3 F = fresnelSchlick(VdotH, F0);
+    vec3 specular;
+    if (uFastShading != 0) {
+        // Blinn-Phong, its power matched to GGX's highlight size and on the
+        // same scale as distributionGGX (no 1/pi). Kelemen's visibility, 1 over
+        // 4 (V.H) squared, stands in for Smith over 4 N.L N.V.
+        float a = roughness * roughness;
+        float power = max(2.0 / max(a * a, 1e-4) - 2.0, 1.0);
+        float NDF = (power + 2.0) * 0.5 * pow(max(dot(N, H), 0.0), power);
+        specular = NDF * F / max(4.0 * VdotH * VdotH, 0.01);
+    } else {
+        float NDF = distributionGGX(N, H, roughness);
+        float G = geometrySmith(N, V, L, roughness);
+        specular = (NDF * G * F) / max(4.0 * max(dot(N, V), 0.0) * NdotL, 0.01);
+    }
     vec3 kD = (vec3(1.0) - F) * (1.0 - metallic);
     vec3 radiance = lightColor * attenuation * intensity * spot;
     return (kD * albedo + specular) * radiance * NdotL;

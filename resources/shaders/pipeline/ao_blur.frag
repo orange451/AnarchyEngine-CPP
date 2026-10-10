@@ -37,7 +37,7 @@ void main() {
         outOcclusion = vec4(1.0);
         return;
     }
-    vec3 N = normalize(texelFetch(uNormal, texel * int(uOcclusionScale), 0).xyz);
+    vec3 N = decodeNormal(texelFetch(uNormal, texel * int(uOcclusionScale), 0));
     float tolerance = kPlaneTolerance * -P.z;
     ivec2 last = textureSize(uOcclusionSource, 0) - 1;
     ivec2 stride = ivec2(uBlurDirection);
@@ -59,7 +59,7 @@ void main() {
                 continue;
             }
             float planeWeight = clamp(1.0 - abs(dot(Ps - P, N)) / tolerance, 0.0, 1.0);
-            vec3 Ns = normalize(texelFetch(uNormal, tap * int(uOcclusionScale), 0).xyz);
+            vec3 Ns = decodeNormal(texelFetch(uNormal, tap * int(uOcclusionScale), 0));
             float normalWeight = pow(clamp(dot(N, Ns), 0.0, 1.0), kNormalPower);
             float weight = gaussian * planeWeight * normalWeight;
             sum += texelFetch(uOcclusionSource, tap, 0).r * weight;

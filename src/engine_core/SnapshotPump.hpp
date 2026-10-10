@@ -175,6 +175,10 @@ struct VisualLighting {
     int antialiasing = 1;
     // Enum.EffectQuality's value: Low 0, Medium 1, High 2.
     int terrain_quality = 2;
+    // Enum.ToneMappingMode's value: Classic 0, Cinematic 1.
+    int tone_mapping = 0;
+    // Enum.ShadingModel's value: Standard 0, Fast 1.
+    int shading_model = 0;
 };
 
 // One Model's Mesh, as the renderer loads it: a file, or the geometry this

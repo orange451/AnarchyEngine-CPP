@@ -85,7 +85,7 @@ void main() {
         if (traced.a > 0.0) {
             vec3 viewDirection = normalize(viewPositionAt(vUv, depth));
             vec3 material = texture(uMaterial, vUv).rgb;
-            SkyReflection sky = skyReflection(viewDirection, texture(uNormal, vUv).rgb, texture(uAlbedo, vUv).rgb,
+            SkyReflection sky = skyReflection(viewDirection, decodeNormal(texture(uNormal, vUv)), texture(uAlbedo, vUv).rgb,
                                               material.x, material.y, material.z, uAmbient, uSkyRadiance,
                                               occlusionAt(vUv, depth));
             // traced.rgb is premultiplied by traced.a.

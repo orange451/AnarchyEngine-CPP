@@ -20,7 +20,7 @@ void main() {
         discard;
     }
     gAlbedo = vec4(s.albedo, 1.0);
-    gNormal = vec4(s.normal, 1.0);
+    gNormal = encodeNormal(s.normal);
     gMaterial = vec4(s.metalness, s.roughness, s.reflectivity, 1.0);
     gEmissive = vec4(s.emissive, 1.0);
 }

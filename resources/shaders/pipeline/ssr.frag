@@ -42,7 +42,7 @@ void main() {
     }
     vec3 origin = viewPositionAt(vUv, depth);
     vec3 viewDirection = normalize(origin);
-    vec3 N = texture(uNormal, vUv).rgb;
+    vec3 N = decodeNormal(texture(uNormal, vUv));
     // The cheap test first: rays turning back toward the camera.
     vec3 dir = reflect(viewDirection, N);
     fade *= facingFade(dir.z);
@@ -152,7 +152,7 @@ void main() {
     vec2 hitUv = (permute ? p.yx : p) / uScreenSize;
     // A ray can only hit a surface that faces it. One facing the same way is
     // the surface it just left, a neighbor on a curved one, or a back face.
-    if (dot(texture(uNormal, hitUv).rgb, dir) >= 0.0) {
+    if (dot(decodeNormal(texture(uNormal, hitUv)), dir) >= 0.0) {
         return;
     }
     vec3 hitPosition = viewPositionAt(hitUv, texture(uDepth, hitUv).r);

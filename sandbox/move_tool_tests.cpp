@@ -122,7 +122,7 @@ struct MoveRig {
         rig.game.history().reset_waypoints();
         return id;
     }
-    float x_of(InstanceId id) { return rig.game.game_object(id)->transform().m[12]; }
+    float x_of(InstanceId id) { return rig.game.spatial_object(id)->transform().m[12]; }
     // The Scene View's mouse, as it reaches the active Move tool: through the
     // plugin's mouse, not the game's input, which an active plugin keeps the left
     // button from.
@@ -351,7 +351,7 @@ TEST_CASE("MT8 selecting Workspace never moves the camera the view looks through
     move.rig.frames(1);
     REQUIRE(near(move.x_of(a), 0));
     REQUIRE(near(move.x_of(b), 4));
-    REQUIRE(near(move.rig.game.game_object(camera)->transform().m[12], 0));
+    REQUIRE(near(move.rig.game.spatial_object(camera)->transform().m[12], 0));
 }
 
 TEST_CASE("MT9 a part both selected and inside a selected Folder moves once", "[MT9]") {

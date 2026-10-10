@@ -2029,10 +2029,32 @@ int main(int argc, char** argv) {
                 profiler::reset_for_testing();
                 profiler::set_gpu_detail(detail);
                 profiler::acquire();
-                for (int frame = 0; frame < 8; ++frame) {
+                // GPU timer queries resolve some frames late, later still when
+                // another program shares the GPU: draw at least 8 frames, then
+                // keep drawing until three GPU timings have come back, up to 64.
+                for (int frame = 0; frame < 64; ++frame) {
                     profiler::frame_boundary();
                     renderer.draw(0, 0, kSize, kSize, kSize, kSize, &draw, 1);
                     glfwSwapBuffers(window);
+                    if (frame < 7) {
+                        continue;
+                    }
+                    profiler::collect();
+                    int timed = 0;
+                    profiler::with_live([&](const profiler::History& history) {
+                        for (const profiler::Frame& recorded : history.frames) {
+                            for (const profiler::ScopeRecord& record : recorded.scopes) {
+                                const profiler::ScopeInfo& info = history.scopes[record.scope];
+                                timed += history.rows[record.row] == "GPU" &&
+                                                 info.name == (detail ? "Geometry" : "3D scene")
+                                             ? 1
+                                             : 0;
+                            }
+                        }
+                    });
+                    if (timed >= 3) {
+                        break;
+                    }
                 }
                 profiler::frame_boundary();
                 profiler::collect();
@@ -2781,11 +2803,26 @@ int main(int argc, char** argv) {
                 Expect(Sum(at(0.f, -0.5f, 0.58f)) + 10 < Sum(contactOff),
                        "the floor where the cube stands on it is shaded (" + Text(at(0.f, -0.5f, 0.58f)) + " vs " +
                            Text(contactOff) + ")");
-                Expect(std::abs(Sum(at(2.2f, -0.5f, 2.2f)) - Sum(openOff)) <= 2,
-                       "the open floor is not shaded (" + Text(at(2.2f, -0.5f, 2.2f)) + ")");
-                Expect(std::abs(Sum(at(0.f, -0.5f, -4.f)) - Sum(pastTopOff)) <= 2,
-                       "the floor seen just past the cube's top edge, far behind it, is not shaded (" +
-                           Text(at(0.f, -0.5f, -4.f)) + ")");
+                // The cube must not darken floor it does not stand near. A flat
+                // floor with occlusion on is itself about one 8-bit step darker
+                // (horizon sampling across a plane at a grazing angle), so the
+                // reference is the floor alone with occlusion on: what is left
+                // over is the cube's own halo.
+                const Pixel openWithCube = at(2.2f, -0.5f, 2.2f);
+                const Pixel pastTopWithCube = at(0.f, -0.5f, -4.f);
+                drawScene(&floor, 1);
+                const Pixel openAlone = at(2.2f, -0.5f, 2.2f);
+                const Pixel pastTopAlone = at(0.f, -0.5f, -4.f);
+                Expect(std::abs(Sum(openWithCube) - Sum(openAlone)) <= 2,
+                       "the open floor is not shaded by the cube (" + Text(openWithCube) + " vs " +
+                           Text(openAlone) + " without it)");
+                Expect(std::abs(Sum(pastTopWithCube) - Sum(pastTopAlone)) <= 2,
+                       "the floor seen just past the cube's top edge, far behind it, is not shaded by it (" +
+                           Text(pastTopWithCube) + " vs " + Text(pastTopAlone) + " without it)");
+                Expect(std::abs(Sum(pastTopAlone) - Sum(pastTopOff)) <= 3 && std::abs(Sum(openAlone) - Sum(openOff)) <= 3,
+                       "a bare floor with occlusion on is at most one step darker (" + Text(pastTopAlone) + " vs " +
+                           Text(pastTopOff) + ")");
+                drawScene(scene, 2);
 
                 // Each Quality shades the contact; High and Medium agree on it.
                 int contact[3] = {};

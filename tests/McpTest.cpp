@@ -1153,11 +1153,19 @@ void TestTabs() {
 
 // save_place hands the studio the folder, empty for a Save, and returns what it reports.
 void TestSavePlace() {
+    // Absolute on the platform the test runs on: Windows needs a drive.
+#if defined(_WIN32)
+    const std::string place = "C:/Users/me/Place";
+    const std::string conflict = "C:/conflict";
+#else
+    const std::string place = "/Users/me/Place";
+    const std::string conflict = "/conflict";
+#endif
     engine_core::Engine engine;
     std::vector<std::string> folders;
     ide::McpStudio studio;
-    studio.save_place = [&folders](const std::string& folder) {
-        if (folder == "/conflict") {
+    studio.save_place = [&folders, conflict](const std::string& folder) {
+        if (folder == conflict) {
             throw std::runtime_error("Not saved: src/Workspace.json changed on disk");
         }
         folders.push_back(folder);
@@ -1169,14 +1177,14 @@ void TestSavePlace() {
     ide::add_engine_tools(server, engine, studio);
     Expect(Member(Call(server, "save_place", "{}"), "project").as_string() == "Place",
            "save_place returns what the studio reports");
-    Call(server, "save_place", R"({"folder":"/Users/me/Place"})");
-    Expect(folders == std::vector<std::string>{"", "/Users/me/Place"}, "a Save has no folder, and Save As its folder");
+    Call(server, "save_place", "{\"folder\":\"" + place + "\"}");
+    Expect(folders == std::vector<std::string>{"", place}, "a Save has no folder, and Save As its folder");
     Expect(ErrorText(server, "save_place", R"({"folder":"Place"})") == "folder must be an absolute path.",
            "a relative folder is refused");
     Expect(ErrorText(server, "save_place", R"({"folder":3})") == "folder must be an absolute path.",
            "a folder that is not a string is refused");
     Expect(folders.size() == 2, "a refused folder never reaches the studio");
-    Expect(ErrorText(server, "save_place", R"({"folder":"/conflict"})") ==
+    Expect(ErrorText(server, "save_place", "{\"folder\":\"" + conflict + "\"}") ==
                "Not saved: src/Workspace.json changed on disk",
            "why the studio did not save comes back as the error");
 }
@@ -1386,6 +1394,8 @@ void TestProfileTool() {
     Expect(saved.find("slowest_frame") == nullptr, "include_timeline false leaves the tree out");
     std::ifstream in(file, std::ios::binary);
     std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    // Closed before the remove below: Windows will not delete a file that is open.
+    in.close();
     Expect(text.rfind("<!doctype html>", 0) == 0 && text.find("\"anarchy-profile\"") != std::string::npos &&
                text.find("\"frames\":[[") != std::string::npos,
            "path writes the profile as an HTML page with its frames");

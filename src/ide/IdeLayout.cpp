@@ -797,12 +797,16 @@ void IdeLayout::routeClipboard(jadefx::KeyEvent& event) {
 
 void IdeLayout::routeGroup(jadefx::KeyEvent& event) {
     if (event.repeat || event.consumed || !event.shortcut() || event.shift || event.alt ||
-        event.key != jadefx::Key::G) {
+        (event.key != jadefx::Key::G && event.key != jadefx::Key::U)) {
         return;
     }
     const std::vector<engine_core::InstanceId> selected = runner_.simulation().datamodel().selection().get();
     if (!selected.empty()) {
-        group(selected);
+        if (event.key == jadefx::Key::G) {
+            group(selected);
+        } else {
+            ungroup(selected);
+        }
         event.consume();
     }
 }

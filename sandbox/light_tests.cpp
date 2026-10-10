@@ -122,7 +122,7 @@ TEST_CASE("LIT3 scripts make lights and set them", "[light]") {
     ScriptRig rig;
     add_script(rig.game, "Lights", R"(
         local point = Instance.new("PointLight", workspace)
-        _G.isa = point:IsA("Light") and point:IsA("GameObject") and point.ClassName == "PointLight"
+        _G.isa = point:IsA("Light") and point:IsA("PVInstance") and not point:IsA("GameObject") and point.ClassName == "PointLight"
         _G.defaults = point.Intensity == 1 and point.Radius == 8 and point.Enabled == true
             and point.Color == Color3.new(1, 1, 1)
         point.Radius = 16

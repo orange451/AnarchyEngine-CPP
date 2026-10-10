@@ -425,8 +425,9 @@ void testContextActions() {
     engine_core::Folder& folder = game.create<engine_core::Folder>();
     actions.clear();
     folder.context_actions(actions);
-    expect(actions.size() == 6 && !actions[0].primary, "a folder uses the plain actions");
-    expect(actions.size() == 6 && actions[5].action == engine_core::InstanceAction::Delete, "a folder can be deleted");
+    expect(actions.size() == 7 && !actions[0].primary, "a folder uses the plain actions");
+    expect(actions.size() == 7 && actions[5].action == engine_core::InstanceAction::Delete, "a folder can be deleted");
+    expect(actions.size() == 7 && actions[6].action == engine_core::InstanceAction::SaveAsPlugin, "a folder can be saved as a plugin");
 }
 
 void testInsertInstance() {

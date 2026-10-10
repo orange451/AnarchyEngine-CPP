@@ -162,6 +162,5 @@ TEST_CASE("M5 default_properties is what save_properties leaves out", "[M5][merg
                                      "VisualOnly"});
     REQUIRE(default_keys(*objects[2]) == std::vector<std::string>{"Enabled", "Simulated", "VisualOnly"});
     REQUIRE(default_keys(*objects[5]) ==
-            std::vector<std::string>{"Color", "FieldOfView", "Prefab", "Scale", "Simulated", "Transform",
-                                     "Transparency", "VisualOnly"});
+            std::vector<std::string>{"FieldOfView", "Simulated", "Transform", "VisualOnly"});
 }

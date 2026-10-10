@@ -280,7 +280,7 @@ TEST_CASE("BP3 an unanchored Brush falls, and a big one splits into pieces", "[b
     rig.seconds(3.0);
     REQUIRE(y_of(ball.transform()) < 2.f);
     REQUIRE(rig.physics.shape_count(ball.id()) > 1);
-    REQUIRE(near(static_cast<float>(rig.physics.body_mass(ball.id())), 1.f, 1e-3f));
+    REQUIRE(near(static_cast<float>(rig.physics.body_mass(ball.id())), static_cast<float>(PhysicsBase::kDefaultMass), 1e-3f));
 }
 
 TEST_CASE("BR1 anchored brushes bake into cells; only edited cells rebake", "[brush]") {

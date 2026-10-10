@@ -350,6 +350,8 @@ extern void (*rt_glTexImage3D)(GLenum target, GLint level, GLint internalformat,
 extern void (*rt_glTexSubImage3D)(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLint zoffset,
                                   GLsizei width, GLsizei height, GLsizei depth, GLenum format, GLenum type,
                                   const void* pixels);
+extern void (*rt_glTexSubImage2D)(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLsizei width,
+                                  GLsizei height, GLenum format, GLenum type, const void* pixels);
 extern void (*rt_glCompressedTexImage2D)(GLenum target, GLint level, GLenum internalformat, GLsizei width,
                                          GLsizei height, GLint border, GLsizei imageSize, const void* data);
 extern void (*rt_glCompressedTexSubImage2D)(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLsizei width,
@@ -486,6 +488,7 @@ bool LoadGl(GlGetProcAddress get_proc);
 #define glDrawBuffers ::runner::rt_glDrawBuffers
 #define glTexImage3D ::runner::rt_glTexImage3D
 #define glTexSubImage3D ::runner::rt_glTexSubImage3D
+#define glTexSubImage2D ::runner::rt_glTexSubImage2D
 #define glCompressedTexImage2D ::runner::rt_glCompressedTexImage2D
 #define glCompressedTexSubImage2D ::runner::rt_glCompressedTexSubImage2D
 #define glCompressedTexImage3D ::runner::rt_glCompressedTexImage3D

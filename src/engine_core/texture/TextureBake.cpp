@@ -121,6 +121,20 @@ std::string cache_key(const std::vector<std::filesystem::path>& sources,
     return text;
 }
 
+std::vector<std::vector<int>> streaming_batches(int width, int height, int levels) {
+    std::vector<std::vector<int>> batches(1);
+    for (int level = levels - 1; level >= 0; --level) {
+        const int side = std::max(std::max(1, width >> level), std::max(1, height >> level));
+        if (side <= 64) {
+            batches[0].push_back(level);
+        } else {
+            batches.push_back({level});
+        }
+    }
+    if (batches[0].empty()) batches.erase(batches.begin());
+    return batches;
+}
+
 std::filesystem::path cache_path(const std::filesystem::path& resources_root, const std::string& key) {
     return resources_root.parent_path() / ".cache" / "textures" / (key + ".atex");
 }

@@ -45,6 +45,11 @@ std::string cache_key(const std::vector<std::filesystem::path>& sources, const s
 std::string cache_key(const std::vector<std::filesystem::path>& sources,
                       const std::vector<std::filesystem::file_time_type>& stamps, const std::string& settings);
 
+// The order a texture's levels load in, as batches of level indices: every
+// level whose larger side is 64 or less in one batch, smallest first, then
+// each larger level alone, smallest first. levels counts the whole chain.
+std::vector<std::vector<int>> streaming_batches(int width, int height, int levels);
+
 // <project>/.cache/textures/<key>.atex, the project being resources_root's
 // parent folder.
 std::filesystem::path cache_path(const std::filesystem::path& resources_root, const std::string& key);

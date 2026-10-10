@@ -3165,14 +3165,72 @@ int main(int argc, char** argv) {
 
             std::vector<std::string> said;
             runner::TextureCache textures([&said](const std::string& message) { said.push_back(message); });
-            Expect(textures.get("textures/stripes.tga") == 0, "no root loads no texture");
+            using engine_core::texture::Usage;
+            // Streamed: 0 until its first levels land, which takes pumping.
+            const auto settle = [&](const std::string& path, Usage usage, bool alwaysLoaded = false) {
+                unsigned texture = 0;
+                for (int pass = 0; pass < 500 && texture == 0; ++pass) {
+                    textures.pump();
+                    texture = textures.get(path, usage, false, alwaysLoaded);
+                    if (texture == 0) std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                }
+                for (int pass = 0; pass < 500 && textures.loading(); ++pass) {
+                    textures.pump();
+                    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                }
+                return textures.get(path, usage, false, alwaysLoaded);
+            };
+            Expect(textures.get("textures/stripes.tga", Usage::Color) == 0, "no root loads no texture");
             textures.setRoot(root);
-            const unsigned stripes = textures.get("textures/stripes.tga");
+            Expect(textures.get("textures/stripes.tga", Usage::Color) == 0, "a texture is not there before it loads");
+            const unsigned stripes = settle("textures/stripes.tga", Usage::Color);
             Expect(stripes != 0, "the texture loads from the resources folder");
-            Expect(textures.get("textures/stripes.tga") == stripes, "a second get is the same upload");
-            Expect(textures.get("textures/missing.png") == 0 && textures.get("textures/junk.png") == 0,
+            Expect(textures.get("textures/stripes.tga", Usage::Color) == stripes, "a second get is the same upload");
+            Expect(settle("textures/missing.png", Usage::Color) == 0 && settle("textures/junk.png", Usage::Color) == 0,
                    "a missing file and a file that is not an image have no texture");
             Expect(said.size() == 2, "each says why once (" + std::to_string(said.size()) + " reports)");
+
+            // Streaming: a 256 by 256 texture shows from its smallest level
+            // on, sharpening a level at a time (a 1-byte budget uploads one
+            // level a pump); AlwaysLoaded shows only once it is whole.
+            {
+                std::string big = "P6\n256 256\n255\n";
+                for (int i = 0; i < 256 * 256; ++i) big += std::string{char(i % 251), char(i % 13 * 19), char(90)};
+                std::ofstream(root / "textures" / "big.ppm", std::ios::binary) << big;
+                std::ofstream(root / "textures" / "big2.ppm", std::ios::binary) << big;
+                const auto baseLevel = [](unsigned texture) {
+                    runner::GLint base = -1;
+                    glBindTexture(runner::GL_TEXTURE_2D, texture);
+                    runner::rt_glGetTexParameteriv(runner::GL_TEXTURE_2D, runner::RT_GL_TEXTURE_BASE_LEVEL, &base);
+                    glBindTexture(runner::GL_TEXTURE_2D, 0);
+                    return base;
+                };
+                unsigned blurry = 0;
+                int firstBase = -1;
+                for (int pass = 0; pass < 500 && blurry == 0; ++pass) {
+                    textures.pump(1);
+                    blurry = textures.get("textures/big.ppm", Usage::Color);
+                    if (blurry == 0) std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                }
+                if (blurry != 0) firstBase = baseLevel(blurry);
+                Expect(blurry != 0 && firstBase > 0, "an Automatic texture shows blurry first (base level " +
+                                                         std::to_string(firstBase) + ")");
+                bool partial = false;
+                unsigned whole = 0;
+                for (int pass = 0; pass < 500; ++pass) {
+                    textures.pump(1);
+                    whole = textures.get("textures/big2.ppm", Usage::Color, false, true);
+                    if (whole != 0) {
+                        partial = partial || baseLevel(whole) != 0;
+                        break;
+                    }
+                    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+                }
+                Expect(whole != 0 && !partial, "an AlwaysLoaded texture shows only whole");
+                for (int pass = 0; pass < 40; ++pass) textures.pump(1);
+                Expect(baseLevel(textures.get("textures/big.ppm", Usage::Color)) == 0,
+                       "and the Automatic one sharpens to level 0");
+            }
 
             // The front face's v runs from 0 at its bottom, 10 of 128 rows below the middle, to 1 at its
             // top, 4 above: the middle is in the image's top half, 6 rows below in its bottom half.
@@ -3236,7 +3294,7 @@ int main(int argc, char** argv) {
                    "a sky uploads with a revision of its own");
             Expect(textures.getEnvironment("textures/sky.hdr").revision == skyImage.revision,
                    "an unchanged file keeps its revision");
-            Expect(textures.get("textures/sky.hdr") != skyImage.texture,
+            Expect(textures.get("textures/sky.hdr", engine_core::texture::Usage::Color) != skyImage.texture,
                    "a Material's upload of the same file is a separate texture");
             Expect(textures.getEnvironment("textures/sky.exr").texture == 0 && !said.empty() &&
                        said.back().find("OpenEXR") != std::string::npos,

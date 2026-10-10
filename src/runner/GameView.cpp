@@ -39,6 +39,9 @@
 #include <utility>
 
 namespace runner {
+
+using engine_core::texture::Usage;
+
 namespace {
 
 int FramesPerSecond(double dt) {
@@ -393,6 +396,8 @@ void GameView::collectMeshes() {
     // switch changes the game's before the snapshot catches up.
     meshes_.setRoot(snapshot.resources_root);
     textures_.setRoot(snapshot.resources_root);
+    // What finished loading since last frame goes up before anything draws.
+    textures_.pump();
     collectOutlines(snapshot);
     collectHandles(snapshot);
     // Each Prefab's meshes once, however many GameObjects draw it.
@@ -415,11 +420,11 @@ void GameView::collectMeshes() {
             }
             MeshDraw draw;
             draw.mesh = mesh;
-            draw.texture = textures_.get(source.diffuse_texture, source.diffuse_flip_y);
-            draw.normalTexture = textures_.get(source.normal_texture, source.normal_flip_y);
-            draw.roughnessTexture = textures_.get(source.roughness_texture, source.roughness_flip_y);
-            draw.metalnessTexture = textures_.get(source.metalness_texture, source.metalness_flip_y);
-            draw.emissiveTexture = textures_.get(source.emissive_texture, source.emissive_flip_y);
+            draw.texture = textures_.get(source.diffuse_texture, Usage::Color, source.diffuse_flip_y, source.diffuse_always_loaded);
+            draw.normalTexture = textures_.get(source.normal_texture, Usage::Normal, source.normal_flip_y, source.normal_always_loaded);
+            draw.roughnessTexture = textures_.get(source.roughness_texture, Usage::Mask, source.roughness_flip_y, source.roughness_always_loaded);
+            draw.metalnessTexture = textures_.get(source.metalness_texture, Usage::Mask, source.metalness_flip_y, source.metalness_always_loaded);
+            draw.emissiveTexture = textures_.get(source.emissive_texture, Usage::Color, source.emissive_flip_y, source.emissive_always_loaded);
             draw.color[0] = source.color.r;
             draw.color[1] = source.color.g;
             draw.color[2] = source.color.b;
@@ -536,11 +541,11 @@ void GameView::collectMeshes() {
         draw.mesh = mesh;
         draw.model = source.world;
         draw.owner = source.owner;
-        draw.texture = textures_.get(look.diffuse_texture, look.diffuse_flip_y);
-        draw.normalTexture = textures_.get(look.normal_texture, look.normal_flip_y);
-        draw.roughnessTexture = textures_.get(look.roughness_texture, look.roughness_flip_y);
-        draw.metalnessTexture = textures_.get(look.metalness_texture, look.metalness_flip_y);
-        draw.emissiveTexture = textures_.get(look.emissive_texture, look.emissive_flip_y);
+        draw.texture = textures_.get(look.diffuse_texture, Usage::Color, look.diffuse_flip_y, look.diffuse_always_loaded);
+        draw.normalTexture = textures_.get(look.normal_texture, Usage::Normal, look.normal_flip_y, look.normal_always_loaded);
+        draw.roughnessTexture = textures_.get(look.roughness_texture, Usage::Mask, look.roughness_flip_y, look.roughness_always_loaded);
+        draw.metalnessTexture = textures_.get(look.metalness_texture, Usage::Mask, look.metalness_flip_y, look.metalness_always_loaded);
+        draw.emissiveTexture = textures_.get(look.emissive_texture, Usage::Color, look.emissive_flip_y, look.emissive_always_loaded);
         draw.color[0] = look.color.r;
         draw.color[1] = look.color.g;
         draw.color[2] = look.color.b;
@@ -603,8 +608,8 @@ void GameView::collectMeshes() {
         out.seconds = seconds;
         out.sunSizeDegrees = dynamic.sun_size;
         out.moonSizeDegrees = dynamic.moon_size;
-        out.sunTexture = textures_.get(dynamic.sun_texture, dynamic.sun_flip_y);
-        out.moonTexture = textures_.get(dynamic.moon_texture, dynamic.moon_flip_y);
+        out.sunTexture = textures_.get(dynamic.sun_texture, Usage::Color, dynamic.sun_flip_y, dynamic.sun_always_loaded);
+        out.moonTexture = textures_.get(dynamic.moon_texture, Usage::Color, dynamic.moon_flip_y, dynamic.moon_always_loaded);
         out.reflectionQuality = dynamic.reflection_quality == 0   ? SceneQuality::Low
                                 : dynamic.reflection_quality == 2 ? SceneQuality::High
                                                                   : SceneQuality::Medium;

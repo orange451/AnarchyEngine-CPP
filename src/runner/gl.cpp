@@ -75,6 +75,7 @@ void (*rt_glDrawBuffers)(GLsizei, const GLenum*) = nullptr;
 void (*rt_glTexImage3D)(GLenum, GLint, GLint, GLsizei, GLsizei, GLsizei, GLint, GLenum, GLenum, const void*) = nullptr;
 void (*rt_glTexSubImage3D)(GLenum, GLint, GLint, GLint, GLint, GLsizei, GLsizei, GLsizei, GLenum, GLenum,
                            const void*) = nullptr;
+void (*rt_glTexSubImage2D)(GLenum, GLint, GLint, GLint, GLsizei, GLsizei, GLenum, GLenum, const void*) = nullptr;
 void (*rt_glCompressedTexImage2D)(GLenum, GLint, GLenum, GLsizei, GLsizei, GLint, GLsizei, const void*) = nullptr;
 void (*rt_glCompressedTexSubImage2D)(GLenum, GLint, GLint, GLint, GLsizei, GLsizei, GLenum, GLsizei,
                                      const void*) = nullptr;
@@ -224,6 +225,7 @@ bool LoadGl(GlGetProcAddress get_proc) {
     LOAD(DrawBuffers);
     LOAD(TexImage3D);
     LOAD(TexSubImage3D);
+    LOAD(TexSubImage2D);
     LOAD(CompressedTexImage2D);
     LOAD(CompressedTexSubImage2D);
     LOAD(CompressedTexImage3D);

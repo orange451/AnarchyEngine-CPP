@@ -298,7 +298,18 @@ void encode_color(const std::uint8_t tile[16][4], bool three_color, std::uint8_t
         cov[4] += g * b;
         cov[5] += b * b;
     }
-    float axis[3] = {1.f, 1.f, 1.f};
+    // Power iteration, from the covariance column with the most variance:
+    // starting from grey would find nothing for colors whose axis is square
+    // to it, as red against blue.
+    const float columns[3][3] = {{cov[0], cov[1], cov[2]}, {cov[1], cov[3], cov[4]}, {cov[2], cov[4], cov[5]}};
+    int widest = 0;
+    for (int c = 1; c < 3; ++c) {
+        if (columns[c][c] > columns[widest][widest]) widest = c;
+    }
+    float axis[3] = {columns[widest][0], columns[widest][1], columns[widest][2]};
+    if (std::fabs(axis[0]) + std::fabs(axis[1]) + std::fabs(axis[2]) < 1e-6f) {
+        axis[0] = axis[1] = axis[2] = 1.f;
+    }
     for (int iteration = 0; iteration < 8; ++iteration) {
         const float x = cov[0] * axis[0] + cov[1] * axis[1] + cov[2] * axis[2];
         const float y = cov[1] * axis[0] + cov[3] * axis[1] + cov[4] * axis[2];

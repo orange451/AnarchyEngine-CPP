@@ -439,3 +439,28 @@ TEST_CASE("TS19 placeholder_layer holds only the levels from 64 down, mid grey, 
     CHECK(std::abs(int(b[1]) - 128) <= 2);
     CHECK(placeholder_layer(32).first_level == 0);
 }
+
+TEST_CASE("TS20 streaming_batches: every level up to 64 a side together, then each larger one alone", "[texture]") {
+    using engine_core::texture::streaming_batches;
+    const auto b = streaming_batches(1024, 512, 11);
+    REQUIRE(b.size() == 5);
+    CHECK(b[0] == std::vector<int>{10, 9, 8, 7, 6, 5, 4});   // 1x1 .. 64x32
+    CHECK(b[1] == std::vector<int>{3});                      // 128x64
+    CHECK(b[4] == std::vector<int>{0});
+    const auto small = streaming_batches(32, 32, 6);
+    REQUIRE(small.size() == 1);
+    CHECK(small[0] == std::vector<int>{5, 4, 3, 2, 1, 0});
+}
+
+TEST_CASE("TS21 BC1 keeps a red and blue block exactly (colors whose axis is square to grey)", "[texture]") {
+    using namespace engine_core::texture;
+    std::vector<std::uint8_t> tile(4 * 4 * 4, 0);
+    for (int i = 0; i < 16; ++i) {
+        tile[std::size_t(i) * 4 + (i < 8 ? 2 : 0)] = 255;   // bottom half blue, top half red
+        tile[std::size_t(i) * 4 + 3] = 255;
+    }
+    for (PixelFormat format : {PixelFormat::BC1, PixelFormat::BC3}) {
+        const auto dec = decode_level(format, encode_level(format, tile.data(), 4, 4).data(), 4, 4);
+        CHECK(mean_abs_error(tile, dec, 0, 3) < 1.0);
+    }
+}

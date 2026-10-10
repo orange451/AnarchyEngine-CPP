@@ -11,6 +11,9 @@
 #include <cmath>
 
 namespace ide {
+
+using engine_core::texture::Usage;
+
 namespace {
 
 constexpr float kFovYDegrees = 30.f;
@@ -78,13 +81,19 @@ bool MaterialBall::draw(const MaterialLook& look, runner::ViewPixels& out) {
     if (!ensureGraphics()) {
         return true;
     }
+    // A preview is drawn once, not every frame, so it waits for its textures
+    // whole (never blurry) and asks to be drawn again until they are.
+    textures_.pump();
     runner::MeshDraw ball;
     ball.mesh = &sphere_;
-    ball.texture = textures_.get(look.diffuse_texture, look.diffuse_flip_y);
-    ball.normalTexture = textures_.get(look.normal_texture, look.normal_flip_y);
-    ball.roughnessTexture = textures_.get(look.roughness_texture, look.roughness_flip_y);
-    ball.metalnessTexture = textures_.get(look.metalness_texture, look.metalness_flip_y);
-    ball.emissiveTexture = textures_.get(look.emissive_texture, look.emissive_flip_y);
+    ball.texture = textures_.get(look.diffuse_texture, Usage::Color, look.diffuse_flip_y, true);
+    ball.normalTexture = textures_.get(look.normal_texture, Usage::Normal, look.normal_flip_y, true);
+    ball.roughnessTexture = textures_.get(look.roughness_texture, Usage::Mask, look.roughness_flip_y, true);
+    ball.metalnessTexture = textures_.get(look.metalness_texture, Usage::Mask, look.metalness_flip_y, true);
+    ball.emissiveTexture = textures_.get(look.emissive_texture, Usage::Color, look.emissive_flip_y, true);
+    if (textures_.loading()) {
+        return false;
+    }
     ball.color[0] = look.color.r;
     ball.color[1] = look.color.g;
     ball.color[2] = look.color.b;

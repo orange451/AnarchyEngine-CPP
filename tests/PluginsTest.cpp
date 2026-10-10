@@ -330,6 +330,42 @@ int RunPluginsTests() {
                    (std::string(side.side) + " joins the dock that is there, as a tab").c_str());
         }
 
+        // A side column that is one dock is split: BottomLeft opens below Search, not as its tab.
+        {
+            layout.save_as_plugin(MakeToolFolder(
+                engine, "Side BottomLeft",
+                "plugin:CreateDockWidget('W', {InitialDock = 'BottomLeft', Enabled = true, Height = 400})"));
+            frames(4);
+            ide::IdePane* placed = layout.page_named_for_tests("plugin:Side BottomLeft/W");
+            ide::IdePane* search = layout.page_named_for_tests("Search");
+            Expect(placed != nullptr && search != nullptr &&
+                       layout.dock_of_for_tests(placed) != layout.dock_of_for_tests(search) &&
+                       std::abs(placed->getAbsoluteX() - search->getAbsoluteX()) < 2 &&
+                       placed->getAbsoluteY() > search->getAbsoluteY() + search->getHeight() - 2,
+                   "BottomLeft splits the left column, below Search");
+            // Closed and opened again, it comes back there, not beside the bottom row's dock.
+            layout.close_page_for_tests(placed);
+            frames(3);
+            engine.on_simulation([&](engine_core::DataModel& game) {
+                for (engine_core::InstanceId id : game.get_children(game.core())) {
+                    if (game.name(id) == "Side BottomLeft") {
+                        if (auto* widget = dynamic_cast<engine_core::DockWidget*>(
+                                game.instance(game.find_first_child(id, "W")))) {
+                            widget->set_enabled(true);
+                        }
+                    }
+                }
+            });
+            frames(4);
+            placed = layout.page_named_for_tests("plugin:Side BottomLeft/W");
+            Expect(placed != nullptr && layout.page_open_for_tests(placed) &&
+                       std::abs(placed->getAbsoluteX() - search->getAbsoluteX()) < 2 &&
+                       placed->getAbsoluteY() > search->getAbsoluteY() + search->getHeight() - 2,
+                   "and opened again it is back below Search");
+            layout.close_page_for_tests(placed);
+            frames(3);
+        }
+
         // Closing and opening a widget again and again splits off no docks.
         const std::size_t docksBefore = layout.dock_count_for_tests();
         const engine_core::InstanceId cycling = MakeToolFolder(

@@ -1727,6 +1727,18 @@ IdeDock* IdeLayout::dock_at(engine_core::DockSide side, double width, double hei
             }
         }
         if (best != nullptr) {
+            // A side column that is one dock, top to bottom: the corner asked for is a
+            // new dock split off its top or bottom, at the widget's height, not a tab of it.
+            const bool corner = side == DockSide::TopLeft || side == DockSide::BottomLeft ||
+                                side == DockSide::TopRight || side == DockSide::BottomRight;
+            const bool fullHeight = std::abs(best->getAbsoluteY() - top) < kSlack &&
+                                    std::abs(best->getAbsoluteY() + best->getHeight() - bottom) < kSlack;
+            if (corner && fullHeight) {
+                const bool atBottom = side == DockSide::BottomLeft || side == DockSide::BottomRight;
+                if (IdeDock* split = dock_beside(best, atBottom ? DropSide::Bottom : DropSide::Top, height)) {
+                    return split;
+                }
+            }
             return best;
         }
     }
@@ -1791,9 +1803,24 @@ engine_core::JsonValue IdeLayout::page_spot(IdePane* page) {
     const double y = dock->getAbsoluteY();
     const double x2 = x + dock->getWidth();
     const double y2 = y + dock->getHeight();
+    // The split this dock is a part of: a neighbor inside it, as the page above in the
+    // same column, says where the dock is better than a longer edge with the next column.
+    jadefx::Node* ownSplit = dock->getParent();
+    while (ownSplit != nullptr && dynamic_cast<jadefx::SplitPane*>(ownSplit) == nullptr) {
+        ownSplit = ownSplit->getParent();
+    }
+    auto inOwnSplit = [ownSplit](const jadefx::Node* node) {
+        for (const jadefx::Node* at = node; at != nullptr && ownSplit != nullptr; at = at->getParent()) {
+            if (at == ownSplit) {
+                return true;
+            }
+        }
+        return false;
+    };
     std::string best;
     const char* bestSide = nullptr;
     double bestOverlap = 0;
+    bool bestInSplit = false;
     for (const std::shared_ptr<IdeDock>& other : docks_) {
         if (!other || other.get() == dock || other->getParent() == nullptr || utilityOf(other.get()) != nullptr) {
             continue;
@@ -1819,7 +1846,14 @@ engine_core::JsonValue IdeLayout::page_spot(IdePane* page) {
             side = "Top";
             overlap = down;
         }
-        if (side == nullptr || overlap <= bestOverlap) {
+        if (side == nullptr) {
+            continue;
+        }
+        const bool inSplit = inOwnSplit(other.get());
+        if (bestInSplit && !inSplit) {
+            continue;
+        }
+        if (inSplit == bestInSplit && overlap <= bestOverlap) {
             continue;
         }
         std::string name = named(*other);
@@ -1827,6 +1861,7 @@ engine_core::JsonValue IdeLayout::page_spot(IdePane* page) {
             best = std::move(name);
             bestSide = side;
             bestOverlap = overlap;
+            bestInSplit = inSplit;
         }
     }
     if (bestSide == nullptr) {

@@ -263,6 +263,8 @@ private:
     void copy(const std::vector<std::uint32_t>& ids);
     void duplicate(const std::vector<std::uint32_t>& ids);
     void group(const std::vector<std::uint32_t>& ids);
+    // Moves each selected Folder's children up into its parent and removes the Folder.
+    void ungroup(const std::vector<std::uint32_t>& ids);
     std::vector<int> recall_folds(const std::string& guid);
     void remember_folds(const std::string& guid, const std::vector<int>& lines);
     void sync_fold_file();
@@ -397,7 +399,7 @@ private:
     void routeSearch(jadefx::KeyEvent& event, jadefx::Scene& scene);
     void routeZoom(jadefx::KeyEvent& event);
     void routeClipboard(jadefx::KeyEvent& event);
-    // Ctrl+G groups the selection in a Folder.
+    // Ctrl+G groups the selection in a Folder; Ctrl+U ungroups selected Folders.
     void routeGroup(jadefx::KeyEvent& event);
     // Zooms the studio and remembers it. announce shows a toast with the new
     // zoom; the status bar's slider, which shows it already, does not.

@@ -348,6 +348,48 @@ void IdeLayout::group(const std::vector<std::uint32_t>& ids) {
     });
 }
 
+void IdeLayout::ungroup(const std::vector<std::uint32_t>& ids) {
+    if (ids.empty()) {
+        return;
+    }
+    runner_.simulation().on_simulation([this, alive = std::weak_ptr<int>(alive_), ids](engine_core::DataModel& world) {
+        std::vector<engine_core::InstanceId> folders;
+        for (engine_core::InstanceId id : cut_set(world, ids)) {
+            const engine_core::DataModel* object = world.instance(id);
+            if (object != nullptr && std::string_view(object->class_name()) == "Folder") {
+                folders.push_back(id);
+            }
+        }
+        if (folders.empty()) {
+            return;
+        }
+        ScopedRecording step(world, "Ungroup");
+        std::vector<engine_core::InstanceId> freed;
+        std::string refused;
+        for (engine_core::InstanceId folder : folders) {
+            std::vector<engine_core::InstanceId> children;
+            for (engine_core::InstanceId child = world.first_child(folder); child != 0;
+                 child = world.next_sibling(child)) {
+                children.push_back(child);
+            }
+            move_set(world, children, world.parent(folder), &refused);
+            // A child that could not leave keeps its folder.
+            if (world.first_child(folder) == 0) {
+                world.destroy(folder);
+            }
+            for (engine_core::InstanceId child : children) {
+                if (world.alive(child) && world.parent(child) != folder) {
+                    freed.push_back(child);
+                }
+            }
+        }
+        world.selection().set(freed);
+        if (!refused.empty()) {
+            toast_later(this, alive, std::move(refused));
+        }
+    });
+}
+
 void IdeLayout::cut(const std::vector<std::uint32_t>& ids) {
     if (!clip_) {
         return;

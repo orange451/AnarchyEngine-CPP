@@ -9,6 +9,7 @@
 #include "NativeMenuBar.hpp"
 #include "ThemeLibrary.hpp"
 #include "Project.hpp"
+#include "SavedLayout.hpp"
 
 #include <cstdint>
 #include <filesystem>
@@ -251,6 +252,9 @@ public:
     // Writes the layout to layout.json in the config folder. A close request
     // on the main window does this. Nothing is written without a config folder.
     void save_layout();
+    // The main window has just maximized. A layout read at the normal size gets
+    // its saved sizes again, now as shares of the maximized window.
+    void window_maximized();
 
 private:
     struct Clip;
@@ -680,6 +684,15 @@ private:
     jadefx::MenuItem* restore_builtin_item_ = nullptr;
     // The floating windows layout.json had, until the main window is up to open them.
     engine_core::JsonValue saved_floating_;
+    // The main window's splits as layout.json had them, and their saved
+    // divider positions, kept until the window maximizes when the file says it
+    // was: shares of the maximized window, set again at its size.
+    std::vector<std::pair<std::weak_ptr<jadefx::SplitPane>, std::vector<double>>> saved_splits_;
+    // Frames left to wait for that maximize before the shares are let go.
+    int saved_splits_wait_ = 0;
+    // The main window's place and size the last time it was not maximized:
+    // from layout.json, then each frame it is not.
+    std::optional<WindowPlace> normal_window_;
     // The main window's place and size from layout.json, until attachFrame.
     engine_core::JsonValue saved_window_;
     // Frames flushed so far.

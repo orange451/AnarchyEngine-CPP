@@ -3,6 +3,7 @@
 #include "ide/IdeDock.hpp"
 #include "ide/IdeExplorer.hpp"
 #include "ide/IdeLayout.hpp"
+#include "ide/SavedLayout.hpp"
 #include "ide/IdePrefabEditor.hpp"
 #include "ide/IdeResources.hpp"
 #include "ide/IdePane.hpp"
@@ -1229,6 +1230,60 @@ int main() {
             frame(*at);
             ide::IdePane* properties = showing(*at, "Properties");
             expect(properties != nullptr && properties->getAbsoluteX() > 640, "Properties opens on the right");
+        }
+
+        // Maximized, the window keeps the place and size it had before, so
+        // un-maximizing after a restart goes back to them.
+        {
+            const ide::WindowPlace normal{100, 80, 1200, 700};
+            const ide::WindowPlace full{0, 0, 1920, 1040};
+            const engine_core::JsonValue kept = ide::save_window_place(true, full, normal);
+            expect(kept.find("maximized") != nullptr && kept.find("maximized")->as_bool() &&
+                       kept.find("width") != nullptr && kept.find("width")->as_number() == 1200 &&
+                       kept.find("height") != nullptr && kept.find("height")->as_number() == 700 &&
+                       kept.find("x")->as_number() == 100 && kept.find("y")->as_number() == 80,
+                   "a maximized window saves the size and place it had before it maximized");
+            const engine_core::JsonValue plain = ide::save_window_place(false, normal, full);
+            expect(!plain.find("maximized")->as_bool() && plain.find("width")->as_number() == 1200,
+                   "a window that is not maximized saves its own size");
+            const engine_core::JsonValue unknown = ide::save_window_place(true, full, std::nullopt);
+            expect(unknown.find("width") == nullptr && unknown.find("x")->as_number() == 0,
+                   "with no size from before, a maximized window saves only its place");
+        }
+
+        // Saved while maximized, the layout's sizes are of the big window. The
+        // studio opens at its normal size and maximizes after, so the docks
+        // that keep their size must take the saved share of the big one.
+        {
+            const fs::path big = fs::temp_directory_path() / ("anarchy-layout-max-" + std::to_string(stamp));
+            double wide_left = 0;
+            {
+                ide::IdeLayout first(1920, 1080, big);
+                auto at = jadefx::make<jadefx::Scene>(nullptr, 1920, 1080);
+                first.mount(*at);
+                at->layout(1920, 1080, time);
+                at->layout(1920, 1080, time + 0.01);
+                time += 0.02;
+                if (ide::IdePane* shown = showing(*at, "Search")) {
+                    wide_left = shown->getWidth();
+                }
+                first.save_layout();
+            }
+            ide::IdeLayout second(1280, 800, big);
+            auto at = jadefx::make<jadefx::Scene>(nullptr, 1280, 800);
+            second.mount(*at);
+            frame(*at);
+            // Maximized.
+            at->layout(1920, 1080, time);
+            second.window_maximized();
+            at->layout(1920, 1080, time + 0.01);
+            at->layout(1920, 1080, time + 0.02);
+            time += 0.04;
+            ide::IdePane* search_pane = showing(*at, "Search");
+            expect(wide_left > 0 && search_pane != nullptr && std::abs(search_pane->getWidth() - wide_left) < 2,
+                   "a layout saved maximized keeps the left column's width once the studio maximizes");
+            std::error_code ignored;
+            fs::remove_all(big, ignored);
         }
         {
             std::string error;

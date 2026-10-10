@@ -12,6 +12,9 @@ namespace ide {
 
 namespace {
 
+// How long a layout saved maximized waits for the window to maximize, in frames.
+constexpr int kMaximizeWaitFrames = 300;
+
 // A layout file capture_layout wrote. False, with why set, when it cannot be
 // read or is not version 1.
 bool ReadLayoutFile(const std::filesystem::path& file, engine_core::JsonValue& saved, std::string& why) {
@@ -828,7 +831,12 @@ bool IdeLayout::restore_layout() {
     if (main == nullptr) {
         return refuse(utf8_path(layout_file_) + " is not a layout this studio reads");
     }
-    std::shared_ptr<jadefx::Node> tree = load_layout_node(*main, layout_host());
+    LayoutHost host = layout_host();
+    saved_splits_.clear();
+    host.loaded_split = [this](const std::shared_ptr<jadefx::SplitPane>& split, const std::vector<double>& dividers) {
+        saved_splits_.emplace_back(split, dividers);
+    };
+    std::shared_ptr<jadefx::Node> tree = load_layout_node(*main, host);
     if (!tree) {
         return refuse(utf8_path(layout_file_) + " docks nothing in the main window");
     }
@@ -931,14 +939,34 @@ void IdeLayout::restore_window(jadefx::Stage& stage) {
     }
     const double x = NumberOr(window, "x", std::nan(""));
     const double y = NumberOr(window, "y", std::nan(""));
+    if (width >= 200 && height >= 150 && std::isfinite(x) && std::isfinite(y)) {
+        normal_window_ = WindowPlace{x, y, width, height};
+    }
     // A place on a display that is gone is left to the system.
     if (std::isfinite(x) && std::isfinite(y) && OnScreen(areas, x, y)) {
         jadefx::moveStageTo(stage, x, y);
     }
     if (const engine_core::JsonValue* maximized = window.find("maximized"); maximized != nullptr && maximized->as_bool()) {
-        // Once the window is showing.
+        // Once the window is showing. flushFrame sets the saved sizes again then.
         jadefx::runLater([&stage] { jadefx::maximizeStage(stage); });
+        saved_splits_wait_ = kMaximizeWaitFrames;
+    } else {
+        saved_splits_.clear();
     }
+}
+
+void IdeLayout::window_maximized() {
+    for (const auto& [weak, dividers] : saved_splits_) {
+        const std::shared_ptr<jadefx::SplitPane> split = weak.lock();
+        // One a page has docked into since has other dividers, and keeps them.
+        if (split && split->getItems().size() == dividers.size() + 1) {
+            for (std::size_t i = 0; i < dividers.size(); ++i) {
+                split->setDividerPosition(static_cast<int>(i), dividers[i]);
+            }
+        }
+    }
+    saved_splits_.clear();
+    saved_splits_wait_ = 0;
 }
 
 void IdeLayout::save_layout() {
@@ -996,18 +1024,11 @@ engine_core::JsonValue IdeLayout::capture_layout() {
     double x = 0;
     double y = 0;
     if (mainStage_ != nullptr && jadefx::stageToScreen(*mainStage_, 0, 0, x, y)) {
-        engine_core::JsonValue window = engine_core::JsonValue::object();
-        window.set("x", engine_core::JsonValue::number(x));
-        window.set("y", engine_core::JsonValue::number(y));
-        // A maximized window's size is the display's, not one to come back to.
-        // Its place still picks the display it maximizes on.
-        const bool maximized = jadefx::isStageMaximized(*mainStage_);
-        if (!maximized) {
-            window.set("width", engine_core::JsonValue::number(mainStage_->getWidth()));
-            window.set("height", engine_core::JsonValue::number(mainStage_->getHeight()));
-        }
-        window.set("maximized", engine_core::JsonValue::boolean(maximized));
-        saved.set("window", std::move(window));
+        // A maximized window's size is the display's, not one to come back to,
+        // so it keeps the one it had before.
+        const WindowPlace now{x, y, static_cast<double>(mainStage_->getWidth()),
+                              static_cast<double>(mainStage_->getHeight())};
+        saved.set("window", save_window_place(jadefx::isStageMaximized(*mainStage_), now, normal_window_));
     }
     return saved;
 }

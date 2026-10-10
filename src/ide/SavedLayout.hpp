@@ -4,11 +4,13 @@
 
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
 namespace jadefx {
 class Node;
+class SplitPane;
 }
 
 namespace ide {
@@ -23,7 +25,25 @@ struct LayoutHost {
     // Docks the page saved under name in dock. False when there is none to
     // dock, such as a name this studio does not know or one already docked.
     std::function<bool(IdeDock& dock, const std::string& name)> dock_page;
+    // Told each split a load makes and the divider positions it set, its saved shares. Optional.
+    std::function<void(const std::shared_ptr<jadefx::SplitPane>& split, const std::vector<double>& dividers)>
+        loaded_split;
 };
+
+// The main window's place and size, in screen points.
+struct WindowPlace {
+    double x = 0;
+    double y = 0;
+    double width = 0;
+    double height = 0;
+};
+
+// The main window as layout.json keeps it: {"x", "y", "width", "height",
+// "maximized"}. Maximized, it keeps normal, the place and size it last had
+// when it was not, so un-maximizing after a restart goes back to them; with
+// none, only now's place, which picks the display it maximizes on.
+engine_core::JsonValue save_window_place(bool maximized, const WindowPlace& now,
+                                         const std::optional<WindowPlace>& normal);
 
 // A dock is {"tabs": [names], "selected": name}. A split is {"split":
 // "horizontal" or "vertical", "items": [...], "sizes": [...]}, where sizes are

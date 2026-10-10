@@ -170,14 +170,32 @@ std::shared_ptr<jadefx::Node> LoadNode(const JsonValue& value, const LayoutHost&
     }
     double edge = 0;
     const std::vector<double> normalized = Normalized(std::move(shares));
+    std::vector<double> dividers;
     for (std::size_t i = 0; i + 1 < normalized.size(); ++i) {
         edge += normalized[i];
         split->setDividerPosition(static_cast<int>(i), edge);
+        dividers.push_back(edge);
+    }
+    if (host.loaded_split) {
+        host.loaded_split(split, dividers);
     }
     return split;
 }
 
 }  // namespace
+
+JsonValue save_window_place(bool maximized, const WindowPlace& now, const std::optional<WindowPlace>& normal) {
+    JsonValue window = JsonValue::object();
+    const WindowPlace& kept = maximized && normal ? *normal : now;
+    window.set("x", JsonValue::number(kept.x));
+    window.set("y", JsonValue::number(kept.y));
+    if (!maximized || normal) {
+        window.set("width", JsonValue::number(kept.width));
+        window.set("height", JsonValue::number(kept.height));
+    }
+    window.set("maximized", JsonValue::boolean(maximized));
+    return window;
+}
 
 JsonValue save_layout_node(const jadefx::Node& node, const LayoutHost& host) {
     JsonValue saved = SaveNode(node, host);

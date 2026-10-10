@@ -3,6 +3,7 @@
 #include "AmbientOcclusionEffect.hpp"
 #include "AssetInstances.hpp"
 #include "BloomEffect.hpp"
+#include "ColorSpace.hpp"
 #include "Dragger.hpp"
 #include "DynamicSky.hpp"
 #include "Camera.hpp"
@@ -65,9 +66,9 @@ VisualLight light_of(const SpatialObject& object) {
     out.kind = VisualLight::Kind::Point;
     out.enabled = light->enabled();
     const ColorRgb color = light->color();
-    out.color[0] = color.r;
-    out.color[1] = color.g;
-    out.color[2] = color.b;
+    out.color[0] = srgb_to_linear(color.r);
+    out.color[1] = srgb_to_linear(color.g);
+    out.color[2] = srgb_to_linear(color.b);
     out.intensity = static_cast<float>(light->intensity());
     out.radius = static_cast<float>(light->radius());
     out.shadows = light->shadows();
@@ -84,9 +85,9 @@ VisualLight light_of(const DirectionalLight& sun) {
     out.kind = VisualLight::Kind::Directional;
     out.enabled = sun.enabled();
     const ColorRgb color = sun.color();
-    out.color[0] = color.r;
-    out.color[1] = color.g;
-    out.color[2] = color.b;
+    out.color[0] = srgb_to_linear(color.r);
+    out.color[1] = srgb_to_linear(color.g);
+    out.color[2] = srgb_to_linear(color.b);
     out.intensity = static_cast<float>(sun.intensity());
     out.shadows = sun.shadows();
     out.shadow_distance = static_cast<float>(sun.shadow_distance());

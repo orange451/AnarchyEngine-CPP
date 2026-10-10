@@ -168,7 +168,7 @@ struct LightDraw {
     float position[3] = {0.f, 0.f, 0.f};
     // Where a SpotLight or DirectionalLight points. Unused for a PointLight.
     float direction[3] = {0.f, 0.f, -1.f};
-    // Linear, as the Color3 holds it.
+    // Linear: the Color3, which is sRGB, decoded.
     float color[3] = {1.f, 1.f, 1.f};
     float intensity = 1.f;
     // Unused for a DirectionalLight, which reaches everywhere.

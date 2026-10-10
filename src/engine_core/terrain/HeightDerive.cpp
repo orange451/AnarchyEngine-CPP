@@ -1,5 +1,7 @@
 #include "terrain/HeightDerive.hpp"
 
+#include "ColorSpace.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -7,13 +9,6 @@
 namespace engine_core::terrain {
 
 namespace {
-
-// --- sRGB -> linear, for height_from_luminance -----------------------------
-
-float srgb_to_linear(float c) {
-    if (c <= 0.04045f) return c / 12.92f;
-    return std::pow((c + 0.055f) / 1.055f, 2.4f);
-}
 
 // --- 1D circular box blur, used separably for the 2D high-pass blur -------
 

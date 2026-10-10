@@ -14,6 +14,7 @@
 #include "PropertyBag.hpp"
 #include "SnapshotPump.hpp"
 
+#include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
@@ -488,4 +489,28 @@ TEST_CASE("LIT10 a light's snapshot row carries its shadows", "[light][render][s
     REQUIRE(pump.find(point.id())->light.shadows);
     REQUIRE_FALSE(pump.find(sun.id())->light.shadows);
     REQUIRE(pump.find(sun.id())->light.shadow_distance == 40.f);
+}
+
+TEST_CASE("LIT11 a light's colour reaches the snapshot linear, as a Material's does", "[light][render]") {
+    SimRole role;
+    engine_core::Game game;
+    engine_core::SnapshotPump pump;
+    pump.reserve(engine_core::DataModel::kMaxInstances);
+    const auto frame = [&] {
+        pump.prepare_copy(game);
+        pump.publish();
+    };
+    PointLight& light = add_light<PointLight>(game);
+    engine_core::DirectionalLight& sun = add_light<engine_core::DirectionalLight>(game);
+    // 0.5 is above the sRGB knee, 0.04045 is exactly at it, 1 is the top.
+    REQUIRE_FALSE(light.set_color(engine_core::ColorRgb{0.5f, 0.04045f, 1.f, 1.f}));
+    REQUIRE_FALSE(sun.set_color(engine_core::ColorRgb{0.5f, 0.04045f, 1.f, 1.f}));
+    frame();
+    for (const auto id : {light.id(), sun.id()}) {
+        REQUIRE(pump.find(id) != nullptr);
+        const VisualLight& shone = pump.find(id)->light;
+        REQUIRE(shone.color[0] == Catch::Approx(0.2140f).margin(1e-3f));
+        REQUIRE(shone.color[1] == Catch::Approx(0.04045f / 12.92f).margin(1e-6f));
+        REQUIRE(shone.color[2] == Catch::Approx(1.f));
+    }
 }

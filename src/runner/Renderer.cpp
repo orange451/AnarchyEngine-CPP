@@ -2,6 +2,7 @@
 
 #include "profiler/Profiler.hpp"
 
+#include "ColorSpace.hpp"
 #include "OcclusionMath.hpp"
 #include "RenderMath.hpp"
 #include "ShaderFile.hpp"
@@ -1847,8 +1848,7 @@ void Renderer::prepareSky() {
     // Tint is a color as picked, sRGB, made linear as surface.glsl makes a Material's.
     const float exposure = std::max(lighting_.sky.exposure, 0.f);
     for (int channel = 0; channel < 3; ++channel) {
-        skyColor_[channel] =
-            dynamic ? 1.f : exposure * std::pow(std::max(lighting_.sky.tint[channel], 0.f), 2.2f);
+        skyColor_[channel] = dynamic ? 1.f : exposure * engine_core::srgb_to_linear(lighting_.sky.tint[channel]);
     }
     skyLightScale_ = dynamic ? 1.f : std::max(lighting_.sky.lightScale, 0.f);
     skyImage_ = dynamic ? whiteTexture_ : lighting_.sky.image;

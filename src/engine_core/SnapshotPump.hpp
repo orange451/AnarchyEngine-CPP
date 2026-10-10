@@ -31,7 +31,7 @@ struct VisualLight {
     // None when the row is not a light.
     Kind kind = Kind::None;
     bool enabled = false;
-    // Linear, as the Color3 holds it.
+    // Linear: the Color3, which is sRGB, decoded.
     float color[3] = {1.f, 1.f, 1.f};
     float intensity = 0.f;
     // 0 for a DirectionalLight, which reaches everywhere.

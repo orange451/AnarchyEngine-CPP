@@ -56,13 +56,13 @@ rows is not shown.
 ## Panel
 
 - `PropertyGroup` (enum) is replaced by `std::string group` on `PropertyRow`.
-  The sheet carries the ordered list of group names it shows.
+  Rows arrive sorted, so each group's rows are contiguous.
 - `PropertiesPanel` builds one foldable header per group in place of the fixed
   `kGroupTitles` Instance/Data headers. The panel-only "Preview" section stays
   last.
 - Fold state is keyed by group name, so a folded group stays folded when the
   selection changes to another class that has the same group.
-- `same_layout` compares group names as well as rows, so a selection change
+- `PropertyRow::same_slot` compares group names, so a selection change
   that changes the groups rebuilds the panel.
 
 ## Groups for existing classes

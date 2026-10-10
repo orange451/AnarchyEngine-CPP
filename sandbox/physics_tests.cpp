@@ -1525,11 +1525,11 @@ TEST_CASE("P39 b3RayCastMesh on the SAH and median-split BVHs matches brute-forc
         build_noisy_sphere(positions, triangles);
         REQUIRE(triangles.size() / 3 >= 2000);
 
-        // Guaranteed hits: a ray from 30 studs out (well past the sphere's
-        // radius, up to about 11.5) toward within 3 studs of the center
+        // Guaranteed hits: a ray from 30 units out (well past the sphere's
+        // radius, up to about 11.5) toward within 3 units of the center
         // must cross the surface. Guaranteed misses: a ray from the same
-        // shell to a point at most 8 studs away from where it started never
-        // comes within 30 - 8*sqrt(3) (about 16) studs of the center.
+        // shell to a point at most 8 units away from where it started never
+        // comes within 30 - 8*sqrt(3) (about 16) units of the center.
         std::mt19937_64 random(4242);
         std::uniform_real_distribution<float> near_center(-3.f, 3.f);
         std::uniform_real_distribution<float> small_offset(-8.f, 8.f);

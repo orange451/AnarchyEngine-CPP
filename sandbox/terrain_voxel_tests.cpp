@@ -28,7 +28,7 @@ TEST_CASE("VC1 distances quantize to the band and back", "[terrain]") {
     REQUIRE(quantize(-4.f, 1.f) == -127);
     REQUIRE(quantize(-100.f, 1.f) == -127);
     REQUIRE(near(dequantize(quantize(1.5f, 1.f), 1.f), 1.5f, 4.f / 127.f));
-    // Studs, not cells: a bigger VoxelSize widens the band.
+    // Units, not cells: a bigger VoxelSize widens the band.
     REQUIRE(quantize(4.f, 2.f) == 64);
 }
 

@@ -786,7 +786,7 @@ private:
 };
 
 // One terrain shot: what the camera looks at, from where (degrees around Y
-// from +X toward +Z, degrees up, studs away), and its vertical angle.
+// from +X toward +Z, degrees up, units away), and its vertical angle.
 struct TerrainShot {
     std::string file;
     engine_core::Vec3 target;
@@ -3128,7 +3128,7 @@ int main(int argc, char** argv) {
             sunLight.direction[1] = -1.f;
             Expect(lit(sunLight, scene, 2)[0] > ambientFloor + 20, "a sun straight down lights the floor beside the cube");
             // CL4: a caster the camera cannot see still shadows what it can. A cube
-            // 12 studs above the open floor point is far above the view.
+            // 12 units above the open floor point is far above the view.
             const runner::MeshDraw withHigh[3] = {scene[0], scene[1],
                                                   runner::MeshDraw{cube, engine_core::matrix4_translation(1.f, 12.f, 2.f)}};
             const int openUnder = lit(sunLight, scene, 2)[1];

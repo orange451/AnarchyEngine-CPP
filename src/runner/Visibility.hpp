@@ -29,6 +29,9 @@ struct DrawItem {
     bool terrain = false;
     // An uploaded mesh, and transparency below 1. Anything else draws nothing.
     bool drawable = false;
+    // Its skinning matrices' first texel in the frame's bone texture, or -1
+    // for none. The renderer sets it; batching copies it into each instance.
+    int boneBase = -1;
     // Shadows only (MeshDraw::shadowOnly): its sphere is found, but it is never visible.
     bool shadowOnly = false;
 };

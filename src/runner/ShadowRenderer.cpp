@@ -53,6 +53,10 @@ bool ShadowRenderer::initialize() {
         return false;
     }
     depth_.viewProjection = glGetUniformLocation(depth_.id, "uViewProjection");
+    // Skinned casters read their matrices from the bone texture's unit.
+    glUseProgram(depth_.id);
+    glUniform1i(glGetUniformLocation(depth_.id, "uBones"), kBoneTextureUnit);
+    glUseProgram(0);
     glGenFramebuffers(1, &atlasFbo_);
     glGenFramebuffers(1, &cascadeFbo_);
     atlasStandIn_ = MakeDepth(1, 1, &kFarDepth);
@@ -157,9 +161,11 @@ int ShadowRenderer::addCasterRuns(const std::vector<int>& casters, const MeshDra
             casterRuns_.push_back(CasterRun{draw.mesh, static_cast<int>(casterRows_.size()), 0});
         }
         ++casterRuns_.back().count;
-        // Depth only reads the world matrix.
+        // Depth reads the world matrix, and a skinned caster its bones.
         InstanceData row{};
         std::copy(draw.model.m, draw.model.m + 16, row.model);
+        const int drawn = casterMeshes_[static_cast<std::size_t>(caster)];
+        row.boneBase = items_ != nullptr ? static_cast<float>(items_[drawn].boneBase) : -1.f;
         casterRows_.push_back(row);
     }
     return begin;

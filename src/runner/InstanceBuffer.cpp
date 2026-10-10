@@ -35,6 +35,7 @@ void InstanceBuffer::attach(int first) const {
         slot(anarchy::amesh::kAttribInstanceNormal + column, 3, offsetof(InstanceData, normal) + column * 12);
     }
     slot(anarchy::amesh::kAttribInstanceTint, 3, offsetof(InstanceData, tint));
+    slot(anarchy::amesh::kAttribInstanceBoneBase, 1, offsetof(InstanceData, boneBase));
 }
 
 void InstanceBuffer::destroy() {

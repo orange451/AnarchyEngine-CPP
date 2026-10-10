@@ -319,10 +319,12 @@ inline constexpr unsigned kAttribWeight = 6;
 
 // Per-instance slots, divisor 1, which runner::InstanceBuffer::attach points
 // at its rows: a mat4 world matrix (7 to 10), a mat3 normal matrix (11 to 13),
-// and a linear RGB tint (14). upload never touches them.
+// a linear RGB tint (14), and the first texel of the instance's skinning
+// matrices in the bone texture, or -1 for none (15). upload never touches them.
 inline constexpr unsigned kAttribInstanceModel = 7;
 inline constexpr unsigned kAttribInstanceNormal = 11;
 inline constexpr unsigned kAttribInstanceTint = 14;
+inline constexpr unsigned kAttribInstanceBoneBase = 15;
 
 // GPU buffers for one AMESH: a VAO, an interleaved VBO and a u32 EBO. Every
 // call but valid() needs the GL context the mesh was uploaded in to be current.

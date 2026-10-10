@@ -56,6 +56,7 @@ set(STUDIO_CORE_SOURCES
     src/runner/Visibility.cpp
     src/runner/TerrainSelection.cpp
     src/runner/DrawBatches.cpp
+    src/runner/BonePalette.cpp
     src/runner/GamePack.cpp
     src/ide/AssetBrowser.cpp
     src/ide/ColorLiterals.cpp
@@ -91,6 +92,7 @@ set(STUDIO_SOURCES
     src/runner/GpuTimer.cpp
     src/runner/ShadowRenderer.cpp
     src/runner/InstanceBuffer.cpp
+    src/runner/BoneTexture.cpp
     src/runner/EnvironmentMap.cpp
     src/runner/MeshCache.cpp
     src/runner/TerrainDraws.cpp

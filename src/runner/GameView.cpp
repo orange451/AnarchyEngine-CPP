@@ -437,6 +437,7 @@ void GameView::collectMeshes() {
             draw.roughness = source.roughness;
             draw.reflectivity = source.reflectivity;
             draw.transparency = source.transparency;
+            draw.skinned = source.skinned;
             draw.slot = nextSlot++;
             loaded.push_back(draw);
         }
@@ -505,6 +506,20 @@ void GameView::collectMeshes() {
             draw.tint[1] = row.color.g;
             draw.tint[2] = row.color.b;
             draw.transparency = 1.f - (1.f - std::clamp(draw.transparency, 0.f, 1.f)) * opacity;
+            // A Model on the Prefab's skeleton moves with the row's pose, which
+            // the held snapshot keeps alive through the frame.
+            if (draw.skinned && row.pose != nullptr && !row.pose->palette.empty()) {
+                draw.bones = row.pose->palette.data();
+                draw.boneCount = static_cast<int>(row.pose->palette.size() / 12);
+                const float* low = draw.mesh->bounds_min();
+                const float* high = draw.mesh->bounds_max();
+                const float poseLow[3] = {row.pose->low.x, row.pose->low.y, row.pose->low.z};
+                const float poseHigh[3] = {row.pose->high.x, row.pose->high.y, row.pose->high.z};
+                for (int axis = 0; axis < 3; ++axis) {
+                    draw.poseMin[axis] = std::min(low[axis], poseLow[axis]);
+                    draw.poseMax[axis] = std::max(high[axis], poseHigh[axis]);
+                }
+            }
         }
     }
     // Each Terrain's LOD nodes chosen for this camera and pane (spec decision 2:

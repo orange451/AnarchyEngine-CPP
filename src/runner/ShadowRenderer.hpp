@@ -54,6 +54,9 @@ public:
     // the atlas gets every light unshadowed, said once.
     bool draw(const std::vector<ShadowRequest>& requests, const MeshDraw* meshes, int count, const Sphere* spheres,
               const CameraView& camera, const ShadowSettings& settings);
+    // The frame's DrawItems, one per MeshDraw, whose boneBase each caster row
+    // takes; null casts every mesh unposed. Set before draw and drawSun.
+    void setDrawItems(const DrawItem* items) { items_ = items; }
     // How the light pass reads key's map: kNone before it has one, or once
     // the driver has refused to draw shadow maps.
     ShadowLookup lookup(std::uint64_t key) const;
@@ -97,6 +100,8 @@ private:
     // What draw handed the planner, and the MeshDraw each came from.
     std::vector<ShadowCaster> casters_;
     std::vector<int> casterMeshes_;
+    // Not owned: setDrawItems'.
+    const DrawItem* items_ = nullptr;
     // The casters of every tile or cascade drawn this frame, as instanced runs.
     struct CasterRun {
         const anarchy::amesh::GpuMesh* mesh = nullptr;

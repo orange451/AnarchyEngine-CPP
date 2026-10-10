@@ -8,8 +8,8 @@
 
 namespace runner {
 
-// One instance as vertex slots 7 to 14 read it (amesh.hpp's kAttribInstance*),
-// 112 bytes with no padding.
+// One instance as vertex slots 7 to 15 read it (amesh.hpp's kAttribInstance*),
+// 116 bytes with no padding.
 struct InstanceData {
     // World space, column-major: slots 7 to 10.
     float model[16];
@@ -18,8 +18,12 @@ struct InstanceData {
     float normal[9];
     // The GameObject's Color made linear, as surface.glsl's toLinear: slot 14.
     float tint[3];
+    // The first texel of its skinning matrices in the bone texture, or -1 for
+    // an unskinned instance: slot 15. A float, which holds every texel index
+    // the texture can have exactly.
+    float boneBase;
 };
-static_assert(sizeof(InstanceData) == 112, "vertex slots 7 to 14 read 112 bytes per instance");
+static_assert(sizeof(InstanceData) == 116, "vertex slots 7 to 15 read 116 bytes per instance");
 
 // Instances first to first + count, all drawn with MeshDraw draw's mesh and Material.
 struct DrawRun {

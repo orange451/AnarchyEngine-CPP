@@ -3,6 +3,7 @@
 
 #include "runner/DrawBatches.hpp"
 
+#include <algorithm>
 #include <array>
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
@@ -207,10 +208,11 @@ TEST_CASE("B8 a second frame replaces the first", "[batches]") {
     REQUIRE(out.opaqueRuns == 0);
 }
 
-TEST_CASE("B9 InstanceData is 112 bytes, in slot order", "[batches]") {
-    REQUIRE(sizeof(InstanceData) == 112);
+TEST_CASE("B9 InstanceData is 116 bytes, in slot order", "[batches]") {
+    REQUIRE(sizeof(InstanceData) == 116);
     REQUIRE(offsetof(InstanceData, normal) == 64);
     REQUIRE(offsetof(InstanceData, tint) == 100);
+    REQUIRE(offsetof(InstanceData, boneBase) == 112);
 }
 
 TEST_CASE("B10 terrain chunks draw alone, after every other opaque run", "[batches]") {
@@ -274,4 +276,46 @@ TEST_CASE("B12 a tint at the sRGB knee decodes linearly, not by a power", "[batc
     REQUIRE(out.instances[0].tint[0] == Approx(0.04045f / 12.92f).margin(1e-6f));
     REQUIRE(out.instances[0].tint[1] == 0.f);
     REQUIRE(out.instances[0].tint[2] == 1.f);
+}
+
+#include "runner/BonePalette.hpp"
+
+static_assert(sizeof(InstanceData) == 116, "slot 15 adds the bone base");
+
+TEST_CASE("BonePalette packs each pose once, three texels a bone", "[bones]") {
+    BonePalette palette;
+    std::vector<float> a(24, 1.f);
+    std::vector<float> b(12, 2.f);
+    REQUIRE(palette.add(a.data(), 2) == 0);
+    // One GameObject's Models share its pose: the same palette again packs nothing.
+    REQUIRE(palette.add(a.data(), 2) == 0);
+    REQUIRE(palette.add(b.data(), 1) == 6);
+    REQUIRE(palette.texels().size() == 9 * 4);
+    REQUIRE(palette.texels()[6 * 4] == 2.f);
+    REQUIRE(palette.rows(4) == 3);
+    REQUIRE(palette.rows(1024) == 1);
+    palette.clear();
+    REQUIRE(palette.texels().empty());
+    REQUIRE(palette.add(b.data(), 1) == 0);
+}
+
+TEST_CASE("skinned instances of one Model are one run, each with its own bone base", "[bones]") {
+    Frame frame;
+    for (int i = 0; i < 100; ++i) {
+        frame.add(At(static_cast<float>(i), 0.f, -10.f), 4);
+        frame.items.back().boneBase = i * 6;
+    }
+    frame.add(At(0.f, 5.f, -10.f), 5);
+    DrawBatches batches;
+    BuildBatches(frame.ready(), frame.visible, kView, batches);
+    REQUIRE(batches.opaqueRuns == 2);
+    std::vector<float> bases;
+    for (const InstanceData& instance : batches.instances) {
+        bases.push_back(instance.boneBase);
+    }
+    REQUIRE(std::count(bases.begin(), bases.end(), -1.f) == 1);
+    std::sort(bases.begin(), bases.end());
+    for (int i = 0; i < 100; ++i) {
+        REQUIRE(bases[static_cast<std::size_t>(i) + 1] == static_cast<float>(i * 6));
+    }
 }

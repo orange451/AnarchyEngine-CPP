@@ -73,7 +73,9 @@ constexpr int kUnitSky = 12;
 constexpr int kUnitIrradiance = 13;
 constexpr int kUnitPrefiltered = 14;
 constexpr int kUnitBrdf = 15;
-constexpr int kUnitCount = 16;
+// The bone texture, which only the vertex shaders read (BoneTexture.hpp).
+constexpr int kUnitBones = kBoneTextureUnit;
+constexpr int kUnitCount = 17;
 // terrain.frag's uDetailFade0/uDetailFade1: the view-space distance band
 // (units) its far falloffs -- mip bias, normal strength, the third
 // triplanar projection -- ramp smoothly across, in place of the old "this
@@ -369,6 +371,7 @@ bool Renderer::buildProgram(Program& program, const char* name, const char* vert
     sampler("uSunTexture", kUnitDiffuse);
     sampler("uMoonTexture", kUnitNormalMap);
     sampler("uTerrainLook", kUnitTerrainLook);
+    sampler("uBones", kUnitBones);
     // The terrain program's own three arrays and anti-tiling noise.
     sampler("uSurfaceA", kUnitNormalMap);
     sampler("uSurfaceB", kUnitRoughnessMap);
@@ -1952,6 +1955,7 @@ void Renderer::findVisible(const MeshDraw* meshes, int count, const CameraView& 
     {
         PROFILE_SCOPE("Visibility", profiler::Group::Render);
         drawItems_.resize(static_cast<std::size_t>(count));
+        bonePalette_.clear();
         for (int index = 0; index < count; ++index) {
             const MeshDraw& draw = meshes[index];
             DrawItem& item = drawItems_[static_cast<std::size_t>(index)];
@@ -1964,6 +1968,13 @@ void Renderer::findVisible(const MeshDraw* meshes, int count, const CameraView& 
             if (item.drawable) {
                 item.boundsMin = draw.mesh->bounds_min();
                 item.boundsMax = draw.mesh->bounds_max();
+                // Posed, it reaches where its bones are: cull by that, and
+                // pack its matrices for every pass that draws it.
+                if (draw.bones != nullptr && draw.boneCount > 0) {
+                    item.boundsMin = draw.poseMin;
+                    item.boundsMax = draw.poseMax;
+                    item.boneBase = bonePalette_.add(draw.bones, draw.boneCount);
+                }
             }
             item.tint = draw.tint;
             // A terrain chunk is opaque, drawn alone, and sorted after every
@@ -1977,6 +1988,10 @@ void Renderer::findVisible(const MeshDraw* meshes, int count, const CameraView& 
                 item.slot = draw.slot;
             }
         }
+        // Once a frame, before any pass: the geometry, see-through, and shadow
+        // passes all read it, on its own unit.
+        boneTexture_.upload(bonePalette_);
+        shadows_.setDrawItems(drawItems_.data());
         FindVisible(drawItems_.data(), count, camera, culling_, visibility_);
         // A draw that names its LOD (Brush Materials) keeps it.
         for (std::vector<VisibleDraw>* list : {&visibility_.opaque, &visibility_.transparent}) {
@@ -2713,6 +2728,7 @@ void Renderer::shutdown() {
     environment_.shutdown();
     shadows_.shutdown();
     instances_.destroy();
+    boneTexture_.destroy();
     skyReady_ = false;
     skyVisible_ = false;
     dynamicSkyBuilt_ = false;

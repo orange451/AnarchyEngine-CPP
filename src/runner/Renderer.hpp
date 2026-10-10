@@ -6,6 +6,8 @@
 #include "EnvironmentMap.hpp"
 #include "GpuTimer.hpp"
 #include "GridBands.hpp"
+#include "BonePalette.hpp"
+#include "BoneTexture.hpp"
 #include "InstanceBuffer.hpp"
 #include "Matrix4.hpp"
 #include "SceneDepth.hpp"
@@ -103,6 +105,19 @@ struct MeshDraw {
     unsigned terrainSurfaceB = 0;
     unsigned terrainSurfaceC = 0;
     int terrainLayerCount = 0;
+    // Its mesh shares the Prefab's skeleton (engine_core::VisualMesh::skinned),
+    // so the pose of the GameObject drawing it moves it.
+    bool skinned = false;
+    // That pose's skinning matrices (engine_core::Pose::palette), 12 floats a
+    // bone, valid for the frame; null draws the mesh unposed, in its bind
+    // pose. Draws that share a palette pack it once.
+    const float* bones = nullptr;
+    int boneCount = 0;
+    // With bones: the mesh's own box grown to take in the posed bones (each
+    // origin and its cull radius), in the mesh's space, which culling reads
+    // in place of the mesh's box.
+    float poseMin[3] = {0.f, 0.f, 0.f};
+    float poseMax[3] = {0.f, 0.f, 0.f};
 };
 
 // A Terrain's look table: a 256 x 4 GL_RGBA32F texture, GL_NEAREST, from
@@ -910,6 +925,9 @@ private:
     std::vector<ViewLight> viewLights_;
     DrawBatches batches_;
     InstanceBuffer instances_;
+    // The frame's skinning matrices, packed in findVisible, and their texture.
+    BonePalette bonePalette_;
+    BoneTexture boneTexture_;
     std::vector<DrawItem> drawItems_;
     VisibilityResult visibility_;
     bool culling_ = true;

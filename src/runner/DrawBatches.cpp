@@ -47,6 +47,7 @@ InstanceData MakeInstance(const DrawItem& item) {
         const float tint = item.tint != nullptr ? item.tint[channel] : 1.f;
         data.tint[channel] = engine_core::srgb_to_linear(tint);
     }
+    data.boneBase = static_cast<float>(item.boneBase);
     return data;
 }
 

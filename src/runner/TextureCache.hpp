@@ -82,8 +82,9 @@ public:
     // The resources folder paths are under. Empty loads nothing. Another root clears the cache.
     void setRoot(const std::filesystem::path& root);
     // The GL texture for path, relative to the root with '/' between names,
-    // drawn as usage, or 0 while it has nothing to show (the renderer then
-    // draws its own white, or flat normal, in its place). Mipmapped and
+    // drawn as usage. While it loads, a Color texture is loadingPlaceholder()
+    // (mid grey) and any other is 0, as is a missing or broken file (the
+    // renderer draws its own white, or flat normal, for 0). Mipmapped and
     // repeating. flipY puts the image's top row at v 0. alwaysLoaded (a
     // Texture whose Streaming is AlwaysLoaded) shows it only once every
     // level is uploaded, never blurry.
@@ -96,6 +97,9 @@ public:
     // has not failed): a caller drawing once, not every frame, draws again
     // later.
     bool loading() const;
+    // What get gives a Color texture still loading: 1 by 1 mid grey, so a
+    // surface reads as loading, not as white. 0 before the first such get.
+    unsigned loadingPlaceholder() const { return grey_; }
     // The same file decoded by DecodeLinearTexture, for a Skybox: RGBA16F,
     // mipmapped, repeating across and clamped at the poles. Kept apart from
     // get's upload of the same path.
@@ -154,6 +158,8 @@ private:
     // get's textures, by path, usage, and flip.
     std::unordered_map<std::string, Streamed> streamed_;
     std::shared_ptr<Loads> loads_;
+    // 1 by 1 mid grey, what a Color texture draws while it loads; made on first need.
+    unsigned grey_ = 0;
     // Each by flipY: [0] upright, [1] flipped.
     std::unordered_map<std::string, Entry> environments_[2];
 };

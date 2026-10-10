@@ -3169,10 +3169,11 @@ int main(int argc, char** argv) {
             // Streamed: 0 until its first levels land, which takes pumping.
             const auto settle = [&](const std::string& path, Usage usage, bool alwaysLoaded = false) {
                 unsigned texture = 0;
-                for (int pass = 0; pass < 500 && texture == 0; ++pass) {
+                for (int pass = 0; pass < 500 && (texture == 0 || texture == textures.loadingPlaceholder()); ++pass) {
                     textures.pump();
                     texture = textures.get(path, usage, false, alwaysLoaded);
-                    if (texture == 0) std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                    if (texture == 0 || texture == textures.loadingPlaceholder())
+                        std::this_thread::sleep_for(std::chrono::milliseconds(10));
                 }
                 for (int pass = 0; pass < 500 && textures.loading(); ++pass) {
                     textures.pump();
@@ -3182,7 +3183,11 @@ int main(int argc, char** argv) {
             };
             Expect(textures.get("textures/stripes.tga", Usage::Color) == 0, "no root loads no texture");
             textures.setRoot(root);
-            Expect(textures.get("textures/stripes.tga", Usage::Color) == 0, "a texture is not there before it loads");
+            {
+                const unsigned first = textures.get("textures/stripes.tga", Usage::Color);
+                Expect(first != 0 && first == textures.loadingPlaceholder(),
+                       "a Color texture draws the grey placeholder until it loads");
+            }
             const unsigned stripes = settle("textures/stripes.tga", Usage::Color);
             Expect(stripes != 0, "the texture loads from the resources folder");
             Expect(textures.get("textures/stripes.tga", Usage::Color) == stripes, "a second get is the same upload");
@@ -3207,12 +3212,13 @@ int main(int argc, char** argv) {
                 };
                 unsigned blurry = 0;
                 int firstBase = -1;
-                for (int pass = 0; pass < 500 && blurry == 0; ++pass) {
+                for (int pass = 0; pass < 500 && (blurry == 0 || blurry == textures.loadingPlaceholder()); ++pass) {
                     textures.pump(1);
                     blurry = textures.get("textures/big.ppm", Usage::Color);
-                    if (blurry == 0) std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                    if (blurry == 0 || blurry == textures.loadingPlaceholder())
+                        std::this_thread::sleep_for(std::chrono::milliseconds(10));
                 }
-                if (blurry != 0) firstBase = baseLevel(blurry);
+                if (blurry != 0 && blurry != textures.loadingPlaceholder()) firstBase = baseLevel(blurry);
                 Expect(blurry != 0 && firstBase > 0, "an Automatic texture shows blurry first (base level " +
                                                          std::to_string(firstBase) + ")");
                 bool partial = false;
@@ -3220,7 +3226,7 @@ int main(int argc, char** argv) {
                 for (int pass = 0; pass < 500; ++pass) {
                     textures.pump(1);
                     whole = textures.get("textures/big2.ppm", Usage::Color, false, true);
-                    if (whole != 0) {
+                    if (whole != 0 && whole != textures.loadingPlaceholder()) {
                         partial = partial || baseLevel(whole) != 0;
                         break;
                     }

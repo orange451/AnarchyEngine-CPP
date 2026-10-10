@@ -249,6 +249,62 @@ void Bake(texture::TexturePool& pool, const LoadsPtr& loads, const MeshLoad& job
     (void)pool;
 }
 
+// A texture with no cache file, at the small-levels priority: decodes it,
+// builds its mips, and posts the levels up to 64 a side at once, so it shows
+// (blurry) without waiting behind every terrain bake. Compressing the larger
+// levels, and writing the cache file, follow at the bake priority.
+void Preview(texture::TexturePool& pool, const LoadsPtr& loads, const MeshLoad& job) {
+    std::string why;
+    std::optional<texture::DecodedImage> image = texture::decode_image_file(job.source, why);
+    if (!image) {
+        std::lock_guard<std::mutex> lock(loads->mutex);
+        loads->failures.push_back({job.name, job.key, job.source.u8string() + ": " + why});
+        return;
+    }
+    if (job.flipY) {
+        FlipRows(image->rgba, std::size_t(image->width) * 4, image->height);
+    }
+    bool hasAlpha = false;
+    for (std::size_t i = 3; i < image->rgba.size() && !hasAlpha; i += 4) hasAlpha = image->rgba[i] != 255;
+    auto baked = std::make_shared<texture::BakedTexture>();
+    baked->width = image->width;
+    baked->height = image->height;
+    baked->formats = {texture::format_for(job.usage, hasAlpha)};
+    auto mips = std::make_shared<std::vector<std::vector<std::uint8_t>>>(
+        texture::build_mips(job.usage, std::move(image->rgba), image->width, image->height));
+    baked->planes.assign(1, std::vector<std::vector<std::uint8_t>>(mips->size()));
+    texture::AtexHeader header;
+    header.width = baked->width;
+    header.height = baked->height;
+    header.levels = static_cast<int>(mips->size());
+    header.formats = baked->formats;
+    const auto encode = [baked, mips](int level) {
+        const int w = std::max(1, baked->width >> level), h = std::max(1, baked->height >> level);
+        baked->planes[0][std::size_t(level)] =
+            texture::encode_level(baked->formats[0], (*mips)[std::size_t(level)].data(), w, h);
+    };
+    const std::vector<std::vector<int>> batches = texture::streaming_batches(header.width, header.height, header.levels);
+    const bool small = !batches.empty() &&
+                       std::max(header.width >> batches[0].back(), header.height >> batches[0].back()) <= 64;
+    if (small) {
+        for (int level : batches[0]) {
+            encode(level);
+            loads->post(LevelOf(job, header, level, baked->planes[0][std::size_t(level)]));
+        }
+    }
+    pool.submit(texture::JobPriority::MeshBake, [loads, job, baked, header, batches, small, encode] {
+        if (loads->stopped()) return;
+        for (std::size_t b = small ? 1 : 0; b < batches.size(); ++b) {
+            for (int level : batches[b]) {
+                encode(level);
+                loads->post(LevelOf(job, header, level, baked->planes[0][std::size_t(level)]));
+            }
+        }
+        std::string error;
+        texture::write_atex(job.cache, *baked, error);   // next time reads it; a failure costs only that
+    });
+}
+
 void ReadBatches(texture::TexturePool& pool, const LoadsPtr& loads, const MeshLoad& job,
                  const texture::AtexHeader& header, std::vector<std::vector<int>> batches, std::size_t next) {
     if (loads->stopped() || next >= batches.size()) return;
@@ -268,8 +324,8 @@ void ReadBatches(texture::TexturePool& pool, const LoadsPtr& loads, const MeshLo
     }
 }
 
-// The first step: the cache file's small levels, or, with none, a bake at
-// the bake priority (after every terrain first look).
+// The first step: the cache file's small levels, or, with none, a preview
+// (its small levels decoded now, the rest baked later).
 void FirstLook(texture::TexturePool& pool, const LoadsPtr& loads, const MeshLoad& job) {
     if (loads->stopped()) return;
     const std::optional<texture::AtexHeader> header = texture::read_atex_header(job.cache);
@@ -282,7 +338,7 @@ void FirstLook(texture::TexturePool& pool, const LoadsPtr& loads, const MeshLoad
         std::error_code error;
         std::filesystem::remove(job.cache, error);   // stale or broken: baked again
     }
-    pool.submit(texture::JobPriority::MeshBake, [&pool, loads, job] { Bake(pool, loads, job); });
+    Preview(pool, loads, job);
 }
 
 }  // namespace
@@ -318,6 +374,10 @@ void TextureCache::clear() {
         }
     }
     streamed_.clear();
+    if (grey_ != 0) {
+        glDeleteTextures(1, &grey_);
+        grey_ = 0;
+    }
     // Loads still running post into the old Loads, which nothing reads now.
     {
         std::lock_guard<std::mutex> lock(loads_->mutex);
@@ -354,7 +414,23 @@ unsigned TextureCache::get(const std::string& path, texture::Usage usage, bool f
         streamed.checked = now;
         check(streamed);
     }
-    return streamed.visible ? streamed.texture : streamed.old;
+    if (streamed.visible) return streamed.texture;
+    if (streamed.old != 0) return streamed.old;
+    // Still loading: a Color texture draws mid grey meanwhile, as terrain
+    // does, so a surface reads as loading rather than as a white material.
+    // Other usages, and a file that is missing or failed, draw the
+    // renderer's own default (0).
+    if (usage != texture::Usage::Color || streamed.key.empty() || streamed.failed) return 0;
+    if (grey_ == 0) {
+        const std::uint8_t pixel[4] = {128, 128, 128, 255};
+        glGenTextures(1, &grey_);
+        glBindTexture(GL_TEXTURE_2D, grey_);
+        glTexImage2D(GL_TEXTURE_2D, 0, static_cast<GLint>(GL_RGBA8), 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixel);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, static_cast<GLint>(GL_LINEAR));
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, static_cast<GLint>(GL_LINEAR));
+        glBindTexture(GL_TEXTURE_2D, 0);
+    }
+    return grey_;
 }
 
 void TextureCache::check(Streamed& streamed) {

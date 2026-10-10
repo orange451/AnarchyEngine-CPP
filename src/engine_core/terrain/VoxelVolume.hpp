@@ -76,7 +76,7 @@ public:
     // with no size limit. Chunks whose Id mask lacks from are skipped
     // untouched. Returns how many chunks changed.
     std::size_t replace_everywhere(std::uint8_t from, std::uint8_t to);
-    // Cells min..max inclusive, x fastest: distances in studs, Ids.
+    // Cells min..max inclusive, x fastest: distances in units, Ids.
     std::optional<std::string> read(CellCoord min, CellCoord max, std::vector<float>& distances,
                                     std::vector<std::uint8_t>& materials) const;
     std::optional<std::string> write(CellCoord min, CellCoord max, const std::vector<float>& distances,

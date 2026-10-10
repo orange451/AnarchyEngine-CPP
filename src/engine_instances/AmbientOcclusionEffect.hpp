@@ -18,7 +18,7 @@ namespace engine_core {
 // Intensity  number              an exponent on how open a surface is: 1 is
 //                                physical, above 1 darker, 0 none. 1, from 0
 //                                to kMaxIntensity.
-// Radius     number              how far, in studs, an occluder still counts;
+// Radius     number              how far, in units, an occluder still counts;
 //                                it fades over the last 60%. 1, from 0 to
 //                                kMaxRadius.
 // Quality    Enum.EffectQuality  Low and Medium shade at half resolution,

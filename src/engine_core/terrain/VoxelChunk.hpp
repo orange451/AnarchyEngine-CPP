@@ -41,8 +41,8 @@ struct Cell {
 // run per cell of every edit) can fold them in rather than crossing a
 // translation unit for a few bytes of math each time.
 
-inline std::int8_t quantize(float studs, float voxel_size) {
-    const float scaled = studs / (kBandCells * voxel_size) * 127.f;
+inline std::int8_t quantize(float distance, float voxel_size) {
+    const float scaled = distance / (kBandCells * voxel_size) * 127.f;
     const float clamped = std::clamp(scaled, -127.f, 127.f);
     return static_cast<std::int8_t>(std::lround(clamped));
 }

@@ -16,7 +16,7 @@ namespace engine_core {
 // Enabled       boolean  false traces nothing. True.
 // Intensity     number   how much of the sky reflection the traced one
 //                        replaces, 1. From 0 to kMaxIntensity.
-// MaxDistance   number   how far a ray may travel, in studs, 50; it fades
+// MaxDistance   number   how far a ray may travel, in units, 50; it fades
 //                        out over the last quarter. From 0 to kMaxMaxDistance.
 // MaxRoughness  number   rougher surfaces keep the sky reflection, 0.3; it
 //                        fades in over the last fifth below. From 0 to 1.

@@ -16,7 +16,7 @@ namespace engine_core {
 //
 // Transform  Matrix4             identity. Saved. Where the handles sit.
 // Space      Enum.TransformSpace   World. Saved. Local follows the Transform's rotation.
-// Increment  number              0. Saved. Snap step in studs; 0 is none.
+// Increment  number              0. Saved. Snap step in units; 0 is none.
 // Dragging   boolean             read-only.
 //
 // DragBegan(handle), Dragged(handle, offset), DragEnded(handle): handle an

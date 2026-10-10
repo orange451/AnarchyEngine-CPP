@@ -151,7 +151,7 @@ struct VisualReflections {
     bool present = false;
     bool enabled = true;
     float intensity = 1.f;
-    // Studs.
+    // Units.
     float max_distance = 50.f;
     float max_roughness = 0.3f;
 };
@@ -162,7 +162,7 @@ struct VisualAmbientOcclusion {
     bool present = false;
     bool enabled = true;
     float intensity = 1.f;
-    // Studs.
+    // Units.
     float radius = 1.f;
     // Enum.EffectQuality's value: Low 0, Medium 1, High 2.
     int quality = 1;

@@ -46,7 +46,7 @@ std::string scene_service_guid(std::string_view class_name);
 // script may set it too; the views do not follow a script's write.
 //
 // Gravity is how fast PhysicsWorld speeds every body and PlayerController
-// downward, in studs per second per second: a saved registry property
+// downward, in units per second per second: a saved registry property
 // (lua_saved_property), so it is saved, undone, and restored at Stop. Below 0
 // pulls up; 0 is none. A change during play takes effect on the next step.
 class Workspace : public SceneService {

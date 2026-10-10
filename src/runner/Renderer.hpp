@@ -180,7 +180,7 @@ struct LightDraw {
     // own meshes cast nothing for it. 0 for none: its map is drawn every frame.
     std::uint64_t id = 0;
     bool shadows = false;
-    // A DirectionalLight's: studs from the camera its cascades cover.
+    // A DirectionalLight's: units from the camera its cascades cover.
     float shadowDistance = 100.f;
 };
 
@@ -235,7 +235,7 @@ struct SceneBloom {
 struct SceneReflections {
     bool enabled = false;
     float intensity = 1.f;
-    // Studs.
+    // Units.
     float maxDistance = 50.f;
     float maxRoughness = 0.3f;
 };
@@ -247,7 +247,7 @@ enum class SceneQuality { Low = 0, Medium = 1, High = 2 };
 struct SceneOcclusion {
     bool enabled = false;
     float intensity = 1.f;
-    // Studs.
+    // Units.
     float radius = 1.f;
     SceneQuality quality = SceneQuality::Medium;
 };
@@ -271,7 +271,7 @@ struct SceneDynamicSky {
     float moonColor[3] = {0.f, 0.f, 0.f};
     float cloudCover = 0.5f;
     float cloudDensity = 0.5f;
-    // Studs drifted across X and Z.
+    // Units drifted across X and Z.
     float cloudOffset[2] = {0.f, 0.f};
     // Degrees across.
     float sunSizeDegrees = 2.f;

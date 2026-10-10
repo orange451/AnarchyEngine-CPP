@@ -1002,6 +1002,11 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
         "Where this is in the world: Offset, measured from the parent PVInstance as OffsetSpace says. Writing it "
         "sets Offset.",
         "Matrix4", false, {});
+    add("Bone", "Offset",
+        "Turns and moves the bone this Bone is named for, after its own pose: the bones below it move with it.",
+        "Matrix4", false, {});
+    add("Bone", "Transform",
+        "Where the bone this Bone is named for is in the world, posed. Writing it sets Offset.", "Matrix4", false, {});
     add("Camera", "FieldOfView",
         "How many degrees this camera sees from bottom to top, from 1 to 120. A Scene View linked to it draws with it.",
         "number", false, {});

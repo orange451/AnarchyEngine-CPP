@@ -3,6 +3,7 @@
 #include "AmbientOcclusionEffect.hpp"
 #include "AssetInstances.hpp"
 #include "Attachment.hpp"
+#include "Bone.hpp"
 #include "BloomEffect.hpp"
 #include "Camera.hpp"
 #include "ChangeHistoryService.hpp"
@@ -199,6 +200,7 @@ DataModel& create_player_controller(DataModel& world) { return world.create<Play
 
 DataModel& create_sound_emitter(DataModel& world) { return world.create<SoundEmitter>(); }
 DataModel& create_attachment(DataModel& world) { return world.create<Attachment>(); }
+DataModel& create_bone(DataModel& world) { return world.create<Bone>(); }
 DataModel& create_dragger(DataModel& world) { return world.create<Dragger>(); }
 DataModel& create_wireframe(DataModel& world) { return world.create<WireframeAdornment>(); }
 DataModel& create_skybox(DataModel& world) { return world.create<Skybox>(); }
@@ -245,6 +247,7 @@ ANARCHY_LUA_REGISTER(register_creatable_instances) {
     register_lua_creatable("PlayerController", create_player_controller);
     register_lua_creatable("SoundEmitter", create_sound_emitter);
     register_lua_creatable("Attachment", create_attachment);
+    register_lua_creatable("Bone", create_bone);
     register_lua_creatable("Dragger", create_dragger);
     register_lua_creatable("WireframeAdornment", create_wireframe);
     register_lua_creatable("Skybox", create_skybox);

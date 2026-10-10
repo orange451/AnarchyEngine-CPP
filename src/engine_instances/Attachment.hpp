@@ -44,7 +44,7 @@ public:
     // SimulationThread. Each returns why it refused the value, changing nothing.
     std::optional<std::string> set_offset(const Matrix4& offset);
     std::optional<std::string> set_offset_space(int space);
-    std::optional<std::string> set_transform(const Matrix4& transform);
+    virtual std::optional<std::string> set_transform(const Matrix4& transform);
     std::optional<std::string> set_pv_transform(const Matrix4& transform) override { return set_transform(transform); }
 
 protected:

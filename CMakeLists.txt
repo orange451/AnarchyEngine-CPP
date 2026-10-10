@@ -597,6 +597,7 @@ add_library(engine_instances STATIC
     src/engine_instances/Skybox.cpp
     src/engine_instances/SoundEmitter.cpp
     src/engine_instances/Attachment.cpp
+    src/engine_instances/Bone.cpp
     src/engine_instances/Dragger.cpp
     src/engine_instances/WireframeAdornment.cpp
     src/engine_instances/Brush.cpp
@@ -1045,6 +1046,7 @@ add_executable(sandbox
     sandbox/terrain_blend_tests.cpp
     sandbox/texture_streaming_tests.cpp
     sandbox/skeleton_tests.cpp
+    sandbox/bone_tests.cpp
 )
 target_link_libraries(sandbox PRIVATE studio_core Catch2::Catch2WithMain)
 # The dense views tests check flecs state the engine keeps private.

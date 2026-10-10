@@ -2,9 +2,13 @@
 
 #include "SpatialObject.hpp"
 #include "InstanceRef.hpp"
+#include "Skeleton.hpp"
 
+#include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace engine_core {
 
@@ -47,6 +51,14 @@ public:
     // returns why and changes nothing.
     std::optional<std::string> set_scale(double value);
 
+    // How the Prefab's skeleton (prefab_skeleton) stands for this GameObject:
+    // its rest pose with each Bone child's Offset added, the first Bone of
+    // each name posing that bone. Null when the Prefab has no skeleton.
+    // Shared and immutable; made again only when the skeleton, or a Bone
+    // child's Name, Offset, or order, has changed since the last call. Needs
+    // the DataModel lock; a read lock is enough.
+    std::shared_ptr<const Pose> pose() const;
+
 protected:
     void on_reuse() override;
 
@@ -55,6 +67,11 @@ private:
     ColorRgb color_ = kDefaultColor;
     double transparency_ = kDefaultTransparency;
     double scale_ = kDefaultScale;
+
+    // pose, as last made, and what it was made from.
+    mutable std::mutex pose_mutex_;
+    mutable std::shared_ptr<const Pose> pose_;
+    mutable std::vector<PoseInput> pose_inputs_;
 };
 
 }  // namespace engine_core

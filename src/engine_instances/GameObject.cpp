@@ -1,9 +1,12 @@
 #include "GameObject.hpp"
 
+#include "Bone.hpp"
 #include "Containment.hpp"
 #include "LuaApi.hpp"
 #include "PropertyBag.hpp"
+#include "Skinning.hpp"
 
+#include <algorithm>
 #include <cmath>
 
 namespace engine_core {
@@ -95,12 +98,50 @@ std::optional<std::string> GameObject::set_scale(double value) {
     return std::nullopt;
 }
 
+std::shared_ptr<const Pose> GameObject::pose() const {
+    std::shared_ptr<const Skeleton> skeleton = alive(id_) ? prefab_skeleton(*this, prefab_guid()) : nullptr;
+    if (skeleton == nullptr) {
+        std::lock_guard<std::mutex> lock(pose_mutex_);
+        pose_.reset();
+        pose_inputs_.clear();
+        return nullptr;
+    }
+    std::vector<PoseInput> inputs;
+    std::vector<bool> claimed(skeleton->bones.size(), false);
+    for (InstanceId child = first_child(id_); child != 0; child = next_sibling(child)) {
+        const auto* bone = dynamic_cast<const Bone*>(instance(child));
+        if (bone == nullptr) {
+            continue;
+        }
+        const int index = skeleton->find(name(child));
+        if (index < 0 || claimed[static_cast<std::size_t>(index)]) {
+            continue;
+        }
+        claimed[static_cast<std::size_t>(index)] = true;
+        inputs.push_back({static_cast<std::uint16_t>(index), bone->offset(), child});
+    }
+    std::lock_guard<std::mutex> lock(pose_mutex_);
+    const auto same_input = [](const PoseInput& a, const PoseInput& b) {
+        return a.bone == b.bone && a.owner == b.owner && same_matrix4(a.offset, b.offset);
+    };
+    if (pose_ != nullptr && pose_->skeleton == skeleton &&
+        std::equal(inputs.begin(), inputs.end(), pose_inputs_.begin(), pose_inputs_.end(), same_input)) {
+        return pose_;
+    }
+    pose_ = std::make_shared<const Pose>(compute_pose(std::move(skeleton), inputs));
+    pose_inputs_ = std::move(inputs);
+    return pose_;
+}
+
 void GameObject::on_reuse() {
     SpatialObject::on_reuse();
     prefab_ref_.set_guid(std::string());
     color_ = kDefaultColor;
     transparency_ = kDefaultTransparency;
     scale_ = kDefaultScale;
+    std::lock_guard<std::mutex> lock(pose_mutex_);
+    pose_.reset();
+    pose_inputs_.clear();
 }
 
 namespace {

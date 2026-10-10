@@ -74,7 +74,7 @@ bool near(float a, float b) { return std::abs(a - b) <= 1e-3f; }
 
 // The Move tool loaded, and a camera at the origin looking down -Z with a 90
 // degree view, 200 x 200 points: handles at (0, 0, -10) put the X arrow along
-// screen y = 100 from x = 100 to 200, and 20 points drag 2 studs.
+// screen y = 100 from x = 100 to 200, and 20 points drag 2 units.
 struct MoveRig {
     ScriptRig rig;
     ide::PluginLoader loader;

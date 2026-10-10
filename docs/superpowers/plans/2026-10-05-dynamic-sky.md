@@ -572,6 +572,7 @@ git commit -m "Add SkyMath: the dynamic sky's sun, moon, stars, light, and light
   - getters: `double time_of_day()`, `latitude()`, `brightness()`, `cloud_cover()`, `cloud_density()`, `sun_size()`, `moon_size()`; `bool shadows()`; `Vec3 wind_direction()`; `LuaSlot sun_texture()`, `moon_texture()`; `EffectQuality reflection_quality()`
   - setters `set_*`, each returning `std::optional<std::string>`; `set_reflection_quality(int)`
   - constants: `kDefaultTimeOfDay` 14, `kDefaultLatitude` 35, `kMaxLatitude` 90, `kDefaultBrightness` 3, `kMaxBrightness` 20, `kDefaultShadows` true, `kDefaultCloudCover` 0.5, `kDefaultCloudDensity` 0.5, `kDefaultWindDirection` {1, 0, 0.3}, `kDefaultSunSize` 2, `kDefaultMoonSize` 2, `kMinBodySize` 0.1, `kMaxBodySize` 20, `kDefaultReflectionQuality` `EffectQuality::Medium`
+  - Defaults changed in 2d00273 to Brightness 2, SunSize/MoonSize 4.
 
 - [ ] **Step 1: Write the failing tests**
 

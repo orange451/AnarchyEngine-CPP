@@ -174,7 +174,7 @@ ANARCHY_LUA_REGISTER(register_color3_lua) {
     const LuaField fields[] = {
         lua_property("R", "number", false, nullptr, nullptr), lua_property("G", "number", false, nullptr, nullptr),
         lua_property("B", "number", false, nullptr, nullptr), lua_method("Lerp", "Color3", nullptr),
-        lua_method("ToHSV", "number", nullptr),               lua_method("ToHex", "string", nullptr),
+        lua_method("ToHSV", nullptr, nullptr),                lua_method("ToHex", "string", nullptr),
     };
     register_lua_class("Color3", nullptr, fields, static_cast<int>(sizeof(fields) / sizeof(fields[0])));
     for (const char* constructor : {"new", "fromRGB", "fromHSV", "fromHex"}) {

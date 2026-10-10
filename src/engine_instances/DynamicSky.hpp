@@ -25,7 +25,7 @@ namespace engine_core {
 // Shadows            boolean             whether the sun or moon light casts shadows. True.
 // CloudCover         number              how much of the sky has cloud, 0 to 1. 0.3.
 // CloudDensity       number              how thick the clouds are, 0 to 1. 0.
-// WindDirection      Vector3             the clouds' drift, studs per second; Y is ignored.
+// WindDirection      Vector3             the clouds' drift, units per second; Y is ignored.
 // SunTexture         Texture?            drawn in place of the sun's disc. Nil.
 // MoonTexture        Texture?            drawn in place of the moon's disc. Nil.
 // SunSize, MoonSize  number              degrees across, kMinBodySize to kMaxBodySize. 4.

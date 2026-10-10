@@ -32,9 +32,16 @@ public:
     // bind() is engine-permanent: stop_simulation leaves it in place, and only
     // unbind() takes it out.
     JobId bind(Phase phase, Job job, int priority = 2000);
-    // The job does not run again. Its closure is released now, or at the next
-    // cancel_session_jobs when it is the job running on this thread.
+    // The job does not run again. A simulation-phase closure is released now,
+    // or at the next cancel_session_jobs when it is the job running on this
+    // thread. A render-phase entry keeps its closure and its slot until
+    // shutdown: the render thread may be inside it, and jobs_ is iterated
+    // there without a lock. Bind a render job once and keep it; each phase
+    // holds the entries Engine reserved (64), and bind past that aborts.
     void unbind(JobId id);
+    // Read-only: jobs held in a phase (render entries stay after unbind) and the capacity reserved for it.
+    std::size_t bound_count(Phase phase) const { return jobs_[static_cast<int>(phase)].size(); }
+    std::size_t phase_capacity(Phase phase) const { return jobs_[static_cast<int>(phase)].capacity(); }
     // Dropped by stop_simulation. A script job uses this, not bind().
     void bind_session(Phase phase, Job job, int priority = 2000);
     void cancel_session_jobs();

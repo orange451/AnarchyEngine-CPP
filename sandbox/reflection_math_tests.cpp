@@ -75,7 +75,7 @@ TEST_CASE("RM5 the cone level grows with roughness and distance, from 0 for a mi
 }
 
 TEST_CASE("RM6 a step hits when the ray's depth across it reaches the surface, even jumping past it", "[reflections]") {
-    // Surface 10 studs away, 0.3 thick.
+    // Surface 10 units away, 0.3 thick.
     REQUIRE(StepHits(9.f, 10.1f, 10.f, 0.3f));
     // A long stride from in front of the surface to far behind it still hits:
     // the ray passed through it during the step.

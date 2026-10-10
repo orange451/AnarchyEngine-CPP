@@ -2003,3 +2003,17 @@ TEST_CASE("A60 plugin and what it makes are declared", "[A60]") {
     INFO(dump(analysis.diagnostics(script.id())));
     REQUIRE_FALSE(analysis.diagnostics(script.id()).empty());
 }
+
+TEST_CASE("A61 Color3:ToHSV returns three numbers to the type checker", "[A61]") {
+    ScriptRig rig;
+    engine_core::ScriptAnalysis analysis(rig.game);
+    engine_core::Script& script = add_script(rig.game, "Hsv", R"(--!strict
+local color = Color3.new(0.2, 0.4, 0.6)
+local h, s, v = color:ToHSV()
+local h2, s2, v2 = Color3.toHSV(color)
+print(h * 2, s * 2, v * 2, h2 * 2, s2 * 2, v2 * 2)
+)");
+    settle(analysis);
+    INFO(dump(analysis.diagnostics(script.id())));
+    REQUIRE_FALSE(has_code(analysis.diagnostics(script.id()), "Type"));
+}

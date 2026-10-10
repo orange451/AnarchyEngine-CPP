@@ -135,7 +135,7 @@ ANARCHY_LUA_REGISTER(register_screen_space_reflections_lua) {
                    0.0, SSR::kMaxIntensity),
         lua_slider(lua_saved_property("MaxDistance", "number", read_number<&SSR::max_distance>,
                                       write_number<&SSR::set_max_distance>, max_distance.c_str()),
-                   0.0, 200.0),
+                   0.0, SSR::kMaxMaxDistance),
         lua_slider(lua_saved_property("MaxRoughness", "number", read_number<&SSR::max_roughness>,
                                       write_number<&SSR::set_max_roughness>, max_roughness.c_str()),
                    0.0, SSR::kMaxMaxRoughness),

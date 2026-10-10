@@ -379,6 +379,7 @@ public:
     Signal& property_changed(InstanceId id, Field field);
     Signal& child_added(InstanceId id);
     Signal& child_removed(InstanceId id);
+    // C++ only, as child_added and child_removed are; scripts see Changed alone. See sandbox SG9.
     Signal& ancestry_changed(InstanceId id);
     // An event the instance's class declares with lua_event, such as a Button's
     // Action, made on first use. name is the field's name.

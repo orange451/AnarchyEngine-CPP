@@ -51,7 +51,7 @@ inline float shape_box_distance(Vec3 q, Vec3 half) {
 
 }  // namespace detail
 
-// Signed distance from local point p to the shape's surface, in studs;
+// Signed distance from local point p to the shape's surface, in units;
 // negative inside. Inline: called once per cell of every edit (VoxelVolume's
 // hot path), so a cross-translation-unit call per cell is worth avoiding.
 inline float shape_distance(const Shape& shape, Vec3 p) {

@@ -617,8 +617,8 @@ TEST_CASE("TW3 an edit re-meshes only the chunks it touched and their neighbors"
     Game game;
     Terrain& t = terrain_in_workspace(game);
     REQUIRE_FALSE(t.edit_volume([&](VoxelVolume& v) { return v.fill(ball_at(5.f, 5.f, 5.f, 4.f), 0); }));
-    // (208, 16, 16) sits in the middle of chunk {6, 0, 0} (16 studs from every
-    // face), so the grown ball's band (radius 6 + the 4-cell band = 10 studs)
+    // (208, 16, 16) sits in the middle of chunk {6, 0, 0} (16 units from every
+    // face), so the grown ball's band (radius 6 + the 4-cell band = 10 units)
     // never reaches a second chunk on any axis -- unlike a center near 0,
     // where the band alone can cross the origin's chunk seam on two axes at
     // once and legitimately dirty more than one chunk's neighborhood.
@@ -744,8 +744,8 @@ TEST_CASE("TW7 a mesh from a Terrain's previous stay in Workspace is dropped, no
     // runs only for a job in collider interest).
     world.update(game);
     world.set_collider_interest(t.id(), {ChunkCoord{0, 0, 0}});
-    // Dead center of chunk {0,0,0} (32 studs on a side): radius 4 plus the
-    // 4-cell band stays 8 studs clear of every face, so this edit dirties
+    // Dead center of chunk {0,0,0} (32 units on a side): radius 4 plus the
+    // 4-cell band stays 8 units clear of every face, so this edit dirties
     // only that one chunk.
     REQUIRE_FALSE(t.edit_volume([&](VoxelVolume& v) { return v.fill(ball_at(16.f, 16.f, 16.f, 4.f), 0); }));
     world.update(game);   // the edit's job, in collider interest: blocks
@@ -855,7 +855,7 @@ namespace {
 
 using physics_rig::PhysicsRig;
 
-// A block of solid whose top is at y = 0: size studs across, depth deep.
+// A block of solid whose top is at y = 0: size units across, depth deep.
 Shape slab(float size, float depth) {
     Shape s;
     s.kind = Shape::Kind::Block;
@@ -1399,7 +1399,7 @@ TEST_CASE("CS6 a body moved next to a chunk with a collider still gets its own c
 
 namespace {
 
-// A rolling slab over 16 x 16 chunks (512 x 512 studs), built as a sum of
+// A rolling slab over 16 x 16 chunks (512 x 512 units), built as a sum of
 // balls whose centers rise and fall: its top wanders across y = 32 and its
 // bottom across y = 0, so most columns have surface in two or more chunks.
 void fill_rolling_slab(VoxelVolume& volume) {

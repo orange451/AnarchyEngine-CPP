@@ -453,6 +453,9 @@ TEST_CASE("P14 scripts set Shape by item, name, or value, and nothing else", "[p
             and not pcall(function() body.Shape = Enum.KeyCode.A end)
             and not pcall(function() body.Shape = Vector3.new() end)
             and body.Shape == Enum.PhysicsShape.Hull
+        _G.whole_only = not pcall(function() body.Shape = 1.9 end)
+            and not pcall(function() body.Shape = 0 / 0 end)
+            and body.Shape == Enum.PhysicsShape.Hull
         local part = Instance.new("GameObject", workspace)
         body.GameObject = part
         _G.ref = body.GameObject == part
@@ -463,6 +466,11 @@ TEST_CASE("P14 scripts set Shape by item, name, or value, and nothing else", "[p
     rig.game.start_simulation();
     rig.frames(1, 0.05);
     INFO(rig.runtime.last_error());
+    {
+        bool whole_only = false;
+        REQUIRE(rig.runtime.global_boolean("whole_only", whole_only));
+        REQUIRE(whole_only);
+    }
     for (const char* name : {"default", "item", "name", "value", "refused", "ref", "mass"}) {
         INFO(name);
         bool value = false;
@@ -1517,11 +1525,11 @@ TEST_CASE("P39 b3RayCastMesh on the SAH and median-split BVHs matches brute-forc
         build_noisy_sphere(positions, triangles);
         REQUIRE(triangles.size() / 3 >= 2000);
 
-        // Guaranteed hits: a ray from 30 studs out (well past the sphere's
-        // radius, up to about 11.5) toward within 3 studs of the center
+        // Guaranteed hits: a ray from 30 units out (well past the sphere's
+        // radius, up to about 11.5) toward within 3 units of the center
         // must cross the surface. Guaranteed misses: a ray from the same
-        // shell to a point at most 8 studs away from where it started never
-        // comes within 30 - 8*sqrt(3) (about 16) studs of the center.
+        // shell to a point at most 8 units away from where it started never
+        // comes within 30 - 8*sqrt(3) (about 16) units of the center.
         std::mt19937_64 random(4242);
         std::uniform_real_distribution<float> near_center(-3.f, 3.f);
         std::uniform_real_distribution<float> small_offset(-8.f, 8.f);

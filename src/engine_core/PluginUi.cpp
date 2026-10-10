@@ -232,7 +232,6 @@ void PluginUi::activate(std::uint32_t serial) {
     }
     active_ = serial;
     held_.store(true);
-    activations_.fetch_add(1);
 }
 
 void PluginUi::deactivate(std::uint32_t serial) {

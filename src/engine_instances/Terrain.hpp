@@ -23,7 +23,7 @@ class TerrainMaterial;
 //
 // Transform   Matrix4  identity. Saved. Moves and turns the island; a
 //                      Transform with scale or shear is refused.
-// VoxelSize   number   read-only, always 1: the size of one cell in studs.
+// VoxelSize   number   read-only, always 1: the size of one cell in units.
 // CanCollide  boolean  true. Saved.
 // TextureSize Enum.TextureSize  how large this Terrain's packed textures
 //                      are: Small, Medium, Large, or Max. Large.

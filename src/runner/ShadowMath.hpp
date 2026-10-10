@@ -5,7 +5,7 @@
 #include <array>
 
 // The shadow maps' cameras, worked out with no GL context so they can be
-// tested. Lengths are world units (studs), and every rule about size is a
+// tested. Lengths are world units, and every rule about size is a
 // ratio, so a place built at any scale gets the same shadows. shadow.glsl
 // reads the maps back with these projections.
 namespace runner {

@@ -335,7 +335,7 @@ TEST_CASE("SC12 W moves the camera where it looks, and E lifts it", "[SC12]") {
     rig.game.input().post_key(key('W'), true);
     rig.frames(1, 0.5);
     rig.render(0.5);
-    REQUIRE(std::abs(rig.position().z + 8.f) < 1e-3f);  // 16 studs/s for half a second, down -Z
+    REQUIRE(std::abs(rig.position().z + 8.f) < 1e-3f);  // 16 units/s for half a second, down -Z
     rig.game.input().post_key(key('W'), false);
     rig.game.input().post_key(key('E'), true);
     rig.frames(1, 0.25);
@@ -417,7 +417,7 @@ TEST_CASE("SC14 the scene camera moves per rendered frame in edit mode", "[SC14]
     rig.frames(1, 0.0);           // input reaches the plugin VM
     rig.render(0.25);             // one rendered frame moves the camera
     rig.render(0.25);
-    REQUIRE(std::abs(rig.position().z + 8.f) < 1e-3f);  // 16 studs/s for half a second
+    REQUIRE(std::abs(rig.position().z + 8.f) < 1e-3f);  // 16 units/s for half a second
 }
 
 TEST_CASE("SC22 loading the built-in plugins is not an edit to the place", "[SC22]") {

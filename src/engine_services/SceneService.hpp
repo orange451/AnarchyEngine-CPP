@@ -32,11 +32,6 @@ public:
 // The scene service classes, in the order game holds them.
 inline constexpr const char* kSceneServiceClasses[] = {"Workspace", "Lighting", "Storage", "Scripts", "Gui"};
 
-bool is_scene_service_class(std::string_view class_name);
-// Each service's GUID is its class name in lowercase, the same in every
-// place, so a place whose files lack one gets the same service on every read.
-std::string scene_service_guid(std::string_view class_name);
-
 // Instances here render in the game. Anything may go in it.
 // CurrentCamera is the Camera the studio's scene view last used: set when you
 // press in a view or pick its camera, and, while none is set, when a view
@@ -46,7 +41,7 @@ std::string scene_service_guid(std::string_view class_name);
 // script may set it too; the views do not follow a script's write.
 //
 // Gravity is how fast PhysicsWorld speeds every body and PlayerController
-// downward, in studs per second per second: a saved registry property
+// downward, in units per second per second: a saved registry property
 // (lua_saved_property), so it is saved, undone, and restored at Stop. Below 0
 // pulls up; 0 is none. A change during play takes effect on the next step.
 class Workspace : public SceneService {

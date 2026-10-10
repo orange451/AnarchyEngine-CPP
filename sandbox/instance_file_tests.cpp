@@ -154,3 +154,17 @@ TEST_CASE("IF4 an unknown property key survives a round trip", "[IF4]") {
     REQUIRE(kept != nullptr);
     REQUIRE(kept->as_number() == 7);
 }
+
+TEST_CASE("IF5 a key the class writes wins over a stale extra of the same name", "[IF5]") {
+    ScriptRig rig;
+    const InstanceId root = sample_tree(rig.game);
+    engine_core::Script& off = add_script(rig.game, root, "Disabled", "print('off')");
+    off.set_enabled(false);
+    rig.game.set_extra_property(off.id(), "Enabled", engine_core::JsonValue::boolean(true));
+
+    const CopiedNode copied = engine_core::copy_tree(rig.game, off.id());
+    const engine_core::JsonValue* enabled = engine_core::bag_find(copied.properties, "Enabled");
+    REQUIRE(enabled != nullptr);
+    REQUIRE(enabled->is_bool());
+    REQUIRE_FALSE(enabled->as_bool());
+}

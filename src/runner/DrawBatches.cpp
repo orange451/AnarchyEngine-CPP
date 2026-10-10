@@ -1,5 +1,7 @@
 #include "DrawBatches.hpp"
 
+#include "ColorSpace.hpp"
+
 #include <algorithm>
 #include <cmath>
 
@@ -43,7 +45,7 @@ InstanceData MakeInstance(const DrawItem& item) {
     NormalMatrix(*item.model, data.normal);
     for (int channel = 0; channel < 3; ++channel) {
         const float tint = item.tint != nullptr ? item.tint[channel] : 1.f;
-        data.tint[channel] = std::pow(std::max(tint, 0.f), 2.2f);
+        data.tint[channel] = engine_core::srgb_to_linear(tint);
     }
     return data;
 }

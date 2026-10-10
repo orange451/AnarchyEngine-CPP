@@ -14,7 +14,7 @@ constexpr float kCloudDimming = 0.7f;
 constexpr float kSunDiscRadiance = 40.f;
 constexpr float kMoonDiscRadiance = 1.5f;
 constexpr float kMoonTint[3] = {0.75f, 0.82f, 1.f};
-// Studs from the camera the sky's light shadows, as a DirectionalLight's default.
+// Units from the camera the sky's light shadows, as a DirectionalLight's default.
 constexpr float kSkyShadowDistance = 100.f;
 // The lighting cube: no sooner after a change, and this often while clouds drift.
 constexpr double kLightingChangeSeconds = 0.05;

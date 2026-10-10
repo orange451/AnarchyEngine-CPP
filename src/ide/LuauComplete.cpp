@@ -191,6 +191,7 @@ Scan Tokenize(const std::u32string& text, int caret) {
             continue;
         }
         if (code == U'`') {
+            const int start = i;
             ++i;
             while (i < caret && text[static_cast<std::size_t>(i)] != U'`') {
                 ++i;
@@ -200,7 +201,7 @@ Scan Tokenize(const std::u32string& text, int caret) {
                 return scan;
             }
             ++i;
-            emit(Token::String, 0, i, {});
+            emit(Token::String, start, i, {});
             continue;
         }
         if (IsDigit(code) || (code == U'.' && i + 1 < caret && IsDigit(text[static_cast<std::size_t>(i + 1)]))) {
@@ -2297,8 +2298,7 @@ struct HoverPlanState {
     bool annotation = false;
 };
 
-HoverPlan plan_hover(std::string_view source, int index, const std::vector<engine_core::LuaNode>& world,
-                     std::uint32_t script_id, bool script_global) {
+HoverPlan plan_hover(std::string_view source, int index) {
     HoverPlan plan;
     const std::u32string text = Utf32(source);
     index = std::max(0, std::min(index, static_cast<int>(text.size())));
@@ -2384,9 +2384,6 @@ HoverPlan plan_hover(std::string_view source, int index, const std::vector<engin
         }
     }
     state->annotation = annotation;
-    (void)world;
-    (void)script_id;
-    (void)script_global;
     plan.offsets.push_back(ByteOf(state->source, index));
     plan.needs_luau = true;
     plan.state = state;
@@ -2568,7 +2565,7 @@ std::optional<PendingHover> ask_hover(HoverInfo& now, engine_core::ScriptAnalysi
                                       int index, const std::vector<engine_core::LuaNode>& world,
                                       std::uint32_t script_id) {
     PendingHover pending;
-    pending.plan = plan_hover(source, index, world, script_id, true);
+    pending.plan = plan_hover(source, index);
     now = pending.plan.info;
     if (!pending.plan.needs_luau) {
         return std::nullopt;
@@ -2604,9 +2601,9 @@ CompletionList complete_luau(std::string_view source, int caret, const std::vect
 }
 
 HoverInfo hover_luau(std::string_view source, int index, const std::vector<engine_core::LuaNode>& world,
-                     std::uint32_t script_id, bool script_global, engine_core::ScriptAnalysis* analysis,
+                     std::uint32_t script_id, engine_core::ScriptAnalysis* analysis,
                      std::chrono::milliseconds wait) {
-    const HoverPlan plan = plan_hover(source, index, world, script_id, script_global);
+    const HoverPlan plan = plan_hover(source, index);
     if (!plan.needs_luau) {
         return plan.info;
     }

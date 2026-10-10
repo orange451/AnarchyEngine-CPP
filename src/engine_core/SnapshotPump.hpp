@@ -4,6 +4,7 @@
 #include "DataModel.hpp"
 #include "DenseIdSet.hpp"
 #include "DraggerMath.hpp"
+#include "DynamicSky.hpp"
 #include "TerrainWorld.hpp"
 #include "types.hpp"
 
@@ -31,7 +32,7 @@ struct VisualLight {
     // None when the row is not a light.
     Kind kind = Kind::None;
     bool enabled = false;
-    // Linear, as the Color3 holds it.
+    // Linear: the Color3, which is sRGB, decoded.
     float color[3] = {1.f, 1.f, 1.f};
     float intensity = 0.f;
     // 0 for a DirectionalLight, which reaches everywhere.
@@ -109,14 +110,14 @@ struct VisualSky {
 // present is false otherwise, and the values are DynamicSky's defaults.
 struct VisualDynamicSky {
     bool present = false;
-    float time_of_day = 14.f;
-    float latitude = 35.f;
-    float brightness = 3.f;
-    bool shadows = true;
-    float cloud_cover = 0.5f;
-    float cloud_density = 0.5f;
-    // Studs per second; Y is ignored.
-    Vec3 wind{1.f, 0.f, 0.3f};
+    float time_of_day = static_cast<float>(DynamicSky::kDefaultTimeOfDay);
+    float latitude = static_cast<float>(DynamicSky::kDefaultLatitude);
+    float brightness = static_cast<float>(DynamicSky::kDefaultBrightness);
+    bool shadows = DynamicSky::kDefaultShadows;
+    float cloud_cover = static_cast<float>(DynamicSky::kDefaultCloudCover);
+    float cloud_density = static_cast<float>(DynamicSky::kDefaultCloudDensity);
+    // Units per second; Y is ignored.
+    Vec3 wind = DynamicSky::kDefaultWindDirection;
     // Texture Paths, relative to the resources folder. Empty for none.
     std::string sun_texture;
     std::string moon_texture;
@@ -127,10 +128,10 @@ struct VisualDynamicSky {
     bool sun_always_loaded = false;
     bool moon_always_loaded = false;
     // Degrees across.
-    float sun_size = 2.f;
-    float moon_size = 2.f;
+    float sun_size = static_cast<float>(DynamicSky::kDefaultSunSize);
+    float moon_size = static_cast<float>(DynamicSky::kDefaultMoonSize);
     // Enum.EffectQuality's value: Low 0, Medium 1, High 2.
-    int reflection_quality = 1;
+    int reflection_quality = static_cast<int>(DynamicSky::kDefaultReflectionQuality);
 };
 
 // The first BloomEffect under Lighting, in tree order, as the renderer reads
@@ -150,7 +151,7 @@ struct VisualReflections {
     bool present = false;
     bool enabled = true;
     float intensity = 1.f;
-    // Studs.
+    // Units.
     float max_distance = 50.f;
     float max_roughness = 0.3f;
 };
@@ -161,7 +162,7 @@ struct VisualAmbientOcclusion {
     bool present = false;
     bool enabled = true;
     float intensity = 1.f;
-    // Studs.
+    // Units.
     float radius = 1.f;
     // Enum.EffectQuality's value: Low 0, Medium 1, High 2.
     int quality = 1;
@@ -306,7 +307,6 @@ public:
 
     // Path C. No DataModel write.
     void override_visual(const SnapshotOverride& override);
-    void set_camera(const Matrix4& camera);
     // The TerrainWorld whose views() resolve_terrains reads each take_changes.
     // Set once, outside the per-frame windows (Engine's constructor sets it,
     // and clears it to null in its destructor before terrain_ is torn down).
@@ -379,8 +379,6 @@ private:
     std::uint64_t next_frame_ = 1;
     std::atomic<std::uint64_t> published_frame_{0};
     std::vector<SnapshotOverride> overrides_;
-    bool camera_pending_ = false;
-    Matrix4 pending_camera_ = matrix4_identity();
     // Not owned. Null until Engine's constructor calls set_terrain_world.
     const TerrainWorld* terrain_world_ = nullptr;
     bool window_open_ = false;

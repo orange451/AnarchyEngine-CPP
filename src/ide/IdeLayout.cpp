@@ -163,8 +163,6 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight, const std::filesys
         ->setOnAction([](jadefx::ActionEvent&) { runner::ProfilerUi::get().toggleShown(); });
     AddItem(*view, "Pause Profiler", nullptr, jadefx::Key::P, jadefx::Key::ModControl)
         ->setOnAction([](jadefx::ActionEvent&) { runner::ProfilerUi::get().togglePaused(); });
-    view->getItems().add(jadefx::make<jadefx::SeparatorMenuItem>());
-    AddItem(*view, "Maybe :)", "Smile.png", 0, 0);
 
     // Filled once the windows it lists are docked, below.
     auto window = jadefx::make<jadefx::Menu>("Window");

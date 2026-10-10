@@ -30,11 +30,6 @@
 
 namespace ide {
 
-const std::shared_ptr<IdeConflicts>& IdeLayout::conflicts_pane() {
-    window_page(*conflicts_window_);
-    return conflicts_pane_;
-}
-
 std::shared_ptr<IdePane> IdeLayout::make_conflicts() {
     ConflictsHost host;
     host.apply = [this](const std::vector<engine_core::DiskChoice>& choices) { check_disk(choices); };
@@ -62,7 +57,7 @@ std::shared_ptr<IdePane> IdeLayout::make_conflicts() {
 std::shared_ptr<IdePane> IdeLayout::make_terminal() {
     TerminalHost host;
     // The project open when the shell starts; this process's folder before one is.
-    host.folder = [this] { return project_ ? project_->root().string() : std::string(); };
+    host.folder = [this] { return project_ ? utf8_path(project_->root()) : std::string(); };
     return jadefx::make<IdeTerminal>(std::move(host));
 }
 
@@ -1112,7 +1107,7 @@ bool IdeLayout::save_profile_capture(const std::filesystem::path& file, std::str
     out << text;
     out.close();
     if (!out) {
-        error = "Could not write " + file.string() + ".";
+        error = "Could not write " + utf8_path(file) + ".";
         return false;
     }
     return true;
@@ -1124,7 +1119,7 @@ void IdeLayout::save_profile_capture_as() {
     options.save = true;
     options.name = profiler::capture_file_name(std::time(nullptr));
     if (project_) {
-        options.directory = project_->root().string();
+        options.directory = utf8_path(project_->root());
     }
     jadefx::showFolderDialog(std::move(options), [this, alive = std::weak_ptr<int>(alive_)](
                                                      jadefx::DialogResult result, const std::string& path) {

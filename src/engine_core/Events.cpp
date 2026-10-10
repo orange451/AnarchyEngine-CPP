@@ -48,6 +48,10 @@ void EventQueue::attach_scheduler(TaskScheduler* scheduler) { scheduler_ = sched
 void EventQueue::watch_prerender(const bool* open) { prerender_open_ = open; }
 
 std::uint64_t EventQueue::count(WriteOrigin origin) const {
+    // SnapshotOverride writes never queue an event; they are counted apart.
+    if (origin == WriteOrigin::SnapshotOverride) {
+        return suppressed_overrides_;
+    }
     const int index = origin_index(origin);
     if (index < 0 || index > 2) {
         return 0;

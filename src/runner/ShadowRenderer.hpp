@@ -83,7 +83,7 @@ private:
     // it (past its limits or memory) or draw into it.
     bool makeAtlas(int size, int pages);
     // Every light drawn unshadowed from now on, said once.
-    void refuse();
+    void refuse(int size, int pages);
     // Depth on, polygon offset on, both sides drawn, scissor on.
     void begin();
     void end();

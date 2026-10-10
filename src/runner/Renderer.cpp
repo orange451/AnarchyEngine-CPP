@@ -2,6 +2,7 @@
 
 #include "profiler/Profiler.hpp"
 
+#include "ColorSpace.hpp"
 #include "OcclusionMath.hpp"
 #include "RenderMath.hpp"
 #include "ShaderFile.hpp"
@@ -246,11 +247,6 @@ bool Renderer::buildProgram(Program& program, const char* name, const char* vert
     program.skyLightScale = at("uSkyLightScale");
     program.prefilteredMaxLod = at("uPrefilteredMaxLod");
     program.skyDrawn = at("uSkyDrawn");
-    program.diffuse = at("uDiffuse");
-    program.normalMap = at("uNormalMap");
-    program.roughnessMap = at("uRoughnessMap");
-    program.metalnessMap = at("uMetalnessMap");
-    program.emissiveMap = at("uEmissiveMap");
     program.color = at("uColor");
     program.emissive = at("uEmissive");
     program.metalness = at("uMetalness");
@@ -263,21 +259,12 @@ bool Renderer::buildProgram(Program& program, const char* name, const char* vert
     program.fadeIn = at("uFadeIn");
     program.lodLevel = at("uLodLevel");
     program.hasSurface = at("uHasSurface");
-    program.nodeLevel = at("uNodeLevel");
     program.terrainQuality = at("uTerrainQuality");
     program.detailFade0 = at("uDetailFade0");
     program.detailFade1 = at("uDetailFade1");
     program.antiTilingOverride = at("uAntiTilingOverride");
     program.projectionDebug = at("uProjectionDebug");
     program.detailFadeOverride = at("uDetailFadeOverride");
-    program.depth = at("uDepth");
-    program.albedo = at("uAlbedo");
-    program.normal = at("uNormal");
-    program.material = at("uMaterial");
-    program.emissiveBuffer = at("uEmissive");
-    program.accumulation = at("uAccumulation");
-    program.transparencyBuffer = at("uTransparency");
-    program.scene = at("uScene");
     program.lightPosition = at("uLightPosition");
     program.lightDirection = at("uLightDirection");
     program.lightCone = at("uLightCone");
@@ -1558,7 +1545,7 @@ unsigned CreateTerrainArray(engine_core::texture::PixelFormat format, int size, 
             glTexImage3D(RT_GL_TEXTURE_2D_ARRAY, level, static_cast<GLint>(GL_RGBA8), levelSize, levelSize,
                          layerCount, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
         }
-        levelSize = std::max((levelSize + 1) / 2, 1);
+        levelSize = engine_core::texture::mip_size(size, level + 1);
     }
     glTexParameteri(RT_GL_TEXTURE_2D_ARRAY, RT_GL_TEXTURE_BASE_LEVEL, levels - 1);
     glTexParameteri(RT_GL_TEXTURE_2D_ARRAY, RT_GL_TEXTURE_MAX_LEVEL, levels - 1);
@@ -1697,7 +1684,7 @@ void Renderer::terrainArrays(engine_core::InstanceId terrain,
         entry.seenRevision = set->revision;
         const int layerCount = std::min(static_cast<int>(set->layers.size()), maxArrayLayers_);
         int levels = 1;
-        for (int w = set->size; w > 1; w = std::max((w + 1) / 2, 1)) ++levels;
+        for (int w = set->size; w > 1; w >>= 1) ++levels;
         TerrainArrays* target = entry.pending.surface[0] != 0 ? &entry.pending : &entry.current;
         if (target->surface[0] == 0 || target->size != set->size || target->layerCount != layerCount) {
             // A new size or layer count needs new arrays: built beside the
@@ -1740,7 +1727,7 @@ void Renderer::terrainArrays(engine_core::InstanceId terrain,
         std::size_t spent = 0;
         bool any = false;
         for (int level = filling.levels - 1; level >= 0 && spent < kBudgetBytes; --level) {
-            const int levelSize = std::max(filling.size >> level, 1);
+            const int levelSize = engine_core::texture::mip_size(filling.size, level);
             for (int i = 0; i < filling.layerCount && spent < kBudgetBytes; ++i) {
                 TerrainArrayLayer& layer = filling.layers[static_cast<std::size_t>(i)];
                 if (layer.bytes == nullptr || layer.nextLevel != level || level < layer.bytes->first_level) continue;
@@ -1847,8 +1834,7 @@ void Renderer::prepareSky() {
     // Tint is a color as picked, sRGB, made linear as surface.glsl makes a Material's.
     const float exposure = std::max(lighting_.sky.exposure, 0.f);
     for (int channel = 0; channel < 3; ++channel) {
-        skyColor_[channel] =
-            dynamic ? 1.f : exposure * std::pow(std::max(lighting_.sky.tint[channel], 0.f), 2.2f);
+        skyColor_[channel] = dynamic ? 1.f : exposure * engine_core::srgb_to_linear(lighting_.sky.tint[channel]);
     }
     skyLightScale_ = dynamic ? 1.f : std::max(lighting_.sky.lightScale, 0.f);
     skyImage_ = dynamic ? whiteTexture_ : lighting_.sky.image;
@@ -2162,7 +2148,6 @@ bool Renderer::geometryPass(const MeshDraw* meshes, const float* projection) {
             glUniform1i(terrain_.fadeIn, draw.terrainFadeIn ? 1 : 0);
             glUniform1i(terrain_.lodLevel, lodColors ? std::min(std::max(draw.terrainLevel, 0), 7) : -1);
             glUniform1i(terrain_.hasSurface, draw.terrainLayerCount > 0 ? 1 : 0);
-            glUniform1i(terrain_.nodeLevel, std::max(draw.terrainLevel, 0));
             glCullFace(run.mirrored ? RT_GL_FRONT : RT_GL_BACK);
             draw.mesh->bind();
             instances_.attach(run.first);

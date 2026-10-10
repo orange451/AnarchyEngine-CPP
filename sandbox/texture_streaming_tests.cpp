@@ -543,3 +543,14 @@ TEST_CASE("TS24 Sound Loaded is whether its file decodes", "[texture]") {
     out.close();
     CHECK(sound.loaded(dir.path));
 }
+
+TEST_CASE("TS25 mip_size floors like GL and reaches 1 for any base", "[texture]") {
+    using engine_core::texture::mip_size;
+    REQUIRE(mip_size(256, 0) == 256);
+    REQUIRE(mip_size(256, 8) == 1);
+    REQUIRE(mip_size(256, 9) == 1);
+    // Odd sizes floor, as glTexImage*D expects: 96 -> 48, 24, 12, 6, 3, 1.
+    REQUIRE(mip_size(96, 5) == 3);
+    REQUIRE(mip_size(96, 6) == 1);
+    REQUIRE(mip_size(1, 3) == 1);
+}

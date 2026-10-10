@@ -823,9 +823,16 @@ void TerrainWorld::update(DataModel& game, double now_ms) {
             record.batches.clear();  // their jobs' results no longer match (every chunk is queued again)
             record.chunk_batch.clear();
             record.sync_built.clear();
+            // Colliders were triangulated at the old size too; PhysicsWorld
+            // must not keep handing them out until each chunk is re-walked.
+            const bool had_colliders = !record.collider_map.empty();
+            record.collider_map.clear();
             if (!record.meshes.empty()) {
                 record.meshes.clear();   // made at the old voxel size
                 record.chunks_dirty = true;
+            }
+            if (had_colliders) {
+                record.chunks_dirty = true;   // publish_chunks rebuilds colliders_vec from the (now empty) map
             }
             fresh = true;
         }

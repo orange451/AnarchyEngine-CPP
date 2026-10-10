@@ -184,24 +184,7 @@ void DataModel::adopt_slot(std::uint16_t pool_index, InstanceId id) {
     const std::uint32_t storage = take_storage(pool);
     issue_entity(part, id);
     DataModel* object = pooled_object(pool, storage, id);
-    if (object->steps()) {
-        ecs_add_id(ecs_world(), part.entity, state_->ecs_ids.steps);
-    }
-    if (object->physics_body()) {
-        ecs_add_id(ecs_world(), part.entity, state_->ecs_ids.physics_body);
-    }
-    if (object->terrain()) {
-        ecs_add_id(ecs_world(), part.entity, state_->ecs_ids.terrain);
-    }
-    if (object->sound_source()) {
-        ecs_add_id(ecs_world(), part.entity, state_->ecs_ids.sound_source);
-    }
-    if (object->billboard_gui()) {
-        ecs_add_id(ecs_world(), part.entity, state_->ecs_ids.billboard);
-    }
-    if (object->wireframe()) {
-        ecs_add_id(ecs_world(), part.entity, state_->ecs_ids.wireframe);
-    }
+    tag_entity(ecs_world(), part.entity, state_->ecs_ids, *object);
     part.pool = pool_index;
     part.storage = storage;
     part.instance = object;

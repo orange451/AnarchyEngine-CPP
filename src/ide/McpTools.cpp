@@ -45,6 +45,17 @@
 namespace ide {
 namespace {
 
+// Releases the profiler when it leaves scope, so a tool that throws
+// mid-report does not leave it recording for the rest of the session.
+struct ProfilerHold {
+    bool held = false;
+    ~ProfilerHold() {
+        if (held) {
+            profiler::release();
+        }
+    }
+};
+
 using engine_core::DataModel;
 using engine_core::DataModelLock;
 using engine_core::InstanceId;
@@ -1577,8 +1588,10 @@ JsonValue GetProfile(const ToolContext&, const JsonValue& arguments) {
     // Nothing recording, as with the profiler hidden or the window minimized:
     // record here, collecting on this thread, since no paint will.
     const bool own = !profiler::paused() && !profiler::enabled();
+    ProfilerHold hold;
     if (own) {
         profiler::acquire();
+        hold.held = true;
         const auto began = std::chrono::steady_clock::now();
         while (recorded < seconds) {
             std::this_thread::sleep_for(std::chrono::milliseconds(50));
@@ -1596,9 +1609,6 @@ JsonValue GetProfile(const ToolContext&, const JsonValue& arguments) {
             capture = profiler::write_capture_html(history, "MCP", profiler::utc_stamp(std::time(nullptr)));
         }
     });
-    if (own) {
-        profiler::release();
-    }
     out.set("recorded_for", JsonValue::number(std::round(recorded * 100.0) / 100.0));
     out.set("paused", JsonValue::boolean(profiler::paused()));
     if (path != nullptr) {

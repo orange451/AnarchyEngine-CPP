@@ -22,7 +22,7 @@ uniform vec3 uSunColor;
 uniform vec3 uMoonColor;
 uniform float uCloudCover;
 uniform float uCloudDensity;
-// How far the clouds have drifted, in studs across X and Z.
+// How far the clouds have drifted, in units across X and Z.
 uniform vec2 uCloudOffset;
 // The tangent of each disc's half angle.
 uniform float uSunSize;
@@ -47,7 +47,7 @@ const float kMoonSkyRadiance = kSunRadiance * 0.03;
 const vec3 kNightSky = vec3(0.002, 0.003, 0.006);
 const int kViewSteps = 12;
 const int kLightSteps = 4;
-// The cloud layer's height and a cloud's size, in studs.
+// The cloud layer's height and a cloud's size, in units.
 const float kCloudHeight = 200.0;
 const float kCloudFeature = 120.0;
 // The bright stars' grid, and a finer one of faint stars behind them.

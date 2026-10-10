@@ -27,6 +27,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -915,6 +916,13 @@ TEST_CASE("path C emits nothing", "[T18]") {
     REQUIRE(game.events().suppressed_overrides() == 0);
 }
 
+TEST_CASE("count of SnapshotOverride is the suppressed overrides", "[events]") {
+    engine_core::EventQueue events;
+    events.emit(engine_core::SignalId{}, 0, engine_core::Field::Reflected, engine_core::WriteOrigin::SnapshotOverride);
+    REQUIRE(events.suppressed_overrides() == 1);
+    REQUIRE(events.count(engine_core::WriteOrigin::SnapshotOverride) == events.suppressed_overrides());
+}
+
 TEST_CASE("wait resumes on a later simulation phase", "[T19]") {
     if (!engine_core::TaskScheduler::can_suspend()) {
         SKIP("Signal::wait needs the fiber switch, which this platform does not build");
@@ -1633,6 +1641,49 @@ TEST_CASE("N6 the root Changed signal is not the first instance", "[N6]") {
     REQUIRE(root_named == 2);
     REQUIRE(first_changed == 0);
     REQUIRE(part_changed == part_held);
+}
+
+TEST_CASE("SG9 ancestry_changed fires on the moved instance and every descendant, once each", "[signals]") {
+    engine_core::Game game;
+    engine_core::Folder& folder = game.create<engine_core::Folder>();
+    game.set_parent(folder.id(), workspace_of(game));
+    engine_core::Folder& child = game.create<engine_core::Folder>();
+    game.set_parent(child.id(), folder.id());
+    engine_core::GameObject& grandchild = game.create<engine_core::GameObject>();
+    game.set_parent(grandchild.id(), child.id());
+    engine_core::Folder& bystander = game.create<engine_core::Folder>();
+    game.set_parent(bystander.id(), workspace_of(game));
+
+    int folder_fired = 0, child_fired = 0, grandchild_fired = 0, bystander_fired = 0;
+    game.ancestry_changed(folder.id()).connect([&](engine_core::InstanceId id, engine_core::Field field) {
+        REQUIRE(id == folder.id());
+        REQUIRE(field == engine_core::Field::Parent);
+        ++folder_fired;
+    });
+    game.ancestry_changed(child.id()).connect([&](engine_core::InstanceId id, engine_core::Field) {
+        REQUIRE(id == child.id());
+        ++child_fired;
+    });
+    game.ancestry_changed(grandchild.id()).connect([&](engine_core::InstanceId, engine_core::Field) { ++grandchild_fired; });
+    game.ancestry_changed(bystander.id()).connect([&](engine_core::InstanceId, engine_core::Field) { ++bystander_fired; });
+
+    game.set_parent(folder.id(), game.scene_service("Storage"));
+    {
+        SimRole role;
+        game.events().drain();
+    }
+    REQUIRE(folder_fired == 1);
+    REQUIRE(child_fired == 1);
+    REQUIRE(grandchild_fired == 1);
+    REQUIRE(bystander_fired == 0);
+
+    // A move to the same parent is not a change.
+    game.set_parent(folder.id(), game.scene_service("Storage"));
+    {
+        SimRole role;
+        game.events().drain();
+    }
+    REQUIRE(folder_fired == 1);
 }
 
 TEST_CASE("N2 siblings may share a name and find_first_child returns the first", "[N2]") {
@@ -5491,4 +5542,22 @@ TEST_CASE("RW2 the window signal binds with RunService and carries its own dt", 
     REQUIRE(service.dt(engine_core::Phase::RenderStepped) == 0.004);
     service.release(game.events());
     REQUIRE_FALSE(service.window_signal()->id().valid());
+}
+
+TEST_CASE("SCH1 a render-phase job's entry stays until shutdown, so a rig binds one and reuses it", "[scheduler]") {
+    engine_core::Engine engine;
+    engine_core::TaskScheduler& scheduler = engine.scheduler();
+    // A render entry is kept after unbind (the render thread may be inside its
+    // closure), so each bind-unbind cycle uses a slot for good. Measure what
+    // Engine already bound, then fill the phase to exactly its capacity; one
+    // more cycle would abort.
+    const engine_core::Phase phase = engine_core::Phase::RenderStepped;
+    const std::size_t kFree = scheduler.phase_capacity(phase) - scheduler.bound_count(phase);
+    std::vector<engine_core::TaskScheduler::JobId> ids;
+    for (std::size_t cycle = 0; cycle < kFree; ++cycle) {
+        ids.push_back(scheduler.bind(phase, [](double) {}));
+        scheduler.unbind(ids.back());
+    }
+    REQUIRE(ids.size() == kFree);
+    REQUIRE(std::adjacent_find(ids.begin(), ids.end()) == ids.end());
 }

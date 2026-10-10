@@ -76,7 +76,7 @@ public:
     // with no size limit. Chunks whose Id mask lacks from are skipped
     // untouched. Returns how many chunks changed.
     std::size_t replace_everywhere(std::uint8_t from, std::uint8_t to);
-    // Cells min..max inclusive, x fastest: distances in studs, Ids.
+    // Cells min..max inclusive, x fastest: distances in units, Ids.
     std::optional<std::string> read(CellCoord min, CellCoord max, std::vector<float>& distances,
                                     std::vector<std::uint8_t>& materials) const;
     std::optional<std::string> write(CellCoord min, CellCoord max, const std::vector<float>& distances,
@@ -88,7 +88,6 @@ public:
     std::array<std::uint64_t, 4> ids_used() const;
     // Chunks changed since the last take_dirty, and every neighbor of each.
     void take_dirty(std::vector<ChunkCoord>& out);
-    bool has_dirty() const { return !dirty_.empty(); }
     // Bumped by every change to the chunk map (edit, set_chunks, clear,
     // replace_everywhere), but only when something actually changed.
     std::uint64_t revision() const { return revision_; }

@@ -807,14 +807,14 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
         {P("h", "number"), P("s", "number"), P("v", "number")});
     add("Color3", "fromHex", "A color from a hex code: RGB or RRGGBB, with or without #.", "Color3", false,
         {P("hex", "string")});
-    add("Color3", "toHSV", "The hue, saturation, and value of a color, each 0 to 1.", "number", false,
+    add("Color3", "toHSV", "The hue, saturation, and value of a color, each 0 to 1.", "number,number,number", false,
         {P("color", "Color3")});
     add("Color3", "R", "The red channel, 0 to 1.", "number", false, {});
     add("Color3", "G", "The green channel, 0 to 1.", "number", false, {});
     add("Color3", "B", "The blue channel, 0 to 1.", "number", false, {});
     add("Color3", "Lerp", "A linear blend toward goal. alpha 0 returns this color and alpha 1 returns goal.", "Color3",
         false, {P("goal", "Color3"), P("alpha", "number")});
-    add("Color3", "ToHSV", "The hue, saturation, and value, each 0 to 1.", "number", false, {});
+    add("Color3", "ToHSV", "The hue, saturation, and value, each 0 to 1.", "number,number,number", false, {});
     add("Color3", "ToHex", "The hex code, RRGGBB in capitals without #.", "string", false, {});
 
     add("", "Vector2", "A 2D vector, such as a point on the screen. new builds one. Omitted components are 0.", nullptr, false,
@@ -1034,7 +1034,7 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
     add("WireframeAdornment", "GetLineCount", "How many lines it holds, up to 65536.", "number", false, {});
     add("Light", "Color", "The color of the light this gives.", "Color3", false, {});
     add("Light", "Intensity", "How bright this light is. 0 gives none.", "number", false, {});
-    add("Light", "Radius", "How many studs this light reaches. It fades to nothing there.", "number", false, {});
+    add("Light", "Radius", "How many units this light reaches. It fades to nothing there.", "number", false, {});
     add("DirectionalLight", "Direction",
         "Which way the light is, as the sun is in the sky: (0, 1, 0) shines straight down. It shines on everything "
         "alike, with no position or reach.",
@@ -1045,7 +1045,7 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
     add("Light", "Enabled", "When false, this light gives none.", "boolean", false, {});
     add("Light", "Shadows", "When true, this light casts shadows.", "boolean", false, {});
     add("DirectionalLight", "Shadows", "When true, this light casts shadows.", "boolean", false, {});
-    add("DirectionalLight", "ShadowDistance", "How many studs from the camera get this light's shadows.", "number",
+    add("DirectionalLight", "ShadowDistance", "How many units from the camera get this light's shadows.", "number",
         false, {});
     add("Skybox", "Image",
         "The sky, an equirectangular image drawn behind everything and lighting every surface. An .hdr gives light "
@@ -1077,7 +1077,7 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
     add("DynamicSky", "CloudDensity",
         "How thick and opaque the clouds are, from 0 to 1. Thick cover dims the sun light.", "number", false, {});
     add("DynamicSky", "WindDirection",
-        "Which way the clouds drift, across X and Z; its length is their speed in studs per second.", "Vector3",
+        "Which way the clouds drift, across X and Z; its length is their speed in units per second.", "Vector3",
         false, {});
     add("DynamicSky", "SunTexture", "An image drawn in place of the sun's disc. Nil draws the disc.", "Texture?",
         false, {});
@@ -1118,7 +1118,7 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
         "Where this island is and how it is turned. It may be moved and rotated, but not scaled: VoxelSize sets "
         "the size of its cells.",
         "Matrix4", false, {});
-    add("Terrain", "VoxelSize", "The size of one cell, in studs. Read-only; always 1.", "number", false, {});
+    add("Terrain", "VoxelSize", "The size of one cell, in units. Read-only; always 1.", "number", false, {});
     add("Terrain", "CanCollide", "When false, nothing collides with this island.", "boolean", false, {});
     add("Terrain", "TextureSize",
         "Enum.TextureSize: how large this Terrain's packed textures are (Small 256, Medium 512, Large 1024, Max "
@@ -1201,7 +1201,7 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
         "Adds a TerrainMaterial on the lowest free Id, named after material. Raises past 255.", "TerrainMaterial",
         false, {P("material", "Material?")});
     add("Terrain", "ReadVoxels",
-        "The cells from min to max, both included, in whole cell coordinates: Distances in studs, negative inside, "
+        "The cells from min to max, both included, in whole cell coordinates: Distances in units, negative inside, "
         "and Materials as Ids, 0 for air and the default. Distances[i][j][k] is cell min + (i - 1, j - 1, k - 1).",
         "{Distances: {{{number}}}, Materials: {{{number}}}}", false, {P("min", "Vector3"), P("max", "Vector3")});
     add("Terrain", "WorldToCell", "The cell nearest a world position, as whole numbers.", "Vector3", false,
@@ -1239,7 +1239,7 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
         "How much of a smooth surface's sky reflection the reflection of what is on screen replaces, from 0 to 1.",
         "number", false, {});
     add("ScreenSpaceReflections", "MaxDistance",
-        "How far a reflected ray may travel, in studs, from 0 to 1000. It fades out over the last quarter.", "number",
+        "How far a reflected ray may travel, in units, from 0 to 1000. It fades out over the last quarter.", "number",
         false, {});
     add("ScreenSpaceReflections", "MaxRoughness",
         "Surfaces rougher than this, from 0 to 1, keep the sky's reflection; it fades in just below.", "number",
@@ -1250,7 +1250,7 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
         "How strongly creases and contact are shaded, from 0 to 4. 1 is physical; above 1 is darker.", "number",
         false, {});
     add("AmbientOcclusionEffect", "Radius",
-        "How far, in studs, from 0 to 10, nearby geometry still hides the sky from a surface.", "number", false, {});
+        "How far, in units, from 0 to 10, nearby geometry still hides the sky from a surface.", "number", false, {});
     add("AmbientOcclusionEffect", "Quality",
         "Enum.EffectQuality: Low and Medium shade at half resolution, High at full.", "Enum.EffectQuality", false,
         {});
@@ -1320,9 +1320,9 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
         false, {});
     add("SoundEmitter", "RollOffMode", "How the sound gets quieter with distance from its PVInstance.", "EnumItem", false,
         {});
-    add("SoundEmitter", "RollOffMinDistance", "Within this many studs, from 0 to 512, the sound is at full volume.",
+    add("SoundEmitter", "RollOffMinDistance", "Within this many units, from 0 to 512, the sound is at full volume.",
         "number", false, {});
-    add("SoundEmitter", "RollOffMaxDistance", "Past this many studs, from 0 to 512, the sound gets no quieter.",
+    add("SoundEmitter", "RollOffMaxDistance", "Past this many units, from 0 to 512, the sound gets no quieter.",
         "number", false, {});
     add("SoundEmitter", "TimePosition", "How many seconds into the sound it is. Writing it while playing seeks.",
         "number", false, {});
@@ -1487,7 +1487,7 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
         "Camera is gone. Not saved.",
         "Camera", false, {});
     add("Workspace", "Gravity",
-        "How fast every PhysicsObject and PlayerController speeds downward, in studs per second per second. "
+        "How fast every PhysicsObject and PlayerController speeds downward, in units per second per second. "
         "Below 0 pulls up; 0 is none. Defaults to 9.81.",
         "number", false, {});
     add("Workspace", "Raycast",
@@ -1509,7 +1509,7 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
     add("RaycastResult", "Instance", "What the ray hit, or nil if it is gone since.", "Instance", false, {});
     add("RaycastResult", "Position", "Where the ray hit, in world space.", "Vector3", false, {});
     add("RaycastResult", "Normal", "The hit surface's outward normal.", "Vector3", false, {});
-    add("RaycastResult", "Distance", "How far along the ray the hit is, in studs.", "number", false, {});
+    add("RaycastResult", "Distance", "How far along the ray the hit is, in units.", "number", false, {});
     add("RaycastResult", "Material",
         "The Material where the ray hit: a Terrain's material there, or the hit Brush face's. Nil for anything else, or "
         "a face with none.",

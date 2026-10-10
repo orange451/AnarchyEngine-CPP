@@ -189,7 +189,7 @@ TEST_CASE("B7 each instance keeps its own tint, made linear", "[batches]") {
     REQUIRE(out.runs.size() == 1);
     REQUIRE(out.instances[0].tint[0] == 1.f);
     REQUIRE(out.instances[0].tint[1] == 0.f);
-    REQUIRE(out.instances[1].tint[1] == Approx(std::pow(0.5f, 2.2f)));
+    REQUIRE(out.instances[1].tint[1] == Approx(0.2140f).margin(1e-3f));   // sRGB 0.5, not pow(0.5, 2.2)
     REQUIRE(out.instances[2].tint[2] == 1.f);
 }
 
@@ -262,4 +262,16 @@ TEST_CASE("B11 one Terrain's chunks, sharing its model, draw nearest box first",
     REQUIRE(out.runs[0].draw == 1);
     REQUIRE(out.runs[1].draw == 2);
     REQUIRE(out.runs[2].draw == 0);
+}
+
+TEST_CASE("B12 a tint at the sRGB knee decodes linearly, not by a power", "[batches]") {
+    Frame frame;
+    frame.add(At(0.f, 0.f, -5.f), 5, 0.f, {0.04045f, 0.f, 1.f});
+    const DrawItem* items = frame.ready();
+    DrawBatches out;
+    BuildBatches(items, frame.visible, kView, out);
+    REQUIRE(out.instances.size() == 1);
+    REQUIRE(out.instances[0].tint[0] == Approx(0.04045f / 12.92f).margin(1e-6f));
+    REQUIRE(out.instances[0].tint[1] == 0.f);
+    REQUIRE(out.instances[0].tint[2] == 1.f);
 }

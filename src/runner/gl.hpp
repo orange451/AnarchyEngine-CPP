@@ -342,7 +342,6 @@ extern void (*rt_glPixelStorei)(GLenum pname, GLint param);
 extern void (*rt_glUniform1i)(GLint location, GLint v0);
 extern void (*rt_glUniform4f)(GLint location, GLfloat v0, GLfloat v1, GLfloat v2, GLfloat v3);
 extern void (*rt_glUniform2f)(GLint location, GLfloat v0, GLfloat v1);
-extern void (*rt_glUniform1fv)(GLint location, GLsizei count, const GLfloat* value);
 extern void (*rt_glUniform3fv)(GLint location, GLsizei count, const GLfloat* value);
 extern void (*rt_glUniform4fv)(GLint location, GLsizei count, const GLfloat* value);
 extern void (*rt_glGenFramebuffers)(GLsizei n, GLuint* framebuffers);
@@ -384,12 +383,10 @@ extern void (*rt_glGetBooleanv)(GLenum pname, GLboolean* data);
 // Optional: a context without them still draws, and the profiler shows no GPU row.
 extern void (*rt_glGenQueries)(GLsizei n, GLuint* ids);
 extern void (*rt_glDeleteQueries)(GLsizei n, const GLuint* ids);
-extern void (*rt_glQueryCounter)(GLuint id, GLenum target);
 extern void (*rt_glBeginQuery)(GLenum target, GLuint id);
 extern void (*rt_glEndQuery)(GLenum target);
 extern void (*rt_glGetQueryObjectiv)(GLuint id, GLenum pname, GLint* params);
 extern void (*rt_glGetQueryObjectui64v)(GLuint id, GLenum pname, GLuint64* params);
-extern void (*rt_glGetInteger64v)(GLenum pname, GLint64* data);
 // Optional too: without it a framebuffer's depth buffer is taken as absent.
 extern void (*rt_glGetFramebufferAttachmentParameteriv)(GLenum target, GLenum attachment, GLenum pname,
                                                          GLint* params);
@@ -483,7 +480,6 @@ bool LoadGl(GlGetProcAddress get_proc);
 #define glUniform1i ::runner::rt_glUniform1i
 #define glUniform4f ::runner::rt_glUniform4f
 #define glUniform2f ::runner::rt_glUniform2f
-#define glUniform1fv ::runner::rt_glUniform1fv
 #define glUniform3fv ::runner::rt_glUniform3fv
 #define glUniform4fv ::runner::rt_glUniform4fv
 #define glGenFramebuffers ::runner::rt_glGenFramebuffers
@@ -512,10 +508,8 @@ bool LoadGl(GlGetProcAddress get_proc);
 #define glGetBooleanv ::runner::rt_glGetBooleanv
 #define glGenQueries ::runner::rt_glGenQueries
 #define glDeleteQueries ::runner::rt_glDeleteQueries
-#define glQueryCounter ::runner::rt_glQueryCounter
 #define glBeginQuery ::runner::rt_glBeginQuery
 #define glEndQuery ::runner::rt_glEndQuery
 #define glGetQueryObjectiv ::runner::rt_glGetQueryObjectiv
 #define glGetQueryObjectui64v ::runner::rt_glGetQueryObjectui64v
-#define glGetInteger64v ::runner::rt_glGetInteger64v
 #define glGetFramebufferAttachmentParameteriv ::runner::rt_glGetFramebufferAttachmentParameteriv

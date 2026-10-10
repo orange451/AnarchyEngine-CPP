@@ -109,8 +109,8 @@ struct MeshDraw {
 // rgba256x4's 256 * 4 * 4 floats, row 0 first. Row 0's texel i is material Id
 // i's color (sRGB, alpha unused); row 1's is its metalness, roughness,
 // reflectivity, and 1; row 2's is its texture layer index, TextureScale,
-// BlendSharpness, and HeightStrength (Task 6 reads it; nothing draws
-// textured yet); row 3 is reserved (0). The GL context has to be current;
+// BlendSharpness, and HeightStrength (terrain.frag's fetchLook reads it);
+// row 3 is reserved (0). The GL context has to be current;
 // the caller deletes the texture.
 unsigned MakeTerrainLookTexture(const float* rgba256x4);
 
@@ -168,7 +168,7 @@ struct LightDraw {
     float position[3] = {0.f, 0.f, 0.f};
     // Where a SpotLight or DirectionalLight points. Unused for a PointLight.
     float direction[3] = {0.f, 0.f, -1.f};
-    // Linear, as the Color3 holds it.
+    // Linear: the Color3, which is sRGB, decoded.
     float color[3] = {1.f, 1.f, 1.f};
     float intensity = 1.f;
     // Unused for a DirectionalLight, which reaches everywhere.
@@ -180,7 +180,7 @@ struct LightDraw {
     // own meshes cast nothing for it. 0 for none: its map is drawn every frame.
     std::uint64_t id = 0;
     bool shadows = false;
-    // A DirectionalLight's: studs from the camera its cascades cover.
+    // A DirectionalLight's: units from the camera its cascades cover.
     float shadowDistance = 100.f;
 };
 
@@ -235,7 +235,7 @@ struct SceneBloom {
 struct SceneReflections {
     bool enabled = false;
     float intensity = 1.f;
-    // Studs.
+    // Units.
     float maxDistance = 50.f;
     float maxRoughness = 0.3f;
 };
@@ -247,7 +247,7 @@ enum class SceneQuality { Low = 0, Medium = 1, High = 2 };
 struct SceneOcclusion {
     bool enabled = false;
     float intensity = 1.f;
-    // Studs.
+    // Units.
     float radius = 1.f;
     SceneQuality quality = SceneQuality::Medium;
 };
@@ -271,7 +271,7 @@ struct SceneDynamicSky {
     float moonColor[3] = {0.f, 0.f, 0.f};
     float cloudCover = 0.5f;
     float cloudDensity = 0.5f;
-    // Studs drifted across X and Z.
+    // Units drifted across X and Z.
     float cloudOffset[2] = {0.f, 0.f};
     // Degrees across.
     float sunSizeDegrees = 2.f;
@@ -477,11 +477,6 @@ private:
         // draws even when its lighting cube, uSkyEnabled's cubesReady, is not).
         int skyDrawn = -1;
         // Material.
-        int diffuse = -1;
-        int normalMap = -1;
-        int roughnessMap = -1;
-        int metalnessMap = -1;
-        int emissiveMap = -1;
         int color = -1;
         int emissive = -1;
         int metalness = -1;
@@ -496,11 +491,8 @@ private:
         // terrain.frag: SetTerrainLodColors' level, or -1 for none.
         int lodLevel = -1;
         // terrain.frag: whether a per-Terrain array pair is bound (Task 6),
-        // this draw's LOD node level (quality falloffs, independent of the
-        // debug lodLevel above), and Lighting.TerrainQuality (0 Low, 1
-        // Medium, 2 High).
+        // and Lighting.TerrainQuality (0 Low, 1 Medium, 2 High).
         int hasSurface = -1;
-        int nodeLevel = -1;
         int terrainQuality = -1;
         // terrain.frag: the view-space distance band the far falloffs (mip
         // bias, normal strength, the third triplanar projection) ramp
@@ -516,15 +508,6 @@ private:
         int antiTilingOverride = -1;
         int projectionDebug = -1;
         int detailFadeOverride = -1;
-        // G-buffer inputs.
-        int depth = -1;
-        int albedo = -1;
-        int normal = -1;
-        int material = -1;
-        int emissiveBuffer = -1;
-        int accumulation = -1;
-        int transparencyBuffer = -1;
-        int scene = -1;
         // One light (light.frag).
         int lightPosition = -1;
         int lightDirection = -1;

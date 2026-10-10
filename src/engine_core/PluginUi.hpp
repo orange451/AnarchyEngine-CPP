@@ -105,9 +105,6 @@ public:
     // True while a plugin is active. Any thread may read it: the Scene View
     // keeps the left button from the game's input while it is set.
     bool mouse_held() const { return held_.load(); }
-    // Moves each time a plugin is activated, so the Scene View can tell that
-    // one took over from its own tools.
-    std::uint64_t activations() const { return activations_.load(); }
 
     // The last mouse event's state, and the key of each mouse signal of serial's mouse.
     void mouse_event(const PluginMouseEvent& event);
@@ -153,7 +150,6 @@ private:
     std::uint64_t revision_ = 1;
     std::uint32_t active_ = 0;
     std::atomic<bool> held_{false};
-    std::atomic<std::uint64_t> activations_{0};
     PluginMouseEvent mouse_;
 };
 

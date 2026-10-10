@@ -3,6 +3,7 @@
 #include "AmbientOcclusionEffect.hpp"
 #include "AssetInstances.hpp"
 #include "BloomEffect.hpp"
+#include "ColorSpace.hpp"
 #include "Dragger.hpp"
 #include "DynamicSky.hpp"
 #include "Camera.hpp"
@@ -65,9 +66,9 @@ VisualLight light_of(const SpatialObject& object) {
     out.kind = VisualLight::Kind::Point;
     out.enabled = light->enabled();
     const ColorRgb color = light->color();
-    out.color[0] = color.r;
-    out.color[1] = color.g;
-    out.color[2] = color.b;
+    out.color[0] = srgb_to_linear(color.r);
+    out.color[1] = srgb_to_linear(color.g);
+    out.color[2] = srgb_to_linear(color.b);
     out.intensity = static_cast<float>(light->intensity());
     out.radius = static_cast<float>(light->radius());
     out.shadows = light->shadows();
@@ -84,9 +85,9 @@ VisualLight light_of(const DirectionalLight& sun) {
     out.kind = VisualLight::Kind::Directional;
     out.enabled = sun.enabled();
     const ColorRgb color = sun.color();
-    out.color[0] = color.r;
-    out.color[1] = color.g;
-    out.color[2] = color.b;
+    out.color[0] = srgb_to_linear(color.r);
+    out.color[1] = srgb_to_linear(color.g);
+    out.color[2] = srgb_to_linear(color.b);
     out.intensity = static_cast<float>(sun.intensity());
     out.shadows = sun.shadows();
     out.shadow_distance = static_cast<float>(sun.shadow_distance());
@@ -152,14 +153,6 @@ void SnapshotPump::override_visual(const SnapshotOverride& override) {
         contract_fail("snapshot override capacity exhausted");
     }
     overrides_.push_back(override);
-}
-
-void SnapshotPump::set_camera(const Matrix4& camera) {
-    if (!window_open_ || thread_role() != ThreadRole::Render) {
-        contract_fail("camera snapshot writes happen inside RenderStepped or PreRender");
-    }
-    pending_camera_ = camera;
-    camera_pending_ = true;
 }
 
 void SnapshotPump::set_terrain_world(const TerrainWorld* terrains) { terrain_world_ = terrains; }
@@ -746,10 +739,6 @@ void SnapshotPump::take_changes(DataModel& game) {
     resolve_terrains(game);
     brushes_.update(game, base_.brushes);
     base_.resources_root = game.resources_root();
-    if (camera_pending_) {
-        base_.camera = pending_camera_;
-        camera_pending_ = false;
-    }
 }
 
 void SnapshotPump::finish_copy() {

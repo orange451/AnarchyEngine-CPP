@@ -86,7 +86,7 @@ struct RayHit {
 //
 // Terrain, once set_terrain_world gave it a TerrainWorld: early in sync,
 // before reconcile_terrain, each dynamic (not Anchored) PhysicsObject or
-// PlayerController's body asks that TerrainWorld (set_collider_interest) for
+// PlayerController's body asks that TerrainWorld (through change_collider_interest) for
 // colliders within kColliderChunks of it, per Terrain, in that Terrain's
 // local chunk space, and the chunk under each body and its immediate
 // neighbors, any whose collider TerrainWorld does not know yet, are built
@@ -142,7 +142,7 @@ public:
     // Where Terrain bodies come from; null for none. SimulationThread, under
     // the write lock. The TerrainWorld must outlive this world or be unset
     // first. Non-const: sync() also drives it, asking for colliders around
-    // each dynamic body or PlayerController (set_collider_interest) and, for
+    // each dynamic body or PlayerController (change_collider_interest) and, for
     // one with none around it, building them synchronously
     // (build_colliders_now), both before Box3D steps.
     void set_terrain_world(TerrainWorld* terrains);

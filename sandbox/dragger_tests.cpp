@@ -17,8 +17,10 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -49,7 +51,7 @@ bool close(float a, float b, float tolerance = 1e-3f) { return std::abs(a - b) <
 
 // A camera at the origin looking down -Z with a 90 degree view, 200 x 200 points,
 // a Dragger at (0, 0, -10), and a part beside it for listeners to move. The X
-// arrow runs along screen y = 100 from x = 100 to 200, and 20 points drag 2 studs.
+// arrow runs along screen y = 100 from x = 100 to 200, and 20 points drag 2 units.
 struct DragRig {
     ScriptRig rig;
     InstanceId camera = 0;
@@ -169,7 +171,7 @@ TEST_CASE("DR2 an arrow is the same number of pixels long near and far", "[DR2]"
     }
 }
 
-// At (0, 0, -10) in a 200 x 200 view, one pixel is 0.1 studs: the X arrow runs from
+// At (0, 0, -10) in a 200 x 200 view, one pixel is 0.1 units: the X arrow runs from
 // screen (100, 100) to (200, 100), and the XY square covers x 125..140, y 60..75.
 TEST_CASE("DR3 an arrow picks within 8 pixels, and a plane square picks inside itself", "[DR3]") {
     const auto view = view_of(200, 200);
@@ -223,7 +225,7 @@ TEST_CASE("DR7 snapping rounds each component along the frame's own axes", "[DR7
     REQUIRE(engine_core::begin_drag(world_frame({0, 0, -10}), view, {150, 100}, engine_core::DraggerHandle::X, start));
     auto offset = engine_core::drag_offset(start, view, {174, 100}, 1.0);
     REQUIRE((offset && close(offset->x, 2)));
-    // Local: turned 45 degrees about Z. The offset is a whole number of studs along X', none along Y'.
+    // Local: turned 45 degrees about Z. The offset is a whole number of units along X', none along Y'.
     const engine_core::Matrix4 turned = engine_core::matrix4_multiply(
         engine_core::matrix4_translation(0, 0, -10), engine_core::matrix4_axis_angle({0, 0, 1}, 3.14159265 / 4));
     const auto frame = engine_core::dragger_frame(turned, true);
@@ -628,4 +630,25 @@ TEST_CASE("DR23 a drag after a write outside any recording is a step of its own,
     REQUIRE(close(drag.transform(drag.part).m[12], 0));
     REQUIRE(drag.rig.game.name(drag.part) == "Edited");
     REQUIRE_FALSE(drag.rig.game.history().can_undo().first);
+}
+
+TEST_CASE("DR20 a Dragger deleted and undone is in the dragger query again", "[DR20]") {
+    DragRig drag;
+    engine_core::DataModel& game = drag.rig.game;
+    std::vector<InstanceId> found;
+    game.draggers(found);
+    REQUIRE(std::find(found.begin(), found.end(), drag.dragger) != found.end());
+
+    begin_step(game, "Delete");
+    game.destroy(drag.dragger);
+    end_step(game);
+    game.draggers(found);
+    REQUIRE(std::find(found.begin(), found.end(), drag.dragger) == found.end());
+
+    game.history().undo();
+    REQUIRE(game.alive(drag.dragger));
+    game.draggers(found);
+    // The revived Dragger must be tagged like a new one, or it is in the tree
+    // but never hovered, dragged, or drawn.
+    REQUIRE(std::find(found.begin(), found.end(), drag.dragger) != found.end());
 }

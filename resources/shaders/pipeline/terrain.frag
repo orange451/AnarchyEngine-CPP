@@ -40,7 +40,6 @@ uniform int uTerrainQuality;
 // per-pixel ramp over the fragment's own view-space distance, which is
 // continuous by construction: no two neighboring pixels, whatever node
 // either belongs to, can be on opposite sides of a discontinuity.
-uniform int uNodeLevel;
 // The view-space distance band (units) the far falloffs ramp smoothly
 // across: at or inside uDetailFade0 every falloff is fully off (as a near,
 // level-0 node always drew); at or beyond uDetailFade1 each is fully on

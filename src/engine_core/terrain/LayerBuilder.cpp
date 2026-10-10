@@ -167,10 +167,6 @@ std::uint8_t average_u8(float sum, int count) {
     return std::uint8_t(std::lround(std::max(0.f, std::min(255.f, sum / float(count)))));
 }
 
-// A level's size, halved and rounded up (so a chain always lands on 1x1
-// exactly regardless of odd intermediate sizes).
-int next_level_size(int n) { return std::max(1, (n + 1) / 2); }
-
 // Builds the full mip chain for the A array (RGB color, decoded/averaged/
 // re-encoded in linear space per the brief; alpha = height, plain
 // average), starting from level0 (which becomes level 0 of the result).
@@ -180,8 +176,8 @@ std::vector<std::vector<std::uint8_t>> build_color_height_mips(std::vector<std::
     int cw = w, ch = h;
     while (cw > 1 || ch > 1) {
         const std::vector<std::uint8_t>& prev = mips.back();
-        const int nw = next_level_size(cw);
-        const int nh = next_level_size(ch);
+        const int nw = engine_core::texture::mip_size(w, static_cast<int>(mips.size()));
+        const int nh = engine_core::texture::mip_size(h, static_cast<int>(mips.size()));
         std::vector<std::uint8_t> next(size_t(nw) * size_t(nh) * 4);
         for (int y = 0; y < nh; ++y) {
             for (int x = 0; x < nw; ++x) {
@@ -221,8 +217,8 @@ std::vector<std::vector<std::uint8_t>> build_normal_rough_metal_mips(std::vector
     int cw = w, ch = h;
     while (cw > 1 || ch > 1) {
         const std::vector<std::uint8_t>& prev = mips.back();
-        const int nw = next_level_size(cw);
-        const int nh = next_level_size(ch);
+        const int nw = engine_core::texture::mip_size(w, static_cast<int>(mips.size()));
+        const int nh = engine_core::texture::mip_size(h, static_cast<int>(mips.size()));
         std::vector<std::uint8_t> next(size_t(nw) * size_t(nh) * 4);
         for (int y = 0; y < nh; ++y) {
             for (int x = 0; x < nw; ++x) {
@@ -372,7 +368,8 @@ namespace {
 std::vector<int> chain_sides(int size) {
     std::vector<int> sides;
     if (size <= 0) return sides;
-    for (int w = size;; w = next_level_size(w)) {
+    for (int level = 0;; ++level) {
+        const int w = engine_core::texture::mip_size(size, level);
         sides.push_back(w);
         if (w == 1) break;
     }

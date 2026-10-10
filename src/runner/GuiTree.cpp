@@ -114,6 +114,7 @@ struct GuiTree::Entry {
     // The node's children list; null for a Label, Button, or TextField.
     jadefx::Pane* container = nullptr;
     jadefx::TextField* field = nullptr;
+    jadefx::Slider* slider = nullptr;
     std::string className;
     // The instance's revision at the last apply. 0 forces one.
     std::uint64_t revision = 0;
@@ -133,6 +134,10 @@ struct GuiTree::Entry {
     // showed or wrote it.
     std::string instanceText;
     std::string fieldText;
+    // A Slider's Value as the instance last had it, and as the slider last
+    // showed or wrote it.
+    double instanceValue = 0;
+    double sliderValue = 0;
     // An ImagePane's Image as its Texture's Path, empty for none, and the
     // opacity ImageTransparency gives it, as the last sync read them.
     bool imagePane = false;
@@ -212,6 +217,8 @@ std::shared_ptr<jadefx::Node> GuiTree::makeNode(engine_core::InstanceId id, cons
         auto field = std::make_shared<GuiNode<jadefx::TextField>>("textfield", input, true);
         field->setOnAction([this, id](jadefx::ActionEvent&) { fire(id, engine_core::kGuiAction); });
         node = field;
+    } else if (className == "Slider") {
+        node = std::make_shared<GuiNode<jadefx::Slider>>("slider", input, true, 0.0, 1.0, 0.0);
     } else {
         return nullptr;
     }
@@ -243,12 +250,17 @@ std::shared_ptr<jadefx::Node> GuiTree::build(engine_core::InstanceId id, const e
         entry.node = makeNode(id, className);
         entry.container = dynamic_cast<jadefx::Pane*>(entry.node.get());
         entry.field = dynamic_cast<jadefx::TextField*>(entry.node.get());
+        entry.slider = dynamic_cast<jadefx::Slider*>(entry.node.get());
         entry.className = className;
     }
     entry.pass = pass_;
     if (entry.field != nullptr && entry.revision != 0 && entry.field->getText() != entry.fieldText) {
         entry.fieldText = entry.field->getText();
         writeText(id, entry.fieldText);
+    }
+    if (entry.slider != nullptr && entry.revision != 0 && entry.slider->getValue() != entry.sliderValue) {
+        entry.sliderValue = entry.slider->getValue();
+        writeValue(id, entry.sliderValue);
     }
     if (gui.revision() != entry.revision) {
         apply(entry, gui);
@@ -358,6 +370,19 @@ void GuiTree::apply(Entry& entry, const engine_core::GuiValues& gui) {
             }
             entry.fieldText = text;
         }
+    } else if (entry.slider != nullptr) {
+        jadefx::Slider& slider = *entry.slider;
+        const double step = gui.number(GuiProperty::Step);
+        slider.setMin(gui.number(GuiProperty::Min));
+        slider.setMax(gui.number(GuiProperty::Max));
+        // The instance snaps what the slider writes; the keys move a Step, or a tenth.
+        slider.setBlockIncrement(step > 0 ? step : (slider.getMax() - slider.getMin()) / 10);
+        const double value = gui.number(GuiProperty::Value);
+        if (value != entry.instanceValue || entry.revision == 0) {
+            entry.instanceValue = value;
+            slider.setValue(value);
+            entry.sliderValue = slider.getValue();
+        }
     }
 }
 
@@ -381,6 +406,26 @@ void GuiTree::writeText(engine_core::InstanceId id, std::string text) {
             recording = game.history().try_begin_recording("Type Text");
         }
         gui->set_text(GuiProperty::Text, text);
+        if (recording) {
+            game.history().finish_recording(*recording, engine_core::FinishRecordingOperation::Commit);
+        }
+    });
+}
+
+void GuiTree::writeValue(engine_core::InstanceId id, double value) {
+    engine_.on_simulation([id, value](engine_core::DataModel& game) {
+        auto* gui = dynamic_cast<engine_core::GuiValues*>(game.instance(id));
+        if (gui == nullptr || gui->number(GuiProperty::Value) == value) {
+            return;
+        }
+        std::optional<std::string> recording;
+        if (!game.simulation_running()) {
+            recording = game.history().try_begin_recording("Move Slider");
+        }
+        engine_core::LuaSlot slot;
+        slot.kind = engine_core::LuaSlot::Kind::Number;
+        slot.number = value;
+        gui->set_value(GuiProperty::Value, slot);
         if (recording) {
             game.history().finish_recording(*recording, engine_core::FinishRecordingOperation::Commit);
         }

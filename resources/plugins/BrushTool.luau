@@ -1124,6 +1124,7 @@ end
 
 local modeButtons: { [string]: Button } = {}
 local gridLabel: Label
+local gridSlider: Slider
 local materialButton: Button
 local sideButton: Button
 local clipRow: HBox
@@ -1137,18 +1138,6 @@ local function set_mode(next: string)
 	if mode == "Vertex" then
 		refresh_corners()
 	end
-	redraw_pane()
-	redraw()
-end
-
-local function step_grid(steps: number)
-	local at = 1
-	for i, g in GRIDS do
-		if math.abs(g - grid) < 1e-9 then
-			at = i
-		end
-	end
-	grid = GRIDS[math.clamp(at + steps, 1, #GRIDS)]
 	redraw_pane()
 	redraw()
 end
@@ -1265,13 +1254,20 @@ button(clipRow, "Undo point", function()
 	redraw()
 end)
 
-local gridRow = row()
-button(gridRow, "-", function()
-	step_grid(-1)
-end)
-gridLabel = caption("", gridRow)
-button(gridRow, "+", function()
-	step_grid(1)
+gridLabel = caption("")
+-- One notch per entry of GRIDS.
+gridSlider = Instance.new("Slider")
+gridSlider.Min = 1
+gridSlider.Max = #GRIDS
+gridSlider.Step = 1
+gridSlider.Style = "width: 100%;"
+gridSlider.Parent = root
+gridSlider.Changed:Connect(function(name)
+	if name == "Value" and GRIDS[gridSlider.Value] ~= grid then
+		grid = GRIDS[gridSlider.Value]
+		redraw_pane()
+		redraw()
+	end
 end)
 
 caption("Shape of the selection")
@@ -1352,6 +1348,7 @@ redraw_pane = function()
 	clipRow.Visible = mode == "Clip"
 	sideButton.Text = "Side: " .. SIDES[clipSide]
 	gridLabel.Text = "Grid " .. number(grid)
+	gridSlider.Value = table.find(GRIDS, grid) or 1
 	materialButton.Text = (material ~= nil and material.Name or "Default") .. "  \u{25B8}"
 	hintLabel.Text = HINTS[mode]
 end

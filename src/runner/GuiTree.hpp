@@ -32,12 +32,12 @@ struct GuiInput {
 
 // The JadeFX nodes for GUI instances, made once and updated in place: each
 // GuiBase is a node of its class's element type (screengui, billboardgui,
-// dockwidget, pane, imagepane, hbox, vbox, label, button, textfield) whose id
+// dockwidget, pane, imagepane, hbox, vbox, label, button, textfield, slider) whose id
 // is its Name and whose classes are its ClassList, and the CSS instances
 // under one, joined in child order, are its stylesheet. A node keeps its
 // state, such as a TextField's caret, while its instance does. Mouse events on
 // a node fire its instance's events on the simulation thread, and typing in a
-// TextField writes Text back.
+// TextField writes Text back, and dragging a Slider writes Value.
 //
 // A pass reads the tree under the DataModel read lock: beginPass, build each
 // root that is drawn, endPass, which lets go of what no build reached. Then,
@@ -78,6 +78,8 @@ private:
     void fire(engine_core::InstanceId id, const char* event);
     // A TextField's typed text, written back to Text.
     void writeText(engine_core::InstanceId id, std::string text);
+    // A Slider's dragged value, written back to Value.
+    void writeValue(engine_core::InstanceId id, double value);
     // The decoded file at path under resourcesRoot_, upside down with flipY, or null.
     std::shared_ptr<jadefx::Image> loadImage(const std::string& path, bool flipY);
 

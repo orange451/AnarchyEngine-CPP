@@ -1344,6 +1344,10 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
     add("TextField", "Text", "The text in the field. Typing changes it.", "string", false, {});
     add("TextField", "Prompt", "Shown while the field is empty.", "string", false, {});
     add("TextField", "Action", "Fires when Enter is pressed in the field.", "Signal", false, {});
+    add("Slider", "Value", "Where the thumb sits, from Min to Max. Dragging changes it.", "number", false, {});
+    add("Slider", "Min", "The value at the left end. Above Max, it raises Max.", "number", false, {});
+    add("Slider", "Max", "The value at the right end. Below Min, it lowers Min.", "number", false, {});
+    add("Slider", "Step", "When above 0, Value stays on Min plus a whole number of Steps.", "number", false, {});
     add("CSS", "Source", "The stylesheet for its parent GuiBase and everything inside it.", "string", false, {});
 
     add("Signal", "Connect", "Calls callback when the signal fires and returns the connection.", "Connection", false,

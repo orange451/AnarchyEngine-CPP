@@ -46,6 +46,7 @@ inline int class_rank(std::string_view class_name) {
         {"Label", 10},
         {"Button", 10},
         {"TextField", 10},
+        {"Slider", 10},
     };
     for (const Rank& entry : kRanks) {
         if (entry.name == class_name) {

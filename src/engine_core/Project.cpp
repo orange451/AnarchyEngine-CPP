@@ -165,6 +165,7 @@ std::vector<ClassEntry>& class_registry() {
         out.push_back({"Label", [](DataModel& world) -> DataModel& { return world.create<Label>(); }});
         out.push_back({"Button", [](DataModel& world) -> DataModel& { return world.create<Button>(); }});
         out.push_back({"TextField", [](DataModel& world) -> DataModel& { return world.create<TextField>(); }});
+        out.push_back({"Slider", [](DataModel& world) -> DataModel& { return world.create<Slider>(); }});
         out.push_back({"CSS", [](DataModel& world) -> DataModel& { return world.create<Css>(); }});
         out.push_back({"Texture", [](DataModel& world) -> DataModel& { return world.create<Texture>(); }});
         out.push_back({"Mesh", [](DataModel& world) -> DataModel& { return world.create<Mesh>(); }});

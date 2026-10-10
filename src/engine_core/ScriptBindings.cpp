@@ -215,6 +215,7 @@ DataModel& create_vbox(DataModel& world) { return world.create<VBox>(); }
 DataModel& create_label(DataModel& world) { return world.create<Label>(); }
 DataModel& create_button(DataModel& world) { return world.create<Button>(); }
 DataModel& create_text_field(DataModel& world) { return world.create<TextField>(); }
+DataModel& create_slider(DataModel& world) { return world.create<Slider>(); }
 DataModel& create_css(DataModel& world) { return world.create<Css>(); }
 
 DataModel& create_texture(DataModel& world) { return world.create<Texture>(); }
@@ -259,6 +260,7 @@ ANARCHY_LUA_REGISTER(register_creatable_instances) {
     register_lua_creatable("Label", create_label);
     register_lua_creatable("Button", create_button);
     register_lua_creatable("TextField", create_text_field);
+    register_lua_creatable("Slider", create_slider);
     register_lua_creatable("CSS", create_css);
     register_lua_creatable("Texture", create_texture);
     register_lua_creatable("Mesh", create_mesh);

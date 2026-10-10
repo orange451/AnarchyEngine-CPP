@@ -20,6 +20,8 @@ namespace {
 constexpr ModelPart kParts[] = {ModelPart::Mesh, ModelPart::Material};
 
 constexpr double kCardWidth = 272;
+// A slot's thumb, which holds the asset's detailed icon when it has one.
+constexpr double kThumbSize = 30;
 constexpr double kGap = 16;
 // About a card's height, so the New Model tile lines up with the cards beside it.
 constexpr double kTileHeight = 228;
@@ -642,6 +644,7 @@ std::shared_ptr<IdePrefabEditor::Card> IdePrefabEditor::make_card(const ModelVie
     card->root->getClassList().add("pe-card");
     card->root->setPrefWidth(kCardWidth);
     card->root->setMinSize(kCardWidth, 0);
+    card->root->setMaxSize(kCardWidth, 100000);
     card->root->setElementId("pe-card:" + std::to_string(id));
 
     // Icon, name over status, and delete.
@@ -652,10 +655,13 @@ std::shared_ptr<IdePrefabEditor::Card> IdePrefabEditor::make_card(const ModelVie
     auto heading = jadefx::make<jadefx::VBox>();
     heading->setSpacing(2);
     heading->setStyle("width: 100%;");
+    heading->setMinSize(0, 0);
     auto name_stack = jadefx::make<jadefx::StackPane>();
+    name_stack->setMinSize(0, 0);
     name_stack->setAlignment(jadefx::Pos::CenterLeft);
     card->name = jadefx::make<jadefx::Label>(view.name);
     card->name->getClassList().add("pe-name");
+    card->name->setMinSize(0, 0);
     card->name->setOnMouseClicked([this, id](const jadefx::MouseEvent& event) {
         if (event.button == 0 && event.clickCount == 2) {
             beginRename(id);
@@ -698,14 +704,17 @@ std::shared_ptr<IdePrefabEditor::Card> IdePrefabEditor::make_card(const ModelVie
         slot.root->getClassList().add("pe-slot");
         slot.root->setAlignment(jadefx::Pos::CenterLeft);
         slot.root->setElementId(std::string("pe-slot:") + std::to_string(id) + ":" + model_part_name(part));
-        slot.thumb = icon_box(part_icon(part), 18, 30, "pe-thumb");
+        slot.thumb = icon_box(part_icon(part), 18, kThumbSize, "pe-thumb");
         slot.root->getChildren().add(slot.thumb);
         auto text = jadefx::make<jadefx::VBox>();
         text->setMouseTransparent(true);
         text->setAlignment(jadefx::Pos::CenterLeft);
         text->setStyle("width: 100%;");
+        text->setMinSize(0, 0);
         slot.text = text_label("", "pe-slot-text");
         slot.sub = text_label("", "pe-slot-sub");
+        slot.text->setMinSize(0, 0);
+        slot.sub->setMinSize(0, 0);
         text->getChildren().add(slot.text);
         text->getChildren().add(slot.sub);
         slot.root->getChildren().add(text);
@@ -770,10 +779,13 @@ void IdePrefabEditor::fill_slot(Card& card, ModelPart part, const PartView& view
     slot.shown = view;
     set_class(*slot.root, "empty", !filled && !view.missing);
     set_class(*slot.root, "missing", view.missing);
-    // The thumb shows the part's icon when filled, and a plus when it asks for one.
+    // The thumb shows the asset's detailed icon, else the part's icon when
+    // filled, and a plus when it asks for one.
     slot.thumb->getChildren().clear();
     const std::string file = filled ? part_icon(part) : view.missing ? "Warning.png" : "Plus.png";
-    if (std::shared_ptr<jadefx::ImageView> icon = icon_file(file)) {
+    if (std::shared_ptr<jadefx::Node> detailed = filled ? AssetPicker::detailedIcon(view.id, kThumbSize - 2) : nullptr) {
+        slot.thumb->getChildren().add(std::move(detailed));
+    } else if (std::shared_ptr<jadefx::ImageView> icon = icon_file(file)) {
         icon->setPrefSize(18, 18);
         icon->setMinSize(18, 18);
         icon->setMaxSize(18, 18);

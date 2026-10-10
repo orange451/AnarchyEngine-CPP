@@ -24,15 +24,15 @@ class AssetPicker : public jadefx::VBox {
 public:
     static std::shared_ptr<AssetPicker> create();
 
-    // Makes a choice's detailed icon, size points square: a Texture's image or
-    // a Material's ball, filling in once loaded. The Assets pane, which keeps
-    // those, sets it; without one, rows show the class's icon.
-    using IconSource = std::function<std::shared_ptr<jadefx::Node>(const AssetChoice& choice,
-                                                                   const std::string& asset_class, double size)>;
+    // Makes an asset's detailed icon, size points square, such as a Texture's
+    // image or a Material's ball, filling in once loaded; null for an asset
+    // with none, whose class icon shows instead. The Assets pane, which keeps
+    // those, sets it and alone decides what each asset class draws, so a new
+    // kind of icon needs no change here or in the panes that show them.
+    using IconSource = std::function<std::shared_ptr<jadefx::Node>(engine_core::InstanceId asset, double size)>;
     static void setIconSource(IconSource source);
-    // choice's detailed icon from the source, or null without one or for an asset with none.
-    static std::shared_ptr<jadefx::Node> detailedIcon(const AssetChoice& choice, const std::string& asset_class,
-                                                      double size);
+    // asset's detailed icon from the source, or null without one.
+    static std::shared_ptr<jadefx::Node> detailedIcon(engine_core::InstanceId asset, double size);
 
     // Shows the picker under anchor, listing choices, with current checked (0
     // for none). pick runs with the chosen id, or 0 for None, after it closes.

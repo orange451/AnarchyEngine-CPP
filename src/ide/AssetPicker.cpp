@@ -149,12 +149,8 @@ private:
 
 void AssetPicker::setIconSource(IconSource source) { icon_source() = std::move(source); }
 
-std::shared_ptr<jadefx::Node> AssetPicker::detailedIcon(const AssetChoice& choice, const std::string& asset_class,
-                                                       double size) {
-    if (!icon_source() || (choice.file.empty() && !choice.look)) {
-        return nullptr;
-    }
-    return icon_source()(choice, asset_class, size);
+std::shared_ptr<jadefx::Node> AssetPicker::detailedIcon(engine_core::InstanceId asset, double size) {
+    return icon_source() && asset != 0 ? icon_source()(asset, size) : nullptr;
 }
 
 std::shared_ptr<AssetPicker> AssetPicker::create() {
@@ -268,7 +264,7 @@ void AssetPicker::rebuild() {
     }
     const std::string icon = icon_filename(asset_class_);
     for (const AssetChoice& choice : filter_choices(all_, query_)) {
-        std::shared_ptr<jadefx::Node> graphic = detailedIcon(choice, asset_class_, kPickerIconSize);
+        std::shared_ptr<jadefx::Node> graphic = detailedIcon(choice.id, kPickerIconSize);
         if (!graphic) {
             graphic = icon_graphic(icon);
         }

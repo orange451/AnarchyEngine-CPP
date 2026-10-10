@@ -94,6 +94,9 @@ private:
     // loaded on thumbnails_'s thread or a Material's ball is drawn, then that,
     // fit and centered. Callers hold the world's read lock.
     std::shared_ptr<jadefx::Node> asset_icon(const AssetRow& row, double size);
+    // An asset's detailed icon for pickers and other panes, or null for a class
+    // with none. Takes the world's read lock. Where each class's icon is decided.
+    std::shared_ptr<jadefx::Node> detailed_icon(engine_core::InstanceId id, double size);
     // asset_icon's box for a Texture's file or a Material's look, or the class's icon for neither. Needs no lock.
     std::shared_ptr<jadefx::Node> icon_box(engine_core::InstanceId id, const std::string& class_name,
                                            std::filesystem::path file, const std::optional<MaterialLook>& look,

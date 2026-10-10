@@ -2,7 +2,6 @@
 
 #include "AssetInstances.hpp"
 #include "Containment.hpp"
-#include "IdeResources.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -18,20 +17,6 @@ std::string lower(std::string_view text) {
     return out;
 }
 
-AssetChoice make_choice(const engine_core::DataModel& world, engine_core::InstanceId id,
-                        const engine_core::DataModel& object, const std::string& where) {
-    AssetChoice choice{id, world.name(id), where};
-    if (const auto* file = dynamic_cast<const engine_core::FileAsset*>(&object)) {
-        choice.path = file->path();
-        const std::filesystem::path root = world.resources_root();
-        if (dynamic_cast<const engine_core::Texture*>(&object) != nullptr && !choice.path.empty() && !root.empty()) {
-            choice.file = root / path_from_utf8(choice.path);
-        }
-    }
-    choice.look = material_look(world, id);
-    return choice;
-}
-
 void collect(const engine_core::DataModel& world, engine_core::InstanceId folder, const std::string& where,
              std::string_view asset_class, std::vector<AssetChoice>& out) {
     for (engine_core::InstanceId child : world.get_children(folder)) {
@@ -41,7 +26,11 @@ void collect(const engine_core::DataModel& world, engine_core::InstanceId folder
         }
         const std::string name = world.name(child);
         if (asset_class == object->class_name()) {
-            out.push_back(make_choice(world, child, *object, where));
+            AssetChoice choice{child, name, where};
+            if (const auto* file = dynamic_cast<const engine_core::FileAsset*>(object)) {
+                choice.path = file->path();
+            }
+            out.push_back(std::move(choice));
         } else {
             collect(world, child, where + "/" + name, asset_class, out);
         }
@@ -63,14 +52,6 @@ std::vector<AssetChoice> asset_choices(const engine_core::DataModel& world, std:
         return lower(a.name) < lower(b.name);
     });
     return choices;
-}
-
-std::optional<AssetChoice> asset_choice(const engine_core::DataModel& world, engine_core::InstanceId id) {
-    const engine_core::DataModel* object = id != 0 ? world.instance(id) : nullptr;
-    if (object == nullptr) {
-        return std::nullopt;
-    }
-    return make_choice(world, id, *object, std::string());
 }
 
 std::vector<AssetChoice> filter_choices(const std::vector<AssetChoice>& choices, std::string_view query) {

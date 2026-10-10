@@ -583,9 +583,7 @@ IdeAssets::IdeAssets(engine_core::DataModel& world, AssetsHost host)
     scroll_->setOnContextMenuRequested([this](const jadefx::MouseEvent& event) { show_empty_menu(event.x, event.y); });
     fit_view();
     // Pickers show the same thumbnails and balls as the pane, kept and refreshed with its own.
-    AssetPicker::setIconSource([this](const AssetChoice& choice, const std::string& asset_class, double size) {
-        return icon_box(choice.id, asset_class, choice.file, choice.look, size);
-    });
+    AssetPicker::setIconSource([this](engine_core::InstanceId asset, double size) { return detailed_icon(asset, size); });
 }
 
 IdeAssets::~IdeAssets() {
@@ -1485,6 +1483,29 @@ std::shared_ptr<jadefx::Node> IdeAssets::asset_icon(const AssetRow& row, double 
     const std::optional<MaterialLook> look =
         row.class_name == "Material" ? material_look(world_, row.id) : std::optional<MaterialLook>();
     return icon_box(row.id, row.class_name, std::move(file), look, size);
+}
+
+std::shared_ptr<jadefx::Node> IdeAssets::detailed_icon(engine_core::InstanceId id, double size) {
+    std::filesystem::path file;
+    std::optional<MaterialLook> look;
+    std::string class_name;
+    {
+        engine_core::DataModelLock lock(world_, engine_core::DataModelLock::Read, kFrameLockWait);
+        const engine_core::DataModel* object = lock.owns() ? world_.instance(id) : nullptr;
+        if (object == nullptr) {
+            return nullptr;
+        }
+        class_name = object->class_name();
+        if (const auto* texture = dynamic_cast<const engine_core::Texture*>(object)) {
+            file = texture_file(texture->path());
+        }
+        look = material_look(world_, id);
+    }
+    // Every other class has no detailed icon yet: its own icon shows instead.
+    if (file.empty() && !look) {
+        return nullptr;
+    }
+    return icon_box(id, class_name, std::move(file), look, size);
 }
 
 std::shared_ptr<jadefx::Node> IdeAssets::icon_box(engine_core::InstanceId id, const std::string& class_name,

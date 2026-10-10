@@ -1,5 +1,7 @@
 #include "IdeExplorer.hpp"
+#include "AssetPicker.hpp"
 #include "ClassOrder.hpp"
+#include "Containment.hpp"
 #include "LockWaits.hpp"
 
 #include "DataModelLock.hpp"
@@ -36,6 +38,8 @@ constexpr double kSlowClickSeconds = 0.5;
 // A slow click waits this long before renaming, so a double-click that starts
 // with it still runs the primary action.
 constexpr double kDoubleClickSeconds = 0.4;
+// An asset row's detailed icon, as big as a class icon.
+constexpr double kDetailedIconSize = 16;
 // The field starts this far before the row's name, clear of the icon, and
 // stops this far short of the row's right edge. With the field's padding, the
 // typed text lands where the name was drawn.
@@ -1317,7 +1321,13 @@ void IdeExplorer::apply(bool batch) {
             row = jadefx::make<jadefx::TreeItem>(snap.labels[i]);
             item_ids_[row.get()] = snap.ids[i];
             if (i < snap.classes.size()) {
-                if (std::shared_ptr<jadefx::ImageView> icon = icon_view(snap.classes[i])) {
+                // An asset shows its detailed icon, such as a Texture's image, when its class has one.
+                std::shared_ptr<jadefx::Node> detailed = engine_core::is_asset_class(snap.classes[i])
+                                                             ? AssetPicker::detailedIcon(snap.ids[i], kDetailedIconSize)
+                                                             : nullptr;
+                if (detailed) {
+                    row->setGraphic(std::move(detailed));
+                } else if (std::shared_ptr<jadefx::ImageView> icon = icon_view(snap.classes[i])) {
                     row->setGraphic(std::move(icon));
                 }
                 // Workspace holds what the place shows, so it starts open.

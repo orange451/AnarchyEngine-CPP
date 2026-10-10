@@ -526,8 +526,8 @@ struct RowView {
     // A reference to an asset, such as "Mesh": its Name opens the asset picker.
     // Empty for any other reference, which picks from the selection.
     std::string asset_class;
-    // The asset whose detailed icon pick shows, so it changes only when that does.
-    std::optional<AssetChoice> shown_asset;
+    // The asset whose icon pick shows, so it changes only when that does.
+    engine_core::InstanceId shown_asset = 0;
     bool asset_icon_set = false;
     // A Transform's fold arrow, and the names of its Position and Orientation lines.
     std::shared_ptr<PropertyDisclosure> disclosure;
@@ -1386,25 +1386,13 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
         if (view.asset_class.empty() || world == nullptr) {
             return;
         }
-        std::optional<AssetChoice> asset;
-        if (!row.mixed && row.value.ref != 0) {
-            engine_core::DataModelLock lock(*world, engine_core::DataModelLock::Read, kFrameLockWait);
-            if (!lock.owns()) {
-                return;
-            }
-            asset = asset_choice(*world, row.value.ref);
-        }
-        const auto same = [](const std::optional<AssetChoice>& a, const std::optional<AssetChoice>& b) {
-            return a.has_value() == b.has_value() &&
-                   (!a || (a->id == b->id && a->file == b->file && a->look == b->look));
-        };
-        if (view.asset_icon_set && same(asset, view.shown_asset)) {
+        const engine_core::InstanceId asset = row.mixed ? 0 : row.value.ref;
+        if (view.asset_icon_set && asset == view.shown_asset) {
             return;
         }
         view.asset_icon_set = true;
         view.shown_asset = asset;
-        std::shared_ptr<jadefx::Node> icon =
-            asset ? AssetPicker::detailedIcon(*asset, view.asset_class, kAssetIconSize) : nullptr;
+        std::shared_ptr<jadefx::Node> icon = AssetPicker::detailedIcon(asset, kAssetIconSize);
         if (!icon) {
             icon = icon_graphic(icon_filename(view.asset_class));
         }

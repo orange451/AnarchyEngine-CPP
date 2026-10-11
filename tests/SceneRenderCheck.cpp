@@ -4963,6 +4963,31 @@ int main(int argc, char** argv) {
         }
         Expect(clear.targetsMade() - made <= 2, "VR4 alternating two sizes makes each size's targets once (" +
                                                     std::to_string(clear.targetsMade() - made) + " made)");
+        // VR4b: the bound is on the parked sets alone, so a pool that holds one
+        // set of the larger size keeps it while the smaller one draws.
+        {
+            runner::Renderer bounded;
+            Expect(bounded.initialize(), "VR4b the renderer builds for a small pool");
+            bounded.setTransparentOutput(true);
+            bounded.setCamera(engine_core::matrix4_translation(0.f, 0.f, 6.f), 40.f);
+            bounded.setTargetPool(std::size_t(48) * 64 * 64 + 1);
+            const int before = bounded.targetsMade();
+            for (int round = 0; round < 3; ++round) {
+                target.shoot(bounded, draws, &sun, 1, 1, shot);
+                small.shoot(bounded, draws, &sun, 1, 1, shot);
+            }
+            Expect(bounded.targetsMade() - before <= 2, "VR4b a pool the size of one parked set keeps it (" +
+                                                          std::to_string(bounded.targetsMade() - before) + " made)");
+            // VR4c: shutdown deletes the current set and every parked one.
+            target.shoot(bounded, draws, &sun, 1, 1, shot);
+            const unsigned parkedDepth = bounded.sceneDepth().texture;
+            small.shoot(bounded, draws, &sun, 1, 1, shot);
+            const unsigned currentDepth = bounded.sceneDepth().texture;
+            bounded.shutdown();
+            Expect(parkedDepth != 0 && currentDepth != 0 && glIsTexture(parkedDepth) == runner::GL_FALSE &&
+                       glIsTexture(currentDepth) == runner::GL_FALSE,
+                   "VR4c shutdown deletes the current and the parked targets");
+        }
 
         // VR5: two Skyboxes in turn filter each image once with a cache of 3.
         const std::filesystem::path skies = std::filesystem::temp_directory_path() / "anarchy-vr-skies";

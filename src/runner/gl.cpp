@@ -41,6 +41,7 @@ void (*rt_glVertexAttribDivisor)(GLuint, GLuint) = nullptr;
 void (*rt_glEnable)(GLenum) = nullptr;
 void (*rt_glDisable)(GLenum) = nullptr;
 GLboolean (*rt_glIsEnabled)(GLenum) = nullptr;
+GLboolean (*rt_glIsTexture)(GLuint) = nullptr;
 void (*rt_glGetIntegerv)(GLenum, GLint*) = nullptr;
 void (*rt_glGetTexParameteriv)(GLenum, GLenum, GLint*) = nullptr;
 void (*rt_glScissor)(GLint, GLint, GLsizei, GLsizei) = nullptr;
@@ -189,6 +190,7 @@ bool LoadGl(GlGetProcAddress get_proc) {
     LOAD(Enable);
     LOAD(Disable);
     LOAD(IsEnabled);
+    LOAD(IsTexture);
     LOAD(GetIntegerv);
     LOAD(GetTexParameteriv);
     LOAD(Scissor);

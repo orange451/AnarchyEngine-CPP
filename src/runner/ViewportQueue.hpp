@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <tuple>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -32,8 +33,9 @@ int ViewportPixels(double points, float pixelsPerPoint);
 // painted and at what pixel size (shown, from paint), and what was last drawn.
 // renderPending runs once a frame, before the panes paint. Among the panes shown
 // since the last call whose scene, size, or incomplete last draw needs a render,
-// it draws the oldest change first, until kViewportPanesPerFrame panes or
-// kViewportPixelsPerFrame pixels, and always at least one.
+// it draws those with no image yet first, then the oldest change, until
+// kViewportPanesPerFrame panes or kViewportPixelsPerFrame pixels, and always at
+// least one. An incomplete draw waits behind the others before it is tried again.
 class ViewportQueue {
 public:
     struct Job {
@@ -78,7 +80,8 @@ private:
     };
     std::unordered_map<engine_core::InstanceId, Entry> entries_;
     std::vector<engine_core::InstanceId> forgotten_;
-    std::vector<std::pair<std::uint64_t, engine_core::InstanceId>> due_;
+    // Due panes by priority: no image yet first, then the oldest change, then id.
+    std::vector<std::tuple<bool, std::uint64_t, engine_core::InstanceId>> due_;
     std::uint64_t frame_ = 1;
 };
 

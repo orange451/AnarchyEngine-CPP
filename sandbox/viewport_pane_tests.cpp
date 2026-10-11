@@ -335,3 +335,17 @@ TEST_CASE("VW7 a WireframeAdornment in a pane under Workspace is not drawn", "[v
     game.set_parent(wire.id(), pane.id());
     REQUIRE_FALSE(wire.drawn());
 }
+
+TEST_CASE("VW8 a Skybox in a pane under Lighting is not the place's sky", "[viewport]") {
+    SimRole role;
+    engine_core::Game game;
+    engine_core::ViewportPane& pane = game.create<engine_core::ViewportPane>();
+    game.set_parent(pane.id(), game.scene_service("Lighting"));
+    engine_core::Skybox& sky = game.create<engine_core::Skybox>();
+    game.set_parent(sky.id(), pane.id());
+    engine_core::SnapshotPump pump;
+    pump.reserve(engine_core::DataModel::kMaxInstances);
+    pump.prepare_copy(game);
+    pump.publish();
+    REQUIRE_FALSE(pump.front().sky.present);
+}

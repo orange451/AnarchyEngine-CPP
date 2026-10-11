@@ -44,8 +44,12 @@ public:
     ViewportRenderer& operator=(const ViewportRenderer&) = delete;
 
     void setScene(engine_core::InstanceId pane, std::shared_ptr<const engine_core::VisualViewport> scene);
-    // The folder an owned pair of caches loads from. A host's own caches keep theirs.
+    // The folder an owned pair of caches loads from, taken up at the next
+    // renderPending, with the context current, since changing it deletes what
+    // the caches hold. A host's own caches keep theirs.
     void setResourcesRoot(const std::filesystem::path& root);
+    // For checks: the root the owned caches load from now.
+    const std::filesystem::path& resourcesRoot() const { return root_; }
     // Paint: pane's last image over x, y, width, height (window points), at
     // opacity, and notes the pane shown at its pixel size.
     void composite(jadefx::UiRenderer& ui, engine_core::InstanceId pane, double x, double y, double width,
@@ -84,6 +88,8 @@ private:
     std::vector<std::vector<MeshDraw>> prefabDraws_;
     std::vector<MeshDraw> draws_;
     std::vector<LightDraw> lights_;
+    std::filesystem::path root_;
+    std::filesystem::path pendingRoot_;
     bool attempted_ = false;
     bool ready_ = false;
 };

@@ -401,8 +401,8 @@ public:
     void setCulling(bool culling) { culling_ = culling; }
     // 0 (the default) destroys a size's buffers when another size draws, as
     // the Scene View wants. Above 0, a size's buffers are parked instead, and
-    // parked sets are deleted least recently used first while they and the
-    // new set total more than bytes: one Renderer drawing panes of a few
+    // parked sets are deleted least recently used first while they total more
+    // than bytes: one Renderer drawing panes of a few
     // sizes in turn does not make its buffers again each time.
     void setTargetPool(std::size_t bytes) { targetPool_ = bytes; }
     // How many Skybox images' cubes stay made at once (1 by default).

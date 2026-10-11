@@ -1,6 +1,7 @@
 #include "ide/IdeLayout.hpp"
 #include "runner/GameView.hpp"
 #include "runner/ViewportNode.hpp"
+#include "runner/ViewportRenderer.hpp"
 
 #include "Camera.hpp"
 #include "DataModel.hpp"
@@ -167,6 +168,13 @@ int RunViewportPaneTests(ide::IdeLayout& layout, jadefx::Scene& scene) {
         Expect(reportedWidth > 0.f && std::abs(reportedWidth - static_cast<float>(node->getWidth())) < 0.5f,
                "VN8 a pane's Camera gets the pane's size as its ViewportSize");
         view->setSnapshotForTest(nullptr);
+    }
+
+    // VN9: a plugin pane's owned caches change root only in paint, with their context current.
+    {
+        runner::ViewportRenderer owned(nullptr, nullptr);
+        owned.setResourcesRoot("elsewhere");
+        Expect(owned.resourcesRoot().empty(), "VN9 a new root waits for the next paint");
     }
 
     engine.on_simulation([&](engine_core::DataModel& game) {

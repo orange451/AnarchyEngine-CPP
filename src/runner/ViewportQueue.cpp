@@ -44,18 +44,19 @@ int ViewportQueue::renderPending(const Draw& draw) {
         if (entry.dirtySince == 0) {
             entry.dirtySince = frame_;
         }
-        due_.emplace_back(entry.dirtySince, pane);
+        due_.emplace_back(entry.hasImage, entry.dirtySince, pane);
     }
     std::sort(due_.begin(), due_.end());
     int drew = 0;
     long long pixels = 0;
     for (const auto& due : due_) {
-        Entry& entry = entries_[due.second];
+        const engine_core::InstanceId pane = std::get<2>(due);
+        Entry& entry = entries_[pane];
         const long long cost = static_cast<long long>(entry.shownWidth) * entry.shownHeight;
         if (drew > 0 && (drew >= kViewportPanesPerFrame || pixels + cost > kViewportPixelsPerFrame)) {
             break;
         }
-        const Job job{due.second, entry.scene, entry.shownWidth, entry.shownHeight};
+        const Job job{pane, entry.scene, entry.shownWidth, entry.shownHeight};
         const Result result = draw(job);
         ++drew;
         pixels += cost;
@@ -67,9 +68,10 @@ int ViewportQueue::renderPending(const Draw& draw) {
         entry.drawnHeight = job.height;
         entry.drawnRevision = job.scene->revision;
         entry.complete = result == Result::Complete;
-        if (entry.complete) {
-            entry.dirtySince = 0;
-        }
+        // Complete needs nothing more. Incomplete goes behind the panes
+        // waiting longer, so a texture that streams for seconds does not keep
+        // the same few panes drawing while the rest wait.
+        entry.dirtySince = entry.complete ? 0 : frame_ + 1;
     }
     for (auto it = entries_.begin(); it != entries_.end();) {
         it->second.shown = false;

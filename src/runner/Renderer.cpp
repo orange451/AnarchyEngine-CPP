@@ -669,8 +669,8 @@ bool Renderer::ensureTargets(int width, int height) {
                 return true;
             }
         }
-        // Least recently used first, while the parked sets and the new one are over the pool.
-        std::size_t total = TargetBytes(width, height);
+        // Least recently used first, while the parked sets are over the pool.
+        std::size_t total = 0;
         for (const TargetSet& set : parked_) {
             total += TargetBytes(set.width, set.height);
         }
@@ -2861,6 +2861,8 @@ void Renderer::shutdown() {
     probeFilled_[1] = false;
     probedDepth_.reset();
     sceneDepth_ = SceneDepth{};
+    // The current set first: unparking writes over its names.
+    destroyTargets();
     for (const TargetSet& set : parked_) {
         unparkTargets(set);
         destroyTargets();

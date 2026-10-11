@@ -167,3 +167,26 @@ TEST_CASE("VQ7 a pane not shown for 60 frames is forgotten", "[viewport]") {
     int height = 0;
     REQUIRE_FALSE(queue.image(1, width, height));
 }
+
+TEST_CASE("VQ8 panes whose draws stay incomplete do not starve the others", "[viewport]") {
+    // While anything streams, every draw comes back Incomplete: each of 24
+    // shown panes still gets an image within 3 frames, 8 a frame.
+    ViewportQueue queue;
+    Recorder record;
+    record.result = ViewportQueue::Result::Incomplete;
+    for (InstanceId pane = 1; pane <= 24; ++pane) {
+        queue.setScene(pane, scene(pane, 1));
+    }
+    for (int frame = 0; frame < 3; ++frame) {
+        for (InstanceId pane = 1; pane <= 24; ++pane) {
+            queue.shown(pane, 64, 64);
+        }
+        queue.renderPending(record.draw());
+    }
+    int width = 0;
+    int height = 0;
+    for (InstanceId pane = 1; pane <= 24; ++pane) {
+        INFO(pane);
+        REQUIRE(queue.image(pane, width, height));
+    }
+}

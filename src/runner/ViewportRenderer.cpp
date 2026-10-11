@@ -60,14 +60,7 @@ void ViewportRenderer::setScene(engine_core::InstanceId pane,
     queue_.setScene(pane, std::move(scene));
 }
 
-void ViewportRenderer::setResourcesRoot(const std::filesystem::path& root) {
-    if (ownMeshes_) {
-        ownMeshes_->setRoot(root);
-    }
-    if (ownTextures_) {
-        ownTextures_->setRoot(root);
-    }
-}
+void ViewportRenderer::setResourcesRoot(const std::filesystem::path& root) { pendingRoot_ = root; }
 
 bool ViewportRenderer::ensureGraphics() {
     if (attempted_) {
@@ -216,6 +209,15 @@ void ViewportRenderer::renderPending() {
     PROFILE_SCOPE("Viewport panes", profiler::Group::Render);
     if (!ensureGraphics()) {
         return;
+    }
+    if (pendingRoot_ != root_ && (ownMeshes_ || ownTextures_)) {
+        root_ = pendingRoot_;
+        if (ownMeshes_) {
+            ownMeshes_->setRoot(root_);
+        }
+        if (ownTextures_) {
+            ownTextures_->setRoot(root_);
+        }
     }
     if (ownTextures_) {
         // What finished loading since last frame goes up before anything draws.

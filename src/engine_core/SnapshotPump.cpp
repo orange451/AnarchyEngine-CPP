@@ -494,6 +494,10 @@ const DataModel* SnapshotPump::find_first_of(const DataModel& game, InstanceId r
             if (object != nullptr && (... || (dynamic_cast<const T*>(object) != nullptr))) {
                 return object;
             }
+            // A ViewportPane's contents are its own world, not the place's.
+            if (object != nullptr && object->viewport_pane()) {
+                continue;
+            }
         }
         const std::size_t first = lighting_walk_.size();
         for (InstanceId child = game.first_child(id); child != 0; child = game.next_sibling(child)) {

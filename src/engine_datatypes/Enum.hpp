@@ -47,6 +47,9 @@ enum class TransformSpace { World = 0, Local = 1 };
 const EnumType& raycast_filter_type_enum();
 // raycast_filter_type_enum's items, by value.
 enum class RaycastFilterType { Exclude = 0, Include = 1 };
+// Exclude 0, Include 1. A PhysicsService collision group's filter type
+// (CollisionGroups::FilterType has the same values).
+const EnumType& collision_filter_type_enum();
 // X 0, Y 1, Z 2, XY 3, YZ 4, XZ 5.
 const EnumType& dragger_handle_enum();
 // Translation 0, Rotation 1: what a Dragger's handles do. Dragger.TransformMode.

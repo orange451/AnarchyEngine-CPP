@@ -47,7 +47,8 @@ bool CollisionGroups::pair(int a, int b) const {
     if ((explicit_[ia] & bit(b)) != 0) {
         return (value_[ia] & bit(b)) != 0;
     }
-    return slots_[ia].type == Type::Blacklist && slots_[static_cast<std::size_t>(b)].type == Type::Blacklist;
+    return slots_[ia].filter_type == FilterType::Exclude &&
+           slots_[static_cast<std::size_t>(b)].filter_type == FilterType::Exclude;
 }
 
 void CollisionGroups::changed() {
@@ -65,7 +66,7 @@ void CollisionGroups::changed() {
     ++revision_;
 }
 
-std::optional<std::string> CollisionGroups::register_group(const std::string& name, Type type) {
+std::optional<std::string> CollisionGroups::register_group(const std::string& name, FilterType filter_type) {
     if (name.empty()) {
         return std::string("Collision group name must not be empty");
     }
@@ -83,7 +84,7 @@ std::optional<std::string> CollisionGroups::register_group(const std::string& na
     }
     const std::size_t slot = static_cast<std::size_t>(free);
     slots_[slot].name = name;
-    slots_[slot].type = type;
+    slots_[slot].filter_type = filter_type;
     slots_[slot].order = next_order_++;
     explicit_[slot] = 0;
     value_[slot] = 0;
@@ -114,12 +115,12 @@ std::optional<std::string> CollisionGroups::unregister_group(const std::string& 
     return std::nullopt;
 }
 
-std::optional<std::string> CollisionGroups::set_type(const std::string& name, Type type) {
+std::optional<std::string> CollisionGroups::set_filter_type(const std::string& name, FilterType filter_type) {
     const int found = bit_of(name);
     if (found < 0) {
         return unknown(name);
     }
-    slots_[static_cast<std::size_t>(found)].type = type;
+    slots_[static_cast<std::size_t>(found)].filter_type = filter_type;
     changed();
     return std::nullopt;
 }
@@ -167,11 +168,11 @@ std::vector<CollisionGroups::Info> CollisionGroups::groups() const {
         const Slot& slot = slots_[static_cast<std::size_t>(i)];
         Info info;
         info.name = slot.name;
-        info.type = slot.type;
+        info.filter_type = slot.filter_type;
         for (const int j : order) {
             const bool set = (explicit_[static_cast<std::size_t>(i)] & bit(j)) != 0;
             const bool value = (value_[static_cast<std::size_t>(i)] & bit(j)) != 0;
-            if (set && value == (slot.type == Type::Whitelist)) {
+            if (set && value == (slot.filter_type == FilterType::Include)) {
                 info.list.push_back(slots_[static_cast<std::size_t>(j)].name);
             }
         }

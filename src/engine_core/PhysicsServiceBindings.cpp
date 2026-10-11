@@ -6,6 +6,7 @@
 
 #include "CollisionGroups.hpp"
 #include "DataModel.hpp"
+#include "Enum.hpp"
 #include "LuaApi.hpp"
 #include "ScriptRuntime.hpp"
 
@@ -24,22 +25,13 @@ namespace {
 
 CollisionGroups& groups_of(lua_State* state) { return ScriptBindings::physics_service_groups(state); }
 
-CollisionGroups::Type check_type(lua_State* state, int index, bool optional) {
+// Enum.CollisionFilterType at index (an item, its name, or its value);
+// Exclude when optional and absent.
+CollisionGroups::FilterType check_filter_type(lua_State* state, int index, bool optional) {
     if (optional && lua_isnoneornil(state, index)) {
-        return CollisionGroups::Type::Blacklist;
+        return CollisionGroups::FilterType::Exclude;
     }
-    const char* text = luaL_checkstring(state, index);
-    if (std::strcmp(text, "Blacklist") == 0) {
-        return CollisionGroups::Type::Blacklist;
-    }
-    if (std::strcmp(text, "Whitelist") == 0) {
-        return CollisionGroups::Type::Whitelist;
-    }
-    luaL_error(state, "collisionType must be \"Blacklist\" or \"Whitelist\"");
-}
-
-const char* type_name(CollisionGroups::Type type) {
-    return type == CollisionGroups::Type::Whitelist ? "Whitelist" : "Blacklist";
+    return static_cast<CollisionGroups::FilterType>(check_enum_arg(state, index, collision_filter_type_enum()));
 }
 
 void raise(lua_State* state, const std::optional<std::string>& refused) {
@@ -52,7 +44,7 @@ int register_group(lua_State* state) {
     return lua_guard(state, [&] {
         CollisionGroups& groups = groups_of(state);
         const std::string name = luaL_checkstring(state, 2);
-        raise(state, groups.register_group(name, check_type(state, 3, true)));
+        raise(state, groups.register_group(name, check_filter_type(state, 3, true)));
         return 0;
     });
 }
@@ -64,11 +56,11 @@ int unregister_group(lua_State* state) {
     });
 }
 
-int set_type(lua_State* state) {
+int set_filter_type(lua_State* state) {
     return lua_guard(state, [&] {
         CollisionGroups& groups = groups_of(state);
         const std::string name = luaL_checkstring(state, 2);
-        raise(state, groups.set_type(name, check_type(state, 3, false)));
+        raise(state, groups.set_filter_type(name, check_filter_type(state, 3, false)));
         return 0;
     });
 }
@@ -126,8 +118,8 @@ int registered_groups(lua_State* state) {
             lua_createtable(state, 0, 3);
             lua_pushlstring(state, info.name.data(), info.name.size());
             lua_setfield(state, -2, "name");
-            lua_pushstring(state, type_name(info.type));
-            lua_setfield(state, -2, "type");
+            push_enum_item(state, collision_filter_type_enum(), static_cast<int>(info.filter_type));
+            lua_setfield(state, -2, "filterType");
             lua_createtable(state, static_cast<int>(info.list.size()), 0);
             int at = 1;
             for (const std::string& other : info.list) {
@@ -153,7 +145,7 @@ ANARCHY_LUA_REGISTER(register_physics_service_lua) {
     const LuaField methods[] = {
         lua_method("RegisterCollisionGroup", "nil", reinterpret_cast<void*>(&register_group)),
         lua_method("UnregisterCollisionGroup", "nil", reinterpret_cast<void*>(&unregister_group)),
-        lua_method("SetCollisionGroupCollisionType", "nil", reinterpret_cast<void*>(&set_type)),
+        lua_method("SetCollisionGroupFilterType", "nil", reinterpret_cast<void*>(&set_filter_type)),
         lua_method("CollisionGroupSetCollidable", "nil", reinterpret_cast<void*>(&set_collidable)),
         lua_method("CollisionGroupSetCollidableBulk", "nil", reinterpret_cast<void*>(&set_collidable_bulk)),
         lua_method("CollisionGroupsAreCollidable", "boolean", reinterpret_cast<void*>(&are_collidable)),

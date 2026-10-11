@@ -5,7 +5,7 @@ Date: 2026-10-11. Status: approved design, not yet planned.
 ## Goal
 
 Let scripts control which physics bodies interact, as Roblox's collision
-groups do, with the Whitelist/Blacklist group types of the user's
+groups do, with the Include/Exclude group filter types of the user's
 CollisionGroupManager module built in. It must hold for welded assemblies,
 PlayerControllers, held (bone) sides, CanCollide, and rays.
 
@@ -16,7 +16,7 @@ PlayerControllers, held (bone) sides, CanCollide, and rays.
 | Where a body names its group | `CollisionGroup`, a saved string property on PhysicsBase (so PhysicsObject, PlayerController, Brush). Default `"Default"`. Any name may be set at any time. |
 | Where groups live | `PhysicsService`, a script service. Groups are registered at runtime by scripts; nothing about them is saved. It starts each run with only `Default`, and Stop clears it. |
 | A body whose group is not registered | Behaves as `Default` until a script registers that name; its filter then updates. |
-| Group types | Built in. `Blacklist` (the default type): collides with every group except those listed. `Whitelist`: collides with no group except those listed. |
+| Group types | Built in, as `Enum.CollisionFilterType` (named after `Enum.RaycastFilterType`; the user's module called them Blacklist and Whitelist). `Exclude` (the default): collides with every group except those listed. `Include`: collides with no group except those listed. |
 | How Box3D filters | Shape filter bits (64-bit category and mask), not the custom filter callback: no per-pair cost. |
 | Group limit | 62. Bits 62 and 63 are reserved for queries. Roblox's limit is 32. |
 | Rays | `RaycastParams.CollisionGroup` (default `"Default"`), as in Roblox. Studio's selection rays ignore groups. |
@@ -38,17 +38,17 @@ may equal `b`.
 `collidable(a, b)`:
 
 1. An explicit setting for `{a, b}` decides.
-2. Else: true only when both groups are `Blacklist`.
+2. Else: true only when both groups are `Exclude`.
 
-So a new group never touches a `Whitelist` group unless the pair is set to
-collide, and two `Blacklist` groups collide unless set not to. A group's
+So a new group never touches an `Include` group unless the pair is set to
+collide, and two `Exclude` groups collide unless set not to. A group's
 "list" (as `GetRegisteredCollisionGroups` reports it, and as the user's
-module calls CollisionList) is derived: for a `Blacklist` group, the groups
-it is explicitly set not to collide with; for a `Whitelist` group, the
+module calls CollisionList) is derived: for an `Exclude` group, the groups
+it is explicitly set not to collide with; for an `Include` group, the
 groups it is explicitly set to collide with. Changing a group's type keeps
 its explicit settings.
 
-`Default` is always registered, as `Blacklist`, and cannot be unregistered;
+`Default` is always registered, as `Exclude`, and cannot be unregistered;
 its type may be changed.
 
 ## 3. `PhysicsService` API
@@ -58,14 +58,14 @@ not saved. Every method runs on the simulation thread.
 
 | Method | Behavior |
 | --- | --- |
-| `RegisterCollisionGroup(name: string, collisionType: string?)` | `collisionType` is `"Blacklist"` (default) or `"Whitelist"`; anything else raises. An already registered name: no change, not even to its type. More than `GetMaxCollisionGroups()` groups raises `"Too many collision groups (the most is 62)"`. An empty name raises. |
+| `RegisterCollisionGroup(name: string, filterType: Enum.CollisionFilterType?)` | `filterType` is `Exclude` (default) or `Include` (an item, or its name); anything else raises. An already registered name: no change, not even to its type. More than `GetMaxCollisionGroups()` groups raises `"Too many collision groups (the most is 62)"`. An empty name raises. |
 | `UnregisterCollisionGroup(name: string)` | Removes the group and every explicit setting naming it. Its bodies behave as `Default`. `Default` raises. An unknown name does nothing. |
-| `SetCollisionGroupCollisionType(name: string, collisionType: string)` | Changes the type. Unknown name raises `Unknown collision group "<name>"; did you forget to call RegisterCollisionGroup?`. |
+| `SetCollisionGroupFilterType(name: string, filterType: Enum.CollisionFilterType)` | Changes the filter type. Unknown name raises `Unknown collision group "<name>"; did you forget to call RegisterCollisionGroup?`. |
 | `CollisionGroupSetCollidable(name1: string, name2: string, collidable: boolean)` | Records the explicit setting for the pair. Both must be registered, else the same unknown-group error. |
 | `CollisionGroupSetCollidableBulk(name: string, names: {string}, collidable: boolean)` | `CollisionGroupSetCollidable` for each of `names`. |
 | `CollisionGroupsAreCollidable(name1: string, name2: string): boolean` | `collidable` (section 2). An unregistered name counts as `Default`. |
 | `IsCollisionGroupRegistered(name: string): boolean` | |
-| `GetRegisteredCollisionGroups(): {{name: string, type: string, list: {string}}}` | In registration order, `Default` first. |
+| `GetRegisteredCollisionGroups(): {{name: string, filterType: Enum.CollisionFilterType, list: {string}}}` | In registration order, `Default` first. |
 | `GetMaxCollisionGroups(): number` | 62. |
 
 Each change bumps the service's revision.
@@ -134,7 +134,7 @@ hit when its group matches.
 
 Sandbox (`[physics][collision-group]` unless noted):
 
-- `collidable`: default Blacklist pairs collide; a Whitelist group touches
+- `collidable`: default Exclude pairs collide; an Include group touches
   only what it is set to; an explicit setting beats the types both ways;
   changing a type keeps explicit settings; `GetRegisteredCollisionGroups`
   lists derived `list`s.
@@ -143,7 +143,7 @@ Sandbox (`[physics][collision-group]` unless noted):
 - Two boxes in groups set not to collide pass through each other; set back
   to collide, they rest on each other.
 - A body naming a group before it is registered behaves as `Default`; once
-  registered as a Whitelist group, it falls through a Default floor.
+  registered as an Include group, it falls through a Default floor.
 - Changing `CollisionGroup` during play takes effect at the next step.
 - A group set not to collide with itself: two welded members stay one
   body; two separate bodies in it pass through each other.

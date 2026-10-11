@@ -42,14 +42,18 @@ TEST_CASE("CGL1 PhysicsService registers groups and answers whether they collide
     const std::string out = rig.run(R"(
         local P = game:GetService("PhysicsService")
         P:RegisterCollisionGroup("A")
-        P:RegisterCollisionGroup("W", "Whitelist")
+        P:RegisterCollisionGroup("W", Enum.CollisionFilterType.Include)
         print(P:IsCollisionGroupRegistered("A"), P:IsCollisionGroupRegistered("Nope"), P:GetMaxCollisionGroups())
         print(P:CollisionGroupsAreCollidable("A", "Default"), P:CollisionGroupsAreCollidable("W", "A"))
         P:CollisionGroupSetCollidableBulk("W", { "A", "Default" }, true)
         print(P:CollisionGroupsAreCollidable("W", "A"), P:CollisionGroupsAreCollidable("W", "Default"))
-        P:SetCollisionGroupCollisionType("A", "Whitelist")
+        P:SetCollisionGroupFilterType("A", Enum.CollisionFilterType.Include)
         local groups = P:GetRegisteredCollisionGroups()
-        print(#groups, groups[1].name, groups[3].name, groups[3].type, table.concat(groups[3].list, ","))
+        print(#groups, groups[1].name, groups[3].name, groups[3].filterType == Enum.CollisionFilterType.Include,
+            groups[1].filterType == Enum.CollisionFilterType.Exclude, table.concat(groups[3].list, ","))
+        -- An item's name works too, as for any Enum argument.
+        P:SetCollisionGroupFilterType("A", "Exclude")
+        print(P:CollisionGroupsAreCollidable("A", "Default"))
         P:UnregisterCollisionGroup("A")
         print(P:IsCollisionGroupRegistered("A"))
     )");
@@ -58,21 +62,23 @@ TEST_CASE("CGL1 PhysicsService registers groups and answers whether they collide
     REQUIRE(has(out, "true\tfalse\n"));
     REQUIRE(has(out, "true\ttrue\n"));
     // A group's list is in registration order, as the groups are.
-    REQUIRE(has(out, "3\tDefault\tW\tWhitelist\tDefault,A\n"));
-    REQUIRE(has(out, "false\n"));
+    REQUIRE(has(out, "3\tDefault\tW\ttrue\ttrue\tDefault,A\ntrue\nfalse\n"));
 }
 
 TEST_CASE("CGL2 PhysicsService raises on bad calls", "[collision-group][lua]") {
     GroupsRig rig;
     const std::string out = rig.run(R"(
         local P = game:GetService("PhysicsService")
-        print(pcall(function() P:SetCollisionGroupCollisionType("X", "Whitelist") end))
+        print(pcall(function() P:SetCollisionGroupFilterType("X", Enum.CollisionFilterType.Include) end))
         print(pcall(function() P:RegisterCollisionGroup("Y", "Greylist") end))
+        print(pcall(function() P:RegisterCollisionGroup("Z", Enum.RaycastFilterType.Include) end))
         print(pcall(function() P:UnregisterCollisionGroup("Default") end))
     )");
     INFO(out);
     REQUIRE(has(out, "Unknown collision group \"X\"; did you forget to call RegisterCollisionGroup?"));
-    REQUIRE(has(out, "collisionType must be \"Blacklist\" or \"Whitelist\""));
+    REQUIRE(has(out, "Enum.CollisionFilterType expected"));
+    // Neither wrong argument registered anything.
+    REQUIRE_FALSE(has(out, "true"));
     REQUIRE(has(out, "Default cannot be unregistered"));
 }
 

@@ -8,9 +8,9 @@
 #include <string>
 
 using engine_core::CollisionGroups;
-using Type = CollisionGroups::Type;
+using FilterType = CollisionGroups::FilterType;
 
-TEST_CASE("CG1 Default alone, Blacklist, collides with itself", "[collision-group]") {
+TEST_CASE("CG1 Default alone, Exclude, collides with itself", "[collision-group]") {
     CollisionGroups groups;
     REQUIRE(groups.registered("Default"));
     REQUIRE(groups.collidable("Default", "Default"));
@@ -21,10 +21,10 @@ TEST_CASE("CG1 Default alone, Blacklist, collides with itself", "[collision-grou
     REQUIRE(groups.collidable("Nope", "Default"));
 }
 
-TEST_CASE("CG2 two Blacklist groups collide unless set not to, both ways", "[collision-group]") {
+TEST_CASE("CG2 two Exclude groups collide unless set not to, both ways", "[collision-group]") {
     CollisionGroups groups;
-    REQUIRE_FALSE(groups.register_group("A", Type::Blacklist));
-    REQUIRE_FALSE(groups.register_group("B", Type::Blacklist));
+    REQUIRE_FALSE(groups.register_group("A", FilterType::Exclude));
+    REQUIRE_FALSE(groups.register_group("B", FilterType::Exclude));
     REQUIRE(groups.collidable("A", "B"));
     REQUIRE_FALSE(groups.set_collidable("A", "B", false));
     REQUIRE_FALSE(groups.collidable("A", "B"));
@@ -33,23 +33,23 @@ TEST_CASE("CG2 two Blacklist groups collide unless set not to, both ways", "[col
     REQUIRE((groups.collides_with("A") & groups.category("Default")) != 0u);
 }
 
-TEST_CASE("CG3 a Whitelist group touches only what it is set to, including groups made later",
+TEST_CASE("CG3 an Include group touches only what it is set to, including groups made later",
           "[collision-group]") {
     CollisionGroups groups;
-    REQUIRE_FALSE(groups.register_group("Ghost", Type::Whitelist));
+    REQUIRE_FALSE(groups.register_group("Ghost", FilterType::Include));
     REQUIRE_FALSE(groups.collidable("Ghost", "Default"));
     REQUIRE_FALSE(groups.set_collidable("Ghost", "Default", true));
     REQUIRE(groups.collidable("Ghost", "Default"));
-    REQUIRE_FALSE(groups.register_group("Later", Type::Blacklist));
+    REQUIRE_FALSE(groups.register_group("Later", FilterType::Exclude));
     REQUIRE_FALSE(groups.collidable("Ghost", "Later"));
     REQUIRE_FALSE(groups.collidable("Ghost", "Ghost"));
 }
 
-TEST_CASE("CG4 a type change keeps explicit settings; lists are derived", "[collision-group]") {
+TEST_CASE("CG4 a filter type change keeps explicit settings; lists are derived", "[collision-group]") {
     CollisionGroups groups;
-    REQUIRE_FALSE(groups.register_group("A", Type::Blacklist));
-    REQUIRE_FALSE(groups.register_group("B", Type::Blacklist));
-    REQUIRE_FALSE(groups.register_group("C", Type::Blacklist));
+    REQUIRE_FALSE(groups.register_group("A", FilterType::Exclude));
+    REQUIRE_FALSE(groups.register_group("B", FilterType::Exclude));
+    REQUIRE_FALSE(groups.register_group("C", FilterType::Exclude));
     REQUIRE_FALSE(groups.set_collidable("A", "B", false));
     REQUIRE_FALSE(groups.set_collidable("A", "C", true));
     auto list_of = [&](const char* name) {
@@ -61,7 +61,7 @@ TEST_CASE("CG4 a type change keeps explicit settings; lists are derived", "[coll
         return std::vector<std::string>{"<missing>"};
     };
     REQUIRE(list_of("A") == std::vector<std::string>{"B"});
-    REQUIRE_FALSE(groups.set_type("A", Type::Whitelist));
+    REQUIRE_FALSE(groups.set_filter_type("A", FilterType::Include));
     REQUIRE_FALSE(groups.collidable("A", "B"));
     REQUIRE(groups.collidable("A", "C"));
     REQUIRE_FALSE(groups.collidable("A", "Default"));
@@ -75,32 +75,32 @@ TEST_CASE("CG4 a type change keeps explicit settings; lists are derived", "[coll
 TEST_CASE("CG5 refusals change nothing", "[collision-group]") {
     CollisionGroups groups;
     const std::uint64_t before = groups.revision();
-    REQUIRE(groups.register_group("", Type::Blacklist) == std::string("Collision group name must not be empty"));
+    REQUIRE(groups.register_group("", FilterType::Exclude) == std::string("Collision group name must not be empty"));
     REQUIRE(groups.unregister_group("Default") == std::string("Default cannot be unregistered"));
-    REQUIRE(groups.set_type("X", Type::Whitelist) ==
+    REQUIRE(groups.set_filter_type("X", FilterType::Include) ==
             std::string("Unknown collision group \"X\"; did you forget to call RegisterCollisionGroup?"));
     REQUIRE(groups.set_collidable("Default", "X", false) ==
             std::string("Unknown collision group \"X\"; did you forget to call RegisterCollisionGroup?"));
     REQUIRE(groups.revision() == before);
     for (int i = 1; i < CollisionGroups::kMaxGroups; ++i) {
-        REQUIRE_FALSE(groups.register_group("G" + std::to_string(i), Type::Blacklist));
+        REQUIRE_FALSE(groups.register_group("G" + std::to_string(i), FilterType::Exclude));
     }
-    REQUIRE(groups.register_group("One too many", Type::Blacklist) ==
+    REQUIRE(groups.register_group("One too many", FilterType::Exclude) ==
             std::string("Too many collision groups (the most is 62)"));
     // Registering an existing name again changes nothing, not even its type.
-    REQUIRE_FALSE(groups.register_group("G1", Type::Whitelist));
+    REQUIRE_FALSE(groups.register_group("G1", FilterType::Include));
     REQUIRE(groups.collidable("G1", "Default"));
 }
 
 TEST_CASE("CG6 unregistering frees the bit and its settings; reset leaves Default", "[collision-group]") {
     CollisionGroups groups;
-    REQUIRE_FALSE(groups.register_group("A", Type::Blacklist));
+    REQUIRE_FALSE(groups.register_group("A", FilterType::Exclude));
     const std::uint64_t a_bit = groups.category("A");
     REQUIRE_FALSE(groups.set_collidable("A", "Default", false));
     REQUIRE_FALSE(groups.unregister_group("A"));
     REQUIRE_FALSE(groups.registered("A"));
     REQUIRE(groups.category("A") == 1u);
-    REQUIRE_FALSE(groups.register_group("B", Type::Blacklist));
+    REQUIRE_FALSE(groups.register_group("B", FilterType::Exclude));
     REQUIRE(groups.category("B") == a_bit);
     REQUIRE(groups.collidable("B", "Default"));
     const std::uint64_t before = groups.revision();

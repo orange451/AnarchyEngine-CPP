@@ -17,14 +17,14 @@ namespace engine_core {
 // DataModel lock.
 class CollisionGroups {
 public:
-    // Blacklist: collides with every group but those set not to. Whitelist:
-    // with none but those set to.
-    enum class Type { Blacklist, Whitelist };
+    // Exclude: collides with every group but those set not to. Include:
+    // with none but those set to. Enum.CollisionFilterType's values.
+    enum class FilterType { Exclude = 0, Include = 1 };
     struct Info {
         std::string name;
-        Type type = Type::Blacklist;
-        // The exceptions to its type: for a Blacklist group, the groups it is
-        // set not to collide with; for a Whitelist group, those it is set to.
+        FilterType filter_type = FilterType::Exclude;
+        // The exceptions to its filter type: for an Exclude group, the groups
+        // it is set not to collide with; for an Include group, those it is set to.
         std::vector<std::string> list;
     };
 
@@ -37,18 +37,18 @@ public:
 
     // Each returns why it refused, changing nothing. Registering a name that
     // is registered already changes nothing, not even its type.
-    std::optional<std::string> register_group(const std::string& name, Type type);
+    std::optional<std::string> register_group(const std::string& name, FilterType filter_type);
     std::optional<std::string> unregister_group(const std::string& name);
-    std::optional<std::string> set_type(const std::string& name, Type type);
+    std::optional<std::string> set_filter_type(const std::string& name, FilterType filter_type);
     std::optional<std::string> set_collidable(const std::string& a, const std::string& b, bool collidable);
 
     bool registered(std::string_view name) const;
-    // An explicit setting decides; else true only when both are Blacklist.
+    // An explicit setting decides; else true only when both are Exclude.
     // An unregistered name counts as Default.
     bool collidable(std::string_view a, std::string_view b) const;
     // In registration order, Default first.
     std::vector<Info> groups() const;
-    // Default alone, Blacklist, with no explicit settings.
+    // Default alone, Exclude, with no explicit settings.
     void reset();
 
     // Filter bits. An unregistered name counts as Default.
@@ -62,7 +62,7 @@ public:
 private:
     struct Slot {
         std::string name;  // empty: free
-        Type type = Type::Blacklist;
+        FilterType filter_type = FilterType::Exclude;
         std::uint64_t order = 0;
     };
     int bit_of(std::string_view name) const;

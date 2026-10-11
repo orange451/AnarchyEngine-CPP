@@ -1832,7 +1832,7 @@ TEST_CASE("RM3b the march hits terrain only for a ray whose collision group coll
     settle(world, rig.game);
     rig.physics.sync(rig.game);
     REQUIRE(rig.physics.shape_count(t.id()) == 0u);   // no colliders: only the march can hit it
-    REQUIRE_FALSE(rig.game.collision_groups().register_group("Sky", engine_core::CollisionGroups::Type::Whitelist));
+    REQUIRE_FALSE(rig.game.collision_groups().register_group("Sky", engine_core::CollisionGroups::FilterType::Include));
     engine_core::RayFilter sky;
     sky.collision_group = "Sky";
     engine_core::RayFilter fallback;

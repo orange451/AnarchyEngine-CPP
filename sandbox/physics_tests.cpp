@@ -1691,11 +1691,11 @@ TEST_CASE("P43 every PhysicsBase has CollisionGroup, saved, Default; Play and St
     REQUIRE(value != nullptr);
     REQUIRE(value->as_string() == "Crates");
 
-    REQUIRE_FALSE(game.collision_groups().register_group("Crates", engine_core::CollisionGroups::Type::Whitelist));
+    REQUIRE_FALSE(game.collision_groups().register_group("Crates", engine_core::CollisionGroups::FilterType::Include));
     game.capture_place();
     game.start_simulation();
     REQUIRE_FALSE(game.collision_groups().registered("Crates"));
-    REQUIRE_FALSE(game.collision_groups().register_group("Crates", engine_core::CollisionGroups::Type::Whitelist));
+    REQUIRE_FALSE(game.collision_groups().register_group("Crates", engine_core::CollisionGroups::FilterType::Include));
     game.stop_simulation();
     REQUIRE_FALSE(game.collision_groups().registered("Crates"));
 }
@@ -1705,8 +1705,8 @@ namespace {
 using engine_core::CollisionGroups;
 
 void groups_apart(engine_core::DataModel& game, const char* a, const char* b) {
-    REQUIRE_FALSE(game.collision_groups().register_group(a, CollisionGroups::Type::Blacklist));
-    REQUIRE_FALSE(game.collision_groups().register_group(b, CollisionGroups::Type::Blacklist));
+    REQUIRE_FALSE(game.collision_groups().register_group(a, CollisionGroups::FilterType::Exclude));
+    REQUIRE_FALSE(game.collision_groups().register_group(b, CollisionGroups::FilterType::Exclude));
     REQUIRE_FALSE(game.collision_groups().set_collidable(a, b, false));
 }
 
@@ -1739,7 +1739,7 @@ TEST_CASE("P45 a body naming a group before it is registered is Default until it
     rig.play();
     rig.seconds(1.5);
     REQUIRE(near(y_of(box.transform()), 0.5f, 0.05f));
-    REQUIRE_FALSE(rig.game.collision_groups().register_group("Ghosts", CollisionGroups::Type::Whitelist));
+    REQUIRE_FALSE(rig.game.collision_groups().register_group("Ghosts", CollisionGroups::FilterType::Include));
     rig.seconds(1.5);
     REQUIRE(y_of(box.transform()) < -2.f);
 }
@@ -1749,7 +1749,7 @@ TEST_CASE("P46 changing CollisionGroup during play takes effect at the next step
     rig.floor();
     PhysicsObject& box = rig.body(at(0.f, 3.f, 0.f), Vec3{1.f, 1.f, 1.f}, false);
     rig.play();
-    REQUIRE_FALSE(rig.game.collision_groups().register_group("Ghosts", CollisionGroups::Type::Whitelist));
+    REQUIRE_FALSE(rig.game.collision_groups().register_group("Ghosts", CollisionGroups::FilterType::Include));
     rig.seconds(1.5);
     REQUIRE(near(y_of(box.transform()), 0.5f, 0.05f));
     REQUIRE_FALSE(box.set_collision_group("Ghosts"));
@@ -1777,7 +1777,7 @@ TEST_CASE("P47 a group apart from itself: welded members stay one body; separate
         REQUIRE_FALSE(body->set_collision_group("Loners"));
     }
     rig.play();
-    REQUIRE_FALSE(rig.game.collision_groups().register_group("Loners", CollisionGroups::Type::Blacklist));
+    REQUIRE_FALSE(rig.game.collision_groups().register_group("Loners", CollisionGroups::FilterType::Exclude));
     REQUIRE_FALSE(rig.game.collision_groups().set_collidable("Loners", "Loners", false));
     rig.seconds(2.0);
     REQUIRE(rig.physics.body_key(a.id()) == rig.physics.body_key(b.id()));
@@ -1801,7 +1801,7 @@ TEST_CASE("P48 a welded assembly's members each collide by their own group", "[p
     rig.game.set_parent(weld.id(), workspace_of(rig.game));
     REQUIRE_FALSE(bottom.set_collision_group("Ghosts"));
     rig.play();
-    REQUIRE_FALSE(rig.game.collision_groups().register_group("Ghosts", CollisionGroups::Type::Whitelist));
+    REQUIRE_FALSE(rig.game.collision_groups().register_group("Ghosts", CollisionGroups::FilterType::Include));
     rig.seconds(3.0);
     REQUIRE(near(y_of(top.transform()), 0.5f, 0.05f));
     REQUIRE(near(y_of(bottom.transform()), -1.5f, 0.05f));

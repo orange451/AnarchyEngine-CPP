@@ -69,7 +69,7 @@ TEST_CASE("GUI1 game has a Gui service, after Scripts", "[gui]") {
 TEST_CASE("GUI2 the classes, their bases, and their defaults", "[gui]") {
     SimRole role;
     engine_core::Game game;
-    for (const char* name : {"ScreenGui", "Pane", "ImagePane", "HBox", "VBox", "Label", "Button", "TextField", "CSS"}) {
+    for (const char* name : {"ScreenGui", "Pane", "ImagePane", "ViewportPane", "HBox", "VBox", "Label", "Button", "TextField", "CSS"}) {
         INFO(name);
         REQUIRE(engine_core::lua_creatable_known(name));
         REQUIRE(engine_core::project_class_known(name));

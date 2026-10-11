@@ -60,6 +60,9 @@ const char* IconFileOverride(const std::string& class_name) {
     if (class_name == "ImagePane") {
         return "Texture.png";
     }
+    if (class_name == "ViewportPane") {
+        return "monitor-window-3d.png";
+    }
     if (class_name == "HBox") {
         return "hbox.png";
     }

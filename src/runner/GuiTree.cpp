@@ -87,7 +87,7 @@ jadefx::Color NodeColor(engine_core::ColorRgb color, float alpha = 1.f) {
 }
 
 bool IsPaneClass(const std::string& name) {
-    return name == "Pane" || name == "ImagePane" || name == "HBox" || name == "VBox";
+    return name == "Pane" || name == "ImagePane" || name == "ViewportPane" || name == "HBox" || name == "VBox";
 }
 
 // How often a file an ImagePane draws is looked at again.
@@ -208,6 +208,8 @@ std::shared_ptr<jadefx::Node> GuiTree::makeNode(engine_core::InstanceId id, cons
         node = std::make_shared<GuiNode<jadefx::StackPane>>("pane", input, false);
     } else if (className == "ImagePane") {
         node = std::make_shared<GuiNode<jadefx::StackPane>>("imagepane", input, false);
+    } else if (className == "ViewportPane") {
+        node = std::make_shared<GuiNode<jadefx::StackPane>>("viewportpane", input, false);
     } else if (className == "HBox") {
         node = std::make_shared<GuiNode<jadefx::HBox>>("hbox", input, false);
     } else if (className == "VBox") {

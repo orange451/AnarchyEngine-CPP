@@ -1208,7 +1208,7 @@ void testInsertFilter() {
         "Sound", "SoundEmitter",
         "Animator", "Attachment", "Bone", "RigidConstraint", "WeldConstraint",
         "BillboardGui", "ScreenGui",
-        "HBox", "ImagePane", "Pane", "VBox",
+        "HBox", "ImagePane", "Pane", "VBox", "ViewportPane",
         "AssetPicker", "Button", "Label", "Slider", "TextField",
         "Animation", "Dragger", "Material", "Mesh", "Prefab", "Texture", "WireframeAdornment"};
     if (shown != expected) {

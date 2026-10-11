@@ -49,6 +49,7 @@ inline int class_rank(std::string_view class_name) {
         {"HBox", 12},
         {"VBox", 12},
         {"ImagePane", 12},
+        {"ViewportPane", 12},
         {"Label", 13},
         {"Button", 13},
         {"TextField", 13},

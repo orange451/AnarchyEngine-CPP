@@ -205,6 +205,9 @@ public:
     // True for a class runner::GuiLayer draws in the 3D world (BillboardGui).
     // Read once, when its entity is issued.
     virtual bool billboard_gui() const { return false; }
+    // True for a ViewportPane, which draws the instances inside it as a world
+    // of their own. Read once, when its entity is issued.
+    virtual bool viewport_pane() const { return false; }
     // True for a WireframeAdornment. Read once, when its entity is issued.
     virtual bool wireframe() const { return false; }
     // True for a Constraint. Read once, when its entity is issued.

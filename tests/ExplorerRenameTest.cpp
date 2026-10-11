@@ -1034,6 +1034,10 @@ void insert_list_suits_the_parent() {
     Expect(ide::insert_suits("ScreenGui", "Button"), "A ScreenGui suits a Button");
     Expect(!ide::insert_suits("ScreenGui", "ScreenGui"), "A ScreenGui does not suit another");
     Expect(ide::insert_suits("Lighting", "SpotLight"), "Lighting suits a light");
+    Expect(ide::insert_suits("ViewportPane", "GameObject"), "Insert offers a GameObject in a ViewportPane");
+    Expect(ide::insert_suits("ViewportPane", "Camera"), "Insert offers a Camera in a ViewportPane");
+    Expect(ide::insert_suits("ViewportPane", "Skybox"), "Insert offers a Skybox in a ViewportPane");
+    Expect(ide::insert_suits("ViewportPane", "Label"), "Insert still offers GUI in a ViewportPane");
     Expect(!ide::insert_suits("Lighting", "Label"), "Lighting does not suit a Label");
     Expect(ide::insert_suits("Scripts", "ModuleScript"), "Scripts suits a ModuleScript");
     Expect(ide::insert_suits("Workspace", "GameObject"), "Workspace suits a GameObject");

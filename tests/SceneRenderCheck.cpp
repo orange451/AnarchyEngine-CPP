@@ -19,6 +19,7 @@
 #include "profiler/Profiler.hpp"
 #include "runner/gl.hpp"
 #include "runner/ViewCapture.hpp"
+#include "runner/ViewportRenderer.hpp"
 #include "terrain/LodNode.hpp"
 #include "terrain/SurfaceNets.hpp"
 #include "terrain/VoxelVolume.hpp"
@@ -4994,6 +4995,72 @@ int main(int argc, char** argv) {
         std::filesystem::remove_all(skies);
         cube.destroy();
         Expect(runner::rt_glGetError() == runner::GL_NO_ERROR, "transparent output leaves no GL error");
+    }
+
+    {
+        // VR6-VR8: ViewportRenderer draws a pane's scene into its texture: a
+        // white cube in front of its Camera, lit by its DirectionalLight,
+        // transparent around it; a scene with no Camera clears to nothing.
+        {
+            // A cube of its own: the one above was broken on purpose by the recheck check.
+            const std::vector<std::byte> bytes = write(Cube());
+            std::ofstream(root / "meshes" / "pane-cube.amesh", std::ios::binary)
+                .write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+        }
+        runner::MeshCache paneMeshes;
+        runner::TextureCache paneTextures;
+        paneMeshes.setRoot(root);
+        paneTextures.setRoot(root);
+        runner::ViewportRenderer panes(&paneMeshes, &paneTextures);
+        auto scene = std::make_shared<engine_core::VisualViewport>();
+        scene->pane = 1;
+        scene->revision = 1;
+        scene->has_camera = true;
+        scene->camera_world = engine_core::matrix4_translation(0.f, 0.f, 6.f);
+        scene->field_of_view = 40.f;
+        auto prefab = std::make_shared<engine_core::VisualPrefab>();
+        prefab->meshes.emplace_back();
+        prefab->meshes[0].path = "meshes/pane-cube.amesh";
+        prefab->meshes[0].color = engine_core::ColorRgb{1.f, 1.f, 1.f, 1.f};
+        scene->prefabs = {nullptr, prefab};
+        engine_core::VisualInstance cubeRow;
+        cubeRow.id = 2;
+        cubeRow.prefab = 1;
+        scene->rows.push_back(cubeRow);
+        engine_core::VisualInstance sunRow;
+        sunRow.id = 3;
+        sunRow.light.kind = engine_core::VisualLight::Kind::Directional;
+        sunRow.light.enabled = true;
+        sunRow.light.intensity = 2.f;
+        sunRow.light.direction[0] = 0.4f;
+        sunRow.light.direction[1] = 0.6f;
+        sunRow.light.direction[2] = 0.7f;
+        scene->rows.push_back(sunRow);
+        runner::ViewportQueue::Result result = runner::ViewportQueue::Result::NotReady;
+        for (int attempt = 0; attempt < 4 && result != runner::ViewportQueue::Result::Complete; ++attempt) {
+            result = panes.renderNow(runner::ViewportQueue::Job{1, scene, 64, 64});
+        }
+        Expect(result == runner::ViewportQueue::Result::Complete, "VR6 a pane's scene renders completely");
+        runner::ViewPixels drawn;
+        Expect(panes.read(1, drawn) && drawn.width == 64 && drawn.height == 64, "VR6 the pane's texture reads back");
+        if (drawn.rgba.size() == 64 * 64 * 4) {
+            const unsigned char* middle = drawn.rgba.data() + (32 * 64 + 32) * 4;
+            Expect(drawn.rgba[3] == 0 && middle[3] == 255 && middle[0] > 100,
+                   "VR7 the cube is drawn, opaque and lit, with nothing around it (" + std::to_string(middle[0]) +
+                       "," + std::to_string(middle[3]) + " corner " + std::to_string(drawn.rgba[3]) + ")");
+        }
+        auto empty = std::make_shared<engine_core::VisualViewport>(*scene);
+        empty->has_camera = false;
+        empty->revision = 2;
+        panes.renderNow(runner::ViewportQueue::Job{1, empty, 64, 64});
+        runner::ViewPixels cleared;
+        panes.read(1, cleared);
+        Expect(cleared.rgba.size() == 64 * 64 * 4 && cleared.rgba[(32 * 64 + 32) * 4 + 3] == 0,
+               "VR8 a pane with no Camera clears to nothing");
+        panes.release();
+        paneMeshes.clear();
+        paneTextures.clear();
+        Expect(runner::rt_glGetError() == runner::GL_NO_ERROR, "VR the pane renderer leaves no GL error");
     }
 
     // A Material's preview: a ball in its Color, lit from the upper left and

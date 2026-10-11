@@ -117,6 +117,8 @@ GameView::GameView(Runner& runner, std::string name, bool closable)
     input.moved = input.dragged;
     auto gui = jadefx::make<GuiLayer>(runner.simulation(), std::move(input));
     guiLayer_ = gui.get();
+    viewports_ = std::make_unique<ViewportRenderer>(&meshes_, &textures_);
+    guiLayer_->setViewportRenderer(viewports_.get());
     // The GUIs have a cascade of their own: the studio's theme and stylesheets
     // stop at the SubScene, and the game's default sheet starts there.
     auto guiScene = jadefx::make<jadefx::SubScene>(std::move(gui));
@@ -625,7 +627,7 @@ void GameView::layoutChildren() {
     followCamera(*frameSnapshot_);
     refreshCameraList();
     refreshOverlays();
-    guiLayer_->sync();
+    guiLayer_->sync(&frameSnapshot_->viewports);
     BillboardView billboards;
     billboards.view = renderer_.view();
     billboards.fovYDegrees = renderer_.fovYDegrees();
@@ -1064,6 +1066,10 @@ void GameView::renderContent(jadefx::UiRenderer& renderer, float opacity) {
     // Painted after the clear, so the label stays on top of the viewport.
     {
         PROFILE_SCOPE("GUIs and overlays", profiler::Group::Engine);
+        // The ViewportPanes due this frame, each into its own texture, before the GUI paints them.
+        if (graphicsReady_) {
+            viewports_->renderPending();
+        }
         Node::renderChildren(renderer, opacity);
     }
     // The render thread waits on this when it is uncapped, so its step follows
@@ -1119,6 +1125,7 @@ void GameView::sceneChanged(jadefx::Scene* previous) {
     if (previous == nullptr || previous->isTearingDown() || getScene() == previous) {
         return;
     }
+    viewports_->release();
     renderer_.shutdown();
     meshes_.clear();
     textures_.clear();

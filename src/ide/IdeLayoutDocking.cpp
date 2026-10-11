@@ -2098,7 +2098,7 @@ void IdeLayout::sync_plugin_widgets() {
         if (found == plugin_widgets_.end()) {
             PluginWidget made;
             made.id = item.id;
-            made.pane = std::make_shared<PluginWidgetPane>(runner_.simulation(), item.id, item.name);
+            made.pane = std::make_shared<PluginWidgetPane>(runner_.simulation(), runner_.feed(), item.id, item.name);
             auto entry = std::make_unique<WindowEntry>();
             entry->name = item.name;
             entry->icon = made.pane->iconFile();

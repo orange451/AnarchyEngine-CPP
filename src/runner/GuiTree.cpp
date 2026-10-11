@@ -6,7 +6,9 @@
 #include "Gui.hpp"
 #include "ScriptRuntime.hpp"
 #include "TextureCache.hpp"
+#include "ViewportNode.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
@@ -209,7 +211,7 @@ std::shared_ptr<jadefx::Node> GuiTree::makeNode(engine_core::InstanceId id, cons
     } else if (className == "ImagePane") {
         node = std::make_shared<GuiNode<jadefx::StackPane>>("imagepane", input, false);
     } else if (className == "ViewportPane") {
-        node = std::make_shared<GuiNode<jadefx::StackPane>>("viewportpane", input, false);
+        node = std::make_shared<GuiNode<ViewportNode>>("viewportpane", input, false, id, viewportRenderer_);
     } else if (className == "HBox") {
         node = std::make_shared<GuiNode<jadefx::HBox>>("hbox", input, false);
     } else if (className == "VBox") {
@@ -303,6 +305,13 @@ std::shared_ptr<jadefx::Node> GuiTree::build(engine_core::InstanceId id, const e
         entry.imageFlipY = texture != nullptr && texture->flip_y();
         entry.imageOpacity = 1.f - static_cast<float>(gui.number(GuiProperty::ImageTransparency));
     }
+    // Read at every sync: the pane's scene moves with its contents, not its revision.
+    if (dynamic_cast<const engine_core::ViewportPane*>(&gui) != nullptr) {
+        if (auto* viewport = dynamic_cast<ViewportNode*>(entry.node.get())) {
+            viewport->setScene(findViewport(id));
+            viewport->setImageOpacity(1.f - static_cast<float>(gui.number(GuiProperty::ImageTransparency)));
+        }
+    }
     std::string name = game_.name(id);
     if (name != entry.name) {
         entry.node->setElementId(name);
@@ -342,6 +351,18 @@ std::shared_ptr<jadefx::Node> GuiTree::build(engine_core::InstanceId id, const e
         }
     }
     return entry.node;
+}
+
+std::shared_ptr<const engine_core::VisualViewport> GuiTree::findViewport(engine_core::InstanceId pane) const {
+    if (viewports_ == nullptr) {
+        return nullptr;
+    }
+    const auto found = std::lower_bound(
+        viewports_->begin(), viewports_->end(), pane,
+        [](const std::shared_ptr<const engine_core::VisualViewport>& scene, engine_core::InstanceId id) {
+            return scene != nullptr && scene->pane < id;
+        });
+    return found != viewports_->end() && *found != nullptr && (*found)->pane == pane ? *found : nullptr;
 }
 
 void GuiTree::apply(Entry& entry, const engine_core::GuiValues& gui) {

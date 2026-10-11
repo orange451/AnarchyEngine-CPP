@@ -51,18 +51,22 @@ GuiLayer::GuiLayer(engine_core::Engine& engine, GuiInput input)
 
 GuiLayer::~GuiLayer() = default;
 
+void GuiLayer::setViewportRenderer(ViewportRenderer* renderer) { tree_->setViewportRenderer(renderer); }
+
 jadefx::Node* GuiLayer::nodeFor(engine_core::InstanceId id) const {
     return tree_->nodeFor(id);
 }
 
-void GuiLayer::sync() {
+void GuiLayer::sync(const std::vector<std::shared_ptr<const engine_core::VisualViewport>>* viewports) {
     {
         // The simulation may be inside a step. Skip this frame rather than wait.
         engine_core::DataModelLock lock(game_, engine_core::DataModelLock::Read, std::chrono::milliseconds(1));
         if (!lock.owns()) {
             return;
         }
+        tree_->setViewports(viewports);
         syncTree();
+        tree_->setViewports(nullptr);
     }
     tree_->updateImages();
 }

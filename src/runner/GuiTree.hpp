@@ -11,14 +11,18 @@
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 namespace engine_core {
 class DataModel;
 class Engine;
 class GuiValues;
+struct VisualViewport;
 }
 
 namespace runner {
+
+class ViewportRenderer;
 
 // What the nodes tell their owner about the mouse on a GUI element: a Scene
 // View hands it to the game as processed input. keepFocus is true when the
@@ -32,7 +36,7 @@ struct GuiInput {
 
 // The JadeFX nodes for GUI instances, made once and updated in place: each
 // GuiBase is a node of its class's element type (screengui, billboardgui,
-// dockwidget, pane, imagepane, hbox, vbox, label, button, textfield, slider, assetpicker) whose id
+// dockwidget, pane, imagepane, viewportpane, hbox, vbox, label, button, textfield, slider, assetpicker) whose id
 // is its Name and whose classes are its ClassList, and the CSS instances
 // under one, joined in child order, are its stylesheet. A node keeps its
 // state, such as a TextField's caret, while its instance does. Mouse events on
@@ -43,7 +47,9 @@ struct GuiInput {
 // root that is drawn, endPass, which lets go of what no build reached. Then,
 // without the lock, updateImages gives each ImagePane the file its Texture's
 // Path names under the resources folder resourcesRoot gave at beginPass, each
-// file looked at again at most once a second.
+// file looked at again at most once a second. A ViewportPane's node is a
+// ViewportNode holding its pane's scene from setViewports, the frame's
+// snapshot list, found by pane id.
 class GuiTree {
 public:
     GuiTree(engine_core::Engine& engine, std::shared_ptr<GuiInput> input,
@@ -74,12 +80,23 @@ public:
     void setAssetPicking(AssetPicking picking) { assetPicking_ = std::move(picking); }
     // Writes a pick to the AssetPicker's Value on the simulation thread, as one undo step while stopped.
     void pickAsset(engine_core::InstanceId picker, engine_core::InstanceId asset);
+    // What draws the ViewportPanes' images; null, as in a headless test, draws none.
+    void setViewportRenderer(ViewportRenderer* renderer) { viewportRenderer_ = renderer; }
+    // The frame's pane scenes, sorted by pane id, for the builds of the pass
+    // that follows; null for none. The list must outlive the pass.
+    void setViewports(const std::vector<std::shared_ptr<const engine_core::VisualViewport>>* viewports) {
+        viewports_ = viewports;
+    }
 
 private:
     struct Entry;
 
     bool themedText_ = false;
     AssetPicking assetPicking_;
+    ViewportRenderer* viewportRenderer_ = nullptr;
+    const std::vector<std::shared_ptr<const engine_core::VisualViewport>>* viewports_ = nullptr;
+    // pane's scene in viewports_, or null.
+    std::shared_ptr<const engine_core::VisualViewport> findViewport(engine_core::InstanceId pane) const;
 
     std::shared_ptr<jadefx::Node> makeNode(engine_core::InstanceId id, const std::string& className);
     void apply(Entry& entry, const engine_core::GuiValues& gui);

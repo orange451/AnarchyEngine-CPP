@@ -101,6 +101,8 @@ set(STUDIO_SOURCES
     src/amesh/amesh_gl.cpp
     src/runner/GameView.cpp
     src/runner/SceneDraws.cpp
+    src/runner/ViewportRenderer.cpp
+    src/runner/ViewportNode.cpp
     src/runner/ProfilerOverlay.cpp
     src/runner/UiFrameProfile.cpp
     src/runner/GuiLayer.cpp
@@ -835,6 +837,7 @@ add_executable(studio-tests
     tests/TerminalPaneTest.cpp
     tests/GuiStyleTest.cpp
     tests/GuiImageTest.cpp
+    tests/ViewportPaneTest.cpp
     tests/BillboardLayerTest.cpp
     tests/ProfilerOverlayTest.cpp
     tests/UiFrameProfileTest.cpp

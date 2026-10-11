@@ -37,6 +37,8 @@ void DataModel::start_simulation() {
     if (!state_->place_captured) {
         capture_place_unlocked();
     }
+    // Stopped MeshEditors' edits reach their files, which play starts from.
+    state_->mesh_editors.write_all(*this, true);
     state_->simulation_running = true;
     // Each assembly's body frame and member offsets, before any script runs.
     state_->assemblies.capture_play(*this);

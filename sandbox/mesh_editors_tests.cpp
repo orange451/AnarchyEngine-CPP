@@ -237,3 +237,42 @@ TEST_CASE("R6 a destroyed Mesh ends its editor", "[mesh-editors]") {
     rig.frames(1);
     REQUIRE(rig.editors().size() == 0);
 }
+
+TEST_CASE("H1 Play writes a stopped editor's edits first, and ends it", "[mesh-editors]") {
+    EditorRig rig;
+    Mesh& cube = rig.mesh("Cube");
+    const std::shared_ptr<MeshEditor> editor = rig.open(cube);
+    add_box(*editor);
+    // Not even committed yet: Play still writes it.
+    rig.game.start_simulation();
+    REQUIRE(rig.file_of(cube).vertices.size() == 24);
+    REQUIRE_FALSE(rig.editors().usable(rig.game, *editor));
+    REQUIRE(rig.editors().size() == 0);
+    REQUIRE(cube.session_geometry().data == nullptr);
+    rig.game.stop_simulation();
+    REQUIRE(cube.session_geometry().data == nullptr);
+}
+
+TEST_CASE("H2 a project save writes pending edits, and the editor carries on", "[mesh-editors]") {
+    ScriptRig rig;
+    TempDir dir;
+    engine_core::Project project = engine_core::Project::create(dir.path, rig.game);
+    Mesh& cube = rig.game.create<Mesh>();
+    rig.game.set_name(cube.id(), "Cube");
+    rig.game.set_parent(cube.id(), rig.game.service("Meshes"));
+    std::string error;
+    const std::shared_ptr<MeshEditor> editor = rig.game.mesh_editors().open(rig.game, cube, error);
+    INFO(error);
+    REQUIRE(editor != nullptr);
+    add_box(*editor);
+    project.save();
+    const std::filesystem::path file = rig.game.resources_root() / std::filesystem::u8path(cube.path());
+    std::ifstream in(file, std::ios::binary);
+    const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    const Data saved =
+        anarchy::amesh::read(anarchy::amesh::ByteSpan(reinterpret_cast<const std::byte*>(text.data()), text.size()));
+    REQUIRE(saved.vertices.size() == 24);
+    REQUIRE(rig.game.mesh_editors().usable(rig.game, *editor));
+    // Still drawn from the live copy until the file has been seen.
+    REQUIRE(cube.session_geometry().data != nullptr);
+}

@@ -5,6 +5,7 @@
 #include "Assemblies.hpp"
 #include "ChangeHistoryService.hpp"
 #include "DataModelLock.hpp"
+#include "MeshEditors.hpp"
 #include "ScriptAnalysis.hpp"
 #include "ScriptRuntime.hpp"
 
@@ -328,6 +329,9 @@ void Engine::simulation_loop() {
                             PROFILE_SCOPE("Stopped physics", profiler::Group::Physics);
                             DataModelLock lock(game_, DataModelLock::Write);
                             if (!game_.simulation_running()) {
+                                // The last tick's tool and command line edits, first,
+                                // so the pieces below are cut from the newest geometry.
+                                game_.mesh_editors().step(game_, std::chrono::steady_clock::now());
                                 decomposer_.update(game_);
                                 // Textures before terrain_: a Material newly seen this tick
                                 // already has its layer index (TerrainTextures::layer_of) by
@@ -493,6 +497,11 @@ void Engine::simulation_loop() {
                 {
                     PROFILE_SCOPE("Events", profiler::Group::Engine);
                     game_.events().drain();
+                }
+                {
+                    // This frame's MeshEditor edits, drawn from the next frame.
+                    PROFILE_SCOPE("Mesh edits", profiler::Group::Engine);
+                    game_.mesh_editors().step(game_, std::chrono::steady_clock::now());
                 }
                 {
                     // After the scripts' writes (a character turned to face

@@ -14,6 +14,7 @@
 #include "DynamicSky.hpp"
 #include "Folder.hpp"
 #include "Game.hpp"
+#include "MeshEditors.hpp"
 #include "GameObject.hpp"
 #include "Gui.hpp"
 #include "GameService.hpp"
@@ -2772,6 +2773,10 @@ void Project::refresh_base(const Comparison& before, const Comparison& after) {
 void Project::save_tree(bool full, const std::vector<SaveConflict>& overwrite) {
     DataModel& world = *game_;
     const bool playing = world.simulation_running();
+    // What MeshEditors hold and their files do not yet: saved with the place.
+    if (!playing) {
+        world.mesh_editors().write_all(world, false);
+    }
     const AuthoredDirty dirty = world.authored_dirty();
     const bool everything = full || playing || dirty.all;
     const std::unordered_set<InstanceId> dirty_ids(dirty.ids.begin(), dirty.ids.end());

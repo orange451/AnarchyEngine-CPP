@@ -230,7 +230,7 @@ local cards = {
 	Rotate = toolbar:CreateButton(
 		"Rotate",
 		"Select and rotate parts in the Scene View",
-		"icons/edit-rotate.png",
+		"icons/Rotate.png",
 		"Rotate"
 	),
 }

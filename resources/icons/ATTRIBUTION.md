@@ -23,3 +23,7 @@ are different icons.
 
 Dragger.png is our own, drawn in the Fugue style: the Move tool's three axis
 handles (X red, Y green, Z blue) around a white hub.
+
+Rotate.png is our own, drawn in the Fugue style: the Rotate tool's rings
+(X red, Y green) inside a blue ring that turns, arrowhead at its end, around
+a white hub.

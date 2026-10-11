@@ -18,7 +18,8 @@ namespace engine_core {
 // A Bone whose parent is not a skinned GameObject, whose Name names no bone,
 // or that comes after another Bone of the same Name, poses nothing: it is a
 // plain Attachment, OffsetSpace and all. A matched Bone ignores OffsetSpace.
-// Nothing makes a Bone but a script, Insert Object, or GameObject:AddBone.
+// GameObject:GetBone makes one the first time a bone is asked for; a script
+// or Insert Object can make one too.
 class Bone : public Attachment {
 public:
     using Attachment::Attachment;

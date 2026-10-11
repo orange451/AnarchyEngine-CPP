@@ -11,7 +11,7 @@ playing imported animation clips, and driving bones from Lua. They share one
 foundation, so the work is split:
 
 1. **Skinning foundation** (this spec): import keeps bones, a per-GameObject
-   pose, GPU skinning, the `Bone` instance, `GetBone`/`AddBone`/`GetBoneNames`.
+   pose, GPU skinning, the `Bone` instance, `GetBone`/`GetBoneNames`.
 2. **Studio pose mode**: the selected GameObject's joints are drawn and picked;
    a gizmo on a joint edits (or, through an explicit action, adds) its `Bone`;
    an "Expose all bones" action adds every one.
@@ -31,8 +31,9 @@ what it will read.
 - The pose belongs to each GameObject, not the shared Prefab or Mesh.
 - Bones are **not** instances by default. The pose is plain runtime data. A
   `Bone` instance exists only for a bone someone chose to pose, attach to, or
-  script, and it is only ever made explicitly: `AddBone`, Insert Object, or a
-  Studio action. Nothing creates one implicitly.
+  script. (Changed 2026-10-11 at the user's request: `GetBone` makes the
+  `Bone` for a bone the first time it is asked for, and `AddBone` is gone. It
+  was explicit creation only.)
 - `Bone` extends `Attachment`.
 - `Bone.Offset` is **additive**: applied after whatever the animation produced,
   in the bone's local frame.
@@ -183,11 +184,9 @@ hand.
 
 - `GameObject:GetBoneNames() -> {string}`: the skeleton's bone names in bone
   order; empty when not skinned.
-- `GameObject:GetBone(name) -> Bone?`: the existing `Bone` child for that name,
-  or nil. Never creates one.
-- `GameObject:AddBone(name) -> Bone`: makes a `Bone` child for that name and
-  returns it. Errors when the skeleton has no such bone, or when a `Bone` for
-  it already exists (use `GetBone`). Undoable as any instance creation.
+- `GameObject:GetBone(name) -> Bone?`: the `Bone` child for that name, made
+  the first time it is asked for (an ordinary child: saved, and undoable as
+  any instance creation); nil when the skeleton has no such bone.
 - `Bone.Offset`, `Bone.Transform`, `Bone.OffsetSpace`: inherited.
 - `Bone` is `Instance.new`-creatable and documented in `LuaApi.cpp`.
 
@@ -210,8 +209,8 @@ hand.
   `Bone.Transform` is right under a rotated, scaled GameObject; writing
   `Transform` round-trips to `Offset`; a Name with no matching bone falls back
   to a plain Attachment; a pose with nothing dirty is not rebuilt.
-- **Lua**: `GetBone` returns nil before `AddBone` and the Bone after;
-  `AddBone` errors for an unknown bone and for a duplicate; undo removes it.
+- **Lua**: the first `GetBone` makes the Bone and later ones return it;
+  an unknown bone gives nil; undo removes a made one.
 - **Batching**: 100 skinned instances of one Prefab make one run per Model,
   each with its own `boneBase`.
 - **Live**: in a running Release Studio over MCP, a rigged model imports, and

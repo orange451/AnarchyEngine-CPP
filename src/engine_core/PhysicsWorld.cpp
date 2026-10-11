@@ -512,7 +512,9 @@ float ray_hit(b3ShapeId shape, b3Pos point, b3Vec3 normal, float fraction, uint6
     if (fraction == 0.f) {
         return -1.f;
     }
-    const InstanceId id = id_of(b3Body_GetUserData(b3Shape_GetBody(shape)));
+    // The shape's owner, not the body's: every shape of an assembly's one body
+    // belongs to the member that made it.
+    const InstanceId id = id_of(b3Shape_GetUserData(shape));
     if (under_any(*hits->game, id, hits->filter->instances) != hits->filter->include) {
         return -1.f;
     }
@@ -569,6 +571,22 @@ struct PhysicsWorld::Impl {
         // (its stamp then) or when play starts.
         bool made_without_pieces = false;
         std::string pieces_stamp;
+        // A member of an assembly's one body (a compound): the stamp of the
+        // play assembly it was built for, or 0 for a body of its own; where its
+        // shapes sit in that body; whether the assembly is anchored; and the
+        // assembly's root, whose id the body carries.
+        std::uint32_t compound = 0;
+        b3Transform place = b3Transform_identity;
+        bool compound_anchored = false;
+        InstanceId compound_root = 0;
+    };
+
+    // An assembly's one body, for the play assembly whose stamp keys it.
+    struct Compound {
+        b3BodyId body = b3_nullBodyId;
+        InstanceId root = 0;
+        bool anchored = false;
+        std::uint64_t seen = 0;
     };
 
     b3WorldId world = b3_nullWorldId;
@@ -586,6 +604,7 @@ struct PhysicsWorld::Impl {
     bool played = false;
     bool poses_from_game_objects = true;
     std::unordered_map<InstanceId, Body> bodies;
+    std::unordered_map<std::uint32_t, Compound> compounds;
     std::function<void(const std::string&)> warn;
 
     // A Terrain's static body: one mesh shape per chunk collider.
@@ -625,6 +644,7 @@ struct PhysicsWorld::Impl {
     std::unordered_map<InstanceId, InstanceId> claims;
     std::vector<InstanceId> claimants;
     std::vector<InstanceId> gone;
+    std::vector<std::uint32_t> compounds_gone;
     std::vector<b3Vec3> points;
     std::vector<Vec3> mesh_points;
     std::vector<std::uint32_t> triangles;
@@ -633,6 +653,8 @@ struct PhysicsWorld::Impl {
 
     Impl() {
         bodies.reserve(1024);
+        compounds.reserve(1024);
+        compounds_gone.reserve(1024);
         eligible.reserve(1024);
         wanted.reserve(1024);
         claims.reserve(1024);
@@ -654,6 +676,7 @@ struct PhysicsWorld::Impl {
             }
         }
         bodies.clear();
+        compounds.clear();
         // Terrain colliders go only now that no shape points into them.
         terrain_bodies.clear();
     }
@@ -679,6 +702,8 @@ struct PhysicsWorld::Impl {
             begin(game.world_generation());
         }
         pull_gravity(game);
+        // Assemblies first: which bodies are one body this sync.
+        game.assemblies().sync_play(game);
         const bool running = game.simulation_running();
         poses_from_game_objects = !running || !played;
         {
@@ -1029,6 +1054,9 @@ struct PhysicsWorld::Impl {
         if (shared) {
             first_in_tree_order(game);
         }
+        if (game.simulation_running()) {
+            keep_compounds(game);
+        }
         for (const auto& [id, target] : wanted) {
             auto* object = dynamic_cast<PhysicsBase*>(game.instance(id));
             if (target != 0 && claims[target] != id) {
@@ -1092,10 +1120,13 @@ struct PhysicsWorld::Impl {
                         continue;
                     }
                     const auto* base = dynamic_cast<const PhysicsBase*>(game.instance(id));
-                    if (base == nullptr || base->anchored()) {
+                    if (base == nullptr || anchored_as(body, *base)) {
                         continue;   // anchored bodies need no colliders around them
                     }
-                    const Vec3 local = matrix4_point(inverse, from_b3(b3Body_GetPosition(body.body)));
+                    // An assembly's member asks around its own origin, not its body's.
+                    const b3Vec3 origin = body.compound != 0 ? b3Body_GetWorldPoint(body.body, body.place.p)
+                                                             : b3Body_GetPosition(body.body);
+                    const Vec3 local = matrix4_point(inverse, from_b3(origin));
                     centers.insert(terrain::ChunkCoord{static_cast<int>(std::floor(local.x / span)),
                                                        static_cast<int>(std::floor(local.y / span)),
                                                        static_cast<int>(std::floor(local.z / span))});
@@ -1323,14 +1354,196 @@ struct PhysicsWorld::Impl {
             return;
         }
         drop_shape(found->second);
-        if (b3Body_IsValid(found->second.body)) {
+        // A compound's body is the compound's; only this member's shapes go.
+        if (found->second.compound == 0 && b3Body_IsValid(found->second.body)) {
             b3DestroyBody(found->second.body);
         }
         bodies.erase(found);
     }
 
+    // ---- Assemblies: one body per play assembly with physics --------------
+
+    static b3Transform transform_of(const Matrix4& m) {
+        b3Transform out = b3Transform_identity;
+        pose_of(m, out.p, out.q);
+        return out;
+    }
+
+    // Every play assembly with physics has its body; one whose assembly is
+    // gone goes, with its members' records.
+    void keep_compounds(DataModel& game) {
+        const std::vector<Assemblies::PlayAssembly>& plays = game.assemblies().play();
+        for (std::size_t index = 0; index < plays.size(); ++index) {
+            if (!plays[index].has_physics) {
+                continue;
+            }
+            auto found = compounds.find(plays[index].stamp);
+            if (found == compounds.end()) {
+                found = make_compound(game, index);
+            }
+            if (found != compounds.end()) {
+                found->second.seen = pass;
+            }
+        }
+        compounds_gone.clear();
+        for (const auto& [stamp, compound] : compounds) {
+            if (compound.seen != pass) {
+                compounds_gone.push_back(stamp);
+            }
+        }
+        for (const std::uint32_t stamp : compounds_gone) {
+            drop_compound(stamp);
+        }
+    }
+
+    void drop_compound(std::uint32_t stamp) {
+        const auto found = compounds.find(stamp);
+        if (found == compounds.end()) {
+            return;
+        }
+        // The body takes every member's shapes with it; only then do the
+        // meshes they point into go.
+        if (b3Body_IsValid(found->second.body)) {
+            b3DestroyBody(found->second.body);
+        }
+        for (auto it = bodies.begin(); it != bodies.end();) {
+            if (it->second.compound == stamp) {
+                if (it->second.mesh != nullptr) {
+                    b3DestroyMesh(it->second.mesh);
+                }
+                it = bodies.erase(it);
+            } else {
+                ++it;
+            }
+        }
+        compounds.erase(found);
+    }
+
+    // One body at the assembly's frame, static when any member is anchored,
+    // carrying every physics member's shapes at its offset, each with its own
+    // density; it moves at its root's authored velocity, as its center of mass.
+    std::unordered_map<std::uint32_t, Compound>::iterator make_compound(DataModel& game, std::size_t index) {
+        Assemblies& assemblies = game.assemblies();
+        const Assemblies::PlayAssembly assembly = assemblies.play()[index];
+        auto* root = dynamic_cast<PhysicsBase*>(game.instance(assembly.root));
+        if (root == nullptr) {
+            return compounds.end();
+        }
+        b3BodyDef def = b3DefaultBodyDef();
+        if (dynamic_cast<PlayerController*>(root) != nullptr) {
+            def.motionLocks.angularX = true;
+            def.motionLocks.angularY = true;
+            def.motionLocks.angularZ = true;
+            def.enableSleep = false;
+        }
+        def.type = assembly.anchored ? b3_staticBody : b3_dynamicBody;
+        pose_of(assembly.frame, def.position, def.rotation);
+        def.linearDamping = static_cast<float>(root->linear_damping());
+        Vec3 angular{};
+        if (const auto* rigid = dynamic_cast<const PhysicsObject*>(root)) {
+            def.angularDamping = static_cast<float>(rigid->angular_damping());
+            angular = rigid->angular_velocity();
+        } else if (const auto* brush = dynamic_cast<const Brush*>(root)) {
+            def.angularDamping = static_cast<float>(brush->angular_damping());
+            angular = brush->angular_velocity();
+        }
+        def.userData = user_data(assembly.root);
+        Compound compound;
+        compound.body = b3CreateBody(world, &def);
+        compound.root = assembly.root;
+        compound.anchored = assembly.anchored;
+        compound.seen = pass;
+        const std::vector<Assemblies::PlayMember>& members = assemblies.play_members();
+        for (std::uint32_t i = assembly.first; i < assembly.first + assembly.count; ++i) {
+            const Assemblies::PlayMember& member = members[i];
+            auto* object = dynamic_cast<PhysicsBase*>(game.instance(member.node));
+            if (object == nullptr) {
+                continue;
+            }
+            destroy(member.node);
+            Body record;
+            record.driven = member.driven;
+            record.body = compound.body;
+            record.compound = assembly.stamp;
+            record.place = transform_of(member.offset);
+            record.compound_anchored = assembly.anchored;
+            record.compound_root = assembly.root;
+            record.seen = pass;
+            object->take_dirty();
+            make_shape(game, *object, record);
+            bodies.insert_or_assign(member.node, std::move(record));
+        }
+        const Vec3 velocity = root->velocity();
+        if (!assembly.anchored) {
+            // Centre-of-mass velocities, now that the shapes put the centre of mass.
+            b3Body_SetLinearVelocity(compound.body, to_b3(velocity));
+            b3Body_SetAngularVelocity(compound.body, to_b3(angular));
+        }
+        const auto made = compounds.emplace(assembly.stamp, compound).first;
+        // A static body reports no move, so its members are put in place now.
+        assemblies.pose_members(game, index, matrix4_orthonormalize(assembly.frame), velocity, angular);
+        return made;
+    }
+
+    // A member's own edits: its shape, material, and mass. The rest belong to
+    // the assembly (Tasks 7 and 8).
+    void keep_member(DataModel& game, PhysicsBase& object, Body& record) {
+        record.seen = pass;
+        const std::uint32_t dirty = object.take_dirty();
+        if ((dirty & PhysicsObject::kDirtyShape) != 0) {
+            make_shape(game, object, record);
+            return;
+        }
+        if ((dirty & PhysicsObject::kDirtyMaterial) != 0) {
+            double friction = -1.0;
+            double bounciness = 0.0;
+            if (const auto* rigid = dynamic_cast<const PhysicsObject*>(&object)) {
+                friction = rigid->friction();
+                bounciness = rigid->bounciness();
+            } else if (const auto* brush = dynamic_cast<const Brush*>(&object)) {
+                friction = brush->friction();
+                bounciness = brush->bounciness();
+            }
+            if (friction >= 0.0) {
+                for (const b3ShapeId shape : record.shapes) {
+                    b3Shape_SetFriction(shape, static_cast<float>(friction));
+                    b3Shape_SetRestitution(shape, static_cast<float>(bounciness));
+                }
+            }
+        }
+        if ((dirty & PhysicsObject::kDirtyMass) != 0) {
+            for (const b3ShapeId shape : record.shapes) {
+                b3Shape_SetDensity(shape, density(object, record.volume), false);
+            }
+            b3Body_ApplyMassFromShapes(record.body);
+        }
+    }
+
+    // A hull placed where the record's shapes sit: as made for a body of its
+    // own, or at its offset in an assembly's body.
+    static b3ShapeId create_hull(const Body& record, const b3ShapeDef& def, const b3HullData* hull) {
+        if (record.compound == 0) {
+            return b3CreateHullShape(record.body, &def, hull);
+        }
+        return b3CreateTransformedHullShape(record.body, &def, hull, record.place, b3Vec3{1.f, 1.f, 1.f});
+    }
+
+    static b3Vec3 placed_point(const Body& record, b3Vec3 point) {
+        return record.compound == 0 ? point : b3TransformPoint(record.place, point);
+    }
+
+    // Whether the body a record's shapes are on is static: the assembly's
+    // anchoring for a member, else the instance's own.
+    static bool anchored_as(const Body& record, const PhysicsBase& object) {
+        return record.compound != 0 ? record.compound_anchored : object.anchored();
+    }
+
     void keep(DataModel& game, PhysicsBase& object, InstanceId target) {
         auto found = bodies.find(object.id());
+        if (found != bodies.end() && found->second.compound != 0) {
+            keep_member(game, object, found->second);
+            return;
+        }
         if (found != bodies.end() && found->second.driven != target) {
             destroy(object.id());
             found = bodies.end();
@@ -1343,7 +1556,7 @@ struct PhysicsWorld::Impl {
         Body& body = found->second;
         body.seen = pass;
         recenter(game, object, body, follow_driven(game, object, body));
-        if (body.made_without_pieces && !object.anchored()) {
+        if (body.made_without_pieces && !anchored_as(body, object)) {
             const auto* rigid = dynamic_cast<PhysicsObject*>(&object);
             const auto* mesh = rigid != nullptr ? dynamic_cast<const Mesh*>(game.instance(rigid->mesh_id())) : nullptr;
             if (game.simulation_running() || (mesh != nullptr && mesh->file_stamp() != body.pieces_stamp)) {
@@ -1481,7 +1694,7 @@ struct PhysicsWorld::Impl {
     void control(DataModel& game, double dt) {
         const float step = static_cast<float>(dt);
         for (auto& [id, record] : bodies) {
-            if (!record.controller) {
+            if (!record.controller || (record.compound != 0 && record.compound_root != id)) {
                 continue;
             }
             auto* controller = dynamic_cast<PlayerController*>(game.instance(id));
@@ -1874,7 +2087,7 @@ struct PhysicsWorld::Impl {
         }
         def.density = density(brush, record.volume);
         for (b3HullData* hull : hulls) {
-            add_shape(record, b3CreateHullShape(record.body, &def, hull));
+            add_shape(record, create_hull(record, def, hull));
             b3DestroyHull(hull);
         }
         b3Body_ApplyMassFromShapes(record.body);
@@ -1901,7 +2114,7 @@ struct PhysicsWorld::Impl {
         if (b3HullData* hull = build_hull(points)) {
             record.volume = b3ComputeHullMass(hull, 1.f).mass;
             def.density = density(controller, record.volume);
-            add_shape(record, b3CreateHullShape(record.body, &def, hull));
+            add_shape(record, create_hull(record, def, hull));
             b3DestroyHull(hull);
         }
         if (record.shapes.empty()) {
@@ -1909,7 +2122,7 @@ struct PhysicsWorld::Impl {
                 b3MakeOffsetBoxHull(radius, tall * 0.5f, radius, b3Vec3{0.f, gap + tall * 0.5f, 0.f});
             record.volume = 4.f * radius * radius * tall;
             def.density = density(controller, record.volume);
-            add_shape(record, b3CreateHullShape(record.body, &def, &box.base));
+            add_shape(record, create_hull(record, def, &box.base));
         }
         b3Body_ApplyMassFromShapes(record.body);
     }
@@ -1938,7 +2151,7 @@ struct PhysicsWorld::Impl {
         const b3Vec3 center = to_b3(record.center);
         switch (object.shape()) {
         case PhysicsObject::Shape::Sphere: {
-            const b3Sphere sphere{center, size.x * 0.5f};
+            const b3Sphere sphere{placed_point(record, center), size.x * 0.5f};
             record.volume = b3ComputeSphereMass(&sphere, 1.f).mass;
             def.density = density(object, record.volume);
             add_shape(record, b3CreateSphereShape(record.body, &def, &sphere));
@@ -1947,8 +2160,8 @@ struct PhysicsWorld::Impl {
         case PhysicsObject::Shape::Capsule: {
             const float radius = size.x * 0.5f;
             const float half = std::max(size.y - size.x, 0.f) * 0.5f;
-            const b3Capsule capsule{b3Vec3{center.x, center.y - half, center.z},
-                                    b3Vec3{center.x, center.y + half, center.z}, radius};
+            const b3Capsule capsule{placed_point(record, b3Vec3{center.x, center.y - half, center.z}),
+                                    placed_point(record, b3Vec3{center.x, center.y + half, center.z}), radius};
             record.volume = b3ComputeCapsuleMass(&capsule, 1.f).mass;
             def.density = density(object, record.volume);
             add_shape(record, b3CreateCapsuleShape(record.body, &def, &capsule));
@@ -1957,8 +2170,8 @@ struct PhysicsWorld::Impl {
         case PhysicsObject::Shape::Custom:
             // Box3D gives a mesh contacts only on a static body, so an
             // unanchored Custom is convex pieces of its mesh instead.
-            if (object.anchored()) {
-                if (b3MeshData* mesh = make_mesh(game, object, record.scale, record.center)) {
+            if (anchored_as(record, object)) {
+                if (b3MeshData* mesh = make_mesh(game, object, record.scale, record.center, record)) {
                     record.mesh = mesh;
                     const Vec3 bounds = scaled(bounds_size(mesh_points), record.scale);
                     record.volume = bounds.x * bounds.y * bounds.z;
@@ -1976,7 +2189,7 @@ struct PhysicsWorld::Impl {
                 record.volume = b3ComputeHullMass(hull, 1.f).mass;
                 def.density = density(object, record.volume);
                 // Box3D copies the hull into the shape.
-                add_shape(record, b3CreateHullShape(record.body, &def, hull));
+                add_shape(record, create_hull(record, def, hull));
                 b3DestroyHull(hull);
             }
             break;
@@ -1987,7 +2200,7 @@ struct PhysicsWorld::Impl {
             if (b3HullData* hull = build_hull(points)) {
                 record.volume = b3ComputeHullMass(hull, 1.f).mass;
                 def.density = density(object, record.volume);
-                add_shape(record, b3CreateHullShape(record.body, &def, hull));
+                add_shape(record, create_hull(record, def, hull));
                 b3DestroyHull(hull);
             }
             break;
@@ -1998,7 +2211,7 @@ struct PhysicsWorld::Impl {
             const b3BoxHull box = b3MakeOffsetBoxHull(size.x * 0.5f, size.y * 0.5f, size.z * 0.5f, center);
             record.volume = size.x * size.y * size.z;
             def.density = density(object, record.volume);
-            add_shape(record, b3CreateHullShape(record.body, &def, &box.base));
+            add_shape(record, create_hull(record, def, &box.base));
         }
         b3Body_ApplyMassFromShapes(record.body);
     }
@@ -2049,10 +2262,14 @@ struct PhysicsWorld::Impl {
     // The whole Mesh as triangles, for an anchored Custom. Box3D keeps a
     // pointer to it, so the body record owns it. Null, with one warning, when
     // there is none.
-    b3MeshData* make_mesh(DataModel& game, PhysicsObject& object, Vec3 scale, Vec3 center) {
+    b3MeshData* make_mesh(DataModel& game, PhysicsObject& object, Vec3 scale, Vec3 center, const Body& record) {
         std::string why = fitted_mesh(game, object, scale, center, true);
         b3MeshData* mesh = nullptr;
         if (why.empty()) {
+            // A mesh shape takes no transform: a member's points are placed first.
+            for (b3Vec3& point : points) {
+                point = placed_point(record, point);
+            }
             mesh = build_mesh(points, triangles, indices);
             if (mesh == nullptr) {
                 why = "Box3D could not build a mesh from its triangles";
@@ -2104,7 +2321,7 @@ struct PhysicsWorld::Impl {
         def.density = density(object, record.volume);
         for (b3HullData* hull : hulls) {
             // Box3D copies the hull into the shape.
-            add_shape(record, b3CreateHullShape(record.body, &def, hull));
+            add_shape(record, create_hull(record, def, hull));
             b3DestroyHull(hull);
         }
         return !record.shapes.empty();
@@ -2261,6 +2478,17 @@ struct PhysicsWorld::Impl {
             Body& record = found->second;
             const b3Vec3 position = event.transform.p;
             const b3Quat rotation = event.transform.q;
+            if (record.compound != 0) {
+                // An assembly's body: every member goes where it is.
+                const int assembly = game.assemblies().play_of(record.compound_root);
+                if (assembly >= 0) {
+                    game.assemblies().pose_members(game, static_cast<std::size_t>(assembly),
+                                                   matrix_of(position, rotation, matrix4_identity()),
+                                                   from_b3(b3Body_GetLinearVelocity(record.body)),
+                                                   from_b3(b3Body_GetAngularVelocity(record.body)));
+                }
+                continue;
+            }
             object->store_simulated(matrix_of(position, rotation, object->transform()),
                                     from_b3(b3Body_GetLinearVelocity(record.body)));
             if (auto* rigid = dynamic_cast<PhysicsObject*>(object)) {
@@ -2288,7 +2516,21 @@ std::optional<RayHit> PhysicsWorld::raycast(DataModel& game, Vec3 origin, Vec3 d
     return impl_->raycast(game, origin, direction, filter);
 }
 
-std::size_t PhysicsWorld::body_count() const { return impl_->bodies.size() + impl_->terrain_bodies.size(); }
+std::size_t PhysicsWorld::body_count() const {
+    // An assembly's members share one Box3D body.
+    std::size_t own = 0;
+    for (const auto& [id, record] : impl_->bodies) {
+        if (record.compound == 0) {
+            ++own;
+        }
+    }
+    return own + impl_->compounds.size() + impl_->terrain_bodies.size();
+}
+
+float PhysicsWorld::body_damping(InstanceId id) const {
+    const auto found = impl_->bodies.find(id);
+    return found != impl_->bodies.end() ? b3Body_GetLinearDamping(found->second.body) : 0.f;
+}
 
 bool PhysicsWorld::has_body(InstanceId id) const {
     return impl_->bodies.count(id) != 0 || impl_->terrain_bodies.count(id) != 0;
@@ -2477,7 +2719,9 @@ void PhysicsWorld::collision_outline(const PlayerController& controller, std::ve
 
 void PhysicsWorld::collision_outline(const PhysicsObject& object, Vec3 center, const std::vector<Vec3>& mesh_points,
                                      const std::vector<std::uint32_t>& triangles, std::vector<Vec3>& lines,
-                                     Vec3 scale, const std::vector<anarchy::amesh::ConvexPiece>* pieces) {
+                                     Vec3 scale, const std::vector<anarchy::amesh::ConvexPiece>* pieces,
+                                     int anchored_as) {
+    const bool anchored = anchored_as >= 0 ? anchored_as != 0 : object.anchored();
     const Vec3 x{1.f, 0.f, 0.f};
     const Vec3 y{0.f, 1.f, 0.f};
     const Vec3 z{0.f, 0.f, 1.f};
@@ -2520,7 +2764,7 @@ void PhysicsWorld::collision_outline(const PhysicsObject& object, Vec3 center, c
         }
         std::vector<b3Vec3> points;
         fit_points(mesh_points, scale, center, points);
-        if (object.shape() == PhysicsObject::Shape::Custom && object.anchored()) {
+        if (object.shape() == PhysicsObject::Shape::Custom && anchored) {
             std::vector<std::int32_t> indices;
             b3MeshData* mesh = build_mesh(points, triangles, indices);
             if (mesh == nullptr) {

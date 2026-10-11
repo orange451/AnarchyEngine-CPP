@@ -79,7 +79,9 @@ bool is_attachment(const DataModel& game, InstanceId id) {
     return dynamic_cast<const Attachment*>(game.instance(id)) != nullptr;
 }
 
-Matrix4 scaled_columns(const Matrix4& frame, const Matrix4& scale_from) {
+}  // namespace
+
+Matrix4 Assemblies::with_scale(const Matrix4& frame, const Matrix4& scale_from) {
     Matrix4 out = frame;
     for (int column = 0; column < 3; ++column) {
         const float* axis = scale_from.m + column * 4;
@@ -90,8 +92,6 @@ Matrix4 scaled_columns(const Matrix4& frame, const Matrix4& scale_from) {
     }
     return out;
 }
-
-}  // namespace
 
 InstanceId claim_winner(const DataModel& game, const InstanceId* candidates, std::size_t count) {
     InstanceId best = 0;
@@ -131,6 +131,13 @@ Assemblies::Assemblies() {
     dangling_mask_.assign(slots, 0);
     dangling_epoch_.assign(slots, 0);
     follow_mark_.assign(slots, 0);
+    play_.reserve(slots);
+    play_members_.reserve(slots);
+    play_losers_.reserve(slots);
+    play_seen_.assign(slots, 0);
+    play_index_.assign(slots, -1);
+    play_member_index_.assign(slots, -1);
+    play_touched_.reserve(slots);
     follow_marked_.reserve(slots);
     carry_stack_.reserve(slots);
 }
@@ -235,12 +242,6 @@ void Assemblies::attachment_changed(DataModel& game, InstanceId id) {
         follow(game, node_of(id));
     }
 }
-
-// Task 7 fills it: a member moved in play moves the whole assembly.
-void Assemblies::play_transform_written(DataModel&, InstanceId) {}
-
-// Task 8 fills it: an end Attachment moved in play re-snaps its edge.
-void Assemblies::play_attachment_changed(DataModel&, InstanceId) {}
 
 InstanceId Assemblies::end_of(const DataModel& game, InstanceId constraint, const InstanceRef& ref, int end) {
     if (ref.guid().empty()) {
@@ -701,7 +702,7 @@ InstanceId Assemblies::mover_of(const DataModel& game, InstanceId node) const {
 Matrix4 Assemblies::holder_transform(const DataModel& game, InstanceId holder) const {
     const DataModel* object = game.instance(holder);
     if (const auto* body = dynamic_cast<const PhysicsBase*>(object)) {
-        return scaled_columns(node_frame(game, holder), body->transform());
+        return with_scale(node_frame(game, holder), body->transform());
     }
     if (const auto* placed = dynamic_cast<const PVInstance*>(object)) {
         return placed->transform();

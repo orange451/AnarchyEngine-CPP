@@ -670,6 +670,8 @@ void Engine::render_loop() {
 }
 
 void Engine::step_physics(double dt) {
+    // Members are known before integrate_simulated skips them.
+    game_.assemblies().sync_play(game_);
     game_.integrate_simulated(dt);
     physics_.step(game_, dt);
 }

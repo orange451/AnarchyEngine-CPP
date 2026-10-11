@@ -956,6 +956,10 @@ void DataModel::integrate_simulated(double dt) {
             if (velocity.x == 0.f && velocity.y == 0.f && velocity.z == 0.f) {
                 continue;
             }
+            // A member of an assembly goes where its assembly does, not by its own velocity.
+            if ((state_->assemblies.flags(owners[i].id) & Assemblies::kMember) != 0) {
+                continue;
+            }
             transforms[i].m[12] += velocity.x * step;
             transforms[i].m[13] += velocity.y * step;
             transforms[i].m[14] += velocity.z * step;

@@ -38,6 +38,8 @@ void DataModel::start_simulation() {
         capture_place_unlocked();
     }
     state_->simulation_running = true;
+    // Each assembly's body frame and member offsets, before any script runs.
+    state_->assemblies.capture_play(*this);
     // Script analysis checks the authored tree only. It stops checking until Stop.
     if (ScriptAnalysis* analysis = script_analysis()) {
         analysis->note_play_started();

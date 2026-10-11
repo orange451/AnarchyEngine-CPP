@@ -138,6 +138,8 @@ public:
     // For tests: a key naming its first shape's Box3D handle, changing
     // whenever the shape is remade; 0 when it has none.
     std::uint64_t shape_key(InstanceId id) const;
+    // For tests: the linear damping of the body this PhysicsBase is on, or 0.
+    float body_damping(InstanceId id) const;
 
     // Where Terrain bodies come from; null for none. SimulationThread, under
     // the write lock. The TerrainWorld must outlive this world or be unset
@@ -224,11 +226,14 @@ public:
     // that is not Anchored, is the hull Box3D makes of them, an anchored Custom
     // is each edge of its triangles once, an unanchored Custom with pieces (as
     // known_pieces gives them) is each piece's hull, and one that cannot be
-    // made is the Box it falls back to. Warns of nothing.
+    // made is the Box it falls back to. Warns of nothing. anchored_as 0 or 1
+    // stands in for the object's own Anchored, as a welded member's body is
+    // static when its assembly is anchored; -1 keeps the object's own.
     static void collision_outline(const PhysicsObject& object, Vec3 center, const std::vector<Vec3>& points,
                                   const std::vector<std::uint32_t>& triangles, std::vector<Vec3>& lines,
                                   Vec3 scale = Vec3{1.f, 1.f, 1.f},
-                                  const std::vector<anarchy::amesh::ConvexPiece>* pieces = nullptr);
+                                  const std::vector<anarchy::amesh::ConvexPiece>* pieces = nullptr,
+                                  int anchored_as = -1);
     // Where a body made at transform is: its position and rotation, with any
     // scale taken out.
     static Matrix4 body_pose(const Matrix4& transform);

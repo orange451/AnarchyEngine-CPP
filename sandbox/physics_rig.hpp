@@ -5,6 +5,7 @@
 
 #include "support.hpp"
 
+#include "Assemblies.hpp"
 #include "PhysicsObject.hpp"
 #include "PhysicsWorld.hpp"
 #include "PlayerController.hpp"
@@ -80,6 +81,16 @@ struct PhysicsRig {
     }
 
     void seconds(double time) { steps(static_cast<int>(time / kStep + 0.5)); }
+
+    // What Engine::step_physics does each substep: assemblies, then the
+    // legacy velocity integration, then physics.
+    void engine_steps(int count) {
+        for (int i = 0; i < count; ++i) {
+            game.assemblies().sync_play(game);
+            game.integrate_simulated(kStep);
+            physics.step(game, kStep);
+        }
+    }
 
     // What the Engine's stopped tick does: bodies follow the tree, nothing moves.
     void sync_steps(int count) {

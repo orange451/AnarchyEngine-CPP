@@ -43,18 +43,6 @@ bool settled(const Matrix4& frame, const Matrix4& target) {
     return true;
 }
 
-Matrix4 with_scale_of(const Matrix4& frame, const Matrix4& scale_from) {
-    Matrix4 out = frame;
-    for (int column = 0; column < 3; ++column) {
-        const float* axis = scale_from.m + column * 4;
-        const float length = std::sqrt(axis[0] * axis[0] + axis[1] * axis[1] + axis[2] * axis[2]);
-        for (int row = 0; row < 3; ++row) {
-            out.m[column * 4 + row] *= length;
-        }
-    }
-    return out;
-}
-
 InstanceId view_camera(const DataModel& game) {
     const auto* workspace = dynamic_cast<const Workspace*>(game.instance(game.scene_service("Workspace")));
     return workspace != nullptr ? workspace->current_camera() : 0;
@@ -151,7 +139,7 @@ bool Assemblies::snap(DataModel& game, const RigidEdge& edge, InstanceId camera)
     if (placed == nullptr) {
         return false;
     }
-    if (placed->set_pv_transform(with_scale_of(target, placed->transform()))) {
+    if (placed->set_pv_transform(with_scale(target, placed->transform()))) {
         return false;
     }
     carry(game, mover, matrix4_multiply(target, matrix4_inverse(frame)));

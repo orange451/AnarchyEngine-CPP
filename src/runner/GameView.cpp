@@ -4,6 +4,7 @@
 
 #include "profiler/Profiler.hpp"
 
+#include "Assemblies.hpp"
 #include "AssetInstances.hpp"
 #include "Camera.hpp"
 #include "ConvexDecomposition.hpp"
@@ -961,14 +962,22 @@ void GameView::readSelectedBodies() {
         // Centered in its GameObject's Prefab, which changes as the Prefab's Models and Meshes do.
         const engine_core::Vec3 center = engine_core::PhysicsWorld::shape_center(*game_, *body);
         const auto same = [](engine_core::Vec3 a, engine_core::Vec3 b) { return a.x == b.x && a.y == b.y && a.z == b.z; };
-        if (meshChanged || outline.shape != static_cast<int>(shape) || outline.anchored != body->anchored() ||
+        // A welded member's body is static when its assembly is anchored.
+        bool anchored = body->anchored();
+        if (game_->simulation_running()) {
+            const engine_core::Assemblies& assemblies = game_->assemblies();
+            if (const int assembly = assemblies.play_of(body->id()); assembly >= 0) {
+                anchored = assemblies.play()[static_cast<std::size_t>(assembly)].anchored;
+            }
+        }
+        if (meshChanged || outline.shape != static_cast<int>(shape) || outline.anchored != anchored ||
             !same(outline.size, size) || !same(outline.center, center)) {
             outline.shape = static_cast<int>(shape);
             outline.size = size;
-            outline.anchored = body->anchored();
+            outline.anchored = anchored;
             outline.center = center;
             engine_core::PhysicsWorld::collision_outline(*body, center, outline.meshPoints, outline.meshTriangles,
-                                                         outline.lines, scale, &outline.meshPieces);
+                                                         outline.lines, scale, &outline.meshPieces, anchored ? 1 : 0);
         }
         // Its body starts at the GameObject it moves.
         outline.driven = body->driven_game_object();

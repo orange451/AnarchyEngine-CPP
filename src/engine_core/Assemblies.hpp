@@ -137,6 +137,55 @@ public:
     // For tests: how many times a rebuild searched for a GUID no instance holds.
     std::size_t find_guid_calls() const { return find_guid_calls_; }
 
+    // Play (§5). When play starts, each assembly of more than one node gets a
+    // body frame (its root's frame then) and each member an offset from it;
+    // the physics world builds one Box3D body per assembly with physics from
+    // these, and writes every member back from that body. SimulationThread.
+    struct PlayMember {
+        InstanceId node = 0;
+        // A physics node's GameObject, written with it; else 0.
+        InstanceId driven = 0;
+        // frame⁻¹ × the node's frame when captured.
+        Matrix4 offset{};
+    };
+    struct PlayAssembly {
+        InstanceId root = 0;
+        bool anchored = false;
+        bool has_physics = false;
+        // The body frame offsets are measured from; also where a member move puts the body.
+        Matrix4 frame{};
+        std::uint32_t first = 0;  // into play_members()
+        std::uint32_t count = 0;
+        // Moves when members or offsets change, so the physics world places shapes again.
+        std::uint32_t stamp = 0;
+        // A member was written: the physics world moves the body to frame.
+        bool teleport = false;
+        // A member's Velocity or AngularVelocity was written: the body takes it.
+        bool velocity_pending = false;
+        Vec3 velocity{};
+        bool angular_pending = false;
+        Vec3 angular{};
+    };
+    // start_simulation, before any script runs.
+    void capture_play(DataModel& game);
+    // Playing: brings the play state up to date. PhysicsWorld::sync and
+    // Engine::step_physics call it; readers of Active and AssemblyRoot call
+    // refresh only, so a read never changes play state.
+    void sync_play(DataModel& game);
+    const std::vector<PlayAssembly>& play() const { return play_; }
+    std::vector<PlayAssembly>& play() { return play_; }
+    const std::vector<PlayMember>& play_members() const { return play_members_; }
+    // The play assembly a node is in, or -1.
+    int play_of(InstanceId node) const;
+    // Writes every member of play()[assembly] from body_pose × its offset,
+    // keeping each one's own scale, as the physics world writes a body back:
+    // no Changed, no history. skip: one already written by its own setter.
+    void pose_members(DataModel& game, std::size_t assembly, const Matrix4& body_pose, Vec3 velocity, Vec3 angular,
+                      InstanceId skip = 0);
+
+    // frame with the length of each of scale_from's axes.
+    static Matrix4 with_scale(const Matrix4& frame, const Matrix4& scale_from);
+
 private:
     struct Edge {
         InstanceId constraint = 0;
@@ -217,6 +266,24 @@ private:
     std::vector<std::uint8_t> follow_mark_;
     std::vector<std::uint32_t> follow_marked_;
     std::vector<InstanceId> carry_stack_;
+
+    // Play state (AssemblyPlay.cpp).
+    struct PlayLoser {
+        InstanceId instance = 0;  // a PhysicsBase that lost its GameObject to a member
+        std::uint32_t member = 0;
+    };
+    void write_member(DataModel& game, InstanceId node, InstanceId driven, const Matrix4& frame, Vec3 velocity,
+                      Vec3 angular, InstanceId skip);
+    std::vector<PlayAssembly> play_;
+    std::vector<PlayMember> play_members_;
+    std::vector<PlayLoser> play_losers_;
+    std::vector<InstanceId> play_seen_;
+    std::vector<std::int32_t> play_index_;
+    std::vector<std::int32_t> play_member_index_;
+    std::vector<std::uint32_t> play_touched_;
+    std::uint32_t next_stamp_ = 0;
+    bool play_captured_ = false;
+    std::uint32_t play_generation_ = 0;
 };
 
 // Holds Assemblies suspended for a scope (§3): load, undo and redo of edit

@@ -18,6 +18,7 @@
 #include "SelectionService.hpp"
 #include "ScriptAnalysis.hpp"
 #include "Runner.hpp"
+#include "SceneDraws.hpp"
 #include "SceneFeed.hpp"
 #include "SceneService.hpp"
 #include "SkyMath.hpp"
@@ -116,6 +117,8 @@ GameView::GameView(Runner& runner, std::string name, bool closable)
     input.moved = input.dragged;
     auto gui = jadefx::make<GuiLayer>(runner.simulation(), std::move(input));
     guiLayer_ = gui.get();
+    viewports_ = std::make_unique<ViewportRenderer>(&meshes_, &textures_);
+    guiLayer_->setViewportRenderer(viewports_.get());
     // The GUIs have a cascade of their own: the studio's theme and stylesheets
     // stop at the SubScene, and the game's default sheet starts there.
     auto guiScene = jadefx::make<jadefx::SubScene>(std::move(gui));
@@ -271,7 +274,8 @@ void GameView::frameSelection() {
         while (!stack.empty()) {
             const engine_core::InstanceId id = stack.back();
             stack.pop_back();
-            if (id == camera) {
+            // A ViewportPane's contents are in its own world's coordinates, not the view's.
+            if (id == camera || game.in_viewport(id)) {
                 continue;
             }
             for (const engine_core::InstanceId child : game.get_children(id)) {
@@ -413,36 +417,7 @@ void GameView::collectMeshes() {
     for (std::size_t index = 0; index < snapshot.prefabs.size(); ++index) {
         std::vector<MeshDraw>& loaded = prefabMeshes_[index];
         loaded.clear();
-        for (const engine_core::VisualMesh& source : snapshot.prefabs[index].meshes) {
-            // A play session's geometry, while it lasts, else the Mesh's file.
-            const anarchy::amesh::GpuMesh* mesh = source.session != nullptr
-                                                      ? meshes_.getSession(source.mesh, *source.session, source.revision)
-                                                      : meshes_.get(source.path);
-            if (mesh == nullptr) {
-                continue;
-            }
-            MeshDraw draw;
-            draw.mesh = mesh;
-            draw.texture = textures_.get(source.diffuse_texture, Usage::Color, source.diffuse_flip_y, source.diffuse_always_loaded);
-            draw.normalTexture = textures_.get(source.normal_texture, Usage::Normal, source.normal_flip_y, source.normal_always_loaded);
-            draw.roughnessTexture = textures_.get(source.roughness_texture, Usage::Mask, source.roughness_flip_y, source.roughness_always_loaded);
-            draw.metalnessTexture = textures_.get(source.metalness_texture, Usage::Mask, source.metalness_flip_y, source.metalness_always_loaded);
-            draw.emissiveTexture = textures_.get(source.emissive_texture, Usage::Color, source.emissive_flip_y, source.emissive_always_loaded);
-            draw.color[0] = source.color.r;
-            draw.color[1] = source.color.g;
-            draw.color[2] = source.color.b;
-            draw.color[3] = source.color.a;
-            draw.emissive[0] = source.emissive.r;
-            draw.emissive[1] = source.emissive.g;
-            draw.emissive[2] = source.emissive.b;
-            draw.metalness = source.metalness;
-            draw.roughness = source.roughness;
-            draw.reflectivity = source.reflectivity;
-            draw.transparency = source.transparency;
-            draw.skinned = source.skinned;
-            draw.slot = nextSlot++;
-            loaded.push_back(draw);
-        }
+        LoadPrefabDraws(snapshot.prefabs[index], meshes_, textures_, nextSlot, loaded);
     }
     // Uploads for sessions no Mesh draws now, as after a Stop. None this frame uses.
     meshes_.sweepSessions();
@@ -451,79 +426,14 @@ void GameView::collectMeshes() {
         if (!row.alive) {
             continue;
         }
-        if (row.light.kind != engine_core::VisualLight::Kind::None && row.light.enabled) {
-            LightDraw light;
-            switch (row.light.kind) {
-            case engine_core::VisualLight::Kind::Spot:
-                light.kind = LightDraw::Kind::Spot;
-                break;
-            case engine_core::VisualLight::Kind::Directional:
-                light.kind = LightDraw::Kind::Directional;
-                break;
-            default:
-                light.kind = LightDraw::Kind::Point;
-                break;
-            }
-            const engine_core::Vec3 position = engine_core::matrix4_position(row.world);
-            light.position[0] = position.x;
-            light.position[1] = position.y;
-            light.position[2] = position.z;
-            // Down the row's -Z, as a Camera looks. The renderer makes it unit length.
-            light.direction[0] = -row.world.m[8];
-            light.direction[1] = -row.world.m[9];
-            light.direction[2] = -row.world.m[10];
-            if (light.kind == LightDraw::Kind::Directional) {
-                // Its Direction is toward the light, so it shines the other way.
-                for (int axis = 0; axis < 3; ++axis) {
-                    light.direction[axis] = -row.light.direction[axis];
-                }
-            }
-            std::copy(row.light.color, row.light.color + 3, light.color);
-            light.intensity = row.light.intensity;
-            light.radius = row.light.radius;
-            light.outerFovDegrees = row.light.outer_fov;
-            light.innerFovScale = row.light.inner_fov_scale;
-            light.id = row.id;
-            light.shadows = row.light.shadows;
-            light.shadowDistance = row.light.shadow_distance;
+        LightDraw light;
+        if (LightDrawFor(row, light)) {
             lightDraws_.push_back(light);
         }
         if (row.prefab == 0 || row.prefab >= snapshot.prefabs.size()) {
             continue;
         }
-        // The GameObject's Color tints each Material's, per instance, and its opacity multiplies each Material's.
-        const float opacity = 1.f - row.transparency;
-        // Its Scale grows the Prefab about the GameObject's origin: each axis, not the position.
-        engine_core::Matrix4 scaled = row.world;
-        for (int column = 0; column < 3; ++column) {
-            for (int axis = 0; axis < 3; ++axis) {
-                scaled.m[column * 4 + axis] *= row.scale;
-            }
-        }
-        for (const MeshDraw& model : prefabMeshes_[row.prefab]) {
-            MeshDraw& draw = meshDraws_.emplace_back(model);
-            draw.model = scaled;
-            draw.owner = row.id;
-            draw.tint[0] = row.color.r;
-            draw.tint[1] = row.color.g;
-            draw.tint[2] = row.color.b;
-            draw.transparency = 1.f - (1.f - std::clamp(draw.transparency, 0.f, 1.f)) * opacity;
-            // A Model on the Prefab's skeleton moves with the row's pose, which
-            // the held snapshot keeps alive through the frame.
-            if (draw.skinned && row.pose != nullptr && !row.pose->palette.empty()) {
-                draw.bones = row.pose->palette.data();
-                draw.boneCount = static_cast<int>(row.pose->palette.size() / 12);
-                draw.poseRevision = row.pose->revision;
-                const float* low = draw.mesh->bounds_min();
-                const float* high = draw.mesh->bounds_max();
-                const float poseLow[3] = {row.pose->low.x, row.pose->low.y, row.pose->low.z};
-                const float poseHigh[3] = {row.pose->high.x, row.pose->high.y, row.pose->high.z};
-                for (int axis = 0; axis < 3; ++axis) {
-                    draw.poseMin[axis] = std::min(low[axis], poseLow[axis]);
-                    draw.poseMax[axis] = std::max(high[axis], poseHigh[axis]);
-                }
-            }
-        }
+        AppendRowDraws(row, prefabMeshes_[row.prefab], meshDraws_);
     }
     // Each Terrain's LOD nodes chosen for this camera and pane (spec decision 2:
     // here, before Renderer::draw, which learns its target size only inside),
@@ -594,19 +504,7 @@ void GameView::collectMeshes() {
                                                                        : SceneQuality::Medium;
     lighting.cinematicToneMapping = snapshot.lighting.tone_mapping == 1;
     lighting.fastShading = snapshot.lighting.shading_model == 1;
-    // The Skybox's images, uploaded linear; a missing or unreadable one draws no sky.
-    const engine_core::VisualSky& sky = snapshot.sky;
-    if (sky.present) {
-        const EnvironmentTexture image = textures_.getEnvironment(sky.image, sky.image_flip_y);
-        lighting.sky.image = image.texture;
-        lighting.sky.imageRevision = image.revision;
-        lighting.sky.exposure = sky.exposure;
-        lighting.sky.lightScale = sky.light_scale;
-        lighting.sky.rotationDegrees = sky.rotation;
-        lighting.sky.tint[0] = sky.tint.r;
-        lighting.sky.tint[1] = sky.tint.g;
-        lighting.sky.tint[2] = sky.tint.b;
-    }
+    SkyFor(snapshot.sky, textures_, lighting.sky);
     // The DynamicSky, if it is the sky: SkyMath's sun, moon, and stars, the
     // clouds' drift by the view's clock, and its light first among the suns,
     // so it takes the shadow cascades.
@@ -730,7 +628,7 @@ void GameView::layoutChildren() {
     followCamera(*frameSnapshot_);
     refreshCameraList();
     refreshOverlays();
-    guiLayer_->sync();
+    guiLayer_->sync(&frameSnapshot_->viewports);
     BillboardView billboards;
     billboards.view = renderer_.view();
     billboards.fovYDegrees = renderer_.fovYDegrees();
@@ -794,6 +692,10 @@ void GameView::readWorkspace() {
     while (!walkScratch_.empty()) {
         const engine_core::InstanceId id = walkScratch_.back();
         walkScratch_.pop_back();
+        // A ViewportPane's Cameras look into its own world, not the place's.
+        if (game_->in_viewport(id)) {
+            continue;
+        }
         if (dynamic_cast<engine_core::Camera*>(game_->instance(id)) != nullptr) {
             if (cameraCount == cameraScratch_.size()) {
                 cameraScratch_.emplace_back();
@@ -1170,6 +1072,10 @@ void GameView::renderContent(jadefx::UiRenderer& renderer, float opacity) {
     // Painted after the clear, so the label stays on top of the viewport.
     {
         PROFILE_SCOPE("GUIs and overlays", profiler::Group::Engine);
+        // The ViewportPanes due this frame, each into its own texture, before the GUI paints them.
+        if (graphicsReady_) {
+            viewports_->renderPending();
+        }
         Node::renderChildren(renderer, opacity);
     }
     // The render thread waits on this when it is uncapped, so its step follows
@@ -1225,6 +1131,7 @@ void GameView::sceneChanged(jadefx::Scene* previous) {
     if (previous == nullptr || previous->isTearingDown() || getScene() == previous) {
         return;
     }
+    viewports_->release();
     renderer_.shutdown();
     meshes_.clear();
     textures_.clear();

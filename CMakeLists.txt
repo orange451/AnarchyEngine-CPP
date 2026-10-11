@@ -45,6 +45,7 @@ set(STUDIO_CORE_SOURCES
     src/runner/ViewCapture.cpp
     src/runner/RenderMath.cpp
     src/runner/BillboardMath.cpp
+    src/runner/ViewportQueue.cpp
     src/runner/GridBands.cpp
     src/runner/ShadowMath.cpp
     src/runner/BloomMath.cpp
@@ -99,6 +100,9 @@ set(STUDIO_SOURCES
     src/runner/TextureCache.cpp
     src/amesh/amesh_gl.cpp
     src/runner/GameView.cpp
+    src/runner/SceneDraws.cpp
+    src/runner/ViewportRenderer.cpp
+    src/runner/ViewportNode.cpp
     src/runner/ProfilerOverlay.cpp
     src/runner/UiFrameProfile.cpp
     src/runner/GuiLayer.cpp
@@ -628,6 +632,7 @@ add_library(engine_core STATIC
     src/engine_core/DataModelPlace.cpp
     src/engine_core/DataModelLock.cpp
     src/engine_core/SnapshotPump.cpp
+    src/engine_core/ViewportScenes.cpp
     src/engine_core/Skeleton.cpp
     src/engine_core/Skinning.cpp
     src/engine_core/Animation.cpp
@@ -837,6 +842,7 @@ add_executable(studio-tests
     tests/TerminalPaneTest.cpp
     tests/GuiStyleTest.cpp
     tests/GuiImageTest.cpp
+    tests/ViewportPaneTest.cpp
     tests/BillboardLayerTest.cpp
     tests/ProfilerOverlayTest.cpp
     tests/UiFrameProfileTest.cpp
@@ -924,6 +930,9 @@ target_link_libraries(assets-demo PRIVATE studio)
 # By hand, not ctest: billboard-demo <out-dir> saves a depth-tested and an always-on-top BillboardGui beside a cube.
 add_executable(billboard-demo tests/BillboardDemo.cpp)
 target_link_libraries(billboard-demo PRIVATE studio)
+# By hand, not ctest: viewport-demo <out-dir> saves two ViewportPanes, an icon and a turning preview.
+add_executable(viewport-demo tests/ViewportDemo.cpp)
+target_link_libraries(viewport-demo PRIVATE studio)
 
 # By hand, not ctest: prefab-demo out-dir light saves the Prefab editor as PNGs.
 add_executable(prefab-demo
@@ -1044,6 +1053,9 @@ add_executable(sandbox
     sandbox/attachment_tests.cpp
     sandbox/scene_camera_tests.cpp
     sandbox/gui_tests.cpp
+    sandbox/viewport_pane_tests.cpp
+    sandbox/viewport_scene_tests.cpp
+    sandbox/viewport_queue_tests.cpp
     sandbox/billboard_tests.cpp
     sandbox/render_math_tests.cpp
     sandbox/shadow_math_tests.cpp
@@ -1105,7 +1117,7 @@ function(anarchy_warnings target)
     endif()
 endfunction()
 foreach(target IN ITEMS studio_core studio AnarchyStudio AnarchyPlayer engine-tests shell-tests properties-tests console-tests
-                        studio-tests mcp-tests explorer-tests assets-tests prefab-editor-tests terrain-editor-tests assets-demo billboard-demo prefab-demo terminal-tests terminal-probe anarchy-mcp
+                        studio-tests mcp-tests explorer-tests assets-tests prefab-editor-tests terrain-editor-tests assets-demo billboard-demo viewport-demo prefab-demo terminal-tests terminal-probe anarchy-mcp
                         sandbox amesh aanim amesh-tests amesh-gl-check scene-render-check gpu-timer-check grid-check profiler-demo profiler profiler-tests ${ENGINE_PACKAGES})
     anarchy_warnings(${target})
 endforeach()
@@ -1220,7 +1232,7 @@ option(ANARCHY_TESTS_IN_ALL "Build every test and demo program in a plain build"
 set(ANARCHY_TEST_PROGRAMS
     shell-tests explorer-tests assets-tests prefab-editor-tests terrain-editor-tests
     console-tests properties-tests studio-tests mcp-tests profiler-tests mcp-setup-tests
-    engine-tests terminal-tests terminal-probe terminal-demo assets-demo billboard-demo
+    engine-tests terminal-tests terminal-probe terminal-demo assets-demo billboard-demo viewport-demo
     prefab-demo amesh-tests amesh-gl-check profiler-demo grid-check gpu-timer-check
     scene-render-check sandbox)
 add_custom_target(tests)

@@ -21,6 +21,7 @@
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace runner {
@@ -241,6 +242,7 @@ bool Renderer::buildProgram(Program& program, const char* name, const char* vert
     program.inverseProjection = at("uInverseProjection");
     program.inverseView = at("uInverseView");
     program.texel = at("uTexel");
+    program.keepAlpha = at("uKeepAlpha");
     program.ambient = at("uAmbient");
     program.skyRadiance = at("uSkyRadiance");
     program.skyEnabled = at("uSkyEnabled");
@@ -652,10 +654,38 @@ unsigned MakeLevelFbo(unsigned texture, int level) {
 }  // namespace
 
 bool Renderer::ensureTargets(int width, int height) {
+    ++targetUses_;
     if (gbufferFbo_ != 0 && width == targetWidth_ && height == targetHeight_) {
         return true;
     }
-    destroyTargets();
+    if (targetPool_ > 0) {
+        if (gbufferFbo_ != 0) {
+            parked_.push_back(parkTargets());
+        }
+        for (std::size_t i = 0; i < parked_.size(); ++i) {
+            if (parked_[i].width == width && parked_[i].height == height) {
+                unparkTargets(parked_[i]);
+                parked_.erase(parked_.begin() + static_cast<std::ptrdiff_t>(i));
+                return true;
+            }
+        }
+        // Least recently used first, while the parked sets are over the pool.
+        std::size_t total = 0;
+        for (const TargetSet& set : parked_) {
+            total += TargetBytes(set.width, set.height);
+        }
+        while (!parked_.empty() && total > targetPool_) {
+            const auto oldest = std::min_element(parked_.begin(), parked_.end(),
+                                                 [](const TargetSet& a, const TargetSet& b) { return a.used < b.used; });
+            total -= TargetBytes(oldest->width, oldest->height);
+            unparkTargets(*oldest);
+            parked_.erase(oldest);
+            destroyTargets();
+        }
+    } else {
+        destroyTargets();
+    }
+    ++targetsMade_;
     targetWidth_ = width;
     targetHeight_ = height;
     albedoTexture_ = MakeTarget(RT_GL_SRGB8_ALPHA8, GL_RGBA, GL_UNSIGNED_BYTE, width, height);
@@ -697,6 +727,54 @@ bool Renderer::ensureTargets(int width, int height) {
         return false;
     }
     return true;
+}
+
+Renderer::TargetSet Renderer::parkTargets() {
+    destroyBloomChain();
+    destroyReflectionBuffers();
+    destroyOcclusionBuffers();
+    TargetSet set;
+    set.width = targetWidth_;
+    set.height = targetHeight_;
+    set.gbufferFbo = std::exchange(gbufferFbo_, 0u);
+    set.albedo = std::exchange(albedoTexture_, 0u);
+    set.normal = std::exchange(normalTexture_, 0u);
+    set.material = std::exchange(materialTexture_, 0u);
+    set.emissive = std::exchange(emissiveTexture_, 0u);
+    set.depth = std::exchange(depthTexture_, 0u);
+    set.accumulationFbo = std::exchange(accumulationFbo_, 0u);
+    set.accumulation = std::exchange(accumulationTexture_, 0u);
+    set.transparencyFbo = std::exchange(transparencyFbo_, 0u);
+    set.transparency = std::exchange(transparencyTexture_, 0u);
+    set.mergeFbo = std::exchange(mergeFbo_, 0u);
+    set.merge = std::exchange(mergeTexture_, 0u);
+    set.ldrFbo = std::exchange(ldrFbo_, 0u);
+    set.ldr = std::exchange(ldrTexture_, 0u);
+    set.fxaaValid = std::exchange(fxaaValid_, false);
+    set.used = targetUses_;
+    targetWidth_ = 0;
+    targetHeight_ = 0;
+    return set;
+}
+
+void Renderer::unparkTargets(const TargetSet& set) {
+    targetWidth_ = set.width;
+    targetHeight_ = set.height;
+    gbufferFbo_ = set.gbufferFbo;
+    albedoTexture_ = set.albedo;
+    normalTexture_ = set.normal;
+    materialTexture_ = set.material;
+    emissiveTexture_ = set.emissive;
+    depthTexture_ = set.depth;
+    accumulationFbo_ = set.accumulationFbo;
+    accumulationTexture_ = set.accumulation;
+    transparencyFbo_ = set.transparencyFbo;
+    transparencyTexture_ = set.transparency;
+    mergeFbo_ = set.mergeFbo;
+    mergeTexture_ = set.merge;
+    ldrFbo_ = set.ldrFbo;
+    ldrTexture_ = set.ldr;
+    fxaaValid_ = set.fxaaValid;
 }
 
 void Renderer::destroyTargets() {
@@ -1108,7 +1186,11 @@ bool Renderer::draw(double x, double y, double width, double height, double scen
     glViewport(pane.x, pane.y, pane.width, pane.height);
     glDisable(GL_BLEND);
     glDisable(GL_DEPTH_TEST);
-    glClearColor(clear_[0], clear_[1], clear_[2], 1.0f);
+    if (transparentOutput_) {
+        glClearColor(0.f, 0.f, 0.f, 0.f);
+    } else {
+        glClearColor(clear_[0], clear_[1], clear_[2], 1.0f);
+    }
     // The floor grid's bands mark the pane's depth as they draw. Cleared here, with
     // the color, rather than just before the grid: a clear between draws to the
     // pane would make the GPU write the pane out and read it back in between.
@@ -1258,9 +1340,14 @@ bool Renderer::draw(double x, double y, double width, double height, double scen
             glViewport(pane.x, pane.y, pane.width, pane.height);
         };
         // Blended over the clear: where nothing was drawn the pane shows through.
-        const auto blendOverClear = [] {
+        // A transparent pane keeps the coverage in alpha as well.
+        const auto blendOverClear = [this] {
             glEnable(GL_BLEND);
-            glBlendFuncSeparate(RT_GL_ONE, RT_GL_ONE_MINUS_SRC_ALPHA, RT_GL_ZERO, RT_GL_ONE);
+            if (transparentOutput_) {
+                glBlendFuncSeparate(RT_GL_ONE, RT_GL_ONE_MINUS_SRC_ALPHA, RT_GL_ONE, RT_GL_ONE_MINUS_SRC_ALPHA);
+            } else {
+                glBlendFuncSeparate(RT_GL_ONE, RT_GL_ONE_MINUS_SRC_ALPHA, RT_GL_ZERO, RT_GL_ONE);
+            }
         };
         bool onPane = false;
         if (lighting_.antialiasing == SceneAntialiasing::FXAA) {
@@ -1270,7 +1357,11 @@ bool Renderer::draw(double x, double y, double width, double height, double scen
             glDisable(GL_SCISSOR_TEST);
             glViewport(0, 0, targetWidth_, targetHeight_);
             glDisable(GL_BLEND);
-            glClearColor(clear_[0], clear_[1], clear_[2], 1.0f);
+            if (transparentOutput_) {
+                glClearColor(0.f, 0.f, 0.f, 0.f);
+            } else {
+                glClearColor(clear_[0], clear_[1], clear_[2], 1.0f);
+            }
             glClear(GL_COLOR_BUFFER_BIT);
             blendOverClear();
             if (toneMapPass(bloomLevels)) {
@@ -2661,6 +2752,7 @@ bool Renderer::fxaaPass() {
     glUseProgram(fxaa_.id);
     BindTexture(kUnitScene, ldrTexture_);
     glUniform2f(fxaa_.texel, 1.f / static_cast<float>(targetWidth_), 1.f / static_cast<float>(targetHeight_));
+    glUniform1f(fxaa_.keepAlpha, transparentOutput_ ? 1.f : 0.f);
     glBindVertexArray(emptyVao_);
     if (!fxaaValid_) {
         if (!CanDraw(fxaa_.id)) {
@@ -2769,6 +2861,13 @@ void Renderer::shutdown() {
     probeFilled_[1] = false;
     probedDepth_.reset();
     sceneDepth_ = SceneDepth{};
+    // The current set first: unparking writes over its names.
+    destroyTargets();
+    for (const TargetSet& set : parked_) {
+        unparkTargets(set);
+        destroyTargets();
+    }
+    parked_.clear();
     destroyTargets();
     targetsRefused_ = false;
     bloomRefusedWidth_ = 0;

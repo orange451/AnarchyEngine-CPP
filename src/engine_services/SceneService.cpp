@@ -30,6 +30,10 @@ bool Workspace::set_current_camera(InstanceId id) {
         if (target == nullptr || !lua_class_inherits(target->class_name(), "Camera")) {
             return false;
         }
+        // A ViewportPane's Camera looks into its own world, not the place's.
+        if (in_viewport(id)) {
+            return false;
+        }
     }
     if (id == current_camera_) {
         return true;
@@ -89,6 +93,10 @@ bool read_current_camera(DataModel&, DataModel& object, LuaSlot& out) {
 bool write_current_camera(DataModel&, DataModel& object, LuaSlot& in) {
     auto* workspace = dynamic_cast<Workspace*>(&object);
     if (workspace == nullptr) {
+        return false;
+    }
+    if (in.kind == LuaSlot::Kind::Instance && workspace->in_viewport(in.id)) {
+        in.error = "CurrentCamera cannot be a Camera inside a ViewportPane";
         return false;
     }
     const bool shaped = in.kind == LuaSlot::Kind::Nil || in.kind == LuaSlot::Kind::Instance;

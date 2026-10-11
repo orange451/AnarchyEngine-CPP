@@ -10,6 +10,7 @@
 #include "ProfilerOverlay.hpp"
 #include "TerrainSelection.hpp"
 #include "TextureCache.hpp"
+#include "ViewportRenderer.hpp"
 #include "Renderer.hpp"
 #include "types.hpp"
 
@@ -208,6 +209,8 @@ private:
     double cursorY_ = -1;
     MeshCache meshes_;
     TextureCache textures_;
+    // The ViewportPanes in this view's GUI, drawn with the caches above.
+    std::unique_ptr<ViewportRenderer> viewports_;
     // Each Terrain's LOD cross-fades, frame to frame.
     TerrainFadeState terrainFades_;
     std::chrono::steady_clock::time_point terrainClockStart_ = std::chrono::steady_clock::now();

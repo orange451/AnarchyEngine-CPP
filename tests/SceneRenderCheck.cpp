@@ -19,6 +19,7 @@
 #include "profiler/Profiler.hpp"
 #include "runner/gl.hpp"
 #include "runner/ViewCapture.hpp"
+#include "runner/ViewportRenderer.hpp"
 #include "terrain/LodNode.hpp"
 #include "terrain/SurfaceNets.hpp"
 #include "terrain/VoxelVolume.hpp"
@@ -4909,6 +4910,182 @@ int main(int argc, char** argv) {
         }
         renderer.shutdown();
         Expect(runner::rt_glGetError() == runner::GL_NO_ERROR, "the terrain checks leave no GL error");
+    }
+
+    {
+        // VR1-VR3: transparent output. A white cube at the origin seen from
+        // (0, 0, 6) into a 64 by 64 target: alpha 0 in the corners, 255 at the
+        // middle, and FXAA leaves edge pixels partly covered.
+        GpuMesh cube;
+        cube.upload(Cube());
+        runner::Renderer clear;
+        Expect(clear.initialize(), "VR the renderer builds for transparent output");
+        clear.setTransparentOutput(true);
+        clear.setCamera(engine_core::matrix4_translation(0.f, 0.f, 6.f), 40.f);
+        OffscreenTarget target(64, 64);
+        const std::vector<runner::MeshDraw> draws = {runner::MeshDraw{&cube, engine_core::matrix4_identity()}};
+        runner::LightDraw sun;
+        sun.kind = runner::LightDraw::Kind::Directional;
+        sun.direction[0] = -0.4f;
+        sun.direction[1] = -0.6f;
+        sun.direction[2] = -0.7f;
+        sun.intensity = 2.f;
+        runner::ViewPixels pixels;
+        Expect(target.complete() && target.shoot(clear, draws, sun, pixels), "VR1 a transparent shot draws");
+        if (pixels.rgba.size() == 64 * 64 * 4) {
+            const auto alpha = [&pixels](int x, int y) {
+                return static_cast<int>(pixels.rgba[(static_cast<std::size_t>(y) * 64 + x) * 4 + 3]);
+            };
+            Expect(alpha(0, 0) == 0 && alpha(63, 63) == 0,
+                   "VR1 nothing drawn is alpha 0 (" + std::to_string(alpha(0, 0)) + ")");
+            Expect(alpha(32, 32) == 255, "VR2 the cube is opaque (" + std::to_string(alpha(32, 32)) + ")");
+            int between = 0;
+            for (int x = 0; x < 64; ++x) {
+                const int a = alpha(x, 32);
+                between += a > 0 && a < 255 ? 1 : 0;
+            }
+            Expect(between > 0, "VR3 FXAA leaves the cube's silhouette partly covered");
+        }
+        // The same renderer with transparent output off clears opaque again.
+        clear.setTransparentOutput(false);
+        runner::ViewPixels opaque;
+        target.shoot(clear, draws, sun, opaque);
+        Expect(opaque.rgba.size() == 64 * 64 * 4 && opaque.rgba[3] == 255, "VR1 off, the corner is opaque");
+
+        // VR4: two sizes in turn make each size's targets once with a pool.
+        clear.setTargetPool(std::size_t(64) << 20);
+        OffscreenTarget small(32, 32);
+        runner::ViewPixels shot;
+        const int made = clear.targetsMade();
+        for (int round = 0; round < 3; ++round) {
+            target.shoot(clear, draws, &sun, 1, 1, shot);
+            small.shoot(clear, draws, &sun, 1, 1, shot);
+        }
+        Expect(clear.targetsMade() - made <= 2, "VR4 alternating two sizes makes each size's targets once (" +
+                                                    std::to_string(clear.targetsMade() - made) + " made)");
+        // VR4b: the bound is on the parked sets alone, so a pool that holds one
+        // set of the larger size keeps it while the smaller one draws.
+        {
+            runner::Renderer bounded;
+            Expect(bounded.initialize(), "VR4b the renderer builds for a small pool");
+            bounded.setTransparentOutput(true);
+            bounded.setCamera(engine_core::matrix4_translation(0.f, 0.f, 6.f), 40.f);
+            bounded.setTargetPool(std::size_t(48) * 64 * 64 + 1);
+            const int before = bounded.targetsMade();
+            for (int round = 0; round < 3; ++round) {
+                target.shoot(bounded, draws, &sun, 1, 1, shot);
+                small.shoot(bounded, draws, &sun, 1, 1, shot);
+            }
+            Expect(bounded.targetsMade() - before <= 2, "VR4b a pool the size of one parked set keeps it (" +
+                                                          std::to_string(bounded.targetsMade() - before) + " made)");
+            // VR4c: shutdown deletes the current set and every parked one.
+            target.shoot(bounded, draws, &sun, 1, 1, shot);
+            const unsigned parkedDepth = bounded.sceneDepth().texture;
+            small.shoot(bounded, draws, &sun, 1, 1, shot);
+            const unsigned currentDepth = bounded.sceneDepth().texture;
+            bounded.shutdown();
+            Expect(parkedDepth != 0 && currentDepth != 0 && glIsTexture(parkedDepth) == runner::GL_FALSE &&
+                       glIsTexture(currentDepth) == runner::GL_FALSE,
+                   "VR4c shutdown deletes the current and the parked targets");
+        }
+
+        // VR5: two Skyboxes in turn filter each image once with a cache of 3.
+        const std::filesystem::path skies = std::filesystem::temp_directory_path() / "anarchy-vr-skies";
+        std::filesystem::create_directories(skies / "textures");
+        std::ofstream(skies / "textures" / "a.hdr", std::ios::binary)
+            << Hdr(16, 8, [](int, int) { return std::array<float, 3>{1.f, 0.5f, 0.2f}; });
+        std::ofstream(skies / "textures" / "b.hdr", std::ios::binary)
+            << Hdr(16, 8, [](int, int) { return std::array<float, 3>{0.2f, 0.5f, 1.f}; });
+        runner::TextureCache skyTextures;
+        skyTextures.setRoot(skies);
+        const runner::EnvironmentTexture skyA = skyTextures.getEnvironment("textures/a.hdr");
+        const runner::EnvironmentTexture skyB = skyTextures.getEnvironment("textures/b.hdr");
+        Expect(skyA.texture != 0 && skyB.texture != 0, "VR5 both sky images load");
+        clear.setSkyCacheSize(3);
+        runner::SceneLighting withSky;
+        const int builds = clear.skyBuilds();
+        for (int round = 0; round < 3; ++round) {
+            for (const runner::EnvironmentTexture* sky : {&skyA, &skyB}) {
+                withSky.sky.image = sky->texture;
+                withSky.sky.imageRevision = sky->revision;
+                clear.setLighting(withSky);
+                target.shoot(clear, draws, &sun, 1, 1, shot);
+            }
+        }
+        Expect(clear.skyBuilds() - builds == 2,
+               "VR5 each sky's cubes are filtered once (" + std::to_string(clear.skyBuilds() - builds) + ")");
+        clear.setLighting(runner::SceneLighting{});
+        clear.shutdown();
+        skyTextures.clear();
+        std::filesystem::remove_all(skies);
+        cube.destroy();
+        Expect(runner::rt_glGetError() == runner::GL_NO_ERROR, "transparent output leaves no GL error");
+    }
+
+    {
+        // VR6-VR8: ViewportRenderer draws a pane's scene into its texture: a
+        // white cube in front of its Camera, lit by its DirectionalLight,
+        // transparent around it; a scene with no Camera clears to nothing.
+        {
+            // A cube of its own: the one above was broken on purpose by the recheck check.
+            const std::vector<std::byte> bytes = write(Cube());
+            std::ofstream(root / "meshes" / "pane-cube.amesh", std::ios::binary)
+                .write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+        }
+        runner::MeshCache paneMeshes;
+        runner::TextureCache paneTextures;
+        paneMeshes.setRoot(root);
+        paneTextures.setRoot(root);
+        runner::ViewportRenderer panes(&paneMeshes, &paneTextures);
+        auto scene = std::make_shared<engine_core::VisualViewport>();
+        scene->pane = 1;
+        scene->revision = 1;
+        scene->has_camera = true;
+        scene->camera_world = engine_core::matrix4_translation(0.f, 0.f, 6.f);
+        scene->field_of_view = 40.f;
+        auto prefab = std::make_shared<engine_core::VisualPrefab>();
+        prefab->meshes.emplace_back();
+        prefab->meshes[0].path = "meshes/pane-cube.amesh";
+        prefab->meshes[0].color = engine_core::ColorRgb{1.f, 1.f, 1.f, 1.f};
+        scene->prefabs = {nullptr, prefab};
+        engine_core::VisualInstance cubeRow;
+        cubeRow.id = 2;
+        cubeRow.prefab = 1;
+        scene->rows.push_back(cubeRow);
+        engine_core::VisualInstance sunRow;
+        sunRow.id = 3;
+        sunRow.light.kind = engine_core::VisualLight::Kind::Directional;
+        sunRow.light.enabled = true;
+        sunRow.light.intensity = 2.f;
+        sunRow.light.direction[0] = 0.4f;
+        sunRow.light.direction[1] = 0.6f;
+        sunRow.light.direction[2] = 0.7f;
+        scene->rows.push_back(sunRow);
+        runner::ViewportQueue::Result result = runner::ViewportQueue::Result::NotReady;
+        for (int attempt = 0; attempt < 4 && result != runner::ViewportQueue::Result::Complete; ++attempt) {
+            result = panes.renderNow(runner::ViewportQueue::Job{1, scene, 64, 64});
+        }
+        Expect(result == runner::ViewportQueue::Result::Complete, "VR6 a pane's scene renders completely");
+        runner::ViewPixels drawn;
+        Expect(panes.read(1, drawn) && drawn.width == 64 && drawn.height == 64, "VR6 the pane's texture reads back");
+        if (drawn.rgba.size() == 64 * 64 * 4) {
+            const unsigned char* middle = drawn.rgba.data() + (32 * 64 + 32) * 4;
+            Expect(drawn.rgba[3] == 0 && middle[3] == 255 && middle[0] > 100,
+                   "VR7 the cube is drawn, opaque and lit, with nothing around it (" + std::to_string(middle[0]) +
+                       "," + std::to_string(middle[3]) + " corner " + std::to_string(drawn.rgba[3]) + ")");
+        }
+        auto empty = std::make_shared<engine_core::VisualViewport>(*scene);
+        empty->has_camera = false;
+        empty->revision = 2;
+        panes.renderNow(runner::ViewportQueue::Job{1, empty, 64, 64});
+        runner::ViewPixels cleared;
+        panes.read(1, cleared);
+        Expect(cleared.rgba.size() == 64 * 64 * 4 && cleared.rgba[(32 * 64 + 32) * 4 + 3] == 0,
+               "VR8 a pane with no Camera clears to nothing");
+        panes.release();
+        paneMeshes.clear();
+        paneTextures.clear();
+        Expect(runner::rt_glGetError() == runner::GL_NO_ERROR, "VR the pane renderer leaves no GL error");
     }
 
     // A Material's preview: a ball in its Color, lit from the upper left and

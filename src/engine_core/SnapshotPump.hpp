@@ -266,6 +266,43 @@ struct VisualPrefab {
     std::shared_ptr<const Skeleton> skeleton;
 };
 
+// One ViewportPane's world as drawn. Immutable once published, and the same
+// pointer frame after frame until something it draws changes, when revision
+// moves with it.
+struct VisualViewport {
+    InstanceId pane = 0;
+    std::uint64_t revision = 0;
+    // The Camera drawn from: CurrentCamera, else the first Camera inside, else none.
+    InstanceId camera = 0;
+    bool has_camera = false;
+    // Whether that Camera is inside the pane, so the pane may report its ViewportSize.
+    bool camera_inside = false;
+    Matrix4 camera_world = matrix4_identity();
+    float field_of_view = 70.f;
+    ColorRgb ambient{0.5f, 0.5f, 0.5f, 1.f};
+    // GameObjects and lights, in tree order. prefab indexes prefabs; 0 is none.
+    std::vector<VisualInstance> rows;
+    // Entry 0 is always null.
+    std::vector<std::shared_ptr<const VisualPrefab>> prefabs;
+    // The first Skybox inside, in tree order; present false with none.
+    VisualSky sky;
+};
+
+// What one Prefab draws, filled into out as the DataModel is now. cached is
+// the Prefab's id as last found, looked for again by guid when it no longer
+// names it. Strings are assigned in place, so an unchanged Prefab keeps them.
+void fill_visual_prefab(const DataModel& game, const std::string& guid, InstanceId& cached, VisualPrefab& out);
+// A Skybox's image, numbers, and tint into out; out.present is left as it is.
+class Skybox;
+void fill_visual_sky(const DataModel& game, const Skybox& skybox, VisualSky& out);
+// What a light's row shines; Kind::None for anything that is not a light.
+class SpatialObject;
+class DirectionalLight;
+VisualLight light_of(const SpatialObject& object);
+VisualLight light_of(const DirectionalLight& sun);
+// A DirectionalLight's row: no Transform, no Prefab, only what it shines.
+VisualInstance sun_row(const DirectionalLight& sun);
+
 // Path C. Applied after the DataModel copy. Gone on the next Prepare
 // unless the job submits it again. Physics never sees it.
 struct SnapshotOverride {
@@ -303,13 +340,23 @@ struct VisualSnapshot {
     // DataModel::resources_root as the snapshot was taken: the folder the
     // paths above are under.
     std::filesystem::path resources_root;
+    // Every ViewportPane under game, by pane id, ascending. Pointers only: each
+    // is immutable and shared until its pane changes.
+    std::vector<std::shared_ptr<const VisualViewport>> viewports;
 };
+
+class ViewportScenes;
 
 // Double buffer plus the one-frame override list.
 // Only RenderThread calls these methods. front() is the buffer Perform reads.
 // find() returns a pointer into that buffer; it dies at the next publish.
 class SnapshotPump {
 public:
+    SnapshotPump();
+    ~SnapshotPump();
+    SnapshotPump(const SnapshotPump&) = delete;
+    SnapshotPump& operator=(const SnapshotPump&) = delete;
+
     void reserve(std::size_t instances);
 
     void begin_prerender_window(DataModel& game);
@@ -411,6 +458,8 @@ private:
     std::vector<InstanceId> billboard_ids_;
     // The WireframeAdornments resolve_wireframes walks.
     std::vector<InstanceId> wireframe_ids_;
+    // Each ViewportPane's scene, into base_.viewports.
+    std::unique_ptr<ViewportScenes> viewports_;
 };
 
 }  // namespace engine_core

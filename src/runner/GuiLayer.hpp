@@ -86,7 +86,11 @@ public:
 
     // Brings the nodes up to date with the Gui service. Skipped, keeping the
     // nodes as they are, when the DataModel is busy.
-    void sync();
+    // frame's ViewportPane scenes, sorted by pane id, go to the ViewportPanes'
+    // nodes; null for none.
+    void sync(const std::vector<std::shared_ptr<const engine_core::VisualViewport>>* viewports = nullptr);
+    // What draws the ViewportPanes' images, the Scene View's own.
+    void setViewportRenderer(ViewportRenderer* renderer);
 
     // The node for an instance, or null when it is not drawn. For tests.
     jadefx::Node* nodeFor(engine_core::InstanceId id) const;

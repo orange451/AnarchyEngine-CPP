@@ -49,6 +49,7 @@ int RunLandingPageTests(ide::IdeLayout& layout, jadefx::Scene& scene);
 int RunTerminalPaneTests();
 int RunGuiStyleTests(ide::IdeLayout& layout, jadefx::Scene& scene);
 int RunGuiImageTests(ide::IdeLayout& layout, jadefx::Scene& scene);
+int RunViewportPaneTests(ide::IdeLayout& layout, jadefx::Scene& scene);
 int RunBillboardLayerTests(ide::IdeLayout& layout, jadefx::Scene& scene);
 int RunStatusBarTests(ide::IdeLayout& layout, jadefx::Scene& scene);
 int RunProfilerOverlayTests(ide::IdeLayout& layout, jadefx::Scene& scene);
@@ -1099,6 +1100,7 @@ int main() {
     failures += RunTerminalPaneTests();
     failures += RunGuiStyleTests(layout, *scene);
     failures += RunGuiImageTests(layout, *scene);
+    failures += RunViewportPaneTests(layout, *scene);
     failures += RunBillboardLayerTests(layout, *scene);
     failures += RunStatusBarTests(layout, *scene);
     failures += RunPluginsTests();

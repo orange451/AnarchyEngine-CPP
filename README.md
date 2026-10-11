@@ -58,7 +58,7 @@ Every GUI class is a `GuiBase`: `ClassList` (CSS classes, separated by spaces), 
 
 Every GuiBase fires `MouseClicked`, `MousePressed`, `MouseReleased`, `MouseEntered`, and `MouseExited`, and a Button and a TextField fire `Action`, on a click or Enter. None passes arguments. A press or click on a GUI is heard by everything it is inside, as in a web page, and reaches `UserInputService` with `gameProcessedEvent` true; a press on a ScreenGui's own empty area goes to the scene as if no GUI were there.
 
-A `CSS` instance styles its parent GUI and everything in it. Type selectors are the class names in lowercase (`screengui`, `pane`, `hbox`, `vbox`, `label`, `button`, `textfield`), `#Name` matches an instance's Name, `.class` its ClassList, and JadeFX's pseudo-classes such as `:hover` and `:active` work. What CSS sets wins over the properties: `background-color` over BackgroundColor, `color` over TextColor, `width` over Size. Double-click a CSS in the Game Explorer to edit it.
+A `CSS` instance styles its parent GUI and everything in it. Type selectors are the class names in lowercase (`screengui`, `pane`, `viewportpane`, `hbox`, `vbox`, `label`, `button`, `textfield`), `#Name` matches an instance's Name, `.class` its ClassList, and JadeFX's pseudo-classes such as `:hover` and `:active` work. What CSS sets wins over the properties: `background-color` over BackgroundColor, `color` over TextColor, `width` over Size. Double-click a CSS in the Game Explorer to edit it.
 
 ```lua
 local hud = Instance.new("ScreenGui", game.Gui)
@@ -70,6 +70,19 @@ play.Text = "Play"
 play.Action:Connect(function() print("play") end)
 local sheet = Instance.new("CSS", hud)
 sheet.Source = ".toolbar { padding: 10px; spacing: 8px; border-radius: 8px; }"
+```
+
+A `ViewportPane` is a pane that draws a little 3D world of its own: the GameObjects, lights, and Skybox inside it, at any depth, seen from its `CurrentCamera` (a Camera anywhere; nil uses the first Camera inside it), with its GUI children over the image. It is lit only by the lights and Skybox inside it and its `Ambient`, never by the place's Lighting, and what it holds never joins the place: it is not drawn in the Scene View, does not collide, and does not light the world, wherever the pane is. Animators inside it play; physics, Terrain, constraints, and sounds do nothing there. Its background is its `BackgroundColor` and `BackgroundTransparency`, so an icon with `BackgroundTransparency` 1 sits on whatever is behind it, and `ImageTransparency` fades the 3D image. It renders again only when something it shows changes, so an inventory of still icons costs nothing frame to frame.
+
+```lua
+local pane = Instance.new("ViewportPane", hud)
+pane.BackgroundTransparency = 1
+local camera = Instance.new("Camera", pane)
+camera.Transform = Matrix4.new(0, 0, 6)
+pane.CurrentCamera = camera
+local sword = Instance.new("GameObject", pane)
+sword.Prefab = game.Assets.Prefabs.Sword
+Instance.new("DirectionalLight", pane)
 ```
 
 ## Scripts

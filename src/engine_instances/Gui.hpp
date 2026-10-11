@@ -83,7 +83,8 @@ class Texture;
 //
 // The Name of a GuiBase is its CSS id, its ClassList its classes, and its
 // class, lowercase, its element type: screengui, billboardgui, pane,
-// imagepane, hbox, vbox, label, button, textfield, slider, assetpicker.
+// imagepane, viewportpane, hbox, vbox, label, button, textfield, slider,
+// assetpicker.
 //
 // Each property is a saved registry property (lua_saved_property), so
 // DataModel saves, loads, undoes, and restores it at Stop.
@@ -235,6 +236,42 @@ protected:
 
 private:
     InstanceRef image_ref_;
+};
+
+// A pane that draws the 3D world inside it: the GameObjects, lights, and
+// Skybox it holds, at any depth, seen from CurrentCamera and lit only by its
+// own lights and Ambient, as runner::ViewportRenderer draws it. Its GUI
+// children are drawn over that image. What it holds is never in Workspace or
+// Lighting, wherever the pane is (DataModel's InViewport scope).
+class ViewportPane : public GuiBasePane {
+public:
+    static constexpr ColorRgb kDefaultAmbient{0.5f, 0.5f, 0.5f, 1.f};
+
+    ViewportPane(DataModel::ChildTag tag, DataModel::State& state, InstanceId id);
+    const char* class_name() const override;
+    bool viewport_pane() const override { return true; }
+
+    // CurrentCamera as a script reads it.
+    LuaSlot current_camera() const;
+    // CurrentCamera's live Camera, or 0. A GUID that names nothing is not
+    // looked for again until the tree changes, so a deleted Camera costs no
+    // scan each frame.
+    InstanceId current_camera_id() const;
+    // SimulationThread. nil clears it; anything but a live Camera is refused,
+    // and returns why.
+    std::optional<std::string> set_current_camera(const LuaSlot& value);
+    ColorRgb ambient() const { return ambient_; }
+    // SimulationThread. A color that is not finite is refused.
+    std::optional<std::string> set_ambient(ColorRgb color);
+
+protected:
+    void on_reuse() override;
+
+private:
+    InstanceRef camera_ref_;
+    ColorRgb ambient_ = kDefaultAmbient;
+    // The tree_revision at which CurrentCamera last named nothing; 0 for none.
+    mutable std::uint64_t camera_miss_ = 0;
 };
 
 class HBox : public GuiBasePane {

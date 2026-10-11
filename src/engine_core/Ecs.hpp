@@ -33,6 +33,9 @@ struct InGame {};
 struct InWorkspace {};
 struct InLighting {};
 struct InCore {};
+// Below a ViewportPane, at any depth: a world of its own, never in Workspace
+// or Lighting, wherever the pane is.
+struct InViewport {};
 // A rigid body: its class's physics_body() is true (PhysicsObject).
 struct PhysicsBody {};
 // A Terrain: its class's terrain() is true.
@@ -45,6 +48,8 @@ struct DraggerTag {};
 struct AnimatorTag {};
 // A BillboardGui: its class's billboard_gui() is true.
 struct BillboardTag {};
+// A ViewportPane: its class's viewport_pane() is true.
+struct ViewportTag {};
 // A WireframeAdornment: its class's wireframe() is true.
 struct WireframeTag {};
 // A Constraint (WeldConstraint, RigidConstraint): its class's constraint() is true.
@@ -66,6 +71,7 @@ struct EcsIds {
     ecs_id_t in_workspace = 0;
     ecs_id_t in_lighting = 0;
     ecs_id_t in_core = 0;
+    ecs_id_t in_viewport = 0;
     ecs_id_t steps = 0;
     ecs_id_t physics_body = 0;
     ecs_id_t terrain = 0;
@@ -73,6 +79,7 @@ struct EcsIds {
     ecs_id_t dragger = 0;
     ecs_id_t animator = 0;
     ecs_id_t billboard = 0;
+    ecs_id_t viewport = 0;
     ecs_id_t wireframe = 0;
     ecs_id_t constraint = 0;
     ecs_id_t simulated = 0;

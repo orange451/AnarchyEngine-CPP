@@ -320,6 +320,7 @@ extern void (*rt_glVertexAttribDivisor)(GLuint index, GLuint divisor);
 extern void (*rt_glEnable)(GLenum cap);
 extern void (*rt_glDisable)(GLenum cap);
 extern GLboolean (*rt_glIsEnabled)(GLenum cap);
+extern GLboolean (*rt_glIsTexture)(GLuint texture);
 extern void (*rt_glGetIntegerv)(GLenum pname, GLint* data);
 extern void (*rt_glGetTexParameteriv)(GLenum target, GLenum pname, GLint* params);
 extern void (*rt_glScissor)(GLint x, GLint y, GLsizei width, GLsizei height);
@@ -459,6 +460,7 @@ bool LoadGl(GlGetProcAddress get_proc);
 #define glEnable ::runner::rt_glEnable
 #define glDisable ::runner::rt_glDisable
 #define glIsEnabled ::runner::rt_glIsEnabled
+#define glIsTexture ::runner::rt_glIsTexture
 #define glGetIntegerv ::runner::rt_glGetIntegerv
 #define glScissor ::runner::rt_glScissor
 #define glGetUniformLocation ::runner::rt_glGetUniformLocation

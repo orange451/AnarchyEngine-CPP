@@ -131,7 +131,8 @@ LuaSlot GuiValues::default_value(GuiProperty property, const char* class_name) {
     case GuiProperty::Style:
         return string_slot("");
     case GuiProperty::Size:
-        return klass == "Pane" || klass == "ImagePane" ? vec2_slot(100.f, 100.f) : vec2_slot(0.f, 0.f);
+        return klass == "Pane" || klass == "ImagePane" || klass == "ViewportPane" ? vec2_slot(100.f, 100.f)
+                                                                                 : vec2_slot(0.f, 0.f);
     case GuiProperty::Alignment:
         return enum_slot(gui_alignment_enum(), 0);
     case GuiProperty::Visible:
@@ -360,6 +361,72 @@ std::optional<std::string> ImagePane::set_image(const LuaSlot& value) {
 void ImagePane::on_reuse() {
     GuiValues::on_reuse();
     image_ref_.set_guid(std::string());
+}
+
+ViewportPane::ViewportPane(DataModel::ChildTag tag, DataModel::State& state, InstanceId id)
+    : GuiBasePane(tag, state, id) {
+    reset_values();
+}
+
+const char* ViewportPane::class_name() const { return "ViewportPane"; }
+
+LuaSlot ViewportPane::current_camera() const { return instance_reference_slot(camera_ref_, "Camera"); }
+
+InstanceId ViewportPane::current_camera_id() const {
+    if (camera_ref_.guid().empty()) {
+        return 0;
+    }
+    const std::uint64_t tree = tree_revision();
+    if (camera_miss_ == tree) {
+        return 0;
+    }
+    const InstanceId target = camera_ref_.resolve(*this);
+    const DataModel* object = target != 0 ? instance(target) : nullptr;
+    if (object == nullptr || !lua_class_inherits(object->class_name(), "Camera")) {
+        camera_miss_ = tree;
+        return 0;
+    }
+    return target;
+}
+
+std::optional<std::string> ViewportPane::set_current_camera(const LuaSlot& value) {
+    if (!on_gameplay_thread()) {
+        contract_fail("Gui setters run on SimulationThread");
+    }
+    const std::string before = camera_ref_.guid();
+    std::optional<std::string> error = set_instance_reference("CurrentCamera", "Camera", camera_ref_, value);
+    if (camera_ref_.guid() != before) {
+        camera_miss_ = 0;
+        touch();
+    }
+    return error;
+}
+
+std::optional<std::string> ViewportPane::set_ambient(ColorRgb color) {
+    if (!on_gameplay_thread()) {
+        contract_fail("Gui setters run on SimulationThread");
+    }
+    if (!std::isfinite(color.r) || !std::isfinite(color.g) || !std::isfinite(color.b)) {
+        return std::string("Ambient must be finite");
+    }
+    // A Color3 has no alpha.
+    color.a = 1.f;
+    if (color.r == ambient_.r && color.g == ambient_.g && color.b == ambient_.b) {
+        return std::nullopt;
+    }
+    const ColorRgb previous = ambient_;
+    ambient_ = color;
+    touch();
+    note_property_change("Ambient", color_slot(previous.r, previous.g, previous.b),
+                         color_slot(color.r, color.g, color.b));
+    return std::nullopt;
+}
+
+void ViewportPane::on_reuse() {
+    GuiValues::on_reuse();
+    camera_ref_.set_guid(std::string());
+    ambient_ = kDefaultAmbient;
+    camera_miss_ = 0;
 }
 
 HBox::HBox(DataModel::ChildTag tag, DataModel::State& state, InstanceId id) : GuiBasePane(tag, state, id) {
@@ -628,6 +695,49 @@ bool write_image(DataModel&, DataModel& object, LuaSlot& in) {
     return true;
 }
 
+bool read_current_camera(DataModel&, DataModel& object, LuaSlot& out) {
+    const auto* pane = dynamic_cast<const ViewportPane*>(&object);
+    if (pane == nullptr) {
+        return false;
+    }
+    out = pane->current_camera();
+    return true;
+}
+
+bool write_current_camera(DataModel&, DataModel& object, LuaSlot& in) {
+    auto* pane = dynamic_cast<ViewportPane*>(&object);
+    if (pane == nullptr) {
+        return false;
+    }
+    if (std::optional<std::string> error = pane->set_current_camera(in)) {
+        in.error = std::move(*error);
+        return false;
+    }
+    return true;
+}
+
+bool read_ambient(DataModel&, DataModel& object, LuaSlot& out) {
+    const auto* pane = dynamic_cast<const ViewportPane*>(&object);
+    if (pane == nullptr) {
+        return false;
+    }
+    const ColorRgb ambient = pane->ambient();
+    out = color_slot(ambient.r, ambient.g, ambient.b);
+    return true;
+}
+
+bool write_ambient(DataModel&, DataModel& object, LuaSlot& in) {
+    auto* pane = dynamic_cast<ViewportPane*>(&object);
+    if (pane == nullptr) {
+        return false;
+    }
+    if (std::optional<std::string> error = pane->set_ambient(in.color)) {
+        in.error = std::move(*error);
+        return false;
+    }
+    return true;
+}
+
 ANARCHY_LUA_REGISTER(register_gui_lua) {
     const LuaField base[] = {
         lua_group("Layout"),
@@ -672,6 +782,17 @@ ANARCHY_LUA_REGISTER(register_gui_lua) {
         gui_field<GuiProperty::ImageTransparency>("ImagePane"),
     };
     add_class("ImagePane", "GuiBasePane", image_pane);
+    const float ambient[3] = {ViewportPane::kDefaultAmbient.r, ViewportPane::kDefaultAmbient.g,
+                              ViewportPane::kDefaultAmbient.b};
+    const LuaField viewport[] = {
+        lua_group("Layout"),
+        gui_field<GuiProperty::Size>("ViewportPane"),
+        lua_group("Appearance"),
+        lua_saved_property("CurrentCamera", "Camera?", read_current_camera, write_current_camera, "null"),
+        lua_saved_property("Ambient", "Color3", read_ambient, write_ambient, kept(write_json(json_floats(ambient, 3)))),
+        gui_field<GuiProperty::ImageTransparency>("ViewportPane"),
+    };
+    add_class("ViewportPane", "GuiBasePane", viewport);
     const LuaField box[] = {lua_group("Layout"), gui_field<GuiProperty::Spacing>("HBox")};
     add_class("HBox", "GuiBasePane", box);
     add_class("VBox", "GuiBasePane", box);
@@ -729,6 +850,10 @@ ANARCHY_LUA_REGISTER(register_gui_lua) {
         register_suited_parents(control, {"ScreenGui", "BillboardGui", "GuiBasePane", "DockWidget"});
     }
     register_suited_parents("CSS", {"Gui", "GuiBase"});
+    // What a ViewportPane draws: Insert offers these inside one.
+    for (const char* inside : {"GameObject", "Camera", "Light", "DirectionalLight", "Skybox"}) {
+        register_suited_parents(inside, {"ViewportPane"});
+    }
 }
 
 }  // namespace

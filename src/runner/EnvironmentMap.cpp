@@ -93,6 +93,12 @@ void EnvironmentMap::shutdown() {
          {&environment_, &irradiance_, &prefiltered_, &brdf_, &spareIrradiance_, &sparePrefiltered_}) {
         DeleteTexture(*texture);
     }
+    for (CachedImage& kept : cached_) {
+        for (unsigned* texture : {&kept.environment, &kept.irradiance, &kept.prefiltered}) {
+            DeleteTexture(*texture);
+        }
+    }
+    cached_.clear();
     slice_ = -1;
     brdfDrawn_ = false;
     imageRevision_ = 0;
@@ -286,6 +292,47 @@ bool EnvironmentMap::update(unsigned image, std::uint64_t imageRevision, unsigne
         prefilteredSize_ == kPrefilteredSize) {
         return true;
     }
+    ++updates_;
+    if (imageCacheSize_ > 1) {
+        // Another image's finished cubes are kept, not filtered over.
+        if (brdfDrawn_ && !procedural_ && imageRevision_ != 0 && environmentSize_ == kEnvironmentSize &&
+            prefilteredSize_ == kPrefilteredSize) {
+            cached_.push_back(CachedImage{imageRevision_, environment_, irradiance_, prefiltered_, updates_});
+            environment_ = 0;
+            irradiance_ = 0;
+            prefiltered_ = 0;
+            imageRevision_ = 0;
+            environmentSize_ = 0;
+            prefilteredSize_ = 0;
+        }
+        for (std::size_t i = 0; i < cached_.size(); ++i) {
+            if (cached_[i].revision != imageRevision) {
+                continue;
+            }
+            for (unsigned* texture : {&environment_, &irradiance_, &prefiltered_}) {
+                DeleteTexture(*texture);
+            }
+            environment_ = cached_[i].environment;
+            irradiance_ = cached_[i].irradiance;
+            prefiltered_ = cached_[i].prefiltered;
+            imageRevision_ = imageRevision;
+            environmentSize_ = kEnvironmentSize;
+            prefilteredSize_ = kPrefilteredSize;
+            procedural_ = false;
+            slice_ = -1;
+            cached_.erase(cached_.begin() + static_cast<std::ptrdiff_t>(i));
+            return true;
+        }
+        // The least recently used go while more than the cache holds are kept.
+        while (static_cast<int>(cached_.size()) > imageCacheSize_ - 1) {
+            const auto oldest = std::min_element(cached_.begin(), cached_.end(),
+                                                 [](const CachedImage& a, const CachedImage& b) { return a.used < b.used; });
+            for (unsigned* texture : {&oldest->environment, &oldest->irradiance, &oldest->prefiltered}) {
+                DeleteTexture(*texture);
+            }
+            cached_.erase(oldest);
+        }
+    }
     if (!ensureTextures(kEnvironmentSize, kPrefilteredSize)) {
         return false;
     }
@@ -299,6 +346,7 @@ bool EnvironmentMap::update(unsigned image, std::uint64_t imageRevision, unsigne
     }
     static_assert((kPrefilteredSize >> (kPrefilteredLevels - 1)) >= 1, "the prefiltered cube's mips run out at 1 by 1");
     imageRevision_ = imageRevision;
+    ++imageBuilds_;
     return true;
 }
 

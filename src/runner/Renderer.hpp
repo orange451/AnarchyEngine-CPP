@@ -399,6 +399,17 @@ public:
     int shadowAtlasPages() const { return shadows_.atlasPages(); }
     // Whether meshes outside the view are skipped: true unless turned off to compare.
     void setCulling(bool culling) { culling_ = culling; }
+    // 0 (the default) destroys a size's buffers when another size draws, as
+    // the Scene View wants. Above 0, a size's buffers are parked instead, and
+    // parked sets are deleted least recently used first while they total more
+    // than bytes: one Renderer drawing panes of a few
+    // sizes in turn does not make its buffers again each time.
+    void setTargetPool(std::size_t bytes) { targetPool_ = bytes; }
+    // How many Skybox images' cubes stay made at once (1 by default).
+    void setSkyCacheSize(int images) { environment_.setImageCacheSize(images); }
+    // For checks: how many times draw made a size's buffers, and filtered a sky image.
+    int targetsMade() const { return targetsMade_; }
+    int skyBuilds() const { return environment_.imageBuilds(); }
     // The last draw's counts. Zero for a draw that drew no meshes.
     const RenderStats& stats() const { return stats_; }
 
@@ -455,6 +466,11 @@ public:
     // What draw clears the pane to, 0 to 1 per channel. The Scene View passes
     // its theme color, so the clear matches the pane around it.
     void setClearColor(float r, float g, float b);
+    // With on, draw clears to transparent and leaves premultiplied coverage in
+    // alpha: 0 where nothing was drawn, 1 under an opaque surface or a sky,
+    // and between at silhouettes and see-through surfaces. For a pane composited
+    // over a UI. Off, as the Scene View draws, the pane is opaque.
+    void setTransparentOutput(bool on) { transparentOutput_ = on; }
     // The depth this frame's surfaces left, and the framebuffer rectangle it
     // covers, for UI drawn inside the pane to hide behind (as the grid does).
     // texture is 0 when the last draw drew no meshes or sky, or failed.
@@ -482,6 +498,7 @@ private:
         int inverseProjection = -1;
         int inverseView = -1;
         int texel = -1;
+        int keepAlpha = -1;
         int ambient = -1;
         int skyRadiance = -1;
         // Skybox (image_lighting.glsl, sky.frag, merge.frag).
@@ -624,6 +641,25 @@ private:
     // False, with nothing made, when the driver will not render into them.
     bool ensureTargets(int width, int height);
     void destroyTargets();
+    // Every size-dependent buffer but bloom's, reflections', and occlusion's,
+    // which a pool does not keep: what it parks while another size draws.
+    struct TargetSet {
+        int width = 0;
+        int height = 0;
+        unsigned gbufferFbo = 0, albedo = 0, normal = 0, material = 0, emissive = 0, depth = 0;
+        unsigned accumulationFbo = 0, accumulation = 0, transparencyFbo = 0, transparency = 0;
+        unsigned mergeFbo = 0, merge = 0, ldrFbo = 0, ldr = 0;
+        bool fxaaValid = false;
+        // The ensureTargets call that last used it, for eviction.
+        std::uint64_t used = 0;
+    };
+    // Moves the current buffers into a set and leaves none current.
+    TargetSet parkTargets();
+    // Makes set the current buffers.
+    void unparkTargets(const TargetSet& set);
+    static std::size_t TargetBytes(int width, int height) {
+        return std::size_t(48) * static_cast<std::size_t>(width) * static_cast<std::size_t>(height);
+    }
     void createSphere();
 
     // Each pass is false, having stopped before its first draw, when its program cannot draw yet.
@@ -821,6 +857,11 @@ private:
     // The offscreen buffers, all targetWidth_ by targetHeight_.
     int targetWidth_ = 0;
     int targetHeight_ = 0;
+    // The pool's parked sets and its size, 0 for none; see setTargetPool.
+    std::vector<TargetSet> parked_;
+    std::size_t targetPool_ = 0;
+    std::uint64_t targetUses_ = 0;
+    int targetsMade_ = 0;
     // Albedo, normal, material, emissive, and the depth every pass shares.
     unsigned gbufferFbo_ = 0;
     unsigned albedoTexture_ = 0;
@@ -915,6 +956,7 @@ private:
 
     GpuTimer gpu_;
     float clear_[3] = {30.f / 255.f, 30.f / 255.f, 30.f / 255.f};
+    bool transparentOutput_ = false;
     // The inverse of the camera's world, column-major.
     engine_core::Matrix4 view_ = DefaultView();
     float fovYDegrees_ = kCameraFovYDegrees;

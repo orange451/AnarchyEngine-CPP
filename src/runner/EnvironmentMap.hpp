@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <vector>
 
 namespace runner {
 
@@ -43,6 +44,13 @@ public:
     EnvironmentMap(const EnvironmentMap&) = delete;
     EnvironmentMap& operator=(const EnvironmentMap&) = delete;
 
+    // How many Skybox images' cubes stay made, least recently used going first
+    // (1, the default, keeps only the current one). A Renderer that draws
+    // several panes with different Skyboxes sets more, so switching between
+    // them does not filter again.
+    void setImageCacheSize(int images) { imageCacheSize_ = images > 1 ? images : 1; }
+    // How many times update filtered an image, for checks.
+    int imageBuilds() const { return imageBuilds_; }
     // False when a shader does not build.
     bool initialize();
     // Deletes the programs and every texture.
@@ -138,6 +146,18 @@ private:
     int prefilteredSize_ = 0;
     // Whether the cubes in use hold a procedural sky rather than an image.
     bool procedural_ = false;
+    // An image's cubes kept while another image's are in use (setImageCacheSize).
+    struct CachedImage {
+        std::uint64_t revision = 0;
+        unsigned environment = 0;
+        unsigned irradiance = 0;
+        unsigned prefiltered = 0;
+        std::uint64_t used = 0;
+    };
+    std::vector<CachedImage> cached_;
+    int imageCacheSize_ = 1;
+    int imageBuilds_ = 0;
+    std::uint64_t updates_ = 0;
 };
 
 }  // namespace runner

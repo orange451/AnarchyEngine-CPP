@@ -1498,6 +1498,15 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
         "Texture?", false, {});
     add("ImagePane", "ImageTransparency", "0 is the Image as it is, 1 is no image. Its background and children stay.",
         "number", false, {});
+    add("ViewportPane", "CurrentCamera",
+        "The Camera it draws from, anywhere in the place. Nil uses the first Camera inside it; with none it draws only "
+        "its background and children.",
+        "Camera?", false, {});
+    add("ViewportPane", "Ambient",
+        "The light every surface inside it gets, from no direction. Only its own lights and Skybox add more.",
+        "Color3", false, {});
+    add("ViewportPane", "ImageTransparency",
+        "0 is the 3D image as drawn, 1 is no image. Its background and children stay.", "number", false, {});
     add("HBox", "Spacing", "Points between its children.", "number", false, {});
     add("VBox", "Spacing", "Points between its children.", "number", false, {});
     add("Label", "Text", "The text it shows.", "string", false, {});

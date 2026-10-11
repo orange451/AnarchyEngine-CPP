@@ -131,10 +131,17 @@ std::optional<std::string> placement_error(std::string_view holder_class, std::s
     if (is_asset_class(holder_class)) {
         return "A " + std::string(holder_class) + " holds nothing";
     }
-    // These affect the whole place, so they live where the place's lighting does.
+    // These affect the whole place, so they live where the place's lighting does;
+    // a Skybox may also be a ViewportPane's own.
     if ((child_class == "Skybox" || child_class == "DynamicSky" || child_class == "BloomEffect" ||
          child_class == "ScreenSpaceReflections" || child_class == "AmbientOcclusionEffect") &&
         holder_class != "Lighting") {
+        if (child_class == "Skybox") {
+            if (holder_class == "ViewportPane") {
+                return std::nullopt;
+            }
+            return std::string("A Skybox must be in Lighting or a ViewportPane");
+        }
         const bool vowel = child_class.front() == 'A';
         return std::string(vowel ? "An " : "A ") + std::string(child_class) + " must be in Lighting";
     }

@@ -53,6 +53,7 @@ DataModel::DataModel(const char* root_name) : owned_(std::make_unique<State>()),
                               .in()
                               .with<ecs::Simulated>()
                               .without<ecs::VisualOnly>()
+                              .without<ecs::InViewport>()
                               .cached()
                               .build();
     world.render_query = world.ecs.query_builder<>()
@@ -69,7 +70,8 @@ DataModel::DataModel(const char* root_name) : owned_(std::make_unique<State>()),
                                   .with<ecs::InCore>()
                                   .with<Matrix4>()
                                   .inout_none()
-                                  .cached()
+                                  .without<ecs::InViewport>()
+                              .cached()
                                   .build();
     world.body_query = world.ecs.query_builder<>()
                            .with<ecs::Instance>()
@@ -90,13 +92,15 @@ DataModel::DataModel(const char* root_name) : owned_(std::make_unique<State>()),
                              .in()
                              .with<ecs::SoundSource>()
                              .with<ecs::InGame>()
-                             .cached()
+                             .without<ecs::InViewport>()
+                              .cached()
                              .build();
     world.dragger_query = world.ecs.query_builder<>()
                               .with<ecs::Instance>()
                               .in()
                               .with<ecs::DraggerTag>()
                               .with<ecs::InGame>()
+                              .without<ecs::InViewport>()
                               .cached()
                               .build();
     world.animator_query = world.ecs.query_builder<>()
@@ -113,6 +117,20 @@ DataModel::DataModel(const char* root_name) : owned_(std::make_unique<State>()),
                                  .with<ecs::InGame>()
                                  .cached()
                                  .build();
+    world.viewport_query = world.ecs.query_builder<>()
+                                .with<ecs::Instance>()
+                                .in()
+                                .with<ecs::ViewportTag>()
+                                .with<ecs::InGame>()
+                                .cached()
+                                .build();
+    world.viewport_animator_query = world.ecs.query_builder<>()
+                                         .with<ecs::Instance>()
+                                         .in()
+                                         .with<ecs::AnimatorTag>()
+                                         .with<ecs::InViewport>()
+                                         .cached()
+                                         .build();
     world.wireframe_query = world.ecs.query_builder<>()
                                  .with<ecs::Instance>()
                                  .in()
@@ -565,6 +583,9 @@ void tag_entity(ecs_world_t* world, ecs_entity_t entity, const EcsIds& ids, cons
     if (object.billboard_gui()) {
         ecs_add_id(world, entity, ids.billboard);
     }
+    if (object.viewport_pane()) {
+        ecs_add_id(world, entity, ids.viewport);
+    }
     if (object.wireframe()) {
         ecs_add_id(world, entity, ids.wireframe);
     }
@@ -834,6 +855,15 @@ bool DataModel::in_core(InstanceId id) const {
     return has_tag(ecs_world(), entity_of(id), state_->ecs_ids.in_core);
 }
 
+bool DataModel::in_viewport(InstanceId id) const {
+    return has_tag(ecs_world(), entity_of(id), state_->ecs_ids.in_viewport);
+}
+
+bool DataModel::walls_scope(InstanceId id) const {
+    const Slot* part = slot(id);
+    return part != nullptr && part->instance != nullptr && part->instance->viewport_pane();
+}
+
 bool DataModel::core_holds(InstanceId id) const {
     if (id == 0 || !alive(id)) {
         return false;
@@ -850,23 +880,26 @@ void DataModel::refresh_scope(InstanceId id) {
     bool workspace = false;
     bool lighting = false;
     bool in_core_now = false;
+    bool viewport = false;
     if (part->parent == 0) {
         game = true;
     } else if (part->parent != kNoParent) {
         game = in_game(part->parent);
-        workspace = in_workspace(part->parent) || part->parent == scene_service("Workspace");
-        lighting = in_lighting(part->parent) || part->parent == scene_service("Lighting");
+        viewport = in_viewport(part->parent) || walls_scope(part->parent);
+        // A ViewportPane's contents are a world of their own: never in Workspace or Lighting.
+        workspace = !viewport && (in_workspace(part->parent) || part->parent == scene_service("Workspace"));
+        lighting = !viewport && (in_lighting(part->parent) || part->parent == scene_service("Lighting"));
         in_core_now = in_core(part->parent) || part->parent == core();
     }
     if (in_game(id) == game && in_workspace(id) == workspace && in_lighting(id) == lighting &&
-        in_core(id) == in_core_now) {
+        in_core(id) == in_core_now && in_viewport(id) == viewport) {
         return;
     }
-    apply_scope(id, game, workspace, lighting, in_core_now);
+    apply_scope(id, game, workspace, lighting, in_core_now, viewport);
 }
 
 void DataModel::apply_scope(InstanceId id, bool in_game_now, bool in_workspace_now, bool in_lighting_now,
-                            bool in_core_now) {
+                            bool in_core_now, bool in_viewport_now) {
     // Top-down over the subtree. A node whose tags come out unchanged prunes
     // its children: their tags were derived from its tags.
     ecs_world_t* world = ecs_world();
@@ -887,17 +920,21 @@ void DataModel::apply_scope(InstanceId id, bool in_game_now, bool in_workspace_n
         bool workspace = in_workspace_now;
         bool lighting = in_lighting_now;
         bool under_core = in_core_now;
+        bool viewport = in_viewport_now;
         if (i > 0) {
             game = in_game(part->parent);
-            workspace = in_workspace(part->parent) || part->parent == workspace_id;
-            lighting = in_lighting(part->parent) || part->parent == lighting_id;
+            viewport = in_viewport(part->parent) || walls_scope(part->parent);
+            workspace = !viewport && (in_workspace(part->parent) || part->parent == workspace_id);
+            lighting = !viewport && (in_lighting(part->parent) || part->parent == lighting_id);
             under_core = in_core(part->parent) || part->parent == core_id;
         }
         const bool had_game = has_tag(world, part->entity, ids.in_game);
         const bool had_workspace = has_tag(world, part->entity, ids.in_workspace);
         const bool had_lighting = has_tag(world, part->entity, ids.in_lighting);
         const bool had_core = has_tag(world, part->entity, ids.in_core);
-        if (had_game == game && had_workspace == workspace && had_lighting == lighting && had_core == under_core) {
+        const bool had_viewport = has_tag(world, part->entity, ids.in_viewport);
+        if (had_game == game && had_workspace == workspace && had_lighting == lighting && had_core == under_core &&
+            had_viewport == viewport) {
             continue;
         }
         if (had_game != game) {
@@ -915,8 +952,13 @@ void DataModel::apply_scope(InstanceId id, bool in_game_now, bool in_workspace_n
         if (had_core != under_core) {
             set_tag(world, part->entity, ids.in_core, under_core);
         }
-        // The render snapshot keeps rows for Workspace and Core, and for lights under Lighting.
-        if ((had_workspace != workspace || had_lighting != lighting || had_core != under_core) &&
+        if (had_viewport != viewport) {
+            set_tag(world, part->entity, ids.in_viewport, viewport);
+        }
+        // The render snapshot keeps rows for Workspace and Core, and for lights
+        // under Lighting, never for a ViewportPane's contents.
+        if ((had_workspace != workspace || had_lighting != lighting || had_core != under_core ||
+             had_viewport != viewport) &&
             (part->body != nullptr || (part->instance != nullptr && part->instance->has_visual_row()))) {
             note(cur, VisualField::Ancestry, current_origin());
         }
@@ -1018,6 +1060,28 @@ void DataModel::dispatch_draggers(std::vector<InputRecord>& records) { state_->d
 void DataModel::billboards(std::vector<InstanceId>& out) const {
     out.clear();
     ecs_iter_t it = ecs_query_iter(ecs_world(), state_->billboard_query.c_ptr());
+    while (ecs_query_next(&it)) {
+        const auto* owners = static_cast<const ecs::Instance*>(ecs_field_w_size(&it, sizeof(ecs::Instance), 0));
+        for (std::int32_t i = 0; i < it.count; ++i) {
+            out.push_back(owners[i].id);
+        }
+    }
+}
+
+void DataModel::viewport_panes(std::vector<InstanceId>& out) const {
+    out.clear();
+    ecs_iter_t it = ecs_query_iter(ecs_world(), state_->viewport_query.c_ptr());
+    while (ecs_query_next(&it)) {
+        const auto* owners = static_cast<const ecs::Instance*>(ecs_field_w_size(&it, sizeof(ecs::Instance), 0));
+        for (std::int32_t i = 0; i < it.count; ++i) {
+            out.push_back(owners[i].id);
+        }
+    }
+}
+
+void DataModel::viewport_animators(std::vector<InstanceId>& out) const {
+    out.clear();
+    ecs_iter_t it = ecs_query_iter(ecs_world(), state_->viewport_animator_query.c_ptr());
     while (ecs_query_next(&it)) {
         const auto* owners = static_cast<const ecs::Instance*>(ecs_field_w_size(&it, sizeof(ecs::Instance), 0));
         for (std::int32_t i = 0; i < it.count; ++i) {

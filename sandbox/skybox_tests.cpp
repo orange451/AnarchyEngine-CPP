@@ -136,9 +136,9 @@ TEST_CASE("SKY2 a Skybox belongs under Lighting and nowhere else", "[skybox]") {
     engine_core::Game game;
     using engine_core::placement_error;
     REQUIRE_FALSE(placement_error("Lighting", "Skybox", "Sky"));
-    REQUIRE(reason(placement_error("Workspace", "Skybox", "Sky")) == "A Skybox must be in Lighting");
-    REQUIRE(reason(placement_error("Storage", "Skybox", "Sky")) == "A Skybox must be in Lighting");
-    REQUIRE(reason(placement_error("Skybox", "Skybox", "Sky")) == "A Skybox must be in Lighting");
+    REQUIRE(reason(placement_error("Workspace", "Skybox", "Sky")) == "A Skybox must be in Lighting or a ViewportPane");
+    REQUIRE(reason(placement_error("Storage", "Skybox", "Sky")) == "A Skybox must be in Lighting or a ViewportPane");
+    REQUIRE(reason(placement_error("Skybox", "Skybox", "Sky")) == "A Skybox must be in Lighting or a ViewportPane");
 
     const InstanceId lighting = game.scene_service("Lighting");
     Skybox& sky = add_skybox(game, lighting);
@@ -147,10 +147,10 @@ TEST_CASE("SKY2 a Skybox belongs under Lighting and nowhere else", "[skybox]") {
     engine_core::Folder& folder = game.create<engine_core::Folder>();
     game.set_parent(folder.id(), lighting);
     REQUIRE_FALSE(game.parent_error(sky.id(), folder.id()));
-    REQUIRE(reason(game.parent_error(sky.id(), workspace_of(game))) == "A Skybox must be in Lighting");
+    REQUIRE(reason(game.parent_error(sky.id(), workspace_of(game))) == "A Skybox must be in Lighting or a ViewportPane");
     // A Folder holding one cannot leave Lighting.
     game.set_parent(sky.id(), folder.id());
-    REQUIRE(reason(game.parent_error(folder.id(), workspace_of(game))) == "A Skybox must be in Lighting");
+    REQUIRE(reason(game.parent_error(folder.id(), workspace_of(game))) == "A Skybox must be in Lighting or a ViewportPane");
 
     // The explorer's Insert list ranks it under Lighting only.
     REQUIRE(engine_core::parent_suits("Lighting", "Skybox"));

@@ -1577,6 +1577,40 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
         "RaycastResult?", false, {P("origin", "Vector3"), P("direction", "Vector3"), P("params", "RaycastParams?")});
 
     add("RaycastParams", "new", "A new RaycastParams, excluding nothing.", "RaycastParams", false, {});
+    add("RaycastParams", "CollisionGroup",
+        "The ray's collision group: it hits only bodies whose group collides with this one. \"Default\" at first.",
+        "string", false, {});
+
+    add("PhysicsService", "RegisterCollisionGroup",
+        "Registers a collision group for this run. filterType is Exclude (the default: it collides with every "
+        "group but those set not to) or Include (with none but those set to). A name already "
+        "registered changes nothing. Groups are not saved: each run starts with Default alone.",
+        "nil", false, {P("name", "string"), P("filterType", "Enum.CollisionFilterType?")});
+    add("PhysicsService", "UnregisterCollisionGroup",
+        "Removes a group and its settings; its bodies behave as Default. Default cannot be unregistered.", "nil",
+        false, {P("name", "string")});
+    add("PhysicsService", "SetCollisionGroupFilterType",
+        "Makes a group Exclude or Include, keeping the settings made for it.", "nil", false,
+        {P("name", "string"), P("filterType", "Enum.CollisionFilterType")});
+    add("PhysicsService", "CollisionGroupSetCollidable",
+        "Sets whether two registered groups collide, both ways, whatever their types. A group may be set against "
+        "itself.",
+        "nil", false, {P("name1", "string"), P("name2", "string"), P("collidable", "boolean")});
+    add("PhysicsService", "CollisionGroupSetCollidableBulk",
+        "CollisionGroupSetCollidable for name against each of names.", "nil", false,
+        {P("name", "string"), P("names", "{string}"), P("collidable", "boolean")});
+    add("PhysicsService", "CollisionGroupsAreCollidable",
+        "Whether two groups collide: as set, else only when both are Exclude. An unregistered name counts as "
+        "Default.",
+        "boolean", false, {P("name1", "string"), P("name2", "string")});
+    add("PhysicsService", "IsCollisionGroupRegistered", "Whether a script has registered this group.", "boolean",
+        false, {P("name", "string")});
+    add("PhysicsService", "GetRegisteredCollisionGroups",
+        "Each registered group, Default first, as {name, filterType, list}: list is the exceptions to its type (for a "
+        "Exclude group, the groups it does not collide with; for an Include group, those it does).",
+        "table", false, {});
+    add("PhysicsService", "GetMaxCollisionGroups", "How many groups may be registered at once: 62.", "number", false,
+        {});
     add("RaycastParams", "FilterType",
         "Whether FilterDescendantsInstances is what the ray sees (Include) or what it does not (Exclude, the "
         "default).",
@@ -1618,8 +1652,14 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
     add("BrushFace", "With", "A copy with the named fields changed, such as {Material = m, Rotation = 90}.",
         "BrushFace", false, {P("changes", "table")});
 
-    add("Brush", "CanCollide", "When false, nothing collides with this Brush and rays pass through it.", "boolean",
-        false, {});
+    add("PhysicsBase", "CanCollide",
+        "When false, nothing collides with this body: it keeps its Mass, nothing rests on it, and unanchored it "
+        "falls through the ground. Rays still hit it.",
+        "boolean", false, {});
+    add("PhysicsBase", "CollisionGroup",
+        "Which PhysicsService collision group this body is in. A name no script has registered behaves as "
+        "Default until one does.",
+        "string", false, {});
     add("Brush", "Color", "Tints every face, over its Material.", "Color3", false, {});
     add("Brush", "Transparency", "Fades every face, over its Material.", "number", false, {});
     add("Brush", "GetFaces", "Every face, in order.", "{BrushFace}", false, {});

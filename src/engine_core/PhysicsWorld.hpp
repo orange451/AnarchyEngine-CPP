@@ -28,6 +28,9 @@ struct ChunkMesh;
 struct RayFilter {
     bool include = false;
     std::vector<InstanceId> instances;
+    // Which collision group the ray is in: it hits only bodies whose group
+    // collides with it. Empty: every group (the studio's own rays).
+    std::string collision_group;
 };
 
 // What a ray hit first.

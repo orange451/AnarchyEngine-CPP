@@ -1,6 +1,7 @@
 // Terrain surfaces: Surface Nets meshing, the mesher pool, TerrainWorld,
 // terrain bodies, and what the renderer is handed.
 
+#include "CollisionGroups.hpp"
 #include "physics_rig.hpp"
 #include "support.hpp"
 
@@ -1819,6 +1820,25 @@ TEST_CASE("RM3 a CanCollide false Terrain is never hit by the march", "[terrain]
     REQUIRE(rig.physics.shape_count(t.id()) == 0u);
 
     REQUIRE_FALSE(rig.physics.raycast(rig.game, Vec3{8.f, 10.f, 8.f}, Vec3{0.f, -20.f, 0.f}, {}).has_value());
+}
+
+TEST_CASE("RM3b the march hits terrain only for a ray whose collision group collides with Default",
+          "[terrain][physics][collision-group]") {
+    PhysicsRig rig;
+    Terrain& t = terrain_in_workspace(rig.game);
+    REQUIRE_FALSE(t.edit_volume([&](VoxelVolume& v) { return v.fill(slab(48.f, 8.f), 1); }));
+    TerrainWorld world(PhysicsWorld::build_terrain_collider);
+    rig.physics.set_terrain_world(&world);
+    settle(world, rig.game);
+    rig.physics.sync(rig.game);
+    REQUIRE(rig.physics.shape_count(t.id()) == 0u);   // no colliders: only the march can hit it
+    REQUIRE_FALSE(rig.game.collision_groups().register_group("Sky", engine_core::CollisionGroups::FilterType::Include));
+    engine_core::RayFilter sky;
+    sky.collision_group = "Sky";
+    engine_core::RayFilter fallback;
+    fallback.collision_group = "Default";
+    REQUIRE(rig.physics.raycast(rig.game, Vec3{8.f, 10.f, 8.f}, Vec3{0.f, -20.f, 0.f}, fallback).has_value());
+    REQUIRE_FALSE(rig.physics.raycast(rig.game, Vec3{8.f, 10.f, 8.f}, Vec3{0.f, -20.f, 0.f}, sky).has_value());
 }
 
 TEST_CASE("RM4 a 2 km ray across an island with no colliders marches fast", "[.][terrain-bench]") {

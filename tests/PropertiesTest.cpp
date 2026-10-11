@@ -1477,6 +1477,11 @@ void TestAssetReferencePicker() {
     Expect(BodyMesh(rig.game, body) == 0, "None clears the Mesh");
 
     // A reference to a class that is not an asset still picks from the selection.
+    // GameObject is the sheet's last row, below the page: scrolled to first.
+    if (jadefx::ScrollPane* scroll = rig.panel.scroll_pane()) {
+        scroll->setVvalue(scroll->getVmax());
+        rig.frame();
+    }
     rig.click(rig.panel.editor("GameObject", 0));
     rig.frame();
     Expect(rig.panel.picking() && !rig.panel.asset_picking(), "GameObject picks from the selection");
@@ -1762,6 +1767,9 @@ void TestClassGroups() {
     Expect(!Has(player, "Behavior:GameObject"), "a PlayerController has no GameObject row");
     const std::vector<std::string> body = GroupedRows(rig, rig.add<engine_core::PhysicsObject>("Body"));
     Expect(Has(body, "Behavior:GameObject"), "a PhysicsObject keeps its GameObject row, in Behavior");
+    for (const std::vector<std::string>& sheet : {brush, player, body}) {
+        Expect(Has(sheet, "Physics:CollisionGroup"), "every body has CollisionGroup, in Physics");
+    }
     for (const std::string& row : brush) {
         // PVInstance's read-only AssemblyRoot reads last, under Data, on every PVInstance.
         if (row == "Data:AssemblyRoot") {

@@ -286,17 +286,6 @@ std::optional<std::string> Brush::set_angular_damping(double damping) {
                       kDirtyDamping);
 }
 
-std::optional<std::string> Brush::set_can_collide(bool can_collide) {
-    require_gameplay_thread(*this);
-    if (can_collide == can_collide_) {
-        return std::nullopt;
-    }
-    can_collide_ = can_collide;
-    mark_dirty(kDirtyShape);
-    note_property_change("CanCollide", bool_slot(!can_collide), bool_slot(can_collide));
-    return std::nullopt;
-}
-
 std::optional<std::string> Brush::set_color(ColorRgb color) {
     require_gameplay_thread(*this);
     if (!std::isfinite(color.r) || !std::isfinite(color.g) || !std::isfinite(color.b)) {
@@ -335,27 +324,12 @@ void Brush::on_reuse() {
     friction_ = kDefaultFriction;
     bounciness_ = 0.0;
     angular_damping_ = 0.0;
-    can_collide_ = true;
     color_ = {};
     transparency_ = 0.0;
     reset_faces();
 }
 
 namespace {
-
-bool read_can_collide(DataModel&, DataModel& object, LuaSlot& out) {
-    const auto* body = dynamic_cast<const Brush*>(&object);
-    if (body == nullptr) {
-        return false;
-    }
-    out = bool_slot(body->can_collide());
-    return true;
-}
-
-bool write_can_collide(DataModel&, DataModel& object, LuaSlot& in) {
-    auto* body = dynamic_cast<Brush*>(&object);
-    return body != nullptr && refuse(in, body->set_can_collide(in.flag));
-}
 
 bool read_anchored(DataModel&, DataModel& object, LuaSlot& out) {
     const auto* body = dynamic_cast<const Brush*>(&object);
@@ -418,7 +392,6 @@ ANARCHY_LUA_REGISTER(register_brush_lua) {
         lua_group("Physics"),
         // A Brush starts anchored, so its saved default is true where PhysicsBase's is false.
         lua_saved_property("Anchored", "boolean", read_anchored, write_anchored, "true"),
-        lua_saved_property("CanCollide", "boolean", read_can_collide, write_can_collide, "true"),
         lua_slider(lua_saved_property("Friction", "number", read_number<Brush, &Brush::friction>,
                                       write_number<Brush, &Brush::set_friction>, friction.c_str()),
                    0.0, 1.0),

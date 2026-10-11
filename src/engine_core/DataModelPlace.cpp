@@ -40,6 +40,8 @@ void DataModel::start_simulation() {
     state_->simulation_running = true;
     // Each assembly's body frame and member offsets, before any script runs.
     state_->assemblies.capture_play(*this);
+    // Each run starts with Default alone; scripts register the rest.
+    state_->collision_groups.reset();
     // Script analysis checks the authored tree only. It stops checking until Stop.
     if (ScriptAnalysis* analysis = script_analysis()) {
         analysis->note_play_started();
@@ -73,6 +75,8 @@ void DataModel::stop_simulation() {
         scheduler->cancel_session_jobs();
     }
     restore_place_unlocked();
+    // PhysicsService's groups were the run's: the stopped world is all Default.
+    state_->collision_groups.reset();
     ++state_->world_generation;
     state_->simulation_running = false;
     // Restore's own notes came while the simulation still ran, so analysis

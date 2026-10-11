@@ -5,6 +5,7 @@
 
 #include "DataModel.hpp"
 #include "Assemblies.hpp"
+#include "CollisionGroups.hpp"
 #include "ChangeHistoryService.hpp"
 #include "DataModelLock.hpp"
 #include "DraggerWorld.hpp"
@@ -130,6 +131,8 @@ struct DataModel::State {
     flecs::query<> constraint_query;
     // Which PVInstances move together; DataModel::assemblies.
     Assemblies assemblies;
+    // PhysicsService's collision groups; DataModel::collision_groups. Not saved.
+    CollisionGroups collision_groups;
 
     // Guards slots, free lists, invalidation, and resync.
     // SimulationThread may hold Write across a whole step and may re-enter

@@ -202,6 +202,13 @@ const EnumEntry kRaycastFilterTypes[] = {
     {"Include", 1},
 };
 
+// Whether a collision group collides with every group but those it is set
+// not to (Exclude), or with none but those it is set to (Include).
+const EnumEntry kCollisionFilterTypes[] = {
+    {"Exclude", 0},
+    {"Include", 1},
+};
+
 // The curve a keyframe pose eases along to the next, and which end of it
 // leads: Roblox's values, as AANIM stores them.
 const EnumEntry kEasingStyles[] = {
@@ -242,6 +249,8 @@ const EnumType kRollOffModeType{"RollOffMode", kRollOffModes, count_of(kRollOffM
 const EnumType kGuiAlignmentType{"GuiAlignment", kGuiAlignments, count_of(kGuiAlignments)};
 const EnumType kTransformSpaceType{"TransformSpace", kTransformSpaces, count_of(kTransformSpaces)};
 const EnumType kRaycastFilterTypeType{"RaycastFilterType", kRaycastFilterTypes, count_of(kRaycastFilterTypes)};
+const EnumType kCollisionFilterTypeType{"CollisionFilterType", kCollisionFilterTypes,
+                                        count_of(kCollisionFilterTypes)};
 const EnumType kDraggerHandleType{"DraggerHandle", kDraggerHandles, count_of(kDraggerHandles)};
 const EnumType kTransformModeType{"TransformMode", kTransformModes, count_of(kTransformModes)};
 const EnumType kEasingStyleType{"EasingStyle", kEasingStyles, count_of(kEasingStyles)};
@@ -277,7 +286,8 @@ const EnumType* const kTypes[] = {&kNormalIdType,       &kAxisType,          &kR
                                   &kFinishRecordingOperationType, &kAntialiasingModeType, &kEffectQualityType,
                                   &kRaycastFilterTypeType, &kTextureSizeType, &kTextureStreamingType,
                                   &kToneMappingModeType, &kShadingModelType, &kAssetTypeType,
-                                  &kTransformModeType, &kEasingStyleType, &kEasingDirectionType};
+                                  &kTransformModeType, &kEasingStyleType, &kEasingDirectionType,
+                                  &kCollisionFilterTypeType};
 
 int enum_item_index(lua_State* state) {
     auto* item = static_cast<EnumItemUd*>(luaL_checkudata(state, 1, kEnumItemMeta));
@@ -357,6 +367,7 @@ const EnumType& roll_off_mode_enum() { return kRollOffModeType; }
 const EnumType& gui_alignment_enum() { return kGuiAlignmentType; }
 const EnumType& transform_space_enum() { return kTransformSpaceType; }
 const EnumType& raycast_filter_type_enum() { return kRaycastFilterTypeType; }
+const EnumType& collision_filter_type_enum() { return kCollisionFilterTypeType; }
 const EnumType& dragger_handle_enum() { return kDraggerHandleType; }
 const EnumType& transform_mode_enum() { return kTransformModeType; }
 const EnumType& easing_style_enum() { return kEasingStyleType; }

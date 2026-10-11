@@ -667,6 +667,7 @@ add_library(engine_core STATIC
     src/engine_core/Assemblies.cpp
     src/engine_core/AssemblyFollow.cpp
     src/engine_core/AssemblyPlay.cpp
+    src/engine_core/CollisionGroups.cpp
     src/engine_core/BrushVisuals.cpp
     src/engine_core/terrain/VoxelChunk.cpp
     src/engine_core/terrain/ChunkCache.cpp
@@ -999,6 +1000,7 @@ add_executable(sandbox
     sandbox/assembly_tests.cpp
     sandbox/assembly_edit_tests.cpp
     sandbox/assembly_play_tests.cpp
+    sandbox/collision_group_tests.cpp
     sandbox/constraint_lines_tests.cpp
     sandbox/alloc_counter.cpp
     sandbox/copy_remap_tests.cpp

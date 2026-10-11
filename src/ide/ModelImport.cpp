@@ -127,26 +127,23 @@ void GatherGlobals(const aiNode* node, const aiMatrix4x4& parent, std::map<const
     }
 }
 
-// The file's skeleton, empty when no mesh has bones. A bone rests where the
-// file binds it: the node drawing its mesh, times the inverse of the bone's
-// offset (from mesh space to the bone's). A node between bones that no mesh
-// is bound to rests where the scene has it.
+// The file's skeleton, empty when no mesh has bones. Every bone rests where
+// the scene has it, the pose its skinned vertices are placed in, so each
+// skinning matrix is the identity at rest whatever the file's bind matrices
+// say.
 SkeletonTable BuildSkeleton(const aiScene& scene, const std::map<const aiNode*, aiMatrix4x4>& globals) {
     SkeletonTable table;
-    std::map<std::string, aiMatrix4x4> rests;
-    for (const auto& [node, global] : globals) {
-        for (unsigned i = 0; i < node->mNumMeshes; ++i) {
-            const aiMesh* mesh = scene.mMeshes[node->mMeshes[i]];
-            for (unsigned b = 0; mesh != nullptr && b < mesh->mNumBones; ++b) {
-                const aiBone* bone = mesh->mBones[b];
-                aiMatrix4x4 offset = bone->mOffsetMatrix;
-                rests.emplace(bone->mName.C_Str(), global * offset.Inverse());
-            }
+    // Every node an aiBone names.
+    std::set<std::string> bone_names;
+    for (unsigned m = 0; m < scene.mNumMeshes; ++m) {
+        const aiMesh* mesh = scene.mMeshes[m];
+        for (unsigned b = 0; mesh != nullptr && b < mesh->mNumBones; ++b) {
+            bone_names.insert(mesh->mBones[b]->mName.C_Str());
         }
     }
     std::vector<const aiNode*> named;
-    for (const auto& entry : rests) {
-        if (const aiNode* node = scene.mRootNode->FindNode(entry.first.c_str())) {
+    for (const std::string& entry : bone_names) {
+        if (const aiNode* node = scene.mRootNode->FindNode(entry.c_str())) {
             named.push_back(node);
         }
     }
@@ -191,8 +188,8 @@ SkeletonTable BuildSkeleton(const aiScene& scene, const std::map<const aiNode*, 
         bone.name = UniqueName(node->mName.C_Str(), taken);
         const auto parent = table.by_node.find(node->mParent);
         bone.parent = node != top && parent != table.by_node.end() ? parent->second : amesh::kNoBone;
-        const auto rest = rests.find(node->mName.C_Str());
-        const aiMatrix4x4 resting = rest != rests.end() ? rest->second : globals.at(node);
+        // Where the scene has it: the pose skinned vertices are placed in (SkinPlacements).
+        const aiMatrix4x4 resting = globals.at(node);
         StoreRest(bone, resting);
         table.rests.push_back(resting);
         table.bones.push_back(bone);
@@ -385,20 +382,84 @@ std::vector<anim::Data> ExtractClips(const aiScene& scene, const std::map<const 
     return clips;
 }
 
-// Appends mesh to data, moved by transform into the model's space, and bound
-// to skeleton's bones when the file has some (BindVertices).
+// Where each vertex of a skinned mesh is in the scene's pose: its bones'
+// transforms there times their offsets, blended by its weights, as Assimp
+// skins and as glTF places a skinned mesh, by its joints whatever its own node
+// says. A vertex no bone weighs is placed by fallback, its node's transform.
+std::vector<aiMatrix4x4> SkinPlacements(const aiMesh& mesh, const aiScene& scene,
+                                        const std::map<const aiNode*, aiMatrix4x4>& globals,
+                                        const aiMatrix4x4& fallback) {
+    std::vector<aiMatrix4x4> sums(mesh.mNumVertices);
+    std::vector<float> totals(mesh.mNumVertices, 0.f);
+    for (aiMatrix4x4& sum : sums) {
+        for (unsigned r = 0; r < 4; ++r) {
+            for (unsigned c = 0; c < 4; ++c) {
+                sum[r][c] = 0.f;
+            }
+        }
+    }
+    for (unsigned b = 0; b < mesh.mNumBones; ++b) {
+        const aiBone* bone = mesh.mBones[b];
+        const aiNode* node = scene.mRootNode->FindNode(bone->mName);
+        const auto global = node != nullptr ? globals.find(node) : globals.end();
+        if (global == globals.end()) {
+            continue;
+        }
+        const aiMatrix4x4 skin = global->second * bone->mOffsetMatrix;
+        for (unsigned w = 0; w < bone->mNumWeights; ++w) {
+            const aiVertexWeight& weight = bone->mWeights[w];
+            if (weight.mVertexId >= mesh.mNumVertices || !(weight.mWeight > 0.f)) {
+                continue;
+            }
+            aiMatrix4x4& sum = sums[weight.mVertexId];
+            for (unsigned r = 0; r < 4; ++r) {
+                for (unsigned c = 0; c < 4; ++c) {
+                    sum[r][c] += skin[r][c] * weight.mWeight;
+                }
+            }
+            totals[weight.mVertexId] += weight.mWeight;
+        }
+    }
+    for (unsigned v = 0; v < mesh.mNumVertices; ++v) {
+        if (!(totals[v] > 0.f)) {
+            sums[v] = fallback;
+            continue;
+        }
+        for (unsigned r = 0; r < 4; ++r) {
+            for (unsigned c = 0; c < 4; ++c) {
+                sums[v][r][c] /= totals[v];
+            }
+        }
+    }
+    return sums;
+}
+
+// Appends mesh to data, moved by transform into the model's space (or, with
+// placements, each vertex by its own: SkinPlacements), and bound to
+// skeleton's bones when the file has some (BindVertices).
 void AppendMesh(amesh::Data& data, const aiMesh& mesh, const aiMatrix4x4& transform,
-                const SkeletonTable* skeleton = nullptr, std::uint16_t rigid = amesh::kNoBone) {
-    const aiMatrix3x3 linear(transform);
+                const SkeletonTable* skeleton = nullptr, std::uint16_t rigid = amesh::kNoBone,
+                const std::vector<aiMatrix4x4>* placements = nullptr) {
+    if (placements != nullptr && placements->size() != mesh.mNumVertices) {
+        placements = nullptr;
+    }
+    aiMatrix3x3 linear(transform);
     aiMatrix3x3 normal_matrix = linear;
     normal_matrix.Inverse().Transpose();
     // A mirroring transform turns the faces inside out; their order turns them back.
-    const bool mirrored = linear.Determinant() < 0.f;
+    const bool mirrored = (placements != nullptr && !placements->empty() ? aiMatrix3x3(placements->front()) : linear)
+                              .Determinant() < 0.f;
 
     const auto base = static_cast<std::uint32_t>(data.vertices.size());
     for (unsigned i = 0; i < mesh.mNumVertices; ++i) {
         amesh::Vertex vertex;
-        const aiVector3D position = transform * mesh.mVertices[i];
+        const aiMatrix4x4& place = placements != nullptr ? (*placements)[i] : transform;
+        if (placements != nullptr) {
+            linear = aiMatrix3x3(place);
+            normal_matrix = linear;
+            normal_matrix.Inverse().Transpose();
+        }
+        const aiVector3D position = place * mesh.mVertices[i];
         vertex.p[0] = position.x, vertex.p[1] = position.y, vertex.p[2] = position.z;
         aiVector3D normal;
         if (mesh.HasNormals()) {
@@ -849,7 +910,11 @@ std::optional<ImportedModel> import_model_file(const fs::path& resources_root, c
                 if (mesh->HasBones() && rigid == amesh::kNoBone) {
                     rigid = 0;
                 }
-                AppendMesh(buckets[at->second].data, *mesh, transform, &skeleton, rigid);
+                // A skinned mesh is placed by its joints, in the pose the bones rest in.
+                const std::vector<aiMatrix4x4> placements =
+                    mesh->HasBones() ? SkinPlacements(*mesh, *scene, globals, transform) : std::vector<aiMatrix4x4>();
+                AppendMesh(buckets[at->second].data, *mesh, transform, &skeleton, rigid,
+                           placements.empty() ? nullptr : &placements);
             }
         }
     }

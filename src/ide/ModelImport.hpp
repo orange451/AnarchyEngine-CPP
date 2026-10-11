@@ -75,9 +75,9 @@ struct ImportedModel {
 // where <Name> is the file's name or name-2, name-3, and so on when another
 // import has it. Every node's transform is baked into the vertices, so the
 // Models need none. A skinned file keeps its skeleton: every AMESH it writes
-// holds the same bone table, each bone resting where the file binds it, and
-// each vertex its four heaviest bones; a mesh under a bone follows that bone
-// whole. Each clip becomes an AANIM file in animations/<Name>/, its keys
+// holds the same bone table, each bone resting where the scene has it, each
+// skinned vertex placed there by its joints, and each vertex its four
+// heaviest bones; a mesh under a bone follows that bone whole. Each clip becomes an AANIM file in animations/<Name>/, its keys
 // sampled at every key time it has, each a change from the bone's rest. A
 // texture the file names is looked for where it says, then by file name beside
 // the model and in the folders under it; one embedded in the file is written

@@ -510,6 +510,41 @@ int RunModelImportTests(ide::IdeLayout& layout, jadefx::Scene& scene) {
         }
     }
 
+    // A skinned mesh is placed by its joints, as glTF says, not by its own node:
+    // here the node sits 5 along Z, but its joint and bind say the triangle is
+    // where its vertices are, as a glTF viewer draws it (FBX2GLTF rigs, such
+    // as RobotExpressive, are made so).
+    {
+        const fs::path source = folder / "Placed";
+        const fs::path resources = folder / "PlacedResources";
+        GltfBuilder gltf;
+        const int position = gltf.floats({0, 0, 0, 1, 0, 0, 0, 1, 0}, "VEC3", 3, "\"min\":[0,0,0],\"max\":[1,1,0]");
+        const int joints = gltf.bytes({0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}, "VEC4", 4);
+        const int weights = gltf.floats({1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0}, "VEC4", 4);
+        const int indices = gltf.shorts({0, 1, 2});
+        const int binds = gltf.floats({1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1}, "MAT4", 16);
+        gltf.write(source, "Placed",
+                   std::string(R"("scenes":[{"nodes":[0,1]}],
+  "nodes":[{"name":"Root"},{"name":"Body","mesh":0,"skin":0,"translation":[0,0,5]}],
+  "skins":[{"joints":[0],"inverseBindMatrices":)") +
+                       std::to_string(binds) + "}],\"meshes\":[{\"primitives\":[{\"attributes\":{\"POSITION\":" +
+                       std::to_string(position) + ",\"JOINTS_0\":" + std::to_string(joints) + ",\"WEIGHTS_0\":" +
+                       std::to_string(weights) + "},\"indices\":" + std::to_string(indices) + "}]}]");
+        std::string error;
+        const std::optional<ide::ImportedModel> model =
+            ide::import_model_file(resources, ide::utf8_path(source / "Placed.gltf"), error);
+        anarchy::amesh::Data data;
+        expect(model.has_value() && model->meshes.size() == 1 &&
+                   ReadMesh(resources / ide::path_from_utf8(model->meshes[0].path), data),
+               "a skinned glTF whose mesh node is moved imports");
+        bool placed = !data.vertices.empty();
+        for (const anarchy::amesh::Vertex& vertex : data.vertices) {
+            placed = placed && Near(vertex.p[2], 0);
+        }
+        expect(placed, "its vertices are where its joints put them, not moved again by its node");
+        expect(data.bones.size() == 1 && Near(data.bones[0].t[2], 0), "its joint rests where the scene has it");
+    }
+
     // An OBJ with three materials, one drawn by two objects, dropped on the studio.
     const fs::path root = folder / "ModelPlace";
     const fs::path outside = folder / "Downloads" / "crate";

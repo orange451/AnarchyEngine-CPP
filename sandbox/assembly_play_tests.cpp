@@ -598,3 +598,257 @@ TEST_CASE("AP16c a PlayerController jumps when its welded crate's Velocity is wr
 }
 
 
+
+TEST_CASE("AP17 disabling a weld mid-flight splits the body, and each piece keeps its motion",
+          "[assembly][play-change]") {
+    for (int spinning = 0; spinning < 2; ++spinning) {
+        PhysicsRig rig;
+        PhysicsObject& a = rig.body(at(0.f, 50.f, 0.f), Vec3{1.f, 1.f, 1.f}, false);
+        PhysicsObject& b = rig.body(at(4.f, 50.f, 0.f), Vec3{1.f, 1.f, 1.f}, false);
+        if (spinning == 1) {
+            REQUIRE_FALSE(a.set_angular_velocity(Vec3{0.f, 0.f, 4.f}));
+        }
+        WeldConstraint& w = weld(rig.game, a.id(), b.id());
+        rig.play();
+        rig.steps(30);
+        const auto center = rig.physics.body_center(a.id());
+        REQUIRE(center);
+        // The old body's velocity at each piece's centre, the box's own origin.
+        const Vec3 omega = a.angular_velocity();
+        const Vec3 v = a.velocity();
+        const auto point_velocity = [&](const PhysicsObject& piece) {
+            const Vec3 p = position_of(piece.transform());
+            const Vec3 r{p.x - center->x, p.y - center->y, p.z - center->z};
+            return Vec3{v.x + omega.y * r.z - omega.z * r.y, v.y + omega.z * r.x - omega.x * r.z,
+                        v.z + omega.x * r.y - omega.y * r.x};
+        };
+        const Vec3 expect_a = point_velocity(a);
+        const Vec3 expect_b = point_velocity(b);
+        REQUIRE_FALSE(w.set_enabled(false));
+        rig.steps(1);
+        INFO(spinning);
+        REQUIRE(rig.physics.body_key(a.id()) != rig.physics.body_key(b.id()));
+        // One step of gravity, 1/240 s at 9.81, on top of what each piece had.
+        const float g = 9.81f / 240.f;
+        REQUIRE(near(a.velocity().x, expect_a.x, 2e-2f));
+        REQUIRE(near(a.velocity().y, expect_a.y - g, 2e-2f));
+        REQUIRE(near(b.velocity().x, expect_b.x, 2e-2f));
+        REQUIRE(near(b.velocity().y, expect_b.y - g, 2e-2f));
+    }
+}
+
+TEST_CASE("AP18 enabling a weld between two falling boxes makes one body and keeps their momentum",
+          "[assembly][play-change]") {
+    PhysicsRig rig;
+    PhysicsObject& a = rig.body(at(0.f, 50.f, 0.f), Vec3{1.f, 1.f, 1.f}, false);
+    REQUIRE_FALSE(a.set_mass(30.0));
+    REQUIRE_FALSE(a.set_velocity(Vec3{6.f, 0.f, 0.f}));
+    PhysicsObject& b = rig.body(at(4.f, 50.f, 0.f), Vec3{1.f, 1.f, 1.f}, false);
+    REQUIRE_FALSE(b.set_mass(10.0));
+    WeldConstraint& w = weld(rig.game, a.id(), b.id());
+    REQUIRE_FALSE(w.set_enabled(false));
+    rig.play();
+    rig.steps(10);
+    const float vy = a.velocity().y;
+    REQUIRE_FALSE(w.set_enabled(true));
+    rig.steps(1);
+    REQUIRE(rig.physics.body_key(a.id()) == rig.physics.body_key(b.id()));
+    // (30 * 6 + 10 * 0) / 40.
+    REQUIRE(near(a.velocity().x, 4.5f, 1e-2f));
+    REQUIRE(near(b.velocity().x, 4.5f, 1e-2f));
+    REQUIRE(near(a.velocity().y, vy - 9.81f / 240.f, 1e-2f));
+}
+
+TEST_CASE("AP19 un-anchoring the anchored member makes a welded Custom collide as pieces",
+          "[assembly][play-change]") {
+    PhysicsRig rig;
+    rig.floor();
+    engine_core::Mesh& mesh = rig.game.create<engine_core::Mesh>();
+    PhysicsObject& base = rig.body(at(0.f, 4.f, 0.f), Vec3{1.f, 1.f, 1.f}, true);
+    PhysicsObject& custom = rig.body(at(3.f, 4.f, 0.f), Vec3{2.f, 2.f, 2.f}, false);
+    REQUIRE_FALSE(custom.set_shape(static_cast<int>(PhysicsObject::Shape::Custom)));
+    REQUIRE_FALSE(custom.set_mesh(instance_slot(mesh.id())));
+    weld(rig.game, base.id(), custom.id());
+    rig.play();
+    REQUIRE_FALSE(mesh.edit_geometry([](anarchy::amesh::Data& data) {
+        engine_core::add_box(data, Vec3{2.f, 2.f, 2.f}, Vec3{0.f, 0.f, 0.f});
+    }));
+    rig.steps(2);
+    REQUIRE(rig.physics.body_mass(custom.id()) == 0.f);
+    base.set_anchored(false);
+    rig.seconds(3.0);
+    REQUIRE(rig.physics.body_mass(custom.id()) > 50.f);
+    // It landed on the floor, a 2 unit cube resting on it, not through it.
+    INFO(y_of(custom.transform()));
+    REQUIRE(y_of(custom.transform()) > 0.5f);
+}
+
+TEST_CASE("AP20 destroying a member mid-fall leaves the survivor its own body and shape", "[assembly][play-change]") {
+    PhysicsRig rig;
+    rig.floor();
+    PhysicsObject& a = rig.body(at(0.f, 8.f, 0.f), Vec3{1.f, 1.f, 1.f}, false);
+    PhysicsObject& b = rig.body(at(3.f, 8.f, 0.f), Vec3{1.f, 1.f, 1.f}, false);
+    weld(rig.game, a.id(), b.id());
+    rig.play();
+    rig.steps(20);
+    rig.game.destroy(b.id());
+    rig.steps(1);
+    REQUIRE(rig.physics.has_body(a.id()));
+    REQUIRE(rig.physics.shape_count(a.id()) == 1);
+    REQUIRE(near(rig.physics.body_mass(a.id()), 50.f, 1e-3f));
+    rig.steps(20);
+    rig.game.stop_simulation();
+    rig.physics.sync(rig.game);
+    REQUIRE(y_of(a.transform()) == 8.f);
+}
+
+TEST_CASE("AP21 a RigidConstraint connected in play snaps the sub's whole assembly, then holds it",
+          "[assembly][play-change]") {
+    PhysicsRig rig;
+    PhysicsObject& parent = rig.body(at(0.f, 50.f, 0.f), Vec3{1.f, 1.f, 1.f}, true);
+    PhysicsObject& sub = rig.body(at(10.f, 50.f, 0.f), Vec3{1.f, 1.f, 1.f}, false);
+    PhysicsObject& rider = rig.body(at(12.f, 50.f, 0.f), Vec3{1.f, 1.f, 1.f}, false);
+    weld(rig.game, sub.id(), rider.id());
+    RigidConstraint& r = rig.game.create<RigidConstraint>();
+    rig.game.set_parent(r.id(), workspace_of(rig.game));
+    REQUIRE_FALSE(r.set_pv_instance1(instance_slot(parent.id())));
+    rig.play();
+    rig.steps(5);
+    REQUIRE_FALSE(r.set_pv_instance2(instance_slot(sub.id())));
+    rig.steps(1);
+    // The sub's pivot is on the parent's, and its welded rider kept its offset.
+    REQUIRE(near(x_of(sub.transform()), 0.f, 1e-3f));
+    REQUIRE(near(y_of(sub.transform()), 50.f, 1e-3f));
+    REQUIRE(near(x_of(rider.transform()), 2.f, 1e-3f));
+    rig.seconds(0.5);
+    // Anchored now, all three.
+    REQUIRE(near(y_of(rider.transform()), 50.f, 1e-3f));
+    REQUIRE(rig.physics.body_key(sub.id()) == rig.physics.body_key(parent.id()));
+}
+
+TEST_CASE("AP22 sliding an end Attachment's Offset in play moves only the sub's side", "[assembly][play-change]") {
+    PhysicsRig rig;
+    rig.floor();
+    // A wide anchored slab, its top at y = 1, and a box resting on it.
+    PhysicsObject& slab = rig.body(at(0.f, 0.5f, 0.f), Vec3{10.f, 1.f, 10.f}, true);
+    PhysicsObject& resting = rig.body(at(-3.f, 1.5f, 0.f), Vec3{1.f, 1.f, 1.f}, false);
+    engine_core::Attachment& slot = rig.game.create<engine_core::Attachment>();
+    REQUIRE_FALSE(slot.set_offset(at(0.f, 3.f, 0.f)));
+    rig.game.set_parent(slot.id(), slab.id());
+    PhysicsObject& door = rig.body(at(0.f, 3.5f, 0.f), Vec3{1.f, 1.f, 1.f}, false);
+    RigidConstraint& r = rig.game.create<RigidConstraint>();
+    rig.game.set_parent(r.id(), workspace_of(rig.game));
+    REQUIRE_FALSE(r.set_pv_instance1(instance_slot(slot.id())));
+    REQUIRE_FALSE(r.set_pv_instance2(instance_slot(door.id())));
+    rig.play();
+    rig.seconds(0.5);
+    const std::uint64_t slab_shape = rig.physics.shape_key(slab.id());
+    const std::uint64_t door_shape = rig.physics.shape_key(door.id());
+    for (int i = 1; i <= 60; ++i) {
+        REQUIRE_FALSE(slot.set_offset(at(0.05f * static_cast<float>(i), 3.f, 0.f)));
+        rig.steps(1);
+    }
+    REQUIRE(rig.physics.shape_key(slab.id()) == slab_shape);
+    REQUIRE(rig.physics.shape_key(door.id()) != door_shape);
+    REQUIRE(near(x_of(door.transform()), 3.f, 1e-3f));
+    REQUIRE(near(resting.velocity().y, 0.f, 0.05f));
+    REQUIRE(near(y_of(resting.transform()), 1.5f, 0.02f));
+}
+
+TEST_CASE("AP23 a face edit on a welded Brush in play moves no other member", "[assembly][play-change]") {
+    PhysicsRig rig;
+    engine_core::Brush& brush = rig.game.create<engine_core::Brush>();
+    REQUIRE_FALSE(brush.set_transform(at(0.f, 5.f, 0.f)));
+    rig.game.set_parent(brush.id(), workspace_of(rig.game));
+    PhysicsObject& box = rig.body(at(5.f, 5.f, 0.f), Vec3{1.f, 1.f, 1.f}, false);
+    weld(rig.game, brush.id(), box.id());
+    rig.play();
+    rig.steps(2);
+    REQUIRE_FALSE(brush.apply(engine_core::brush::move_face(brush.faces(), 0, 2.0)));
+    rig.steps(2);
+    REQUIRE(near(x_of(box.transform()), 5.f, 1e-3f));
+    REQUIRE(near(y_of(box.transform()), 5.f, 1e-3f));
+}
+
+TEST_CASE("AP24 Stop puts every member back after a play that snapped and slid", "[assembly][play-change]") {
+    PhysicsRig rig;
+    PhysicsObject& parent = rig.body(at(0.f, 50.f, 0.f), Vec3{1.f, 1.f, 1.f}, true);
+    engine_core::Attachment& slot = rig.game.create<engine_core::Attachment>();
+    rig.game.set_parent(slot.id(), parent.id());
+    PhysicsObject& sub = rig.body(at(10.f, 40.f, 0.f), Vec3{1.f, 1.f, 1.f}, false);
+    RigidConstraint& r = rig.game.create<RigidConstraint>();
+    rig.game.set_parent(r.id(), workspace_of(rig.game));
+    REQUIRE_FALSE(r.set_pv_instance1(instance_slot(slot.id())));
+    REQUIRE_FALSE(r.set_enabled(false));
+    REQUIRE_FALSE(r.set_pv_instance2(instance_slot(sub.id())));
+    const Matrix4 authored = sub.transform();
+    rig.play();
+    rig.steps(5);
+    REQUIRE_FALSE(r.set_enabled(true));
+    rig.steps(5);
+    REQUIRE_FALSE(slot.set_offset(at(2.f, 0.f, 0.f)));
+    rig.steps(5);
+    REQUIRE(near(x_of(sub.transform()), 2.f, 1e-3f));
+    rig.game.stop_simulation();
+    REQUIRE(same(sub.transform(), authored, 0.f));
+    REQUIRE(same(slot.offset(), engine_core::matrix4_identity(), 0.f));
+    REQUIRE_FALSE(r.enabled());
+}
+
+TEST_CASE("AP25 a member that leaves Workspace in play leaves its assembly, and both keep moving",
+          "[assembly][play-change]") {
+    PhysicsRig rig;
+    PhysicsObject& a = rig.body(at(0.f, 50.f, 0.f), Vec3{1.f, 1.f, 1.f}, false);
+    GameObject& rider = create_part(rig.game);
+    rider.set_transform(at(3.f, 50.f, 0.f));
+    PhysicsObject& b = rig.body(at(-3.f, 50.f, 0.f), Vec3{1.f, 1.f, 1.f}, false);
+    weld(rig.game, a.id(), rider.id());
+    weld(rig.game, a.id(), b.id());
+    rig.play();
+    rig.steps(20);
+    rig.game.set_parent(b.id(), rig.game.scene_service("Storage"));
+    rig.steps(1);
+    REQUIRE_FALSE(rig.physics.has_body(b.id()));
+    const float y = y_of(a.transform());
+    rig.steps(20);
+    REQUIRE(y_of(a.transform()) < y);
+    REQUIRE(near(distance(a.transform(), rider.transform()), 3.f, 1e-3f));
+}
+
+TEST_CASE("AP16b un-anchoring a seat makes the welded PlayerController root, and it hovers", "[assembly][play-change]") {
+    PhysicsRig rig;
+    rig.floor();
+    engine_core::PlayerController& player = rig.controller(at(0.f, 0.f, 0.f));
+    PhysicsObject& seat = rig.body(at(1.5f, 0.5f, 0.f), Vec3{1.f, 1.f, 1.f}, true);
+    weld(rig.game, player.id(), seat.id());
+    rig.play();
+    rig.steps(5);
+    rig.game.assemblies().refresh(rig.game);
+    REQUIRE(rig.game.assemblies().root_of(rig.game, player.id()) == seat.id());
+    seat.set_anchored(false);
+    rig.seconds(1.0);
+    rig.game.assemblies().refresh(rig.game);
+    REQUIRE(rig.game.assemblies().root_of(rig.game, player.id()) == player.id());
+    REQUIRE(player.on_ground());
+    REQUIRE(near(y_of(player.transform()), 0.f, 0.05f));
+}
+
+TEST_CASE("AP28 a RigidConstraint whose sub a script destroyed is Active again after Stop",
+          "[assembly][play-change]") {
+    PhysicsRig rig;
+    PhysicsObject& parent = rig.body(at(0.f, 50.f, 0.f), Vec3{1.f, 1.f, 1.f}, true);
+    PhysicsObject& sub = rig.body(at(0.f, 50.f, 0.f), Vec3{1.f, 1.f, 1.f}, false);
+    const InstanceId sub_id = sub.id();
+    RigidConstraint& r = rig.game.create<RigidConstraint>();
+    rig.game.set_parent(r.id(), workspace_of(rig.game));
+    REQUIRE_FALSE(r.set_pv_instance1(instance_slot(parent.id())));
+    REQUIRE_FALSE(r.set_pv_instance2(instance_slot(sub_id)));
+    rig.play();
+    rig.steps(5);
+    rig.game.destroy(sub_id);
+    rig.steps(5);
+    rig.game.stop_simulation();
+    rig.game.assemblies().refresh(rig.game);
+    REQUIRE(rig.game.assemblies().active(r.id()));
+    REQUIRE(r.pv_instance2_id() == sub_id);
+}

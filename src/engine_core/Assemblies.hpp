@@ -152,6 +152,9 @@ public:
         InstanceId driven = 0;
         // frame⁻¹ × the node's frame when captured.
         Matrix4 offset{};
+        // Moves when offset changes in place (an end Attachment slid, a Brush
+        // recentred), so the physics world places only this member's shapes again.
+        std::uint32_t revision = 0;
     };
     struct PlayAssembly {
         InstanceId root = 0;
@@ -170,6 +173,14 @@ public:
         Vec3 velocity{};
         bool angular_pending = false;
         Vec3 angular{};
+        // Made when play started: its body moves at its root's authored
+        // velocity. Made later, by a weld made or broken in play: its body keeps
+        // the momentum of the bodies its members were on.
+        bool captured = true;
+        // The stamp of a body this assembly takes over, keeping that body's
+        // frame and its kept members' shapes: the piece of a split that holds
+        // the old root, or the side of a merge whose root was root. 0: a new body.
+        std::uint32_t reuse = 0;
     };
     // start_simulation, before any script runs.
     void capture_play(DataModel& game);
@@ -190,6 +201,11 @@ public:
 
     // frame with the length of each of scale_from's axes.
     static Matrix4 with_scale(const Matrix4& frame, const Matrix4& scale_from);
+
+    // For a Brush recentre: inside one, a checked Transform write to id is a
+    // change of pivot, not a move, so in play no other member moves.
+    void begin_pivot_change(InstanceId id) { pivot_change_ = id; }
+    void end_pivot_change() { pivot_change_ = 0; }
 
 private:
     struct Edge {
@@ -289,10 +305,42 @@ private:
     std::uint32_t next_stamp_ = 0;
     bool play_captured_ = false;
     std::uint32_t play_generation_ = 0;
+    // Rebuilds so far, and how many the play state has followed.
+    std::uint64_t builds_ = 0;
+    std::uint64_t play_builds_ = 0;
+    // RigidConstraints active in play as of the last play sync.
+    std::vector<InstanceId> play_rigid_;
+    std::vector<PlayAssembly> old_play_;
+    std::vector<PlayMember> old_members_;
+    std::vector<InstanceId> side_;
+    std::vector<std::uint8_t> side_mark_;
+    InstanceId pivot_change_ = 0;
+    void play_rebuilt(DataModel& game);
+    void index_play();
+    int old_play_of(InstanceId node) const;
+    // The body's pose now, from where its members were last written.
+    Matrix4 body_pose(const DataModel& game, const PlayAssembly& assembly,
+                      const std::vector<PlayMember>& members) const;
+    // A RigidConstraint newly active in play: the sub's side moves rigidly so
+    // its pivot lands on the parent's.
+    void snap_in_play(DataModel& game, const RigidEdge& edge);
 };
 
 // Holds Assemblies suspended for a scope (§3): load, undo and redo of edit
 // waypoints, Stop's restore, paste.
+// A Brush's recentre: its Transform moves one way and its faces the other,
+// so nothing moves in the world. In play, its assembly keeps still.
+class AssemblyPivotChange {
+public:
+    AssemblyPivotChange(DataModel& game, InstanceId id);
+    ~AssemblyPivotChange();
+    AssemblyPivotChange(const AssemblyPivotChange&) = delete;
+    AssemblyPivotChange& operator=(const AssemblyPivotChange&) = delete;
+
+private:
+    DataModel& game_;
+};
+
 class AssemblySuspend {
 public:
     explicit AssemblySuspend(DataModel& game);

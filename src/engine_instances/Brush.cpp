@@ -223,6 +223,8 @@ std::optional<std::string> Brush::apply(brush::Built built, brush::DVec3* moved)
         transform.m[12 + row] += static_cast<float>(transform.m[row] * c.x + transform.m[4 + row] * c.y +
                                                     transform.m[8 + row] * c.z);
     }
+    // A change of pivot, not a move: in play its assembly keeps still.
+    AssemblyPivotChange pivot(*this, id());
     return set_transform(transform);
 }
 

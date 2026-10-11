@@ -579,6 +579,8 @@ struct PhysicsWorld::Impl {
         b3Transform place = b3Transform_identity;
         bool compound_anchored = false;
         InstanceId compound_root = 0;
+        // The PlayMember revision its shapes were placed at.
+        std::uint32_t member_revision = 0;
     };
 
     // An assembly's one body, for the play assembly whose stamp keys it.
@@ -645,6 +647,16 @@ struct PhysicsWorld::Impl {
     std::vector<InstanceId> claimants;
     std::vector<InstanceId> gone;
     std::vector<std::uint32_t> compounds_gone;
+    // A body's motion as it was before its members moved to another body.
+    struct Motion {
+        b3BodyId body = b3_nullBodyId;
+        float mass = 0.f;
+        b3Vec3 velocity{};
+        b3Vec3 angular{};
+        b3Vec3 center{};
+    };
+    std::vector<Motion> motions;
+    std::vector<InstanceId> members_scratch;
     std::vector<b3Vec3> points;
     std::vector<Vec3> mesh_points;
     std::vector<std::uint32_t> triangles;
@@ -655,6 +667,8 @@ struct PhysicsWorld::Impl {
         bodies.reserve(1024);
         compounds.reserve(1024);
         compounds_gone.reserve(1024);
+        motions.reserve(1024);
+        members_scratch.reserve(1024);
         eligible.reserve(1024);
         wanted.reserve(1024);
         claims.reserve(1024);
@@ -1378,11 +1392,15 @@ struct PhysicsWorld::Impl {
                 continue;
             }
             auto found = compounds.find(plays[index].stamp);
+            if (found == compounds.end() && plays[index].reuse != 0) {
+                found = adopt_compound(game, index);
+            }
             if (found == compounds.end()) {
                 found = make_compound(game, index);
             }
             if (found != compounds.end()) {
                 found->second.seen = pass;
+                refresh_compound(game, index, found->second);
             }
         }
         apply_assembly_writes(game);
@@ -1393,7 +1411,213 @@ struct PhysicsWorld::Impl {
             }
         }
         for (const std::uint32_t stamp : compounds_gone) {
+            hand_off(game, stamp);
             drop_compound(stamp);
+        }
+    }
+
+    // How a body moves now, kept before its members go to other bodies.
+    void note_motion(b3BodyId body) {
+        if (!b3Body_IsValid(body)) {
+            return;
+        }
+        for (const Motion& motion : motions) {
+            if (B3_ID_EQUALS(motion.body, body)) {
+                return;
+            }
+        }
+        Motion motion;
+        motion.body = body;
+        motion.mass = b3Body_GetType(body) == b3_dynamicBody ? b3Body_GetMass(body) : 0.f;
+        motion.velocity = b3Body_GetLinearVelocity(body);
+        motion.angular = b3Body_GetAngularVelocity(body);
+        motion.center = b3Body_GetWorldCenter(body);
+        motions.push_back(motion);
+    }
+
+    // The motion a body made of the noted ones starts with: one body's own,
+    // as its velocity was at center; several bodies' momentum.
+    void inherit_motion(b3BodyId body) {
+        if (motions.empty() || b3Body_GetType(body) != b3_dynamicBody) {
+            return;
+        }
+        b3Vec3 velocity{};
+        b3Vec3 angular{};
+        if (motions.size() == 1) {
+            const Motion& only = motions.front();
+            const b3Vec3 center = b3Body_GetWorldCenter(body);
+            const b3Vec3 r{center.x - only.center.x, center.y - only.center.y, center.z - only.center.z};
+            velocity = b3Add(only.velocity, b3Cross(only.angular, r));
+            angular = only.angular;
+        } else {
+            float total = 0.f;
+            for (const Motion& motion : motions) {
+                total += motion.mass;
+                velocity = b3MulAdd(velocity, motion.mass, motion.velocity);
+                angular = b3MulAdd(angular, motion.mass, motion.angular);
+            }
+            if (total > 0.f) {
+                velocity = b3MulSV(1.f / total, velocity);
+                angular = b3MulSV(1.f / total, angular);
+            }
+        }
+        b3Body_SetLinearVelocity(body, velocity);
+        b3Body_SetAngularVelocity(body, angular);
+    }
+
+    // A member leaving a body for a body of its own keeps the motion its old
+    // body gave it there: the velocity at its origin, and the same spin.
+    static void keep_motion(PhysicsBase& object, const Body& record) {
+        const b3Vec3 at = b3Body_GetWorldPoint(record.body, record.place.p);
+        object.store_simulated(object.transform(), from_b3(b3Body_GetWorldPointVelocity(record.body, at)));
+        const Vec3 spin = from_b3(b3Body_GetAngularVelocity(record.body));
+        if (auto* rigid = dynamic_cast<PhysicsObject*>(&object)) {
+            rigid->store_angular_velocity(spin);
+        } else if (auto* brush = dynamic_cast<Brush*>(&object)) {
+            brush->store_angular_velocity(spin);
+        }
+    }
+
+    // The members of a compound about to go that are in no assembly now keep
+    // its motion for the bodies of their own they get next.
+    void hand_off(DataModel& game, std::uint32_t stamp) {
+        const auto found = compounds.find(stamp);
+        if (found == compounds.end() || !b3Body_IsValid(found->second.body)) {
+            return;
+        }
+        for (const auto& [id, record] : bodies) {
+            if (record.compound != stamp || game.assemblies().play_of(id) >= 0) {
+                continue;
+            }
+            if (auto* object = dynamic_cast<PhysicsBase*>(game.instance(id))) {
+                keep_motion(*object, record);
+            }
+        }
+    }
+
+    // A split or a merge in play: the body the old root was on carries on,
+    // its departing members' shapes go, arriving members' shapes come at
+    // their offsets, and its motion takes in theirs.
+    std::unordered_map<std::uint32_t, Compound>::iterator adopt_compound(DataModel& game, std::size_t index) {
+        Assemblies& assemblies = game.assemblies();
+        const Assemblies::PlayAssembly assembly = assemblies.play()[index];
+        const auto old = compounds.find(assembly.reuse);
+        if (old == compounds.end() || !b3Body_IsValid(old->second.body)) {
+            return compounds.end();
+        }
+        Compound compound = old->second;
+        compounds.erase(old);
+        compound.root = assembly.root;
+        compound.seen = pass;
+        b3Body_SetUserData(compound.body, user_data(assembly.root));
+        motions.clear();
+        note_motion(compound.body);
+        // Departing: on this body, in another assembly or none now.
+        members_scratch.clear();
+        for (const auto& [id, record] : bodies) {
+            if (record.compound == assembly.reuse && assemblies.play_of(id) != static_cast<int>(index)) {
+                members_scratch.push_back(id);
+            }
+        }
+        for (const InstanceId id : members_scratch) {
+            if (auto* object = dynamic_cast<PhysicsBase*>(game.instance(id))) {
+                keep_motion(*object, bodies[id]);
+            }
+            destroy(id);
+        }
+        bool arrived = false;
+        const std::vector<Assemblies::PlayMember>& members = assemblies.play_members();
+        for (std::uint32_t i = assembly.first; i < assembly.first + assembly.count; ++i) {
+            const Assemblies::PlayMember& member = members[i];
+            auto* object = dynamic_cast<PhysicsBase*>(game.instance(member.node));
+            if (object == nullptr) {
+                continue;
+            }
+            const auto found = bodies.find(member.node);
+            if (found != bodies.end() && found->second.compound == assembly.reuse) {
+                // Staying: its shapes are where they were.
+                found->second.compound = assembly.stamp;
+                found->second.compound_root = assembly.root;
+                continue;
+            }
+            if (found != bodies.end()) {
+                note_motion(found->second.body);
+            }
+            arrived = true;
+            destroy(member.node);
+            Body record;
+            record.driven = member.driven;
+            record.body = compound.body;
+            record.compound = assembly.stamp;
+            record.place = transform_of(member.offset);
+            record.compound_anchored = compound.anchored;
+            record.compound_root = assembly.root;
+            record.member_revision = member.revision;
+            record.seen = pass;
+            object->take_dirty();
+            make_shape(game, *object, record);
+            bodies.insert_or_assign(member.node, std::move(record));
+        }
+        b3Body_ApplyMassFromShapes(compound.body);
+        if (arrived) {
+            inherit_motion(compound.body);
+        }
+        motions.clear();
+        return compounds.emplace(assembly.stamp, compound).first;
+    }
+
+    // What changed on a body that stays: its anchoring (a Custom member is a
+    // mesh only on a static body, so it is made again around the switch, and
+    // a body that starts moving starts at rest), and the members whose
+    // offsets moved in place, whose shapes alone are placed again.
+    void refresh_compound(DataModel& game, std::size_t index, Compound& compound) {
+        const Assemblies& assemblies = game.assemblies();
+        const Assemblies::PlayAssembly& assembly = assemblies.play()[index];
+        const std::vector<Assemblies::PlayMember>& members = assemblies.play_members();
+        if (compound.anchored != assembly.anchored) {
+            members_scratch.clear();
+            for (std::uint32_t i = assembly.first; i < assembly.first + assembly.count; ++i) {
+                const auto found = bodies.find(members[i].node);
+                if (found == bodies.end() || found->second.compound != assembly.stamp) {
+                    continue;
+                }
+                found->second.compound_anchored = assembly.anchored;
+                const auto* rigid = dynamic_cast<const PhysicsObject*>(game.instance(members[i].node));
+                if (rigid != nullptr && rigid->shape() == PhysicsObject::Shape::Custom) {
+                    drop_shape(found->second);
+                    members_scratch.push_back(members[i].node);
+                }
+            }
+            b3Body_SetType(compound.body, assembly.anchored ? b3_staticBody : b3_dynamicBody);
+            for (const InstanceId id : members_scratch) {
+                if (auto* object = dynamic_cast<PhysicsBase*>(game.instance(id))) {
+                    make_shape(game, *object, bodies[id]);
+                }
+            }
+            if (!assembly.anchored) {
+                b3Body_SetLinearVelocity(compound.body, b3Vec3{});
+                b3Body_SetAngularVelocity(compound.body, b3Vec3{});
+                b3Body_SetAwake(compound.body, true);
+            }
+            compound.anchored = assembly.anchored;
+        }
+        for (std::uint32_t i = assembly.first; i < assembly.first + assembly.count; ++i) {
+            const Assemblies::PlayMember& member = members[i];
+            const auto found = bodies.find(member.node);
+            if (found == bodies.end() || found->second.compound != assembly.stamp ||
+                found->second.member_revision == member.revision) {
+                continue;
+            }
+            auto* object = dynamic_cast<PhysicsBase*>(game.instance(member.node));
+            if (object == nullptr) {
+                continue;
+            }
+            found->second.place = transform_of(member.offset);
+            found->second.member_revision = member.revision;
+            make_shape(game, *object, found->second);
+            if (!compound.anchored) {
+                b3Body_SetAwake(compound.body, true);
+            }
         }
     }
 
@@ -1498,6 +1722,7 @@ struct PhysicsWorld::Impl {
         compound.root = assembly.root;
         compound.anchored = assembly.anchored;
         compound.seen = pass;
+        motions.clear();
         const std::vector<Assemblies::PlayMember>& members = assemblies.play_members();
         for (std::uint32_t i = assembly.first; i < assembly.first + assembly.count; ++i) {
             const Assemblies::PlayMember& member = members[i];
@@ -1505,8 +1730,12 @@ struct PhysicsWorld::Impl {
             if (object == nullptr) {
                 continue;
             }
+            if (const auto found = bodies.find(member.node); found != bodies.end()) {
+                note_motion(found->second.body);
+            }
             destroy(member.node);
             Body record;
+            record.member_revision = member.revision;
             record.driven = member.driven;
             record.body = compound.body;
             record.compound = assembly.stamp;
@@ -1518,12 +1747,21 @@ struct PhysicsWorld::Impl {
             make_shape(game, *object, record);
             bodies.insert_or_assign(member.node, std::move(record));
         }
-        const Vec3 velocity = root->velocity();
+        Vec3 velocity = root->velocity();
         if (!assembly.anchored) {
-            // Centre-of-mass velocities, now that the shapes put the centre of mass.
-            b3Body_SetLinearVelocity(compound.body, to_b3(velocity));
-            b3Body_SetAngularVelocity(compound.body, to_b3(angular));
+            // Centre-of-mass velocities, now that the shapes put the centre of
+            // mass: at play start the root's authored ones, later the motion
+            // of the bodies its members came from.
+            if (assembly.captured) {
+                b3Body_SetLinearVelocity(compound.body, to_b3(velocity));
+                b3Body_SetAngularVelocity(compound.body, to_b3(angular));
+            } else {
+                inherit_motion(compound.body);
+                velocity = from_b3(b3Body_GetLinearVelocity(compound.body));
+                angular = from_b3(b3Body_GetAngularVelocity(compound.body));
+            }
         }
+        motions.clear();
         const auto made = compounds.emplace(assembly.stamp, compound).first;
         // A static body reports no move, so its members are put in place now.
         assemblies.pose_members(game, index, matrix4_orthonormalize(assembly.frame), velocity, angular);

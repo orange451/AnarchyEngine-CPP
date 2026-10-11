@@ -138,6 +138,11 @@ Assemblies::Assemblies() {
     play_index_.assign(slots, -1);
     play_member_index_.assign(slots, -1);
     play_touched_.reserve(slots);
+    play_rigid_.reserve(slots);
+    old_play_.reserve(slots);
+    old_members_.reserve(slots);
+    side_.reserve(slots);
+    side_mark_.assign(slots, 0);
     follow_marked_.reserve(slots);
     carry_stack_.reserve(slots);
 }
@@ -432,6 +437,7 @@ bool Assemblies::root_before(const DataModel& game, InstanceId a, InstanceId b) 
 }
 
 void Assemblies::rebuild(const DataModel& game) {
+    ++builds_;
     clear_touched();
     edges_.clear();
     rigid_order_.clear();

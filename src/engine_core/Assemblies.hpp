@@ -59,6 +59,13 @@ public:
         // Which end (1 or 2) names the parent: the end on the root's side.
         int parent_end = 1;
     };
+    // An active JointConstraint (joint spec §2): node1 is PVInstance1's node
+    // (the base), node2 PVInstance2's. It joins nothing.
+    struct JointEdge {
+        InstanceId constraint = 0;
+        InstanceId node1 = 0;
+        InstanceId node2 = 0;
+    };
 
     Assemblies();
     Assemblies(const Assemblies&) = delete;
@@ -116,6 +123,10 @@ public:
     // each keeps from colliding, lower id first, sorted, no repeats. They join
     // nothing, so neither is in edges or groups for it.
     const std::vector<std::pair<InstanceId, InstanceId>>& no_collide_pairs() const { return no_collide_; }
+    // Active JointConstraints, by constraint id: two different assemblies,
+    // each with a body, not both anchored, and no PlayerController at either
+    // end or root. They join nothing.
+    const std::vector<JointEdge>& joints() const { return joints_; }
 
     // Suspending (§3): while suspended, every hook returns at once; edits
     // still move the revision. The outermost resume runs one follow pass when
@@ -290,6 +301,8 @@ private:
     // Rigid rule 2: points each rigid edge away from its assembly's root, and
     // fills rigid_ in follow order. Needs groups_ and nodes_.
     void orient_rigid(const DataModel& game);
+    // Whether a joint between node1 and node2 holds, once groups_ is built.
+    bool joint_holds(const DataModel& game, InstanceId node1, InstanceId node2) const;
     bool root_before(const DataModel& game, InstanceId a, InstanceId b) const;
     Matrix4 holder_transform(const DataModel& game, InstanceId holder) const;
     Matrix4 attachment_frame(const DataModel& game, InstanceId attachment, int depth) const;
@@ -329,6 +342,7 @@ private:
     std::vector<RigidEdge> rigid_;
     std::vector<RigidEdge> bone_;
     std::vector<std::pair<InstanceId, InstanceId>> no_collide_;
+    std::vector<JointEdge> joints_;
     // orient_rigid's scratch, per place in nodes_: live edges by node, as
     // offsets into adj_; hops from the root over every live edge; hops from
     // the rigid tree's anchor over rigid edges; and the BFS queue.

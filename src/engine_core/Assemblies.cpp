@@ -179,6 +179,7 @@ Assemblies::Assemblies() {
     edges_.reserve(slots);
     rigid_order_.reserve(slots);
     no_collide_.reserve(slots);
+    joints_.reserve(slots);
     nodes_.reserve(slots);
     groups_.reserve(slots);
     group_nodes_.reserve(slots);
@@ -496,6 +497,35 @@ InstanceId Assemblies::resolve_live(const DataModel& game, InstanceId end) const
     return dynamic_cast<const SpatialObject*>(object) != nullptr ? holder : 0;
 }
 
+bool Assemblies::joint_holds(const DataModel& game, InstanceId node1, InstanceId node2) const {
+    const std::int32_t group1 = group_[id_slot(node1)];
+    const std::int32_t group2 = group_[id_slot(node2)];
+    if (group1 >= 0 && group1 == group2) {
+        return false;
+    }
+    // One end's assembly: it needs a body, and no PlayerController at the end or as its root.
+    const auto side = [&](InstanceId node, std::int32_t group, bool& anchored) {
+        const PhysicsBase* body = body_of(game, node);
+        InstanceId root = node;
+        bool physics = body != nullptr;
+        anchored = body != nullptr && body->anchored();
+        if (group >= 0) {
+            const Group& assembly = groups_[static_cast<std::size_t>(group)];
+            root = assembly.root;
+            physics = assembly.has_physics;
+            anchored = assembly.anchored;
+        }
+        return physics && dynamic_cast<const PlayerController*>(body) == nullptr &&
+               dynamic_cast<const PlayerController*>(body_of(game, root)) == nullptr;
+    };
+    bool anchored1 = false;
+    bool anchored2 = false;
+    if (!side(node1, group1, anchored1) || !side(node2, group2, anchored2)) {
+        return false;
+    }
+    return !(anchored1 && anchored2);
+}
+
 // Whether a ranks above b as root: anchored, then a PlayerController, then a
 // physics node, then higher Mass, then the larger body, then the lower GUID.
 bool Assemblies::root_before(const DataModel& game, InstanceId a, InstanceId b) const {
@@ -538,6 +568,7 @@ void Assemblies::rebuild(const DataModel& game) {
     rigid_.clear();
     bone_.clear();
     no_collide_.clear();
+    joints_.clear();
     contested_.clear();
 
     // Claims: each body is a node, and so is the GameObject it drives, under
@@ -598,6 +629,14 @@ void Assemblies::rebuild(const DataModel& game) {
         const InstanceId node1 = resolve_end(game, end1, true);
         const InstanceId node2 = resolve_end(game, end2, true);
         if (!constraint->joins()) {
+            if (constraint->joint()) {
+                // A joint joins nothing; whether it holds needs the assemblies (below).
+                active_[id_slot(id)] = 0;
+                if (constraint->enabled() && node1 != 0 && node2 != 0 && node1 != node2) {
+                    joints_.push_back(JointEdge{id, node1, node2});
+                }
+                continue;
+            }
             // A NoCollisionConstraint joins nothing: it only keeps two bodies apart.
             const bool live = constraint->enabled() && node1 != 0 && node2 != 0 && node1 != node2 &&
                               body_of(game, node1) != nullptr && body_of(game, node2) != nullptr;
@@ -715,6 +754,15 @@ void Assemblies::rebuild(const DataModel& game) {
                 group.root = node;
             }
         }
+    }
+    // Joints, now that assemblies are known (joint spec §2).
+    joints_.erase(std::remove_if(joints_.begin(), joints_.end(),
+                                 [&](const JointEdge& joint) { return !joint_holds(game, joint.node1, joint.node2); }),
+                  joints_.end());
+    std::sort(joints_.begin(), joints_.end(),
+              [](const JointEdge& a, const JointEdge& b) { return a.constraint < b.constraint; });
+    for (const JointEdge& joint : joints_) {
+        active_[id_slot(joint.constraint)] = 1;
     }
     orient_rigid(game);
 

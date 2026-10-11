@@ -246,6 +246,38 @@ TEST_CASE("MT3 Play turns the Move tool off; it stays off after Stop until its b
     REQUIRE((at && near(at->x, 1)));
 }
 
+TEST_CASE("MT18 during play the Move tool turns on and drags with no undo step; Stop turns it off and puts the part "
+          "back",
+          "[MT18]") {
+    MoveRig move;
+    const InstanceId a = move.part_at("A", 0, 0, -10);
+    move.rig.game.selection().set({a});
+    move.rig.frames(1);
+    move.rig.game.capture_place();
+    move.rig.game.start_simulation();
+    move.rig.frames(1);
+    REQUIRE_FALSE(move.lit("Move"));
+    move.click_move_button();
+    INFO(move.rig.runtime.last_error());
+    REQUIRE(move.lit("Move"));
+    REQUIRE(move.rig.runtime.plugin_ui().active() != 0);
+    auto at = handles_at(move.rig.game);
+    REQUIRE((at && near(at->x, 0)));
+    move.post(true, 150, 100);
+    move.move(160, 100);
+    move.move(170, 100);
+    move.post(false, 170, 100);
+    move.rig.frames(1);
+    REQUIRE(near(move.x_of(a), 2));
+    REQUIRE_FALSE(move.rig.game.history().can_undo().first);
+    move.rig.game.stop_simulation();
+    move.rig.frames(1);
+    REQUIRE_FALSE(move.lit("Move"));
+    REQUIRE(move.rig.runtime.plugin_ui().active() == 0);
+    REQUIRE_FALSE(handles_at(move.rig.game));
+    REQUIRE(near(move.x_of(a), 0));
+}
+
 TEST_CASE("MT4 New and Open clear the selection, so the Move tool lets go", "[MT4][project]") {
     MoveRig move;
     TempDir dir;

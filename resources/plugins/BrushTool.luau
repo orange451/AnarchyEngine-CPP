@@ -1,7 +1,8 @@
 -- The studio's Brush tool: draw boxes, move and resize brushes, push and pull
--- their faces, extrude, drag corners, clip, and loop cut, while the place is
--- not playing. The Brushes button on the Plugins tab turns it on, and the
--- Brushes pane holds its modes and actions. Every edit is one undo step.
+-- their faces, extrude, drag corners, clip, and loop cut. The Brushes button on
+-- the Plugins tab turns it on, and the Brushes pane holds its modes and actions.
+-- Every edit is one undo step. It works during a test too, where its edits are
+-- the session's and Stop puts them back. Play and Stop turn it off.
 --
 -- Draw mode
 --   Drag on a surface or the ground: the footprint, then move to set the
@@ -908,6 +909,7 @@ local function extrude()
 				b.Transform = Matrix4.new(origin)
 				b:MakeHull(points)
 				b:SetMaterial(faceMaterial)
+				b.Anchored = brush.Anchored
 				b.Parent = brush.Parent
 				return b
 			end)
@@ -1386,7 +1388,7 @@ local function turn_off()
 end
 
 local function turn_on()
-	if active or RunService:IsRunning() then
+	if active then
 		return
 	end
 	active = true
@@ -1409,9 +1411,14 @@ toggle.Click:Connect(function()
 end)
 
 plugin.Deactivation:Connect(turn_off)
-RunService.Started:Connect(function()
+-- Play and Stop each turn it off, at once, not when Deactivation is heard: Stop
+-- may drop events still queued.
+local function reset()
+	turn_off()
 	plugin:Deactivate()
-end)
+end
+RunService.Started:Connect(reset)
+RunService.Stopped:Connect(reset)
 -- Opening the pane, from the Window menu or as a restored layout does, turns
 -- the tool on, and closing it turns the tool off.
 widget.Changed:Connect(function(property)

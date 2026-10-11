@@ -7,17 +7,20 @@
 #include "GameObject.hpp"
 #include "MeshShapes.hpp"
 #include "PhysicsWorld.hpp"
+#include "PluginUi.hpp"
 #include "Project.hpp"
 #include "PropertyBag.hpp"
 #include "SnapshotPump.hpp"
 #include "physics_rig.hpp"
 #include "support.hpp"
 #include "amesh.hpp"
+#include "ide/PluginLoader.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
 #include <cmath>
+#include <filesystem>
 #include <string>
 
 using namespace engine_core;
@@ -453,4 +456,59 @@ TEST_CASE("BP7 a Brush under a GameObject with an off-centre Prefab keeps its hu
     }
     // A move is not a reason to clip the hull again.
     REQUIRE(rig.physics.shapes_made(brush.id()) == made);
+}
+
+namespace {
+
+// The Brushes button on the Plugins tab, as a click on it does.
+void click_brushes(ScriptRig& rig) {
+    bool clicked = false;
+    for (const PluginToolbarState& bar : rig.runtime.plugin_ui().toolbars()) {
+        for (const PluginButtonState& button : bar.buttons) {
+            if (bar.name == "Brushes" && button.key == "Brushes") {
+                clicked = rig.runtime.plugin_ui().click(button.id);
+            }
+        }
+    }
+    REQUIRE(clicked);
+    rig.frames(1);
+}
+
+bool brushes_lit(ScriptRig& rig) {
+    for (const PluginToolbarState& bar : rig.runtime.plugin_ui().toolbars()) {
+        for (const PluginButtonState& button : bar.buttons) {
+            if (bar.name == "Brushes" && button.key == "Brushes") {
+                return button.active;
+            }
+        }
+    }
+    return false;
+}
+
+}  // namespace
+
+TEST_CASE("BT1 the Brushes tool turns on during play; Play and Stop each turn it off", "[brush]") {
+    ScriptRig rig;
+    ide::PluginLoader loader;
+    ide::PluginFile file;
+    std::string error;
+    REQUIRE(ide::read_plugin_file(std::filesystem::path(ANARCHY_SOURCE_DIR) / "resources/plugins/BrushTool.luau", file,
+                                  error));
+    REQUIRE(loader.load(rig.game, rig.runtime, {file}) == 1);
+    rig.frames(1);
+    click_brushes(rig);
+    INFO(rig.runtime.last_error());
+    REQUIRE(brushes_lit(rig));
+    rig.game.capture_place();
+    rig.game.start_simulation();
+    rig.frames(1);
+    REQUIRE_FALSE(brushes_lit(rig));
+    REQUIRE(rig.runtime.plugin_ui().active() == 0);
+    click_brushes(rig);
+    REQUIRE(brushes_lit(rig));
+    REQUIRE(rig.runtime.plugin_ui().active() != 0);
+    rig.game.stop_simulation();
+    rig.frames(1);
+    REQUIRE_FALSE(brushes_lit(rig));
+    REQUIRE(rig.runtime.plugin_ui().active() == 0);
 }

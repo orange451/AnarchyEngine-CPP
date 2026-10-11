@@ -180,8 +180,9 @@ constexpr SpecText kSpecs[] = {
          "max_size":{"type":"integer","minimum":64,"maximum":2048,"description":"Default 1024."}}})"},
     {"mouse_input",
      "Uses the mouse on the studio's Scene View as a person would, in edit mode or during a test. What "
-     "is under the pointer hears it, a GUI first: a GuiButton is pressed, and in edit mode the "
-     "studio's tools select and drag; then UserInputService fires InputBegan, InputChanged, and "
+     "is under the pointer hears it, a GUI first: a GuiButton is pressed, and a studio tool that is "
+     "on selects and drags, in edit mode or during a test, keeping the left button from the game; "
+     "then UserInputService fires InputBegan, InputChanged, and "
      "InputEnded, gameProcessedEvent true over a GUI. A press also gives the view the keyboard, as a "
      "click does. x and y are points from the view's top-left; screenshot returns view_width and "
      "view_height, so a pixel in its picture is at x = px * view_width / width. click (the default) "

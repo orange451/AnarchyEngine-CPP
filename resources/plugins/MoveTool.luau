@@ -2,13 +2,14 @@
 -- any is on, clicking in the Scene View selects what is under the pointer
 -- (Shift or Ctrl adds it or takes it away, and clicking nothing clears the
 -- selection). With Move, translate handles also sit at the middle of the
--- PVInstances selected or inside what is selected, while the place is not
--- playing, so selecting a Folder moves everything in it. Dragging them moves
--- the Dragger and each of those PVInstances by the same offset, as one undo
--- step. With Rotate the handles are rings instead, and dragging one turns each
--- of them about that middle, in steps of 15 degrees. The Dragger lives in
--- Core, so it is never saved and its own moves are never undo steps. Turning
--- on another tool, or Play, turns it off.
+-- PVInstances selected or inside what is selected, so selecting a Folder moves
+-- everything in it. Dragging them moves the Dragger and each of those
+-- PVInstances by the same offset, as one undo step. With Rotate the handles
+-- are rings instead, and dragging one turns each of them about that middle, in
+-- steps of 15 degrees. The Dragger lives in Core, so it is never saved and its
+-- own moves are never undo steps. The tools work during a test too, where a
+-- drag is the session's: no undo step, and Stop puts it back. Turning on
+-- another tool, Play, or Stop turns it off.
 local RunService = game:GetService("RunService")
 local Selection = game:GetService("Selection")
 local Core = game:GetService("Core")
@@ -41,14 +42,10 @@ local function depth(item)
 end
 
 -- The PVInstances selected or under what is selected, each once, ancestors
--- before what is under them, or none while the place plays. The camera the
--- view looks through stays out: moving it would move the view the drag is
--- measured in.
+-- before what is under them. The camera the view looks through stays out:
+-- moving it would move the view the drag is measured in.
 local function selected()
 	local list = {}
-	if RunService:IsRunning() then
-		return list
-	end
 	local seen = {}
 	local viewing = workspace.CurrentCamera
 	local function gather(item)
@@ -251,9 +248,6 @@ local function turn_off()
 end
 
 local function turn_on(which)
-	if RunService:IsRunning() then
-		return
-	end
 	mode = which
 	if not active then
 		active = true
@@ -276,10 +270,12 @@ end
 
 plugin.Deactivation:Connect(turn_off)
 Selection.SelectionChanged:Connect(update)
--- Off at once, not when Deactivation is heard: Stop may drop events still queued.
-RunService.Started:Connect(function()
+-- Play and Stop each turn it off, at once, not when Deactivation is heard: Stop
+-- may drop events still queued.
+local function reset()
 	turn_off()
 	plugin:Deactivate()
-end)
-RunService.Stopped:Connect(update)
+end
+RunService.Started:Connect(reset)
+RunService.Stopped:Connect(reset)
 update()

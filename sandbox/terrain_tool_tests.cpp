@@ -317,6 +317,34 @@ TEST_CASE("TB4 Play turns the terrain tools off and closes the pane", "[TB4]") {
     REQUIRE(tools.lit().empty());
 }
 
+TEST_CASE("TB10 during play the terrain tools turn on and Add fills; Stop turns them off and drops the fill",
+          "[TB10]") {
+    TerrainToolRig tools;
+    tools.rig.game.capture_place();
+    tools.rig.game.start_simulation();
+    tools.rig.frames(1);
+    tools.click("Add");
+    INFO(tools.rig.runtime.last_error());
+    REQUIRE(tools.lit() == "Add");
+    REQUIRE(tools.pane_open());
+    using Kind = engine_core::PluginMouseEvent::Kind;
+    tools.slide("Grid", 3);
+    tools.mouse(Kind::Move, 50, 50);
+    tools.mouse(Kind::Button1Down, 50, 50);
+    tools.mouse(Kind::Move, 150, 150);
+    tools.mouse(Kind::Button1Up, 150, 150);
+    tools.mouse(Kind::Move, 150, 150);
+    tools.mouse(Kind::Button1Down, 150, 150);
+    tools.mouse(Kind::Button1Up, 150, 150);
+    REQUIRE(tools.solid(0, 2, 0));
+    tools.rig.game.stop_simulation();
+    tools.rig.frames(1);
+    REQUIRE(tools.lit().empty());
+    REQUIRE_FALSE(tools.pane_open());
+    REQUIRE(tools.rig.runtime.plugin_ui().active() == 0);
+    REQUIRE_FALSE(tools.solid(0, 2, 0));
+}
+
 TEST_CASE("TB5 the pane steps the size and names the Terrain", "[TB5]") {
     TerrainToolRig tools;
     tools.click("Grow");

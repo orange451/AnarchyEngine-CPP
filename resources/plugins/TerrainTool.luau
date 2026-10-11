@@ -3,10 +3,11 @@
 -- height, click to fill; Shift keeps it square, then a cube; Alt ends the
 -- footprint early), Grow raises the ground under a ball at the pointer (Shift
 -- lowers it), Smooth evens it out, and Paint sets its material (Shift: the default).
--- They edit the selected Terrain while the place is not playing; with none
--- selected, the pane offers to insert one. Each stroke is one undo step. The Terrain pane holds
--- the size, strength, grid, and material. Turning on another tool, or Play, turns
--- them off.
+-- They edit the selected Terrain; with none selected, the pane offers to insert
+-- one. Each stroke is one undo step. During a test they work too, and what they
+-- change is the session's: Stop puts the voxels back. The Terrain pane holds the
+-- size, strength, grid, and material. Turning on another tool, Play, or Stop
+-- turns them off.
 local RunService = game:GetService("RunService")
 local Selection = game:GetService("Selection")
 local History = game:GetService("ChangeHistoryService")
@@ -686,9 +687,6 @@ local function turn_off()
 end
 
 local function turn_on(which: string)
-	if RunService:IsRunning() then
-		return
-	end
 	tool = which
 	drawing = nil
 	if not active then
@@ -713,11 +711,14 @@ for name, card in cards do
 end
 
 plugin.Deactivation:Connect(turn_off)
--- Off at once, not when Deactivation is heard: Stop may drop events still queued.
-RunService.Started:Connect(function()
+-- Play and Stop each turn them off, at once, not when Deactivation is heard:
+-- Stop may drop events still queued.
+local function reset()
 	turn_off()
 	plugin:Deactivate()
-end)
+end
+RunService.Started:Connect(reset)
+RunService.Stopped:Connect(reset)
 -- Closing the pane turns the tools off; opening it turns the last one on.
 widget.Changed:Connect(function(property)
 	if property ~= "Enabled" then

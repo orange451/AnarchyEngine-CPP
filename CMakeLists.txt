@@ -628,6 +628,7 @@ add_library(engine_core STATIC
     src/engine_core/DataModelPlace.cpp
     src/engine_core/DataModelLock.cpp
     src/engine_core/SnapshotPump.cpp
+    src/engine_core/ViewportScenes.cpp
     src/engine_core/Skeleton.cpp
     src/engine_core/Skinning.cpp
     src/engine_core/Animation.cpp
@@ -1035,6 +1036,7 @@ add_executable(sandbox
     sandbox/scene_camera_tests.cpp
     sandbox/gui_tests.cpp
     sandbox/viewport_pane_tests.cpp
+    sandbox/viewport_scene_tests.cpp
     sandbox/billboard_tests.cpp
     sandbox/render_math_tests.cpp
     sandbox/shadow_math_tests.cpp

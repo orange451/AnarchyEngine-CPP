@@ -62,6 +62,8 @@ void SceneFeed::perform(const engine_core::VisualSnapshot& front) {
     out->terrains = front.terrains;
     out->brushes = front.brushes;
     out->resources_root = front.resources_root;
+    // Each ViewportPane's scene, shared by pointer.
+    out->viewports = front.viewports;
     std::lock_guard<std::mutex> guard(mu_);
     newest_ = std::move(out);
 }

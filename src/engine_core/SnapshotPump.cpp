@@ -16,6 +16,7 @@
 #include "ScreenSpaceReflections.hpp"
 #include "Skybox.hpp"
 #include "TerrainWorld.hpp"
+#include "ViewportScenes.hpp"
 #include "WireframeAdornment.hpp"
 
 #include <algorithm>
@@ -56,6 +57,8 @@ float field_of_view_of(const SpatialObject& object) {
 }
 
 float unit(double value) { return static_cast<float>(std::clamp(value, 0.0, 1.0)); }
+
+}  // namespace
 
 VisualLight light_of(const SpatialObject& object) {
     VisualLight out;
@@ -98,6 +101,8 @@ VisualLight light_of(const DirectionalLight& sun) {
     return out;
 }
 
+namespace {
+
 bool is_light(const DataModel* instance) {
     return dynamic_cast<const Light*>(instance) != nullptr || dynamic_cast<const DirectionalLight*>(instance) != nullptr;
 }
@@ -109,6 +114,8 @@ bool has_row(const DataModel& game, InstanceId id) {
            (game.in_lighting(id) && is_light(game.instance(id)));
 }
 
+}  // namespace
+
 // A DirectionalLight's row: no Transform, no Prefab, only what it shines.
 VisualInstance sun_row(const DirectionalLight& sun) {
     VisualInstance row;
@@ -118,6 +125,8 @@ VisualInstance sun_row(const DirectionalLight& sun) {
     return row;
 }
 
+namespace {
+
 // The live T that asset's reference at index holds, or null.
 template <typename T>
 const T* ReferencedAs(const DataModel& game, const ReferenceAsset& asset, std::size_t index) {
@@ -126,6 +135,10 @@ const T* ReferencedAs(const DataModel& game, const ReferenceAsset& asset, std::s
 }
 
 }  // namespace
+
+SnapshotPump::SnapshotPump() : viewports_(std::make_unique<ViewportScenes>()) {}
+
+SnapshotPump::~SnapshotPump() = default;
 
 void SnapshotPump::reserve(std::size_t instances) {
     base_.instances.reserve(instances);
@@ -388,62 +401,70 @@ void fill_visual_material(const DataModel& game, const Material* material, Visua
     out.transparency = unit(material != nullptr ? material->transparency() : Material::kDefaultTransparency);
 }
 
+void fill_visual_prefab(const DataModel& game, const std::string& guid, InstanceId& cached, VisualPrefab& out) {
+    std::vector<VisualMesh>& meshes = out.meshes;
+    // The first Model whose Mesh has bones names the skeleton, as prefab_skeleton finds it.
+    std::shared_ptr<const Skeleton>& skeleton = out.skeleton;
+    skeleton.reset();
+    std::size_t used = 0;
+    // A Prefab undone, loaded, or brought back by Stop holds its GUID again, maybe under a new id.
+    if (cached == 0 || !game.alive(cached) || game.guid(cached) != guid) {
+        const std::optional<InstanceId> found = game.find_guid(guid);
+        cached = found ? *found : 0;
+    }
+    if (dynamic_cast<const Prefab*>(game.instance(cached)) != nullptr) {
+        for (InstanceId child = game.first_child(cached); child != 0; child = game.next_sibling(child)) {
+            const auto* model = dynamic_cast<const Model*>(game.instance(child));
+            if (model == nullptr) {
+                continue;
+            }
+            const LuaSlot mesh_ref = model->reference(Model::kMeshReference);
+            const auto* mesh = mesh_ref.kind == LuaSlot::Kind::Instance
+                                   ? dynamic_cast<const Mesh*>(game.instance(mesh_ref.id))
+                                   : nullptr;
+            if (mesh == nullptr) {
+                continue;
+            }
+            Mesh::SessionGeometry session = mesh->session_geometry();
+            if (session.data == nullptr && mesh->path().empty()) {
+                continue;
+            }
+            if (used == meshes.size()) {
+                meshes.emplace_back();
+            }
+            // Assigned in place, so an unchanged Prefab reuses last frame's strings.
+            VisualMesh& mesh_out = meshes[used++];
+            const std::shared_ptr<const Skeleton> own = mesh->skeleton();
+            if (skeleton == nullptr) {
+                skeleton = own;
+            }
+            mesh_out.skinned = own != nullptr && own->signature == skeleton->signature;
+            mesh_out.mesh = mesh->id();
+            mesh_out.revision = session.revision;
+            if (session.data != nullptr) {
+                mesh_out.path.clear();
+                mesh_out.session = std::move(session.data);
+            } else {
+                mesh_out.path = mesh->path();
+                mesh_out.session.reset();
+            }
+            fill_visual_material(game, ReferencedAs<Material>(game, *model, Model::kMaterialReference), mesh_out);
+        }
+    }
+    meshes.resize(used);
+}
+
 void SnapshotPump::resolve_prefabs(DataModel& game) {
     base_.prefabs.resize(std::max<std::size_t>(prefab_entries_.size(), 1));
     for (std::size_t index = 1; index < prefab_entries_.size(); ++index) {
         PrefabEntry& entry = prefab_entries_[index];
-        std::vector<VisualMesh>& meshes = base_.prefabs[index].meshes;
-        // The first Model whose Mesh has bones names the skeleton, as prefab_skeleton finds it.
-        std::shared_ptr<const Skeleton>& skeleton = base_.prefabs[index].skeleton;
-        skeleton.reset();
-        std::size_t used = 0;
+        VisualPrefab& prefab = base_.prefabs[index];
         if (entry.rows != 0) {
-            // A Prefab undone, loaded, or brought back by Stop holds its GUID again, maybe under a new id.
-            if (entry.cached == 0 || !game.alive(entry.cached) || game.guid(entry.cached) != entry.guid) {
-                const std::optional<InstanceId> found = game.find_guid(entry.guid);
-                entry.cached = found ? *found : 0;
-            }
-            if (dynamic_cast<const Prefab*>(game.instance(entry.cached)) != nullptr) {
-                for (InstanceId child = game.first_child(entry.cached); child != 0; child = game.next_sibling(child)) {
-                    const auto* model = dynamic_cast<const Model*>(game.instance(child));
-                    if (model == nullptr) {
-                        continue;
-                    }
-                    const LuaSlot mesh_ref = model->reference(Model::kMeshReference);
-                    const auto* mesh = mesh_ref.kind == LuaSlot::Kind::Instance
-                                           ? dynamic_cast<const Mesh*>(game.instance(mesh_ref.id))
-                                           : nullptr;
-                    if (mesh == nullptr) {
-                        continue;
-                    }
-                    Mesh::SessionGeometry session = mesh->session_geometry();
-                    if (session.data == nullptr && mesh->path().empty()) {
-                        continue;
-                    }
-                    if (used == meshes.size()) {
-                        meshes.emplace_back();
-                    }
-                    // Assigned in place, so an unchanged Prefab reuses last frame's strings.
-                    VisualMesh& out = meshes[used++];
-                    const std::shared_ptr<const Skeleton> own = mesh->skeleton();
-                    if (skeleton == nullptr) {
-                        skeleton = own;
-                    }
-                    out.skinned = own != nullptr && own->signature == skeleton->signature;
-                    out.mesh = mesh->id();
-                    out.revision = session.revision;
-                    if (session.data != nullptr) {
-                        out.path.clear();
-                        out.session = std::move(session.data);
-                    } else {
-                        out.path = mesh->path();
-                        out.session.reset();
-                    }
-                    fill_visual_material(game, ReferencedAs<Material>(game, *model, Model::kMaterialReference), out);
-                }
-            }
+            fill_visual_prefab(game, entry.guid, entry.cached, prefab);
+        } else {
+            prefab.skeleton.reset();
+            prefab.meshes.clear();
         }
-        meshes.resize(used);
     }
 }
 
@@ -488,6 +509,25 @@ const T* SnapshotPump::find_first(const DataModel& game, InstanceId root) {
     return static_cast<const T*>(find_first_of<T>(game, root));
 }
 
+void fill_visual_sky(const DataModel& game, const Skybox& skybox, VisualSky& out) {
+    // Assigned in place, so an unchanged sky reuses last frame's strings. A
+    // sky is uploaded whole; it never streams.
+    const LuaSlot slot = skybox.image();
+    const auto* texture =
+        slot.kind == LuaSlot::Kind::Instance ? dynamic_cast<const Texture*>(game.instance(slot.id)) : nullptr;
+    if (texture != nullptr) {
+        out.image = texture->path();
+        out.image_flip_y = texture->flip_y();
+    } else {
+        out.image.clear();
+        out.image_flip_y = false;
+    }
+    out.exposure = static_cast<float>(skybox.exposure());
+    out.light_scale = static_cast<float>(skybox.light_scale());
+    out.rotation = static_cast<float>(skybox.rotation());
+    out.tint = skybox.tint();
+}
+
 void SnapshotPump::resolve_lighting(DataModel& game) {
     const auto* lighting = dynamic_cast<const Lighting*>(game.instance(game.scene_service("Lighting")));
     VisualSky& sky = base_.sky;
@@ -512,12 +552,7 @@ void SnapshotPump::resolve_lighting(DataModel& game) {
         }
     };
     if (skybox != nullptr) {
-        bool image_always_loaded = false;   // a sky is uploaded whole; it never streams
-        texture_path(skybox->image(), sky.image, sky.image_flip_y, image_always_loaded);
-        sky.exposure = static_cast<float>(skybox->exposure());
-        sky.light_scale = static_cast<float>(skybox->light_scale());
-        sky.rotation = static_cast<float>(skybox->rotation());
-        sky.tint = skybox->tint();
+        fill_visual_sky(game, *skybox, sky);
     } else {
         sky.image.clear();
         sky.image_flip_y = false;
@@ -625,6 +660,7 @@ void SnapshotPump::blit(VisualSnapshot& dst) const {
     dst.wire_lines = base_.wire_lines;
     dst.terrains = base_.terrains;
     dst.brushes = base_.brushes;
+    dst.viewports = base_.viewports;
     dst.instances.resize(base_.instances.size());
     std::copy(base_.instances.begin(), base_.instances.end(), dst.instances.begin());
     // Element by element, so strings that did not change keep their buffers.
@@ -755,11 +791,16 @@ void SnapshotPump::take_changes(DataModel& game) {
     InvalidationQueue& queue = game.invalidations();
     if (queue.take_overflow() || game.consume_resync()) {
         resync(game);
+        viewports_->mark_all();
     } else {
-        queue.drain([&](const Invalidation& change) { apply_live(game, change); });
+        queue.drain([&](const Invalidation& change) {
+            apply_live(game, change);
+            viewports_->note(game, change.id);
+        });
     }
     resolve_prefabs(game);
     resolve_poses(game);
+    viewports_->update(game, base_.viewports);
     resolve_lighting(game);
     resolve_draggers(game);
     resolve_billboards(game);

@@ -1,6 +1,7 @@
 #include "GuiTree.hpp"
 
 #include "AssetInstances.hpp"
+#include "Camera.hpp"
 #include "ChangeHistoryService.hpp"
 #include "Engine.hpp"
 #include "Gui.hpp"
@@ -151,6 +152,10 @@ struct GuiTree::Entry {
     std::string imagePath;
     bool imageFlipY = false;
     float imageOpacity = 1.f;
+    // The Camera inside a ViewportPane last given the pane's size, and that size.
+    engine_core::InstanceId sizedCamera = 0;
+    double sizedWidth = 0;
+    double sizedHeight = 0;
 };
 
 GuiTree::GuiTree(engine_core::Engine& engine, std::shared_ptr<GuiInput> input,
@@ -310,6 +315,22 @@ std::shared_ptr<jadefx::Node> GuiTree::build(engine_core::InstanceId id, const e
         if (auto* viewport = dynamic_cast<ViewportNode*>(entry.node.get())) {
             viewport->setScene(findViewport(id));
             viewport->setImageOpacity(1.f - static_cast<float>(gui.number(GuiProperty::ImageTransparency)));
+            // The Camera inside a pane learns the pane's size, so ViewportPointToRay works in it.
+            const std::shared_ptr<const engine_core::VisualViewport>& scene = viewport->scene();
+            const double width = entry.node->getWidth();
+            const double height = entry.node->getHeight();
+            if (scene != nullptr && scene->camera_inside && width > 0.0 &&
+                (scene->camera != entry.sizedCamera || width != entry.sizedWidth || height != entry.sizedHeight)) {
+                entry.sizedCamera = scene->camera;
+                entry.sizedWidth = width;
+                entry.sizedHeight = height;
+                const engine_core::Vec2 size{static_cast<float>(width), static_cast<float>(height)};
+                engine_.on_simulation([camera = scene->camera, size](engine_core::DataModel& game) {
+                    if (auto* target = dynamic_cast<engine_core::Camera*>(game.instance(camera))) {
+                        target->set_viewport_size(size);
+                    }
+                });
+            }
         }
     }
     std::string name = game_.name(id);

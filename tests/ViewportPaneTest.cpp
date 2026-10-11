@@ -132,7 +132,47 @@ int RunViewportPaneTests(ide::IdeLayout& layout, jadefx::Scene& scene) {
         Expect(std::abs(viewport->imageOpacity() - 0.75f) < 1e-4f,
                "VN6 ImageTransparency 0.25 draws the image at 0.75");
     }
-    engine.on_simulation([&](engine_core::DataModel& game) { game.destroy_tree(screen); });
+    // VN7: a Camera in a pane under Workspace is not offered by the Scene View.
+    engine_core::InstanceId anchor = 0;
+    engine.on_simulation([&](engine_core::DataModel& game) {
+        anchor = engine_core::lua_create_instance(game, "GameObject")->id();
+        game.set_parent(anchor, game.scene_service("Workspace"));
+        const engine_core::InstanceId board = engine_core::lua_create_instance(game, "BillboardGui")->id();
+        game.set_parent(board, anchor);
+        const engine_core::InstanceId inner = engine_core::lua_create_instance(game, "ViewportPane")->id();
+        game.set_parent(inner, board);
+        const engine_core::InstanceId hidden = engine_core::lua_create_instance(game, "Camera")->id();
+        game.set_name(hidden, "PaneCamera");
+        game.set_parent(hidden, inner);
+    });
+    frame();
+    bool offered = false;
+    for (const std::string& item : view->cameraList().getItems()) {
+        offered = offered || item == "PaneCamera";
+    }
+    Expect(!offered, "VN7 a Camera inside a ViewportPane is not in the Scene View's camera list");
+
+    // VN8: the pane reports its size, in points, to the Camera inside it.
+    if (viewport != nullptr) {
+        view->setSnapshotForTest(PaneShot(pane, camera, 4));
+        frame();
+        frame();
+        float reportedWidth = 0.f;
+        engine.on_simulation([&](engine_core::DataModel& game) {
+            if (auto* own = dynamic_cast<engine_core::Camera*>(game.instance(camera))) {
+                reportedWidth = own->viewport_size().x;
+            }
+        });
+        frame();
+        Expect(reportedWidth > 0.f && std::abs(reportedWidth - static_cast<float>(node->getWidth())) < 0.5f,
+               "VN8 a pane's Camera gets the pane's size as its ViewportSize");
+        view->setSnapshotForTest(nullptr);
+    }
+
+    engine.on_simulation([&](engine_core::DataModel& game) {
+        game.destroy_tree(screen);
+        game.destroy_tree(anchor);
+    });
     frame();
     if (gFailures == 0) {
         std::printf("viewport pane tests passed\n");

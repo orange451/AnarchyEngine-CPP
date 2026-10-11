@@ -274,7 +274,8 @@ void GameView::frameSelection() {
         while (!stack.empty()) {
             const engine_core::InstanceId id = stack.back();
             stack.pop_back();
-            if (id == camera) {
+            // A ViewportPane's contents are in its own world's coordinates, not the view's.
+            if (id == camera || game.in_viewport(id)) {
                 continue;
             }
             for (const engine_core::InstanceId child : game.get_children(id)) {
@@ -691,6 +692,10 @@ void GameView::readWorkspace() {
     while (!walkScratch_.empty()) {
         const engine_core::InstanceId id = walkScratch_.back();
         walkScratch_.pop_back();
+        // A ViewportPane's Cameras look into its own world, not the place's.
+        if (game_->in_viewport(id)) {
+            continue;
+        }
         if (dynamic_cast<engine_core::Camera*>(game_->instance(id)) != nullptr) {
             if (cameraCount == cameraScratch_.size()) {
                 cameraScratch_.emplace_back();

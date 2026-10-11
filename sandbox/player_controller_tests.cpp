@@ -3,6 +3,8 @@
 
 #include "physics_rig.hpp"
 
+#include "Constraint.hpp"
+#include "JointConstraint.hpp"
 #include "LuaApi.hpp"
 #include "Project.hpp"
 #include "PropertyBag.hpp"
@@ -964,4 +966,119 @@ TEST_CASE("C26 jumping just before a steep slope, its feet stay out of it", "[pl
             CHECK(deepest < 0.05f);
         }
     }
+}
+
+namespace {
+
+engine_core::LuaSlot body_slot(engine_core::InstanceId id) {
+    engine_core::LuaSlot slot;
+    slot.kind = engine_core::LuaSlot::Kind::Instance;
+    slot.id = id;
+    return slot;
+}
+
+template <class T>
+T& link(engine_core::DataModel& game, engine_core::InstanceId a, engine_core::InstanceId b) {
+    T& made = game.create<T>();
+    REQUIRE_FALSE(made.set_pv_instance1(body_slot(a)));
+    REQUIRE_FALSE(made.set_pv_instance2(body_slot(b)));
+    game.set_parent(made.id(), workspace_of(game));
+    return made;
+}
+
+bool holds(engine_core::DataModel& game, const engine_core::Constraint& constraint) {
+    game.assemblies().refresh(game);
+    return game.assemblies().active(constraint.id());
+}
+
+Matrix4 tilted(Matrix4 where, Vec3 axis, double degrees) {
+    return engine_core::matrix4_multiply(where, engine_core::matrix4_axis_angle(axis, degrees * 3.14159265358979 / 180.0));
+}
+
+}  // namespace
+
+TEST_CASE("C27 Enabled starts true, saves only when off, comes back at Stop, and off keeps a full Transform",
+          "[player]") {
+    PhysicsRig rig;
+    REQUIRE(engine_core::lua_class_find("PlayerController", "Enabled") != nullptr);
+    PlayerController& c = rig.controller(at(1.f, 2.f, 3.f));
+    REQUIRE(c.enabled());
+    engine_core::PropertyBag saved;
+    c.save_properties(saved);
+    REQUIRE(engine_core::bag_find(saved, "Enabled") == nullptr);
+    c.set_enabled(false);
+    REQUIRE_FALSE(c.enabled());
+    saved.clear();
+    c.save_properties(saved);
+    REQUIRE(engine_core::bag_find(saved, "Enabled") != nullptr);
+    // Off, a Transform written keeps its tilt.
+    REQUIRE_FALSE(c.set_transform(tilted(at(1.f, 2.f, 3.f), Vec3{0.f, 0.f, 1.f}, 30.0)));
+    REQUIRE(c.transform().m[5] < 0.9f);
+    // On again, it stands up where it is.
+    c.set_enabled(true);
+    REQUIRE(near(c.transform().m[5], 1.f, 1e-5f));
+    REQUIRE(near(x_of(c.transform()), 1.f, 1e-5f));
+    rig.play();
+    c.set_enabled(false);
+    rig.game.stop_simulation();
+    REQUIRE(c.enabled());
+}
+
+TEST_CASE("C28 a disabled controller falls over like any body, and does not hover", "[player]") {
+    PhysicsRig rig;
+    rig.floor();
+    PlayerController& c = rig.controller(at(0.f, 0.05f, 0.f));
+    c.set_enabled(false);
+    // Past the 32 degrees where a cylinder this tall tips over.
+    REQUIRE_FALSE(c.set_transform(tilted(at(0.f, 0.3f, 0.f), Vec3{0.f, 0.f, 1.f}, 50.0)));
+    rig.play();
+    rig.seconds(3.0);
+    // Lying on its side: its up axis is nearly flat.
+    REQUIRE(std::fabs(c.transform().m[5]) < 0.3f);
+    REQUIRE_FALSE(c.on_ground());
+}
+
+TEST_CASE("C29 a disabled controller welded to a car neither roots it nor stops its wheel joints", "[player]") {
+    PhysicsRig rig;
+    rig.floor();
+    PhysicsObject& chassis = rig.body(at(0.f, 1.f, 0.f), Vec3{2.f, 0.5f, 4.f}, false);
+    PhysicsObject& wheel = rig.body(tilted(at(1.3f, 0.5f, 1.5f), Vec3{0.f, 0.f, 1.f}, 90.0), Vec3{1.f, 0.4f, 1.f}, false);
+    REQUIRE_FALSE(wheel.set_shape(static_cast<int>(PhysicsObject::Shape::Cylinder)));
+    auto& axle = link<engine_core::WheelConstraint>(rig.game, chassis.id(), wheel.id());
+    PlayerController& driver = rig.controller(at(0.f, 1.25f, 0.f));
+    driver.set_enabled(false);
+    link<engine_core::WeldConstraint>(rig.game, chassis.id(), driver.id());
+    REQUIRE(holds(rig.game, axle));
+    REQUIRE(rig.game.assemblies().root_of(rig.game, driver.id()) == chassis.id());
+    // Enabled, a controller roots what it is welded to, and joints there let go.
+    driver.set_enabled(true);
+    REQUIRE_FALSE(holds(rig.game, axle));
+    REQUIRE(rig.game.assemblies().root_of(rig.game, chassis.id()) == driver.id());
+    driver.set_enabled(false);
+    REQUIRE(holds(rig.game, axle));
+    rig.play();
+    rig.seconds(1.0);
+    REQUIRE(rig.physics.joint_count() == 1);
+    // It rides with the chassis, as placed.
+    REQUIRE(near(y_of(driver.transform()) - y_of(chassis.transform()), 0.25f, 0.05f));
+}
+
+TEST_CASE("C30 enabled again after tumbling, it stands up and walks", "[player]") {
+    PhysicsRig rig;
+    rig.floor();
+    PlayerController& c = rig.controller(at(0.f, 0.05f, 0.f));
+    c.set_enabled(false);
+    // Past the 32 degrees where a cylinder this tall tips over.
+    REQUIRE_FALSE(c.set_transform(tilted(at(0.f, 0.3f, 0.f), Vec3{0.f, 0.f, 1.f}, 50.0)));
+    rig.play();
+    rig.seconds(2.0);
+    REQUIRE(std::fabs(c.transform().m[5]) < 0.5f);
+    c.set_enabled(true);
+    rig.seconds(1.0);
+    REQUIRE(near(c.transform().m[5], 1.f, 1e-3f));
+    REQUIRE(c.on_ground());
+    const float x0 = x_of(c.transform());
+    REQUIRE_FALSE(c.set_velocity(Vec3{2.f, 0.f, 0.f}));
+    rig.seconds(0.25);
+    REQUIRE(x_of(c.transform()) > x0 + 0.2f);
 }

@@ -515,8 +515,7 @@ bool Assemblies::joint_holds(const DataModel& game, InstanceId node1, InstanceId
             physics = assembly.has_physics;
             anchored = assembly.anchored;
         }
-        return physics && dynamic_cast<const PlayerController*>(body) == nullptr &&
-               dynamic_cast<const PlayerController*>(body_of(game, root)) == nullptr;
+        return physics && enabled_controller(body) == nullptr && enabled_controller(body_of(game, root)) == nullptr;
     };
     bool anchored1 = false;
     bool anchored2 = false;
@@ -536,8 +535,8 @@ bool Assemblies::root_before(const DataModel& game, InstanceId a, InstanceId b) 
     if (anchored_a != anchored_b) {
         return anchored_a;
     }
-    const bool controller_a = dynamic_cast<const PlayerController*>(pa) != nullptr;
-    const bool controller_b = dynamic_cast<const PlayerController*>(pb) != nullptr;
+    const bool controller_a = enabled_controller(pa) != nullptr;
+    const bool controller_b = enabled_controller(pb) != nullptr;
     if (controller_a != controller_b) {
         return controller_a;
     }
@@ -951,7 +950,7 @@ InstanceId Assemblies::root_of(const DataModel& game, InstanceId id) const {
 Matrix4 Assemblies::node_frame(const DataModel& game, InstanceId node) const {
     const DataModel* object = game.instance(node);
     if (const auto* body = dynamic_cast<const PhysicsBase*>(object)) {
-        const bool controller = dynamic_cast<const PlayerController*>(body) != nullptr;
+        const bool controller = enabled_controller(body) != nullptr;
         if (const GameObject* driven = game.game_object(body->driven_game_object())) {
             return controller ? upright_transform(driven->transform()) : matrix4_orthonormalize(driven->transform());
         }

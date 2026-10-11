@@ -127,7 +127,7 @@ bool Assemblies::sub_target(const DataModel& game, const RigidEdge& edge, Matrix
         const Matrix4 local = matrix4_multiply(matrix4_inverse(frame), sub_pivot);
         target = matrix4_multiply(parent_pivot, matrix4_inverse(local));
     }
-    if (dynamic_cast<const PlayerController*>(game.instance(edge.sub_node)) != nullptr) {
+    if (enabled_controller(game.instance(edge.sub_node)) != nullptr) {
         target = upright_transform(target);
     } else {
         target = matrix4_orthonormalize(target);

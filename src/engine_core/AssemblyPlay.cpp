@@ -403,7 +403,7 @@ void Assemblies::play_transform_written(DataModel& game, InstanceId id) {
     const Matrix4 frame = matrix4_multiply(matrix4_orthonormalize(placed->transform()),
                                            matrix4_inverse(play_members_[static_cast<std::size_t>(member)].offset));
     const auto* root = dynamic_cast<const PhysicsBase*>(game.instance(assembly.root));
-    const bool controller = dynamic_cast<const PlayerController*>(root) != nullptr;
+    const bool controller = enabled_controller(root) != nullptr;
     assembly.frame = controller ? upright_transform(frame) : matrix4_orthonormalize(frame);
     assembly.teleport = true;
     Vec3 velocity{};

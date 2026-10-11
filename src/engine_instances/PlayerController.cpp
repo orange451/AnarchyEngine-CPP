@@ -1,5 +1,6 @@
 #include "PlayerController.hpp"
 
+#include "Assemblies.hpp"
 #include "Containment.hpp"
 #include "LuaApi.hpp"
 #include "PropertyBag.hpp"
@@ -35,7 +36,28 @@ std::optional<std::string> PlayerController::set_transform(const Matrix4& transf
             return std::string("Transform must be finite");
         }
     }
-    return PhysicsBase::set_transform(upright_transform(transform));
+    return PhysicsBase::set_transform(enabled_ ? upright_transform(transform) : transform);
+}
+
+void PlayerController::set_enabled(bool enabled) {
+    require_gameplay_thread(*this);
+    if (enabled_ == enabled) {
+        return;
+    }
+    enabled_ = enabled;
+    // The physics world makes its shape again, and with it whether the body
+    // is a walking character (PhysicsWorld's record, and its locks).
+    mark_dirty(kDirtyShape);
+    note_property_change("Enabled", bool_slot(!enabled), bool_slot(enabled));
+    if (!enabled) {
+        store_ground(false, false);
+    }
+    // Its assembly's root, and the joints there, may change.
+    assemblies().bump();
+    if (enabled) {
+        // It stands up where it is.
+        PhysicsBase::set_transform(upright_transform(transform()));
+    }
 }
 
 std::optional<std::string> PlayerController::set_friction(double friction) {
@@ -69,6 +91,7 @@ void PlayerController::on_reuse() {
     height_ = kDefaultHeight;
     step_height_ = kDefaultStepHeight;
     max_slope_ = kDefaultMaxSlope;
+    enabled_ = true;
     on_ground_ = false;
     sliding_ = false;
 }
@@ -82,6 +105,15 @@ bool read_flag(DataModel&, DataModel& object, LuaSlot& out) {
         return false;
     }
     out = bool_slot((body->*Get)());
+    return true;
+}
+
+bool write_enabled(DataModel&, DataModel& object, LuaSlot& in) {
+    auto* body = dynamic_cast<PlayerController*>(&object);
+    if (body == nullptr) {
+        return false;
+    }
+    body->set_enabled(in.flag);
     return true;
 }
 
@@ -99,6 +131,7 @@ ANARCHY_LUA_REGISTER(register_player_controller_lua) {
         lua_saved_property("Friction", "number", read_number<C, &C::friction>, write_number<C, &C::set_friction>,
                            friction.c_str()),
         lua_group("Character"),
+        lua_saved_property("Enabled", "boolean", read_flag<&C::enabled>, write_enabled, "true"),
         lua_saved_property("Radius", "number", read_number<C, &C::radius>, write_number<C, &C::set_radius>,
                            radius.c_str()),
         lua_saved_property("Height", "number", read_number<C, &C::height>, write_number<C, &C::set_height>,

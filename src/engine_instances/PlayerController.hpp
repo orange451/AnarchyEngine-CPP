@@ -28,10 +28,16 @@ namespace engine_core {
 //                      the tallest edge it walks up. Read back as written;
 //                      hover_gap() caps it.
 // MaxSlope    number   45, degrees in [0, 89]. Steeper ground slides.
+// Enabled     boolean  true. Off, it is an ordinary body with its cylinder:
+//                      it turns every way and tumbles, keeps a Transform's
+//                      full rotation, neither hovers nor walks, ranks as any
+//                      body for its assembly's root, and lets joints hold at
+//                      its assembly (a driver welded into a car). On again,
+//                      it stands up where it is.
 // OnGround    boolean  read only: on ground no steeper than MaxSlope.
 // IsSliding   boolean  read only: on ground steeper than MaxSlope.
 //
-// The first five are saved registry properties. OnGround and IsSliding are
+// The first six are saved registry properties. OnGround and IsSliding are
 // not saved, record no history, and read false while the place is not playing.
 class PlayerController : public PhysicsBase {
 public:
@@ -53,6 +59,7 @@ public:
     double max_slope() const { return max_slope_; }
     bool on_ground() const { return on_ground_ && simulation_running(); }
     bool is_sliding() const { return sliding_ && simulation_running(); }
+    bool enabled() const { return enabled_; }
 
     // How far the cylinder's bottom stands above the feet: StepHeight, capped
     // so the cylinder is at least kMinSize tall.
@@ -65,6 +72,7 @@ public:
     std::optional<std::string> set_height(double height);
     std::optional<std::string> set_step_height(double step_height);
     std::optional<std::string> set_max_slope(double degrees);
+    void set_enabled(bool enabled);
 
     // The physics world's side: what its ground probe found this step, with
     // no Changed and no history.
@@ -77,6 +85,7 @@ protected:
     void on_reuse() override;
 
 private:
+    bool enabled_ = true;
     double friction_ = kDefaultFriction;
     double radius_ = kDefaultRadius;
     double height_ = kDefaultHeight;
@@ -90,5 +99,13 @@ private:
 // taken out. Its +Z axis, laid flat, gives the turn; when that points up or
 // down, its +X axis does.
 Matrix4 upright_transform(const Matrix4& transform);
+
+// object as an Enabled PlayerController, else null: every rule special to a
+// walking character (upright, hovering, walking, first as root, no joints)
+// asks for this one.
+inline const PlayerController* enabled_controller(const DataModel* object) {
+    const auto* controller = dynamic_cast<const PlayerController*>(object);
+    return controller != nullptr && controller->enabled() ? controller : nullptr;
+}
 
 }  // namespace engine_core

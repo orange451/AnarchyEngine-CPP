@@ -1869,6 +1869,22 @@ struct PhysicsWorld::Impl {
         }
     }
 
+    // A walking character's body (an Enabled PlayerController's, or an
+    // assembly's it roots) never turns but about Y and never sleeps; any other
+    // turns freely. Changed only when it differs.
+    static void settle_locks(b3BodyId body, bool upright) {
+        const b3MotionLocks locks = b3Body_GetMotionLocks(body);
+        if (locks.angularX == upright && locks.angularY == upright && locks.angularZ == upright) {
+            return;
+        }
+        b3MotionLocks next = locks;
+        next.angularX = upright;
+        next.angularY = upright;
+        next.angularZ = upright;
+        b3Body_SetMotionLocks(body, next);
+        b3Body_EnableSleep(body, !upright);
+    }
+
     void settle_held_types(DataModel& game) {
         const bool running = game.simulation_running();
         const Assemblies& assemblies = game.assemblies();
@@ -1879,12 +1895,14 @@ struct PhysicsWorld::Impl {
             const auto* object = dynamic_cast<const PhysicsBase*>(game.instance(id));
             if (object != nullptr) {
                 settle_type(record.body, object->anchored(), running && (assemblies.flags(id) & Assemblies::kHeld) != 0);
+                settle_locks(record.body, record.controller);
             }
         }
         for (auto& [stamp, compound] : compounds) {
             if (b3Body_IsValid(compound.body)) {
                 settle_type(compound.body, compound.anchored,
                             running && (assemblies.flags(compound.root) & Assemblies::kHeld) != 0);
+                settle_locks(compound.body, enabled_controller(game.instance(compound.root)) != nullptr);
             }
         }
     }
@@ -2538,7 +2556,7 @@ struct PhysicsWorld::Impl {
         if (driven == nullptr) {
             return;
         }
-        const bool controller = dynamic_cast<PlayerController*>(&object) != nullptr;
+        const bool controller = enabled_controller(&object) != nullptr;
         b3Vec3 position{};
         b3Quat rotation{};
         pose_of(controller ? upright_transform(driven->transform()) : driven->transform(), position, rotation);
@@ -2890,7 +2908,7 @@ struct PhysicsWorld::Impl {
             return compounds.end();
         }
         b3BodyDef def = b3DefaultBodyDef();
-        if (dynamic_cast<PlayerController*>(root) != nullptr) {
+        if (enabled_controller(root) != nullptr) {
             def.motionLocks.angularX = true;
             def.motionLocks.angularY = true;
             def.motionLocks.angularZ = true;
@@ -3097,7 +3115,7 @@ struct PhysicsWorld::Impl {
     // may center the shape elsewhere: it is made again there. One scaled
     // another way, by its Transform or its Scale, makes it again at that size.
     void recenter(DataModel& game, PhysicsBase& object, Body& record, bool moved) {
-        if (record.controller) {
+        if (dynamic_cast<const PlayerController*>(&object) != nullptr) {
             return;
         }
         const GameObject* driven = record.driven != 0 ? game.game_object(record.driven) : nullptr;
@@ -3578,7 +3596,7 @@ struct PhysicsWorld::Impl {
         }
         b3BodyDef def = b3DefaultBodyDef();
         const auto* rigid = dynamic_cast<PhysicsObject*>(&object);
-        if (dynamic_cast<PlayerController*>(&object) != nullptr) {
+        if (enabled_controller(&object) != nullptr) {
             // Upright, it never turns, and it never sleeps under its hover.
             start = upright_transform(start);
             def.motionLocks.angularX = true;
@@ -3669,7 +3687,8 @@ struct PhysicsWorld::Impl {
     // body's origin) up to Height, with no friction and no bounce.
     void make_controller_shape(PlayerController& controller, Body& record) {
         drop_shape(record);
-        record.controller = true;
+        // Disabled, it is an ordinary body: nothing that walks it runs.
+        record.controller = controller.enabled();
         record.center = Vec3{};
         record.scale = kUnscaled;
         record.prefab.clear();

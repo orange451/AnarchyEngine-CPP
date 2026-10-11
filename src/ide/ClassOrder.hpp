@@ -7,49 +7,50 @@
 namespace ide {
 
 // Where a class's cluster sits in the explorer and the Insert list. Lower
-// comes first. Folders lead, then scripts and CSS, then the things in the world. A
-// class not listed comes after every listed one.
+// comes first. The Camera leads, then Folders, then scripts and CSS, then the things
+// in the world: Terrain, the other physics objects, then plain GameObjects. A class
+// not listed comes after every listed one.
 inline int class_rank(std::string_view class_name) {
     struct Rank {
         std::string_view name;
         int rank;
     };
     static constexpr Rank kRanks[] = {
-        {"Folder", 0},
-        {"Script", 1},
-        {"ModuleScript", 1},
-        {"CSS", 1},
-        {"Camera", 2},
-        {"GameObject", 3},
-        {"PhysicsObject", 3},
-        {"PlayerController", 3},
-        {"Model", 3},
+        {"Camera", 0},
+        {"Folder", 1},
+        {"Script", 2},
+        {"ModuleScript", 2},
+        {"CSS", 2},
         {"Terrain", 3},
-        {"Brush", 3},
-        {"Skybox", 4},
-        {"DynamicSky", 4},
-        {"AmbientOcclusionEffect", 4},
-        {"BloomEffect", 4},
-        {"ScreenSpaceReflections", 4},
-        {"DirectionalLight", 5},
-        {"PointLight", 5},
-        {"SpotLight", 5},
-        {"Sound", 6},
-        {"SoundEmitter", 6},
-        {"Attachment", 7},
-        {"Bone", 7},
-        {"Animator", 7},
-        {"ScreenGui", 8},
-        {"BillboardGui", 8},
-        {"Pane", 9},
-        {"HBox", 9},
-        {"VBox", 9},
-        {"ImagePane", 9},
-        {"Label", 10},
-        {"Button", 10},
-        {"TextField", 10},
-        {"Slider", 10},
-        {"AssetPicker", 10},
+        {"PhysicsObject", 4},
+        {"Brush", 4},
+        {"PlayerController", 4},
+        {"GameObject", 5},
+        {"Model", 5},
+        {"Skybox", 6},
+        {"DynamicSky", 6},
+        {"AmbientOcclusionEffect", 6},
+        {"BloomEffect", 6},
+        {"ScreenSpaceReflections", 6},
+        {"DirectionalLight", 7},
+        {"PointLight", 7},
+        {"SpotLight", 7},
+        {"Sound", 8},
+        {"SoundEmitter", 8},
+        {"Attachment", 9},
+        {"Bone", 9},
+        {"Animator", 9},
+        {"ScreenGui", 10},
+        {"BillboardGui", 10},
+        {"Pane", 11},
+        {"HBox", 11},
+        {"VBox", 11},
+        {"ImagePane", 11},
+        {"Label", 12},
+        {"Button", 12},
+        {"TextField", 12},
+        {"Slider", 12},
+        {"AssetPicker", 12},
     };
     for (const Rank& entry : kRanks) {
         if (entry.name == class_name) {

@@ -6,6 +6,7 @@
 
 #include "AssetInstances.hpp"
 #include "CollisionGroups.hpp"
+#include "Constraint.hpp"
 #include "ConvexDecomposition.hpp"
 #include "Enum.hpp"
 #include "Folder.hpp"
@@ -1697,4 +1698,145 @@ TEST_CASE("P43 every PhysicsBase has CollisionGroup, saved, Default; Play and St
     REQUIRE_FALSE(game.collision_groups().register_group("Crates", engine_core::CollisionGroups::Type::Whitelist));
     game.stop_simulation();
     REQUIRE_FALSE(game.collision_groups().registered("Crates"));
+}
+
+namespace {
+
+using engine_core::CollisionGroups;
+
+void groups_apart(engine_core::DataModel& game, const char* a, const char* b) {
+    REQUIRE_FALSE(game.collision_groups().register_group(a, CollisionGroups::Type::Blacklist));
+    REQUIRE_FALSE(game.collision_groups().register_group(b, CollisionGroups::Type::Blacklist));
+    REQUIRE_FALSE(game.collision_groups().set_collidable(a, b, false));
+}
+
+}  // namespace
+
+TEST_CASE("P44 two boxes in groups set apart pass through each other; set back, they rest",
+          "[physics][collision-group]") {
+    PhysicsRig rig;
+    rig.floor();
+    PhysicsObject& under = rig.body(at(0.f, 0.5f, 0.f), Vec3{1.f, 1.f, 1.f}, true);
+    PhysicsObject& over = rig.body(at(0.f, 3.f, 0.f), Vec3{1.f, 1.f, 1.f}, false);
+    REQUIRE_FALSE(under.set_collision_group("Under"));
+    REQUIRE_FALSE(over.set_collision_group("Over"));
+    rig.play();
+    groups_apart(rig.game, "Under", "Over");
+    rig.seconds(2.0);
+    // Through the anchored box, onto the floor.
+    REQUIRE(near(y_of(over.transform()), 0.5f, 0.05f));
+    REQUIRE_FALSE(rig.game.collision_groups().set_collidable("Under", "Over", true));
+    REQUIRE_FALSE(over.set_transform(at(0.f, 3.f, 0.f)));
+    rig.seconds(2.0);
+    REQUIRE(near(y_of(over.transform()), 1.5f, 0.05f));
+}
+
+TEST_CASE("P45 a body naming a group before it is registered is Default until it is", "[physics][collision-group]") {
+    PhysicsRig rig;
+    rig.floor();
+    PhysicsObject& box = rig.body(at(0.f, 3.f, 0.f), Vec3{1.f, 1.f, 1.f}, false);
+    REQUIRE_FALSE(box.set_collision_group("Ghosts"));
+    rig.play();
+    rig.seconds(1.5);
+    REQUIRE(near(y_of(box.transform()), 0.5f, 0.05f));
+    REQUIRE_FALSE(rig.game.collision_groups().register_group("Ghosts", CollisionGroups::Type::Whitelist));
+    rig.seconds(1.5);
+    REQUIRE(y_of(box.transform()) < -2.f);
+}
+
+TEST_CASE("P46 changing CollisionGroup during play takes effect at the next step", "[physics][collision-group]") {
+    PhysicsRig rig;
+    rig.floor();
+    PhysicsObject& box = rig.body(at(0.f, 3.f, 0.f), Vec3{1.f, 1.f, 1.f}, false);
+    rig.play();
+    REQUIRE_FALSE(rig.game.collision_groups().register_group("Ghosts", CollisionGroups::Type::Whitelist));
+    rig.seconds(1.5);
+    REQUIRE(near(y_of(box.transform()), 0.5f, 0.05f));
+    REQUIRE_FALSE(box.set_collision_group("Ghosts"));
+    rig.seconds(1.5);
+    REQUIRE(y_of(box.transform()) < -2.f);
+}
+
+TEST_CASE("P47 a group apart from itself: welded members stay one body; separate ones pass through",
+          "[physics][collision-group]") {
+    PhysicsRig rig;
+    rig.floor();
+    PhysicsObject& a = rig.body(at(0.f, 3.f, 0.f), Vec3{1.f, 1.f, 1.f}, false);
+    PhysicsObject& b = rig.body(at(1.f, 3.f, 0.f), Vec3{1.f, 1.f, 1.f}, false);
+    engine_core::WeldConstraint& weld = rig.game.create<engine_core::WeldConstraint>();
+    engine_core::LuaSlot slot;
+    slot.kind = engine_core::LuaSlot::Kind::Instance;
+    slot.id = a.id();
+    REQUIRE_FALSE(weld.set_pv_instance1(slot));
+    slot.id = b.id();
+    REQUIRE_FALSE(weld.set_pv_instance2(slot));
+    rig.game.set_parent(weld.id(), workspace_of(rig.game));
+    PhysicsObject& lower = rig.body(at(5.f, 0.5f, 0.f), Vec3{1.f, 1.f, 1.f}, true);
+    PhysicsObject& upper = rig.body(at(5.f, 3.f, 0.f), Vec3{1.f, 1.f, 1.f}, false);
+    for (PhysicsObject* body : {&a, &b, &lower, &upper}) {
+        REQUIRE_FALSE(body->set_collision_group("Loners"));
+    }
+    rig.play();
+    REQUIRE_FALSE(rig.game.collision_groups().register_group("Loners", CollisionGroups::Type::Blacklist));
+    REQUIRE_FALSE(rig.game.collision_groups().set_collidable("Loners", "Loners", false));
+    rig.seconds(2.0);
+    REQUIRE(rig.physics.body_key(a.id()) == rig.physics.body_key(b.id()));
+    REQUIRE(near(y_of(a.transform()), 0.5f, 0.05f));
+    REQUIRE(near(y_of(upper.transform()), 0.5f, 0.05f));
+}
+
+TEST_CASE("P48 a welded assembly's members each collide by their own group", "[physics][collision-group]") {
+    PhysicsRig rig;
+    rig.floor();
+    // The bottom member passes through the floor; the top one stops on it.
+    PhysicsObject& bottom = rig.body(at(0.f, 1.f, 0.f), Vec3{1.f, 1.f, 1.f}, false);
+    PhysicsObject& top = rig.body(at(0.f, 3.f, 0.f), Vec3{1.f, 1.f, 1.f}, false);
+    engine_core::WeldConstraint& weld = rig.game.create<engine_core::WeldConstraint>();
+    engine_core::LuaSlot slot;
+    slot.kind = engine_core::LuaSlot::Kind::Instance;
+    slot.id = bottom.id();
+    REQUIRE_FALSE(weld.set_pv_instance1(slot));
+    slot.id = top.id();
+    REQUIRE_FALSE(weld.set_pv_instance2(slot));
+    rig.game.set_parent(weld.id(), workspace_of(rig.game));
+    REQUIRE_FALSE(bottom.set_collision_group("Ghosts"));
+    rig.play();
+    REQUIRE_FALSE(rig.game.collision_groups().register_group("Ghosts", CollisionGroups::Type::Whitelist));
+    rig.seconds(3.0);
+    REQUIRE(near(y_of(top.transform()), 0.5f, 0.05f));
+    REQUIRE(near(y_of(bottom.transform()), -1.5f, 0.05f));
+}
+
+TEST_CASE("P49 a PlayerController stands only on what its group collides with", "[physics][collision-group]") {
+    PhysicsRig rig;
+    rig.floor();
+    PhysicsObject& platform = rig.body(at(0.f, 5.f, 0.f), Vec3{10.f, 1.f, 10.f}, true);
+    REQUIRE_FALSE(platform.set_collision_group("Platforms"));
+    engine_core::PlayerController& player = rig.controller(at(0.f, 6.f, 0.f));
+    REQUIRE_FALSE(player.set_collision_group("Players"));
+    rig.play();
+    groups_apart(rig.game, "Platforms", "Players");
+    rig.seconds(3.0);
+    REQUIRE(y_of(player.transform()) < 1.f);
+}
+
+TEST_CASE("P50 rays: by group from the physics world, every group for Studio; Stop clears the groups",
+          "[physics][collision-group]") {
+    PhysicsRig rig;
+    rig.floor();
+    PhysicsObject& box = rig.body(at(0.f, 3.f, 0.f), Vec3{2.f, 2.f, 2.f}, true);
+    REQUIRE_FALSE(box.set_collision_group("Boxes"));
+    REQUIRE_FALSE(box.set_can_collide(false));
+    rig.play();
+    groups_apart(rig.game, "Boxes", "Rays");
+    engine_core::RayFilter studio;
+    engine_core::RayFilter grouped;
+    grouped.collision_group = "Rays";
+    const auto all = rig.physics.raycast(rig.game, Vec3{0.f, 10.f, 0.f}, Vec3{0.f, -20.f, 0.f}, studio);
+    REQUIRE((all && all->instance == box.id()));
+    const auto by_group = rig.physics.raycast(rig.game, Vec3{0.f, 10.f, 0.f}, Vec3{0.f, -20.f, 0.f}, grouped);
+    REQUIRE((by_group && by_group->instance != box.id()));
+    rig.game.stop_simulation();
+    const auto after = rig.physics.raycast(rig.game, Vec3{0.f, 10.f, 0.f}, Vec3{0.f, -20.f, 0.f}, grouped);
+    REQUIRE((after && after->instance == box.id()));
 }

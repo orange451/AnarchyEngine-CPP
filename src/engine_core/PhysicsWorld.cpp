@@ -3,6 +3,7 @@
 #include "Assemblies.hpp"
 #include "AssetInstances.hpp"
 #include "Brush.hpp"
+#include "CollisionGroups.hpp"
 #include "ConvexDecomposition.hpp"
 #include "DataModel.hpp"
 #include "GameObject.hpp"
@@ -127,36 +128,33 @@ Matrix4 matrix_of(const b3Vec3& position, const b3Quat& rotation, const Matrix4&
 
 void* user_data(InstanceId id) { return reinterpret_cast<void*>(static_cast<std::uintptr_t>(id)); }
 
-// Filter bits. A solid shape is in kSolidBits and meets every shape. A shape
-// whose body cannot collide (CanCollide false) is in kGhostBits and accepts
-// only kQueryBits, which no shape is in: it touches nothing, not even another
-// ghost, and only a query sees it. Every shape is made with one of the two,
-// since Box3D's default category is every bit, ghosts' included.
-constexpr std::uint64_t kSolidBits = 1u << 0;
-constexpr std::uint64_t kGhostBits = 1u << 1;
-constexpr std::uint64_t kQueryBits = std::uint64_t{1} << 62;
-
-b3Filter shape_filter(bool can_collide) {
+// Filter bits (docs/superpowers/specs/2026-10-11-collision-groups-design.md
+// §4). A shape's category is its body's group's bit; its mask, every group it
+// collides with, plus the ground and ray query bits. CanCollide false: the
+// ray bit alone, so it touches nothing, whatever its group.
+b3Filter shape_filter(const CollisionGroups& groups, std::string_view group, bool can_collide) {
     b3Filter filter = b3DefaultFilter();
-    filter.categoryBits = can_collide ? kSolidBits : kGhostBits;
-    filter.maskBits = can_collide ? B3_DEFAULT_MASK_BITS : kQueryBits;
+    filter.categoryBits = groups.category(group);
+    filter.maskBits = can_collide
+                          ? groups.collides_with(group) | CollisionGroups::kGroundBit | CollisionGroups::kRayBit
+                          : CollisionGroups::kRayBit;
     return filter;
 }
 
-// Rays hit every shape, solid or not: a body that cannot collide can still be
-// picked and found.
-b3QueryFilter ray_filter() {
+// A ray in group (empty: every group) hits what that group collides with,
+// CanCollide or not.
+b3QueryFilter ray_filter(const CollisionGroups& groups, const std::string& group) {
     b3QueryFilter filter = b3DefaultQueryFilter();
-    filter.categoryBits = kQueryBits;
-    filter.maskBits = B3_DEFAULT_MASK_BITS;
+    filter.categoryBits = CollisionGroups::kRayBit;
+    filter.maskBits = group.empty() ? B3_DEFAULT_MASK_BITS : groups.collides_with(group);
     return filter;
 }
 
-// A PlayerController's ground is solid: it does not stand on a ghost.
-b3QueryFilter ground_filter() {
+// A PlayerController's ground: what can collide and its group collides with.
+b3QueryFilter ground_filter(const CollisionGroups& groups, const std::string& group) {
     b3QueryFilter filter = b3DefaultQueryFilter();
-    filter.categoryBits = kQueryBits;
-    filter.maskBits = kSolidBits;
+    filter.categoryBits = CollisionGroups::kGroundBit;
+    filter.maskBits = groups.collides_with(group);
     return filter;
 }
 
@@ -645,6 +643,10 @@ struct PhysicsWorld::Impl {
     bool played = false;
     bool poses_from_game_objects = true;
     std::unordered_map<InstanceId, Body> bodies;
+    // The DataModel's collision groups, set at each sync, and the revision
+    // whose filters the shapes have.
+    const CollisionGroups* groups = nullptr;
+    std::uint64_t groups_seen = ~std::uint64_t{0};
     std::unordered_map<std::uint32_t, Compound> compounds;
     // Where each body a hand holds must go this step (drive_held).
     std::vector<Assemblies::HeldTarget> held;
@@ -757,8 +759,13 @@ struct PhysicsWorld::Impl {
     }
 
     void sync(DataModel& game, bool stepping = false) {
+        groups = &game.collision_groups();
         if (!b3World_IsValid(world) || generation != game.world_generation()) {
             begin(game.world_generation());
+        }
+        if (groups->revision() != groups_seen) {
+            groups_seen = groups->revision();
+            refilter_all(game);
         }
         pull_gravity(game);
         // Assemblies first: which bodies are one body this sync.
@@ -1103,7 +1110,7 @@ struct PhysicsWorld::Impl {
         RayHits hits;
         hits.game = &game;
         hits.filter = &filter;
-        b3World_CastRay(world, to_b3(origin), to_b3(direction), ray_filter(), ray_hit, &hits);
+        b3World_CastRay(world, to_b3(origin), to_b3(direction), ray_filter(*groups, filter.collision_group), ray_hit, &hits);
         // Task 9 (spec "Physics"): Box3D's cast above tested every chunk that
         // has a collider shape; march each Terrain's own voxel distance
         // field, in its own local space, over exactly the chunks that do
@@ -1413,7 +1420,7 @@ struct PhysicsWorld::Impl {
         def.materialCount = kTerrainMaterialCount;
         def.baseMaterial = terrain_surfaces[0];
         def.userData = user_data(terrain);
-        def.filter = shape_filter(true);
+        def.filter = shape_filter(*groups, CollisionGroups::kDefault, true);
         // A static shape otherwise meets only bodies that move: one resting
         // where a chunk was just made again would sink into it first.
         def.invokeContactCreation = true;
@@ -1936,12 +1943,34 @@ struct PhysicsWorld::Impl {
         }
     }
 
-    // CanCollide changed: the shapes stay, and only what they touch changes.
-    // Their contacts are made again, so a body turned off lets go at once.
-    static void set_filters(const PhysicsBase& object, const Body& record) {
-        const b3Filter filter = shape_filter(object.can_collide());
+    b3Filter filter_of(const PhysicsBase& object) const {
+        return shape_filter(*groups, object.collision_group(), object.can_collide());
+    }
+
+    // CanCollide or CollisionGroup changed: the shapes stay; only what they
+    // touch changes. Contacts are made again, so a pair that stopped
+    // colliding lets go at once.
+    void set_filters(const PhysicsBase& object, const Body& record) {
+        const b3Filter filter = filter_of(object);
         for (const b3ShapeId shape : record.shapes) {
             b3Shape_SetFilter(shape, filter, true);
+        }
+    }
+
+    // The groups changed: every body's shapes and every terrain chunk.
+    void refilter_all(DataModel& game) {
+        for (auto& [id, record] : bodies) {
+            if (const auto* object = dynamic_cast<const PhysicsBase*>(game.instance(id))) {
+                set_filters(*object, record);
+            }
+        }
+        const b3Filter terrain = shape_filter(*groups, CollisionGroups::kDefault, true);
+        for (auto& [id, body] : terrain_bodies) {
+            for (auto& [coord, chunk] : body.chunks) {
+                if (b3Shape_IsValid(chunk.shape)) {
+                    b3Shape_SetFilter(chunk.shape, terrain, true);
+                }
+            }
         }
     }
 
@@ -2068,7 +2097,7 @@ struct PhysicsWorld::Impl {
             proxy.radius = 0.f;
             ProbeHits hits;
             hits.self = record.body;
-            b3World_CastShape(world, origin, &proxy, b3Vec3{0.f, -reach, 0.f}, ground_filter(), probe_hit,
+            b3World_CastShape(world, origin, &proxy, b3Vec3{0.f, -reach, 0.f}, ground_filter(*groups, controller.collision_group()), probe_hit,
                               &hits);
             if (hits.started_inside) {
                 continue;
@@ -2093,7 +2122,7 @@ struct PhysicsWorld::Impl {
                 const float deeper = reach + gap;
                 ProbeHits middle;
                 middle.self = record.body;
-                b3World_CastRay(world, origin, b3Vec3{0.f, -deeper, 0.f}, ground_filter(), probe_hit, &middle);
+                b3World_CastRay(world, origin, b3Vec3{0.f, -deeper, 0.f}, ground_filter(*groups, controller.collision_group()), probe_hit, &middle);
                 if (middle.hit && !middle.started_inside && middle.normal.y >= steepest(controller)) {
                     ground.walled = true;
                     ground.wall = ground.normal;
@@ -2516,7 +2545,7 @@ struct PhysicsWorld::Impl {
         const GameObject* driven = record.driven != 0 ? game.game_object(record.driven) : nullptr;
         record.prefab = driven != nullptr ? driven->prefab_guid() : std::string();
         b3ShapeDef def = b3DefaultShapeDef();
-        def.filter = shape_filter(brush.can_collide());
+        def.filter = filter_of(brush);
         def.baseMaterial.friction = static_cast<float>(brush.friction());
         def.baseMaterial.restitution = static_cast<float>(brush.bounciness());
         def.userData = user_data(brush.id());
@@ -2559,7 +2588,7 @@ struct PhysicsWorld::Impl {
         primitive_points(PhysicsObject::Shape::Cylinder, Vec3{2.f * radius, tall, 2.f * radius},
                          Vec3{0.f, gap + tall * 0.5f, 0.f}, points);
         b3ShapeDef def = b3DefaultShapeDef();
-        def.filter = shape_filter(controller.can_collide());
+        def.filter = filter_of(controller);
         def.baseMaterial.friction = 0.f;
         def.baseMaterial.restitution = 0.f;
         def.userData = user_data(controller.id());
@@ -2592,7 +2621,7 @@ struct PhysicsWorld::Impl {
         record.made_without_pieces = false;
         record.pieces_stamp.clear();
         b3ShapeDef def = b3DefaultShapeDef();
-        def.filter = shape_filter(object.can_collide());
+        def.filter = filter_of(object);
         def.baseMaterial.friction = static_cast<float>(object.friction());
         def.baseMaterial.restitution = static_cast<float>(object.bounciness());
         def.userData = user_data(object.id());

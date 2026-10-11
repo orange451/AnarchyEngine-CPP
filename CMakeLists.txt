@@ -45,6 +45,7 @@ set(STUDIO_CORE_SOURCES
     src/runner/ViewCapture.cpp
     src/runner/RenderMath.cpp
     src/runner/BillboardMath.cpp
+    src/runner/ViewportQueue.cpp
     src/runner/GridBands.cpp
     src/runner/ShadowMath.cpp
     src/runner/BloomMath.cpp
@@ -1037,6 +1038,7 @@ add_executable(sandbox
     sandbox/gui_tests.cpp
     sandbox/viewport_pane_tests.cpp
     sandbox/viewport_scene_tests.cpp
+    sandbox/viewport_queue_tests.cpp
     sandbox/billboard_tests.cpp
     sandbox/render_math_tests.cpp
     sandbox/shadow_math_tests.cpp

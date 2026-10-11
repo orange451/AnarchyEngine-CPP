@@ -109,6 +109,9 @@ local function middle(list)
 	return Vector3.new((minX + maxX) / 2, (minY + maxY) / 2, (minZ + maxZ) / 2)
 end
 
+-- Defined below; the Dragger's DragEnded calls it.
+local place
+
 local function make_dragger()
 	local made = Instance.new("Dragger")
 	made.Name = "MoveTool"
@@ -116,14 +119,20 @@ local function make_dragger()
 	made.Parent = Core
 	made.DragBegan:Connect(function()
 		starts = { { item = made, start = made.Transform } }
+		local moved = {}
 		for _, item in selected() do
-			table.insert(starts, { item = item, start = item.Transform })
+			moved[item] = true
+			-- An Attachment (or Bone) whose parent moves holds its place on it:
+			-- written as well, it would move twice, or, when that parent is
+			-- held where it is (a RigidConstraint's sub), slide off it.
+			local rides = item:IsA("Attachment") and moved[item.Parent] == true
+			if not rides then
+				table.insert(starts, { item = item, start = item.Transform })
+			end
 		end
 	end)
 	-- Move's offset is a Vector3 to add; Rotate's a Matrix4, the turn about the
-	-- middle. Ancestors go first, so what holds its place relative to one (an
-	-- Attachment, a Bone) is already where it belongs and is left alone: written
-	-- as well, it would move twice. What holds a world Transform is written.
+	-- middle. Ancestors go first. What holds a world Transform is written.
 	made.Dragged:Connect(function(_, offset)
 		local turning = typeof(offset) == "Matrix4"
 		for _, entry in starts do
@@ -138,6 +147,8 @@ local function make_dragger()
 	end)
 	made.DragEnded:Connect(function()
 		starts = {}
+		-- Back over the selection: something dragged may have been held where it was.
+		place()
 	end)
 	return made
 end
@@ -150,7 +161,7 @@ local function drop_dragger()
 end
 
 -- Puts the handles at the selection's middle while the tool is on, or takes them away.
-local function place()
+function place()
 	if dragger ~= nil and dragger.Dragging then
 		return
 	end

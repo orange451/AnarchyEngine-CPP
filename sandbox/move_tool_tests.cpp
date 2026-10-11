@@ -4,6 +4,7 @@
 
 #include "Attachment.hpp"
 #include "Camera.hpp"
+#include "Constraint.hpp"
 #include "ChangeHistoryService.hpp"
 #include "Dragger.hpp"
 #include "PluginUi.hpp"
@@ -634,4 +635,88 @@ TEST_CASE("MT17 what is under a moved thing comes along once, however the select
     REQUIRE(near(move.rig.game.spatial_object(hand)->transform().m[13], 3));
     REQUIRE(near(grip.offset().m[12], 1));
     REQUIRE(near(grip.transform().m[12], 3));
+}
+
+TEST_CASE("MT19 dragging a RigidConstraint sub held by its own Attachment leaves it and the Attachment alone",
+          "[MT19]") {
+    MoveRig move;
+    const InstanceId a = move.part_at("A", 0, 0, -10);
+    const InstanceId b = move.part_at("B", 4, 0, -10);
+    engine_core::Attachment& grip = move.rig.game.create<engine_core::Attachment>();
+    move.rig.game.set_parent(grip.id(), b);
+    REQUIRE_FALSE(grip.set_offset(engine_core::matrix4_translation(0.f, 1.f, 0.f)));
+    engine_core::RigidConstraint& rigid = move.rig.game.create<engine_core::RigidConstraint>();
+    move.rig.game.set_parent(rigid.id(), move.rig.game.scene_service("Workspace"));
+    engine_core::LuaSlot slot;
+    slot.kind = engine_core::LuaSlot::Kind::Instance;
+    slot.id = a;
+    REQUIRE_FALSE(rigid.set_pv_instance1(slot));
+    slot.id = grip.id();
+    REQUIRE_FALSE(rigid.set_pv_instance2(slot));
+    // B sits so its grip is on A: one unit below it.
+    const engine_core::Matrix4 placed = move.rig.game.game_object(b)->transform();
+    REQUIRE(near(placed.m[13], -1));
+    move.rig.game.history().reset_waypoints();
+    move.rig.game.selection().set({b});
+    move.rig.frames(1);
+    auto at = handles_at(move.rig.game);
+    REQUIRE(at);
+    // Handles at B: the X arrow from x = 100 on screen y for B's height.
+    move.post(true, 150, 110);
+    move.move(160, 110);
+    move.move(170, 110);
+    move.post(false, 170, 110);
+    move.rig.frames(1);
+    INFO(move.rig.runtime.last_error());
+    REQUIRE(near(move.x_of(b), placed.m[12]));
+    REQUIRE(near(move.rig.game.game_object(b)->transform().m[13], -1));
+    REQUIRE(near(grip.offset().m[13], 1));
+    REQUIRE(near(grip.offset().m[12], 0));
+}
+
+TEST_CASE("MT20 after a snapped-back drag the handles sit on the selection again", "[MT20]") {
+    MoveRig move;
+    const InstanceId a = move.part_at("A", 0, 0, -10);
+    const InstanceId b = move.part_at("B", 4, 0, -10);
+    engine_core::RigidConstraint& rigid = move.rig.game.create<engine_core::RigidConstraint>();
+    move.rig.game.set_parent(rigid.id(), move.rig.game.scene_service("Workspace"));
+    engine_core::LuaSlot slot;
+    slot.kind = engine_core::LuaSlot::Kind::Instance;
+    slot.id = a;
+    REQUIRE_FALSE(rigid.set_pv_instance1(slot));
+    slot.id = b;
+    REQUIRE_FALSE(rigid.set_pv_instance2(slot));
+    move.rig.game.history().reset_waypoints();
+    move.rig.game.selection().set({b});
+    move.rig.frames(1);
+    move.post(true, 150, 100);
+    move.move(160, 100);
+    move.move(170, 100);
+    move.post(false, 170, 100);
+    move.rig.frames(1);
+    INFO(move.rig.runtime.last_error());
+    REQUIRE(near(move.x_of(b), 0));
+    auto at = handles_at(move.rig.game);
+    REQUIRE((at && near(at->x, 0) && near(at->y, 0)));
+}
+
+TEST_CASE("MT21 a dragged part carries its Attachment without writing it", "[MT21]") {
+    MoveRig move;
+    const InstanceId a = move.part_at("A", 0, 0, -10);
+    engine_core::Attachment& grip = move.rig.game.create<engine_core::Attachment>();
+    move.rig.game.set_parent(grip.id(), a);
+    REQUIRE_FALSE(grip.set_offset(engine_core::matrix4_translation(0.f, 1.f, 0.f)));
+    move.rig.game.history().reset_waypoints();
+    move.rig.game.selection().set({a});
+    move.rig.frames(1);
+    move.post(true, 150, 100);
+    move.move(160, 100);
+    move.move(170, 100);
+    move.post(false, 170, 100);
+    move.rig.frames(1);
+    INFO(move.rig.runtime.last_error());
+    REQUIRE(near(move.x_of(a), 2));
+    REQUIRE(near(grip.offset().m[13], 1));
+    REQUIRE(near(grip.offset().m[12], 0));
+    REQUIRE(near(grip.transform().m[12], 2));
 }

@@ -202,6 +202,14 @@ const EnumEntry kRaycastFilterTypes[] = {
     {"Include", 1},
 };
 
+// The curve a keyframe pose eases along to the next, and which end of it
+// leads: Roblox's values, as AANIM stores them.
+const EnumEntry kEasingStyles[] = {
+    {"Linear", 0}, {"Constant", 1}, {"Sine", 2},         {"Quad", 3},     {"Cubic", 4},  {"Quart", 5},
+    {"Quint", 6},  {"Exponential", 7}, {"Circular", 8}, {"Back", 9},     {"Elastic", 10}, {"Bounce", 11},
+};
+const EnumEntry kEasingDirections[] = {{"In", 0}, {"Out", 1}, {"InOut", 2}};
+
 // What a Dragger's handles do: move along arrows and planes, or turn about rings.
 const EnumEntry kTransformModes[] = {
     {"Translation", 0},
@@ -236,6 +244,8 @@ const EnumType kTransformSpaceType{"TransformSpace", kTransformSpaces, count_of(
 const EnumType kRaycastFilterTypeType{"RaycastFilterType", kRaycastFilterTypes, count_of(kRaycastFilterTypes)};
 const EnumType kDraggerHandleType{"DraggerHandle", kDraggerHandles, count_of(kDraggerHandles)};
 const EnumType kTransformModeType{"TransformMode", kTransformModes, count_of(kTransformModes)};
+const EnumType kEasingStyleType{"EasingStyle", kEasingStyles, count_of(kEasingStyles)};
+const EnumType kEasingDirectionType{"EasingDirection", kEasingDirections, count_of(kEasingDirections)};
 // How the 3D scene's edges are smoothed. Later methods, such as TAA, are new entries.
 const EnumEntry kAntialiasingModes[] = {{"None", 0}, {"FXAA", 1}};
 const EnumType kAntialiasingModeType{"AntialiasingMode", kAntialiasingModes, count_of(kAntialiasingModes)};
@@ -267,7 +277,7 @@ const EnumType* const kTypes[] = {&kNormalIdType,       &kAxisType,          &kR
                                   &kFinishRecordingOperationType, &kAntialiasingModeType, &kEffectQualityType,
                                   &kRaycastFilterTypeType, &kTextureSizeType, &kTextureStreamingType,
                                   &kToneMappingModeType, &kShadingModelType, &kAssetTypeType,
-                                  &kTransformModeType};
+                                  &kTransformModeType, &kEasingStyleType, &kEasingDirectionType};
 
 int enum_item_index(lua_State* state) {
     auto* item = static_cast<EnumItemUd*>(luaL_checkudata(state, 1, kEnumItemMeta));
@@ -349,6 +359,8 @@ const EnumType& transform_space_enum() { return kTransformSpaceType; }
 const EnumType& raycast_filter_type_enum() { return kRaycastFilterTypeType; }
 const EnumType& dragger_handle_enum() { return kDraggerHandleType; }
 const EnumType& transform_mode_enum() { return kTransformModeType; }
+const EnumType& easing_style_enum() { return kEasingStyleType; }
+const EnumType& easing_direction_enum() { return kEasingDirectionType; }
 const EnumType& antialiasing_mode_enum() { return kAntialiasingModeType; }
 const EnumType& effect_quality_enum() { return kEffectQualityType; }
 const EnumType& texture_size_enum() { return kTextureSizeType; }

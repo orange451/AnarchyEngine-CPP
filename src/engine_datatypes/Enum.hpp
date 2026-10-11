@@ -51,6 +51,9 @@ enum class RaycastFilterType { Exclude = 0, Include = 1 };
 const EnumType& dragger_handle_enum();
 // Translation 0, Rotation 1: what a Dragger's handles do. Dragger.TransformMode.
 const EnumType& transform_mode_enum();
+// Linear 0 to Bounce 11, and In 0, Out 1, InOut 2: how a keyframe pose eases. AANIM's values.
+const EnumType& easing_style_enum();
+const EnumType& easing_direction_enum();
 // How the 3D scene's edges are smoothed: None 0, FXAA 1. Lighting.Antialiasing.
 const EnumType& antialiasing_mode_enum();
 // antialiasing_mode_enum's items, by value.

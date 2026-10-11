@@ -1002,6 +1002,39 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
         "Where this is in the world: Offset, measured from the parent PVInstance as OffsetSpace says. Writing it "
         "sets Offset.",
         "Matrix4", false, {});
+    add("Animator", "LoadAnimation", "A new, stopped track that plays animation on this Animator's GameObject.",
+        "AnimationTrack", false, {P("animation", "Animation")});
+    add("Animator", "GetPlayingAnimationTracks", "The tracks whose IsPlaying is true, in the order they were loaded.",
+        "{AnimationTrack}", false, {});
+    add("Animator", "StepAnimations",
+        "Steps every track by dt seconds now, in edit mode or Play, whatever AutoStep says.", "nil", false,
+        {P("dt", "number")});
+    add("Animation", "GetKeyframeNames", "The names of the clip's keyframes, in time order.", "{string}", false, {});
+    add("", "AnimationTrack",
+        "One Animation playing, or ready to, on an Animator: what LoadAnimation returns. Not an instance, and never "
+        "saved; Stop drops it.",
+        nullptr, false, {});
+    add("AnimationTrack", "Animation", "The Animation it plays.", "Animation", false, {});
+    add("AnimationTrack", "Length", "How long the clip runs, in seconds.", "number", false, {});
+    add("AnimationTrack", "Looped", "Whether it starts over at its end. Starts as the clip's.", "boolean", false, {});
+    add("AnimationTrack", "Speed", "How fast it plays: 1 as made, negative backward.", "number", false, {});
+    add("AnimationTrack", "TimePosition", "Seconds into the clip. Writing it jumps there.", "number", false, {});
+    add("AnimationTrack", "IsPlaying", "Read-only. True from Play until a Stop's fade ends.", "boolean", false, {});
+    add("AnimationTrack", "WeightCurrent", "Read-only. How much it moves its bones now, as its fades go.", "number",
+        false, {});
+    add("AnimationTrack", "WeightTarget", "Read-only. The weight its fade is going to.", "number", false, {});
+    add("AnimationTrack", "Play", "Plays it, fading in from nothing over fade seconds (0.2 when none).", "nil", false,
+        {P("fade", "number?"), P("speed", "number?"), P("weight", "number?")});
+    add("AnimationTrack", "Stop", "Fades it out over fade seconds (0.2 when none), then stops it.", "nil", false,
+        {P("fade", "number?")});
+    add("AnimationTrack", "AdjustWeight", "Fades its weight to weight over fade seconds (0.2 when none).", "nil", false,
+        {P("weight", "number"), P("fade", "number?")});
+    add("AnimationTrack", "AdjustSpeed", "Changes its speed to speed over fade seconds (0.2 when none).", "nil", false,
+        {P("speed", "number"), P("fade", "number?")});
+    add("AnimationTrack", "Destroy", "Takes it off its Animator for good.", "nil", false, {});
+    add("AnimationTrack", "KeyframeReached", "Fires when it reaches a keyframe, with its name and index from 1.",
+        "Signal", false, {});
+    add("AnimationTrack", "Stopped", "Fires when a Stop's fade ends.", "Signal", false, {});
     add("Animator", "AutoStep",
         "While true, Play steps this Animator's tracks once a frame. Edit mode never does; StepAnimations "
         "steps them in either.",

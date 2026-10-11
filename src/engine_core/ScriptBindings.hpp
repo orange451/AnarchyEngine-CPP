@@ -32,6 +32,8 @@ class SoundEmitter;
 class Camera;
 class WireframeAdornment;
 class Terrain;
+class Animator;
+struct TrackState;
 enum class FinishRecordingOperation;
 
 // Enum.FinishRecordingOperation's values, which are Roblox's (Cancel 0,
@@ -57,6 +59,8 @@ struct SignalUd {
     const char* blocked_name = nullptr;
     // kSignalEvent: the event's name, the registered field's, like blocked_name.
     const char* event_name = nullptr;
+    // kSignalTrack: the track, on the Animator id names.
+    std::uint32_t track = 0;
 };
 
 inline constexpr const char* kInstanceMeta = "AE.Instance";
@@ -106,6 +110,9 @@ constexpr int kSignalHost = 4;
 // A PluginUi signal, a plugin's Unloading or a button's Click, found by its key in id;
 // event_name is its name. Its handlers get the values the event carries, as a host signal's do.
 constexpr int kSignalPlugin = 5;
+// An AnimationTrack's KeyframeReached or Stopped: the Animator in id, the track in
+// track, event_name which. Its handlers get the values the event carries.
+constexpr int kSignalTrack = 6;
 constexpr int kServiceKinds = static_cast<int>(sizeof(kServiceClasses) / sizeof(kServiceClasses[0]));
 
 inline int service_kind(const char* name) {
@@ -374,6 +381,22 @@ struct ScriptBindings {
     static int game_object_get_bone_names(lua_State* state);
     static int game_object_get_bone(lua_State* state);
     static int game_object_add_bone(lua_State* state);
+    // Animator's and Animation's methods and the AnimationTrack datatype, in AnimationBindings.cpp.
+    static void link_animation_methods();
+    static Animator& animator_self(lua_State* state);
+    static int animator_load_animation(lua_State* state);
+    static int animator_get_playing(lua_State* state);
+    static int animator_step_animations(lua_State* state);
+    static int animation_get_keyframe_names(lua_State* state);
+    // The live track an AnimationTrack userdata names, or raises "AnimationTrack is gone".
+    static TrackState& track_of(lua_State* state, int index, Animator** owner = nullptr);
+    static int track_index(lua_State* state);
+    static int track_newindex(lua_State* state);
+    static int track_play(lua_State* state);
+    static int track_stop(lua_State* state);
+    static int track_adjust_weight(lua_State* state);
+    static int track_adjust_speed(lua_State* state);
+    static int track_destroy(lua_State* state);
     // Camera's methods, in CameraBindings.cpp.
     static void link_camera_methods();
     static Camera& camera_self(lua_State* state);
@@ -431,6 +454,8 @@ struct ScriptBindings {
 void open_raycast(lua_State* state);
 // The BrushFace metatable and global, in BrushBindings.cpp.
 void open_brush_face(lua_State* state);
+// The AnimationTrack metatable, AE.AnimationTrack.
+void open_animation_track(lua_State* state);
 // The Plugin, PluginToolbar, and PluginToolbarButton metatables and the plugin
 // cache, in PluginBindings.cpp. The plugin global itself is set per thread.
 void open_plugin_api(lua_State* state);

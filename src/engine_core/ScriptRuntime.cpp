@@ -776,6 +776,7 @@ void open_host_libraries(lua_State* state) {
     open_matrix4(state);
     open_raycast(state);
     open_brush_face(state);
+    open_animation_track(state);
     open_plugin_api(state);
 }
 

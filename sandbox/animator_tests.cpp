@@ -160,3 +160,102 @@ TEST_CASE("ANI6 a new skeleton under a playing track is matched by name at the n
     anim.animator->step(0.25);
     REQUIRE(anim.animator->animated() == nullptr);
 }
+
+TEST_CASE("ANI7 scripts load tracks, play them, hear their keyframes and their stop, and lose them", "[animator]") {
+    ScriptRig rig;
+    TempDir dir;
+    write_mesh(dir / "meshes" / "arm.amesh", arm(2));
+    aanim::Data named = slide();
+    named.keyframes[0].name = "Start";
+    named.keyframes[1].name = "End";
+    write_clip(dir / "animations" / "slide.aanim", named);
+    rig.game.set_resources_root(dir.path);
+    engine_core::Mesh& mesh = rig.game.create<engine_core::Mesh>();
+    rig.game.set_parent(mesh.id(), rig.game.service("Meshes"));
+    REQUIRE_FALSE(mesh.set_path("meshes/arm.amesh"));
+    engine_core::Prefab& prefab = rig.game.create<engine_core::Prefab>();
+    rig.game.set_parent(prefab.id(), rig.game.service("Prefabs"));
+    engine_core::Model& model = rig.game.create<engine_core::Model>();
+    rig.game.set_parent(model.id(), prefab.id());
+    REQUIRE_FALSE(model.set_reference(engine_core::Model::kMeshReference, id_slot(mesh.id())));
+    engine_core::GameObject& object = create_part(rig.game);
+    rig.game.set_name(object.id(), "Arm");
+    REQUIRE_FALSE(object.set_prefab(id_slot(prefab.id())));
+    engine_core::Animator& animator = rig.game.create<engine_core::Animator>();
+    rig.game.set_parent(animator.id(), object.id());
+    engine_core::Bone& hand = rig.game.create<engine_core::Bone>();
+    rig.game.set_name(hand.id(), "Hand");
+    rig.game.set_parent(hand.id(), object.id());
+    engine_core::Animation& clip = rig.game.create<engine_core::Animation>();
+    rig.game.set_name(clip.id(), "Slide");
+    rig.game.set_parent(clip.id(), rig.game.service("Animations"));
+    REQUIRE_FALSE(clip.set_path("animations/slide.aanim"));
+    add_script(rig.game, "Animate", R"(
+        local arm = workspace.Arm
+        local animator = arm.Animator
+        local clip = game.Assets.Animations.Slide
+        local names = clip:GetKeyframeNames()
+        _G.names = #names == 2 and names[1] == "Start" and names[2] == "End"
+        local track = animator:LoadAnimation(clip)
+        _G.loaded = track.Length == 1 and track.Animation == clip and not track.IsPlaying and track.Speed == 1
+            and typeof(track) == "AnimationTrack"
+        local reached = {}
+        track.KeyframeReached:Connect(function(name, index) table.insert(reached, name .. index) end)
+        local stopped = 0
+        track.Stopped:Connect(function() stopped += 1 end)
+        track:Play(0)
+        _G.playing = track.IsPlaying and track.WeightCurrent == 1 and track.WeightTarget == 1
+        animator:StepAnimations(0.5)
+        _G.moved = math.abs(arm.Hand.Transform.Position.X - 1) < 1e-3
+        _G.listed = #animator:GetPlayingAnimationTracks() == 1 and animator:GetPlayingAnimationTracks()[1] == track
+        animator:StepAnimations(0.6)
+        task.wait()
+        task.wait()
+        _G.reached = reached[1] == "Start1" and reached[2] == "End2" and #reached == 2
+        track.TimePosition = 0.25
+        track.Looped = true
+        track.Speed = 2
+        _G.written = track.TimePosition == 0.25 and track.Looped and track.Speed == 2
+        track:AdjustSpeed(1, 0)
+        track:AdjustWeight(0.5, 0)
+        _G.adjusted = track.Speed == 1 and track.WeightTarget == 0.5
+        track:Stop(0)
+        animator:StepAnimations(0)
+        task.wait()
+        task.wait()
+        _G.stopped = stopped == 1 and not track.IsPlaying and #animator:GetPlayingAnimationTracks() == 0
+        _G.refused = not pcall(function() animator:LoadAnimation(workspace) end)
+            and not pcall(function() animator:StepAnimations(0 / 0) end)
+            and not pcall(function() track:Play(0 / 0) end)
+            and not pcall(function() track.IsPlaying = true end)
+        track:Destroy()
+        local ok, why = pcall(function() return track.Length end)
+        _G.gone = not ok and string.find(why, "AnimationTrack is gone", 1, true) ~= nil
+        _G.enums = Enum.EasingStyle.Bounce.Value == 11 and Enum.EasingDirection.InOut.Value == 2
+        -- Destroyed by its own handler, mid-step.
+        local doomed = animator:LoadAnimation(clip)
+        doomed.KeyframeReached:Connect(function() doomed:Destroy() end)
+        doomed:Play(0)
+        animator:StepAnimations(0.5)
+        task.wait()
+        task.wait()
+        animator:StepAnimations(0.5)
+        _G.survived = #animator:GetPlayingAnimationTracks() == 0
+    )");
+    rig.game.start_simulation();
+    rig.frames(12);
+    INFO(rig.runtime.last_error());
+    std::string printed;
+    for (const auto& line : rig.runtime.drain_output().lines) {
+        printed += line.text;
+    }
+    INFO(printed);
+    for (const char* name : {"names", "loaded", "playing", "moved", "listed", "reached", "written", "adjusted",
+                             "stopped", "refused", "gone", "enums", "survived"}) {
+        bool value = false;
+        INFO(name);
+        REQUIRE(rig.runtime.global_boolean(name, value));
+        REQUIRE(value);
+    }
+    rig.game.stop_simulation();
+}

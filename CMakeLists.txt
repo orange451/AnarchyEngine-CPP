@@ -645,6 +645,7 @@ add_library(engine_core STATIC
     src/engine_core/PluginUi.cpp
     src/engine_core/TerrainBindings.cpp
     src/engine_core/SkeletonBindings.cpp
+    src/engine_core/AnimationBindings.cpp
     src/engine_core/ScriptRuntime.cpp
     src/engine_core/TableSnapshot.cpp
     src/engine_core/ScriptAnalysis.cpp

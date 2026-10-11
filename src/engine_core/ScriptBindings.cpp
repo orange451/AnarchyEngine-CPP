@@ -731,6 +731,13 @@ Signal& ScriptBindings::signal_of(lua_State* state, ScriptRuntime& runtime, cons
         signal = runtime.host_signal(static_cast<HostSignal>(ud.phase));
     } else if (ud.kind == kSignalPlugin) {
         signal = runtime.plugin_ui().signal(ud.id);
+    } else if (ud.kind == kSignalTrack) {
+        auto* animator = dynamic_cast<Animator*>(runtime.resolve_id(ud.id, ud.world));
+        if (animator == nullptr || animator->track(ud.track) == nullptr) {
+            luaL_error(state, "AnimationTrack is gone");
+        }
+        const bool stopped = ud.event_name != nullptr && std::strcmp(ud.event_name, "Stopped") == 0;
+        signal = &animator->track_signal(ud.track, stopped ? TrackEvent::Kind::Stopped : TrackEvent::Kind::KeyframeReached);
     } else {
         signal = runtime.run_service_.signal(static_cast<Phase>(ud.phase));
     }
@@ -758,7 +765,7 @@ const char* ScriptBindings::signal_cause(const SignalUd& ud) {
     if (ud.kind == kSignalHost) {
         return ud.phase >= 0 && ud.phase < 7 ? kHost[ud.phase] : "event";
     }
-    if (ud.kind == kSignalPlugin) {
+    if (ud.kind == kSignalPlugin || ud.kind == kSignalTrack) {
         return ud.event_name != nullptr ? ud.event_name : "event";
     }
     return ud.phase >= 0 && ud.phase < kPhaseCount ? kPhases[ud.phase] : "event";
@@ -803,7 +810,8 @@ int ScriptBindings::signal_connect(lua_State* state) {
             if (kind == kSignalChanged) {
                 runtime->invoke_listener(owner, held->ref, script, generation, cause,
                                          changed_name(field, runtime->game_->events().payload()), false, 0);
-            } else if (kind == kSignalInput || kind == kSignalEvent || kind == kSignalHost || kind == kSignalPlugin) {
+            } else if (kind == kSignalInput || kind == kSignalEvent || kind == kSignalHost || kind == kSignalPlugin ||
+                       kind == kSignalTrack) {
                 runtime->invoke_listener_args(owner, held->ref, script, generation, cause,
                                               runtime->game_->events().current_args());
             } else {
@@ -869,7 +877,8 @@ int ScriptBindings::signal_wait(lua_State* state) {
             runtime->guarded(*waiting->vm, [&] {
                 if (kind == kSignalChanged) {
                     runtime->make_ready(*waiting, changed_name(field, runtime->game_->events().payload()));
-                } else if (kind == kSignalInput || kind == kSignalEvent || kind == kSignalHost || kind == kSignalPlugin) {
+                } else if (kind == kSignalInput || kind == kSignalEvent || kind == kSignalHost || kind == kSignalPlugin ||
+                       kind == kSignalTrack) {
                     runtime->make_ready_args(*waiting, runtime->game_->events().current_args());
                 } else if (runtime->in_render_window_) {
                     runtime->resume_waiting_now(*waiting, runtime->run_service_.dt(phase));
@@ -1596,6 +1605,7 @@ ANARCHY_LUA_REGISTER(register_script_methods) {
     ScriptBindings::link_brush_methods();
     ScriptBindings::link_camera_methods();
     ScriptBindings::link_skeleton_methods();
+    ScriptBindings::link_animation_methods();
     ScriptBindings::link_wireframe_methods();
 
     // AssetInstances.cpp declares the class and its Path.

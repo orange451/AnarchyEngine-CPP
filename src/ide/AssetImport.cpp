@@ -104,7 +104,9 @@ std::vector<PlacedAsset> place_assets(engine_core::DataModel& world, const std::
         } else if (asset.model) {
             out.root = build_model_assets(world, asset.imported, out.error, &out.made);
             const engine_core::InstanceId prefabs = world.service("Prefabs");
-            if (const engine_core::InstanceId into = FolderIn(world, folder, prefabs); out.root != 0 && into != prefabs) {
+            const bool prefab = dynamic_cast<const engine_core::Prefab*>(world.instance(out.root)) != nullptr;
+            if (const engine_core::InstanceId into = FolderIn(world, folder, prefabs);
+                prefab && into != prefabs) {
                 world.set_parent(out.root, into);
             }
         } else if (const engine_core::InstanceId audio = world.service("Audio"); asset.sound && audio == 0) {

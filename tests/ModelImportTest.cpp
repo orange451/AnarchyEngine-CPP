@@ -9,6 +9,7 @@
 #include "LuaApi.hpp"
 #include "Project.hpp"
 #include "SelectionService.hpp"
+#include "aanim.hpp"
 #include "amesh.hpp"
 
 #include "jadefx/jadefx.hpp"
@@ -91,6 +92,73 @@ struct MaterialView {
 engine_core::InstanceId Target(const engine_core::ReferenceAsset& asset, std::size_t index) {
     const engine_core::LuaSlot slot = asset.reference(index);
     return slot.kind == engine_core::LuaSlot::Kind::Instance ? slot.id : 0;
+}
+
+// A glTF file built in a test: accessors over one binary buffer, and the JSON
+// around them, which the test writes as nodes, skins, meshes, and animations.
+struct GltfBuilder {
+    std::string bin;
+    std::string views;
+    std::string accessors;
+    int count = 0;
+
+    // A float accessor of type (SCALAR, VEC3, VEC4, MAT4) over values; min
+    // and max are written for a POSITION accessor when given.
+    int floats(const std::vector<float>& values, const char* type, int per, const char* bounds = nullptr) {
+        return add(reinterpret_cast<const char*>(values.data()), values.size() * 4, type, 5126,
+                   static_cast<int>(values.size()) / per, bounds);
+    }
+    int bytes(const std::vector<std::uint8_t>& values, const char* type, int per) {
+        return add(reinterpret_cast<const char*>(values.data()), values.size(), type, 5121,
+                   static_cast<int>(values.size()) / per, nullptr);
+    }
+    int shorts(const std::vector<std::uint16_t>& values) {
+        return add(reinterpret_cast<const char*>(values.data()), values.size() * 2, "SCALAR", 5123,
+                   static_cast<int>(values.size()), nullptr);
+    }
+    int add(const char* data, std::size_t size, const char* type, int component, int items, const char* bounds) {
+        while (bin.size() % 4 != 0) {
+            bin += '\0';
+        }
+        const std::size_t offset = bin.size();
+        bin.append(data, size);
+        const int index = count++;
+        views += std::string(views.empty() ? "" : ",") + "{\"buffer\":0,\"byteOffset\":" + std::to_string(offset) +
+                 ",\"byteLength\":" + std::to_string(size) + "}";
+        accessors += std::string(accessors.empty() ? "" : ",") + "{\"bufferView\":" + std::to_string(index) +
+                     ",\"componentType\":" + std::to_string(component) + ",\"count\":" + std::to_string(items) +
+                     ",\"type\":\"" + type + "\"" + (bounds != nullptr ? std::string(",") + bounds : "") + "}";
+        return index;
+    }
+    // Writes name.gltf and name.bin into folder, with body the JSON's other members.
+    void write(const fs::path& folder, const std::string& name, const std::string& body) const {
+        WriteBytes(folder / (name + ".bin"), bin);
+        WriteBytes(folder / (name + ".gltf"),
+                   "{\"asset\":{\"version\":\"2.0\"},\"scene\":0," + body + ",\"buffers\":[{\"byteLength\":" +
+                       std::to_string(bin.size()) + ",\"uri\":\"" + name + ".bin\"}],\"bufferViews\":[" + views +
+                       "],\"accessors\":[" + accessors + "]}");
+    }
+};
+
+// What an AANIM file holds, or an empty clip when it does not read.
+anarchy::aanim::Data ReadClip(const fs::path& file) {
+    const std::string bytes = ReadBytes(file);
+    try {
+        return anarchy::aanim::read(
+            anarchy::aanim::ByteSpan(reinterpret_cast<const std::byte*>(bytes.data()), bytes.size()));
+    } catch (const std::exception&) {
+        return {};
+    }
+}
+
+// The pose of bone in keyframe, or null.
+const anarchy::aanim::Pose* PoseOf(const anarchy::aanim::Keyframe& keyframe, const char* bone) {
+    for (const anarchy::aanim::Pose& pose : keyframe.poses) {
+        if (pose.bone == bone) {
+            return &pose;
+        }
+    }
+    return nullptr;
 }
 
 }  // namespace
@@ -315,6 +383,130 @@ int RunModelImportTests(ide::IdeLayout& layout, jadefx::Scene& scene) {
             expect(blended, "a vertex shared by two joints keeps both weights");
         } else if (model) {
             expect(false, "one mesh for each of its two materials");
+        }
+    }
+
+    // Clips: a skinned arm (Root, and Hand 2 up, under a node 5 along Z) whose
+    // clip "Wave" slides Root 1 along X and turns Hand a quarter about Z over a
+    // second; the same clip with no mesh; and a Mixamo-style Armature node
+    // scaled 0.01 above a Root the clip moves 100 along X.
+    {
+        const fs::path source = folder / "Clips";
+        const fs::path resources = folder / "ClipsResources";
+        const float s = 0.70710678f;
+        const auto arm = [&](bool with_mesh, GltfBuilder& gltf) {
+            const int times = gltf.floats({0.f, 1.f}, "SCALAR", 1, "\"min\":[0],\"max\":[1]");
+            const int slide = gltf.floats({0, 0, 0, 1, 0, 0}, "VEC3", 3);
+            const int stay = gltf.floats({0, 2, 0, 0, 2, 0}, "VEC3", 3);
+            const int turn = gltf.floats({0, 0, 0, 1, 0, 0, s, s}, "VEC4", 4);
+            std::string body = R"("scenes":[{"nodes":[0]}],
+  "nodes":[{"name":"Arm","translation":[0,0,5],"children":[1,3]},{"name":"Root","children":[2]},
+           {"name":"Hand","translation":[0,2,0]})";
+            if (with_mesh) {
+                const int position =
+                    gltf.floats({0, 0, 0, 1, 0, 0, 0, 1, 0}, "VEC3", 3, "\"min\":[0,0,0],\"max\":[1,1,0]");
+                const int joints = gltf.bytes({0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0}, "VEC4", 4);
+                const int weights = gltf.floats({1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0}, "VEC4", 4);
+                const int indices = gltf.shorts({0, 1, 2});
+                const int binds = gltf.floats({1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1,
+                                               1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, -2, 0, 1},
+                                              "MAT4", 16);
+                body += ",{\"name\":\"Skin\",\"mesh\":0,\"skin\":0}],\"skins\":[{\"joints\":[1,2],"
+                        "\"inverseBindMatrices\":" +
+                        std::to_string(binds) + "}],\"meshes\":[{\"primitives\":[{\"attributes\":{\"POSITION\":" +
+                        std::to_string(position) + ",\"JOINTS_0\":" + std::to_string(joints) +
+                        ",\"WEIGHTS_0\":" + std::to_string(weights) + "},\"indices\":" + std::to_string(indices) +
+                        "}]}]";
+            } else {
+                body += ",{\"name\":\"Skin\"}]";
+            }
+            body += ",\"animations\":[{\"name\":\"Wave\",\"samplers\":[{\"input\":" + std::to_string(times) +
+                    ",\"output\":" + std::to_string(slide) + "},{\"input\":" + std::to_string(times) +
+                    ",\"output\":" + std::to_string(stay) + "},{\"input\":" + std::to_string(times) +
+                    ",\"output\":" + std::to_string(turn) +
+                    "}],\"channels\":[{\"sampler\":0,\"target\":{\"node\":1,\"path\":\"translation\"}},"
+                    "{\"sampler\":1,\"target\":{\"node\":2,\"path\":\"translation\"}},"
+                    "{\"sampler\":2,\"target\":{\"node\":2,\"path\":\"rotation\"}}]}]";
+            return body;
+        };
+        GltfBuilder skinned;
+        skinned.write(source, "Moves", arm(true, skinned));
+        GltfBuilder bare;
+        bare.write(source, "Moves-only", arm(false, bare));
+
+        std::string error;
+        std::optional<ide::ImportedModel> model =
+            ide::import_model_file(resources, ide::utf8_path(source / "Moves.gltf"), error);
+        expect(model.has_value(), "a skinned glTF with a clip imports");
+        if (!model) {
+            std::fprintf(stderr, "  %s\n", error.c_str());
+        }
+        if (model && model->animations.size() == 1) {
+            for (const std::string& note : model->notes) {
+                expect(note.find("Animations are not imported") == std::string::npos, "clips are no longer left out");
+            }
+            expect(model->animations[0].name == "Wave" && model->animations[0].path == "animations/Moves/Wave.aanim",
+                   "its clip is written under animations/<model>, named after the clip");
+            const anarchy::aanim::Data clip = ReadClip(resources / "animations" / "Moves" / "Wave.aanim");
+            expect(clip.keyframes.size() == 2 && Near(clip.keyframes[0].time, 0) && Near(clip.keyframes[1].time, 1),
+                   "a keyframe at each of its key times");
+            if (clip.keyframes.size() == 2) {
+                const anarchy::aanim::Pose* root0 = PoseOf(clip.keyframes[0], "Root");
+                const anarchy::aanim::Pose* root1 = PoseOf(clip.keyframes[1], "Root");
+                const anarchy::aanim::Pose* hand1 = PoseOf(clip.keyframes[1], "Hand");
+                expect(root0 != nullptr && Near(root0->position[0], 0) && Near(root0->rotation[3], 1),
+                       "a bone where it rests has no change");
+                expect(root1 != nullptr && Near(root1->position[0], 1) && Near(root1->position[2], 0),
+                       "a moved root's change is its move, not its place under the node above it");
+                expect(hand1 != nullptr && Near(hand1->position[1], 0) && Near(std::fabs(hand1->rotation[2]), s) &&
+                           Near(std::fabs(hand1->rotation[3]), s),
+                       "a turned bone's change is its turn alone");
+                expect(root1 != nullptr && root1->style == anarchy::aanim::EasingStyle::Linear && root1->weight == 1.f,
+                       "imported poses are linear, at full weight");
+            }
+        } else if (model) {
+            expect(false, "one clip");
+        }
+
+        error.clear();
+        model = ide::import_model_file(resources, ide::utf8_path(source / "Moves-only.gltf"), error);
+        expect(model.has_value() && model->meshes.empty() && model->animations.size() == 1,
+               "a file of clips and no triangles imports its clips alone");
+        if (!model) {
+            std::fprintf(stderr, "  %s\n", error.c_str());
+        }
+
+        // Mixamo: an Armature scaled 0.01 holds the skeleton and the mesh.
+        GltfBuilder mixamo;
+        const int times = mixamo.floats({0.f, 1.f}, "SCALAR", 1, "\"min\":[0],\"max\":[1]");
+        const int slide = mixamo.floats({0, 0, 0, 100, 0, 0}, "VEC3", 3);
+        const int position =
+            mixamo.floats({0, 0, 0, 100, 0, 0, 0, 100, 0}, "VEC3", 3, "\"min\":[0,0,0],\"max\":[100,100,0]");
+        const int joints = mixamo.bytes({0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}, "VEC4", 4);
+        const int weights = mixamo.floats({1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0}, "VEC4", 4);
+        const int indices = mixamo.shorts({0, 1, 2});
+        const int binds = mixamo.floats({1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1}, "MAT4", 16);
+        mixamo.write(source, "Mixamo",
+                     std::string(R"("scenes":[{"nodes":[0]}],
+  "nodes":[{"name":"Armature","scale":[0.01,0.01,0.01],"children":[1,2]},{"name":"Root"},
+           {"name":"Body","mesh":0,"skin":0}],
+  "skins":[{"joints":[1],"inverseBindMatrices":)") +
+                         std::to_string(binds) + "}],\"meshes\":[{\"primitives\":[{\"attributes\":{\"POSITION\":" +
+                         std::to_string(position) + ",\"JOINTS_0\":" + std::to_string(joints) + ",\"WEIGHTS_0\":" +
+                         std::to_string(weights) + "},\"indices\":" + std::to_string(indices) +
+                         "}]}],\"animations\":[{\"name\":\"Run\",\"samplers\":[{\"input\":" + std::to_string(times) +
+                         ",\"output\":" + std::to_string(slide) +
+                         "}],\"channels\":[{\"sampler\":0,\"target\":{\"node\":1,\"path\":\"translation\"}}]}]");
+        error.clear();
+        model = ide::import_model_file(resources, ide::utf8_path(source / "Mixamo.gltf"), error);
+        expect(model.has_value() && model->animations.size() == 1, "a Mixamo-style file imports its clip");
+        if (model && model->animations.size() == 1) {
+            const anarchy::aanim::Data clip = ReadClip(resources / ide::path_from_utf8(model->animations[0].path));
+            const anarchy::aanim::Pose* root1 = clip.keyframes.size() == 2 ? PoseOf(clip.keyframes[1], "Root") : nullptr;
+            // 100 in the Armature's units, which its 0.01 scale makes 1 in the model's: no 100x stretch.
+            expect(root1 != nullptr && Near(root1->position[0], 100) && Near(root1->scale[0], 1) &&
+                       Near(root1->scale[1], 1),
+                   "a scaled Armature's root moves in its own units, unstretched");
         }
     }
 

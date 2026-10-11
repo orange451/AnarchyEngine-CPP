@@ -1025,11 +1025,15 @@ JsonValue ImportRow(const DataModel& world, const McpImport& import) {
         }
         return row;
     }
-    row.set("prefab", Brief(world, import.root));
+    // A file of clips alone made no Prefab: its root is the Animations Folder.
+    if (dynamic_cast<const engine_core::Prefab*>(world.instance(import.root)) != nullptr) {
+        row.set("prefab", Brief(world, import.root));
+    }
     JsonValue folders = JsonValue::array();
     std::size_t meshes = 0;
     std::size_t materials = 0;
     std::size_t textures = 0;
+    std::size_t animations = 0;
     for (InstanceId id : import.made) {
         const std::string klass = ClassOf(world, id);
         if (klass == "Folder") {
@@ -1038,11 +1042,13 @@ JsonValue ImportRow(const DataModel& world, const McpImport& import) {
         meshes += klass == "Mesh";
         materials += klass == "Material";
         textures += klass == "Texture";
+        animations += klass == "Animation";
     }
     row.set("folders", std::move(folders));
     row.set("meshes", JsonValue::number(static_cast<double>(meshes)));
     row.set("materials", JsonValue::number(static_cast<double>(materials)));
     row.set("textures", JsonValue::number(static_cast<double>(textures)));
+    row.set("animations", JsonValue::number(static_cast<double>(animations)));
     if (!import.notes.empty()) {
         JsonValue notes = JsonValue::array();
         for (const std::string& note : import.notes) {

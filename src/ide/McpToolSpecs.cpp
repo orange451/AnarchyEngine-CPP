@@ -60,7 +60,8 @@ constexpr SpecText kSpecs[] = {
      "Folder named after it in each of those categories; the textures it names are found beside it. "
      "Files are copied into the project's resources folder; a place never saved keeps them in a "
      "scratch folder until its first save. A skinned model keeps its bones (GameObject:AddBone poses "
-     "one); animations are not imported. Returns what each file made, or why it failed, and what a "
+     "one), and its clips become Animations in a Folder in Assets.Animations; a file of clips alone "
+     "makes only those. Returns what each file made, or why it failed, and what a "
      "model left out. To show a Prefab in the world, create a GameObject in Workspace and set its "
      "Prefab property to the Prefab. Not during a test.",
      R"({"type":"object","required":["files"],"properties":{

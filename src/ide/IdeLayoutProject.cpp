@@ -481,6 +481,9 @@ void IdeLayout::place_imports(const std::filesystem::path& resources, const std:
             summary = "Imported " + model.name + ": " + Count(model.meshes.size(), "mesh", "meshes") + ", " +
                       Count(model.materials.size(), "material", "materials") + ", " +
                       Count(model.textures.size(), "texture", "textures");
+            if (!model.animations.empty()) {
+                summary += ", " + Count(model.animations.size(), "animation", "animations");
+            }
         }
         if (!problem.empty()) {
             toast_later(this, alive, std::move(problem));

@@ -7,6 +7,7 @@
 #include "LuaApi.hpp"
 #include "Project.hpp"
 #include "TextureImport.hpp"
+#include "aanim.hpp"
 #include "amesh.hpp"
 #include "runner/TextureCache.hpp"
 
@@ -31,10 +32,12 @@ namespace {
 
 namespace fs = std::filesystem;
 namespace amesh = anarchy::amesh;
+namespace anim = anarchy::aanim;
 
 // The resources folders an import writes into, as a Path names them.
 constexpr const char* kMeshFolder = "meshes";
 constexpr const char* kTextureFolder = "textures";
+constexpr const char* kAnimationFolder = "animations";
 
 // Past this many names taken, the import gives up rather than search on.
 constexpr int kMaxSuffix = 10000;
@@ -52,14 +55,15 @@ float Clamp01(float value) { return std::isfinite(value) ? std::clamp(value, 0.f
 
 std::uint8_t ToByte(float value) { return static_cast<std::uint8_t>(std::lround(Clamp01(value) * 255.f)); }
 
-// A folder name under meshes/ and textures/ that neither has yet.
+// A folder name under meshes/, textures/, and animations/ that none has yet.
 std::optional<std::string> FreeFolder(const fs::path& root, const std::string& name) {
     const std::string safe = engine_core::sanitize_file_name(name);
     for (int suffix = 1; suffix <= kMaxSuffix; ++suffix) {
         const std::string folder = suffix == 1 ? safe : safe + "-" + std::to_string(suffix);
         std::error_code failure;
         if (!fs::exists(root / kMeshFolder / path_from_utf8(folder), failure) &&
-            !fs::exists(root / kTextureFolder / path_from_utf8(folder), failure)) {
+            !fs::exists(root / kTextureFolder / path_from_utf8(folder), failure) &&
+            !fs::exists(root / kAnimationFolder / path_from_utf8(folder), failure)) {
             return folder;
         }
     }
@@ -89,6 +93,8 @@ struct SkeletonTable {
     // An aiBone's name, as the file gives it, to its bone.
     std::map<std::string, std::uint16_t> by_name;
     std::map<const aiNode*, std::uint16_t> by_node;
+    // Each bone's rest in the model's space, as an aiMatrix4x4: bones' m and t.
+    std::vector<aiMatrix4x4> rests;
 
     // node's bone, or its nearest ancestor's; kNoBone when none is one.
     std::uint16_t nearest(const aiNode* node) const {
@@ -186,7 +192,9 @@ SkeletonTable BuildSkeleton(const aiScene& scene, const std::map<const aiNode*, 
         const auto parent = table.by_node.find(node->mParent);
         bone.parent = node != top && parent != table.by_node.end() ? parent->second : amesh::kNoBone;
         const auto rest = rests.find(node->mName.C_Str());
-        StoreRest(bone, rest != rests.end() ? rest->second : globals.at(node));
+        const aiMatrix4x4 resting = rest != rests.end() ? rest->second : globals.at(node);
+        StoreRest(bone, resting);
+        table.rests.push_back(resting);
         table.bones.push_back(bone);
         table.by_node.emplace(node, index);
         table.by_name.emplace(node->mName.C_Str(), index);
@@ -251,6 +259,130 @@ void BindVertices(amesh::Data& data, std::uint32_t base, const aiMesh& mesh, con
             vertex.weight[k] = list[k].first / total;
         }
     }
+}
+
+// The key value at time, from keys sorted by time: the first before it, the
+// last after it, and between two, lerp (or slerp, by mix) by how far along.
+template <typename Key, typename Value, typename Mix>
+Value Sample(const Key* keys, unsigned count, double ticks, Value fallback, Mix mix) {
+    if (count == 0) {
+        return fallback;
+    }
+    if (ticks <= keys[0].mTime) {
+        return keys[0].mValue;
+    }
+    for (unsigned k = 1; k < count; ++k) {
+        if (ticks <= keys[k].mTime) {
+            const double span = keys[k].mTime - keys[k - 1].mTime;
+            const float along = span > 0.0 ? static_cast<float>((ticks - keys[k - 1].mTime) / span) : 0.f;
+            return mix(keys[k - 1].mValue, keys[k].mValue, along);
+        }
+    }
+    return keys[count - 1].mValue;
+}
+
+// The scene's clips as AANIM data: per clip, a keyframe at every time any of
+// its channels has a key, each channel's node sampled there as a change from
+// its rest. A bone's rest is the skeleton's (rest local to its parent bone, or
+// the model's space for a root); any other node's is its own transform. So a
+// node above the skeleton (a Mixamo Armature scaled 0.01) is taken into the
+// root's motion as it is into its rest, and stretches nothing.
+std::vector<anim::Data> ExtractClips(const aiScene& scene, const std::map<const aiNode*, aiMatrix4x4>& globals,
+                                     const SkeletonTable& skeleton) {
+    std::vector<anim::Data> clips;
+    for (unsigned a = 0; a < scene.mNumAnimations; ++a) {
+        const aiAnimation* animation = scene.mAnimations[a];
+        if (animation == nullptr || animation->mNumChannels == 0) {
+            continue;
+        }
+        const double tps = animation->mTicksPerSecond > 0.0 ? animation->mTicksPerSecond : 25.0;
+        // Every key time, in ticks, once.
+        std::vector<double> times;
+        for (unsigned c = 0; c < animation->mNumChannels; ++c) {
+            const aiNodeAnim* channel = animation->mChannels[c];
+            for (unsigned k = 0; k < channel->mNumPositionKeys; ++k) {
+                times.push_back(channel->mPositionKeys[k].mTime);
+            }
+            for (unsigned k = 0; k < channel->mNumRotationKeys; ++k) {
+                times.push_back(channel->mRotationKeys[k].mTime);
+            }
+            for (unsigned k = 0; k < channel->mNumScalingKeys; ++k) {
+                times.push_back(channel->mScalingKeys[k].mTime);
+            }
+        }
+        std::sort(times.begin(), times.end());
+        const double first = times.empty() ? 0.0 : times.front();
+        times.erase(std::unique(times.begin(), times.end(),
+                                [tps](double x, double y) { return std::abs(x - y) / tps < 1e-5; }),
+                    times.end());
+
+        anim::Data clip;
+        clip.name = animation->mName.length > 0 ? animation->mName.C_Str() : "";
+        for (const double ticks : times) {
+            anim::Keyframe keyframe;
+            keyframe.time = static_cast<float>((ticks - first) / tps);
+            for (unsigned c = 0; c < animation->mNumChannels; ++c) {
+                const aiNodeAnim* channel = animation->mChannels[c];
+                const aiNode* node = scene.mRootNode->FindNode(channel->mNodeName);
+                if (node == nullptr) {
+                    continue;
+                }
+                aiVector3D rest_scale;
+                aiQuaternion rest_rotation;
+                aiVector3D rest_position;
+                node->mTransformation.Decompose(rest_scale, rest_rotation, rest_position);
+                const aiVector3D position =
+                    Sample(channel->mPositionKeys, channel->mNumPositionKeys, ticks, rest_position,
+                           [](const aiVector3D& x, const aiVector3D& y, float t) { return x + (y - x) * t; });
+                const aiVector3D scaling =
+                    Sample(channel->mScalingKeys, channel->mNumScalingKeys, ticks, rest_scale,
+                           [](const aiVector3D& x, const aiVector3D& y, float t) { return x + (y - x) * t; });
+                const aiQuaternion rotation =
+                    Sample(channel->mRotationKeys, channel->mNumRotationKeys, ticks, rest_rotation,
+                           [](const aiQuaternion& x, const aiQuaternion& y, float t) {
+                               aiQuaternion out;
+                               aiQuaternion::Interpolate(out, x, y, t);
+                               return out.Normalize();
+                           });
+                const aiMatrix4x4 local(scaling, rotation, position);
+                // Rest and pose in one frame: the parent bone's, or the model's space.
+                std::string bone_name = node->mName.C_Str();
+                aiMatrix4x4 rest;
+                aiMatrix4x4 posed = local;
+                const auto bone = skeleton.by_node.find(node);
+                if (bone != skeleton.by_node.end()) {
+                    const amesh::Bone& entry = skeleton.bones[bone->second];
+                    bone_name = entry.name;
+                    rest = skeleton.rests[bone->second];
+                    if (entry.parent != amesh::kNoBone) {
+                        aiMatrix4x4 parent = skeleton.rests[entry.parent];
+                        rest = parent.Inverse() * rest;
+                    } else if (node->mParent != nullptr) {
+                        posed = globals.at(node->mParent) * local;
+                    }
+                } else {
+                    rest = node->mTransformation;
+                }
+                aiMatrix4x4 inverse = rest;
+                const aiMatrix4x4 change = inverse.Inverse() * posed;
+                aiVector3D scale;
+                aiQuaternion turn;
+                aiVector3D move;
+                change.Decompose(scale, turn, move);
+                anim::Pose pose;
+                pose.bone = bone_name;
+                pose.position[0] = move.x, pose.position[1] = move.y, pose.position[2] = move.z;
+                turn.Normalize();
+                pose.rotation[0] = turn.x, pose.rotation[1] = turn.y, pose.rotation[2] = turn.z;
+                pose.rotation[3] = turn.w;
+                pose.scale[0] = scale.x, pose.scale[1] = scale.y, pose.scale[2] = scale.z;
+                keyframe.poses.push_back(pose);
+            }
+            clip.keyframes.push_back(std::move(keyframe));
+        }
+        clips.push_back(std::move(clip));
+    }
+    return clips;
 }
 
 // Appends mesh to data, moved by transform into the model's space, and bound
@@ -657,8 +789,16 @@ std::optional<ImportedModel> import_model_file(const fs::path& resources_root, c
                                 aiProcess_SplitLargeMeshes | aiProcess_ImproveCacheLocality |
                                 aiProcess_RemoveRedundantMaterials | aiProcess_LimitBoneWeights |
                                 aiProcess_ValidateDataStructure;
-    const aiScene* scene = importer.ReadFile(utf8_path(from), kSteps);
-    if (scene == nullptr || scene->mRootNode == nullptr || (scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE) != 0) {
+    // Read, then cleaned up only when there is geometry to clean: a file of
+    // clips alone has no meshes or materials, which the steps refuse, and
+    // Assimp calls such a scene incomplete.
+    const aiScene* scene = importer.ReadFile(utf8_path(from), 0);
+    if (scene != nullptr && scene->mNumMeshes > 0) {
+        scene = importer.ApplyPostProcessing(kSteps);
+    }
+    const bool clips_alone = scene != nullptr && scene->mNumMeshes == 0 && scene->mNumAnimations > 0;
+    if (scene == nullptr || scene->mRootNode == nullptr ||
+        ((scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE) != 0 && !clips_alone)) {
         error = importer.GetErrorString();
         if (error.empty()) {
             error = "it holds no scene";
@@ -736,12 +876,10 @@ std::optional<ImportedModel> import_model_file(const fs::path& resources_root, c
     buckets.erase(std::remove_if(buckets.begin(), buckets.end(),
                                  [](const Bucket& bucket) { return bucket.data.indices.empty(); }),
                   buckets.end());
-    if (buckets.empty()) {
+    const std::vector<anim::Data> clips = ExtractClips(*scene, globals, skeleton);
+    if (buckets.empty() && clips.empty()) {
         error = "it holds no triangles";
         return std::nullopt;
-    }
-    if (scene->mNumAnimations > 0) {
-        Note(model, "Animations are not imported yet");
     }
 
     const std::optional<std::string> folder = FreeFolder(resources_root, model.name);
@@ -784,6 +922,27 @@ std::optional<ImportedModel> import_model_file(const fs::path& resources_root, c
         }
         model.meshes.push_back({name, std::move(*path), material_index});
     }
+
+    // Each clip its own AANIM file, named after it (or the file, when it has no name).
+    const std::string animation_folder = std::string(kAnimationFolder) + "/" + *folder;
+    std::set<std::string> clip_names;
+    for (const anim::Data& clip : clips) {
+        const std::string name = UniqueName(clip.name.empty() ? model.name : clip.name, clip_names);
+        std::string bytes;
+        try {
+            const std::vector<std::byte> written = anim::write(clip);
+            bytes.assign(reinterpret_cast<const char*>(written.data()), written.size());
+        } catch (const std::exception& failure) {
+            error = "clip " + name + " cannot be written as AANIM: " + failure.what();
+            return std::nullopt;
+        }
+        std::optional<std::string> path = store_resource_file(
+            resources_root, animation_folder, engine_core::sanitize_file_name(name) + ".aanim", bytes, error);
+        if (!path) {
+            return std::nullopt;
+        }
+        model.animations.push_back({name, std::move(*path)});
+    }
     return model;
 }
 
@@ -793,12 +952,14 @@ engine_core::InstanceId build_model_assets(engine_core::DataModel& world, const 
     const engine_core::InstanceId materials = world.service("Materials");
     const engine_core::InstanceId meshes = world.service("Meshes");
     const engine_core::InstanceId prefabs = world.service("Prefabs");
-    if (textures == 0 || materials == 0 || meshes == 0 || prefabs == 0) {
+    const engine_core::InstanceId animations = world.service("Animations");
+    if (textures == 0 || materials == 0 || meshes == 0 || prefabs == 0 || animations == 0) {
         error = "This place has no Assets to import into";
         return 0;
     }
-    // Every instance, its three folders, and a Prefab, so none is left half made.
-    const std::size_t needed = model.textures.size() + model.materials.size() + model.meshes.size() * 2 + 4;
+    // Every instance, its four folders, and a Prefab, so none is left half made.
+    const std::size_t needed =
+        model.textures.size() + model.materials.size() + model.meshes.size() * 2 + model.animations.size() + 5;
     if (world.room_left() < needed) {
         error = engine_core::InstanceCapacityError().what();
         return 0;
@@ -875,6 +1036,31 @@ engine_core::InstanceId build_model_assets(engine_core::DataModel& world, const 
         }
     }
 
+    engine_core::InstanceId animation_folder = 0;
+    if (!model.animations.empty()) {
+        animation_folder = make("Folder", animations, model.name);
+        if (animation_folder == 0) {
+            return fail();
+        }
+        for (const ImportedAnimation& imported : model.animations) {
+            const engine_core::InstanceId id = make("Animation", animation_folder, imported.name);
+            if (id == 0) {
+                return fail();
+            }
+            (void)static_cast<engine_core::Animation*>(world.instance(id))->set_path(imported.path);
+        }
+    }
+    // A file of clips alone makes no Prefab: its Animations folder is what it made.
+    if (model.meshes.empty()) {
+        if (animation_folder == 0) {
+            error = "it holds no triangles";
+            return fail();
+        }
+        if (made_out != nullptr) {
+            *made_out = std::move(made);
+        }
+        return animation_folder;
+    }
     const engine_core::InstanceId mesh_folder = make("Folder", meshes, model.name);
     const engine_core::InstanceId prefab = mesh_folder != 0 ? make("Prefab", prefabs, model.name) : 0;
     if (prefab == 0) {

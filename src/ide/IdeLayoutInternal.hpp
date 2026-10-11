@@ -230,7 +230,8 @@ scene {
 .ide-ribbon-separator {
     width: 1px;
     height: 48px;
-    background-color: var(--ide-ribbon-border-color);
+    background-color: var(--ide-muted-text-color);
+    opacity: 0.5;
 }
 .ide-ribbon-empty {
     padding: 0 6px;

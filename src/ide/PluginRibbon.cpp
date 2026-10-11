@@ -217,12 +217,18 @@ std::shared_ptr<jadefx::Node> PluginRibbon::makeGroup(const engine_core::PluginT
 
 namespace {
 
+// A gap between groups, a line down its middle.
 std::shared_ptr<jadefx::Node> MakeSeparator() {
-    auto separator = jadefx::make<jadefx::Pane>();
-    separator->getClassList().add("ide-ribbon-separator");
-    separator->setMouseTransparent(true);
-    separator->setPrefSize(9, 48);
-    return separator;
+    auto gap = jadefx::make<jadefx::StackPane>();
+    gap->setAlignment(jadefx::Pos::Center);
+    gap->setMouseTransparent(true);
+    gap->setMinSize(21, 48);
+    gap->setPrefSize(21, 48);
+    auto line = jadefx::make<jadefx::Pane>();
+    line->getClassList().add("ide-ribbon-separator");
+    line->setPrefSize(1, 48);
+    gap->getChildren().add(std::move(line));
+    return gap;
 }
 
 }  // namespace

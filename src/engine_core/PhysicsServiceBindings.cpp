@@ -16,6 +16,7 @@
 #include <cstring>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace engine_core {
 
@@ -83,11 +84,21 @@ int set_collidable_bulk(lua_State* state) {
         luaL_checktype(state, 3, LUA_TTABLE);
         luaL_checktype(state, 4, LUA_TBOOLEAN);
         const bool collidable = lua_toboolean(state, 4) != 0;
+        // All or nothing: every name is checked before any is applied.
         const int count = lua_objlen(state, 3);
+        std::vector<std::string> others;
+        others.reserve(static_cast<std::size_t>(count));
         for (int i = 1; i <= count; ++i) {
             lua_rawgeti(state, 3, i);
-            const std::string other = luaL_checkstring(state, -1);
+            others.emplace_back(luaL_checkstring(state, -1));
             lua_pop(state, 1);
+        }
+        for (const std::string& other : others) {
+            if (!groups.registered(other)) {
+                raise(state, groups.set_collidable(name, other, collidable));
+            }
+        }
+        for (const std::string& other : others) {
             raise(state, groups.set_collidable(name, other, collidable));
         }
         return 0;

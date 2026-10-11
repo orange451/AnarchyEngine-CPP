@@ -111,3 +111,20 @@ TEST_CASE("CGL3 RaycastParams.CollisionGroup filters what a ray hits", "[collisi
     INFO(out);
     REQUIRE(has(out, "Default\nBox\nFloor\n"));
 }
+
+TEST_CASE("CGL4 CollisionGroupSetCollidableBulk with a bad name changes nothing", "[collision-group][lua]") {
+    GroupsRig rig;
+    const std::string out = rig.run(R"(
+        local P = game:GetService("PhysicsService")
+        P:RegisterCollisionGroup("A")
+        P:RegisterCollisionGroup("B")
+        print(pcall(function() P:CollisionGroupSetCollidableBulk("A", { "B", "Nope" }, false) end))
+        print(P:CollisionGroupsAreCollidable("A", "B"))
+        print(pcall(function() P:CollisionGroupSetCollidableBulk("A", { "B", 5 }, false) end))
+        print(P:CollisionGroupsAreCollidable("A", "B"))
+    )");
+    INFO(out);
+    REQUIRE(has(out, "Unknown collision group \"Nope\""));
+    REQUIRE_FALSE(has(out, "\nfalse\n"));
+    REQUIRE(has(out, "true\n"));
+}

@@ -1801,6 +1801,9 @@ TEST_CASE("P48 a welded assembly's members each collide by their own group", "[p
     rig.game.set_parent(weld.id(), workspace_of(rig.game));
     REQUIRE_FALSE(bottom.set_collision_group("Ghosts"));
     rig.play();
+    // A step first: the compound body and its members' shapes exist, so the
+    // registration re-filters them rather than their being made with it.
+    rig.seconds(0.1);
     REQUIRE_FALSE(rig.game.collision_groups().register_group("Ghosts", CollisionGroups::FilterType::Include));
     rig.seconds(3.0);
     REQUIRE(near(y_of(top.transform()), 0.5f, 0.05f));
@@ -1839,4 +1842,27 @@ TEST_CASE("P50 rays: by group from the physics world, every group for Studio; St
     rig.game.stop_simulation();
     const auto after = rig.physics.raycast(rig.game, Vec3{0.f, 10.f, 0.f}, Vec3{0.f, -20.f, 0.f}, grouped);
     REQUIRE((after && after->instance == box.id()));
+}
+
+TEST_CASE("P51 a group registered on a freed bit re-filters bodies, with none of the old group's settings",
+          "[physics][collision-group]") {
+    PhysicsRig rig;
+    rig.floor();
+    PhysicsObject& box = rig.body(at(0.f, 3.f, 0.f), Vec3{1.f, 1.f, 1.f}, false);
+    REQUIRE_FALSE(box.set_collision_group("Second"));
+    rig.play();
+    CollisionGroups& groups = rig.game.collision_groups();
+    REQUIRE_FALSE(groups.register_group("First", CollisionGroups::FilterType::Exclude));
+    REQUIRE_FALSE(groups.set_collidable("First", "Default", false));
+    rig.seconds(1.5);
+    REQUIRE(near(y_of(box.transform()), 0.5f, 0.05f));
+    // Second takes First's bit; First's setting against Default goes with it.
+    REQUIRE_FALSE(groups.unregister_group("First"));
+    REQUIRE_FALSE(groups.register_group("Second", CollisionGroups::FilterType::Exclude));
+    rig.seconds(1.0);
+    REQUIRE(near(y_of(box.transform()), 0.5f, 0.05f));
+    // The box was re-filtered onto Second's bit: a setting on it now applies.
+    REQUIRE_FALSE(groups.set_collidable("Second", "Default", false));
+    rig.seconds(1.5);
+    REQUIRE(y_of(box.transform()) < -2.f);
 }

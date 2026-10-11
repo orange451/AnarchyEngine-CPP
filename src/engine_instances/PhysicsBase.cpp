@@ -115,7 +115,12 @@ std::optional<std::string> PhysicsBase::set_vec(const char* property, Vec3& slot
 }
 
 std::optional<std::string> PhysicsBase::set_velocity(Vec3 velocity) {
-    return set_vec("Velocity", velocity_, velocity, kDirtyVelocity);
+    std::optional<std::string> refused = set_vec("Velocity", velocity_, velocity, kDirtyVelocity);
+    if (!refused) {
+        // A member's Velocity is its assembly's.
+        assemblies().velocity_written(*this, id(), true, velocity, false, Vec3{});
+    }
+    return refused;
 }
 
 void PhysicsBase::set_anchored(bool anchored) {

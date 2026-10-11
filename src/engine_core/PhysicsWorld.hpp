@@ -140,6 +140,8 @@ public:
     std::uint64_t shape_key(InstanceId id) const;
     // For tests: the linear damping of the body this PhysicsBase is on, or 0.
     float body_damping(InstanceId id) const;
+    // For tests: where the centre of mass of the body this PhysicsBase is on is.
+    std::optional<Vec3> body_center(InstanceId id) const;
 
     // Where Terrain bodies come from; null for none. SimulationThread, under
     // the write lock. The TerrainWorld must outlive this world or be unset

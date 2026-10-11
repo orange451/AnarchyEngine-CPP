@@ -1385,6 +1385,7 @@ struct PhysicsWorld::Impl {
                 found->second.seen = pass;
             }
         }
+        apply_assembly_writes(game);
         compounds_gone.clear();
         for (const auto& [stamp, compound] : compounds) {
             if (compound.seen != pass) {
@@ -1393,6 +1394,50 @@ struct PhysicsWorld::Impl {
         }
         for (const std::uint32_t stamp : compounds_gone) {
             drop_compound(stamp);
+        }
+    }
+
+    // What scripts and Properties wrote to members since the last sync: a move
+    // of the whole assembly, and its velocities, centre of mass's, applied
+    // after the shapes put the centre of mass. An upward write to a
+    // PlayerController root's assembly is a jump, whichever member took it.
+    void apply_assembly_writes(DataModel& game) {
+        std::vector<Assemblies::PlayAssembly>& plays = game.assemblies().play();
+        for (Assemblies::PlayAssembly& assembly : plays) {
+            const auto found = compounds.find(assembly.stamp);
+            const bool body = found != compounds.end() && b3Body_IsValid(found->second.body);
+            if (assembly.teleport) {
+                assembly.teleport = false;
+                if (body) {
+                    b3Vec3 position{};
+                    b3Quat rotation{};
+                    pose_of(assembly.frame, position, rotation);
+                    b3Body_SetTransform(found->second.body, position, rotation);
+                    if (!found->second.anchored) {
+                        b3Body_SetAwake(found->second.body, true);
+                    }
+                }
+            }
+            if (!assembly.velocity_pending && !assembly.angular_pending) {
+                continue;
+            }
+            if (body && !found->second.anchored) {
+                const b3BodyId id = found->second.body;
+                if (assembly.velocity_pending) {
+                    const auto root = bodies.find(assembly.root);
+                    if (root != bodies.end() && root->second.controller &&
+                        assembly.velocity.y - b3Body_GetLinearVelocity(id).y > kRisingSpeed) {
+                        root->second.launched = true;
+                    }
+                    b3Body_SetLinearVelocity(id, to_b3(assembly.velocity));
+                }
+                if (assembly.angular_pending) {
+                    b3Body_SetAngularVelocity(id, to_b3(assembly.angular));
+                }
+                b3Body_SetAwake(id, true);
+            }
+            assembly.velocity_pending = false;
+            assembly.angular_pending = false;
         }
     }
 
@@ -1694,7 +1739,14 @@ struct PhysicsWorld::Impl {
     void control(DataModel& game, double dt) {
         const float step = static_cast<float>(dt);
         for (auto& [id, record] : bodies) {
-            if (!record.controller || (record.compound != 0 && record.compound_root != id)) {
+            if (!record.controller) {
+                continue;
+            }
+            // Only an assembly's root controller steers it; another stands on nothing.
+            if (record.compound != 0 && record.compound_root != id) {
+                if (auto* rider = dynamic_cast<PlayerController*>(game.instance(id))) {
+                    rider->store_ground(false, false);
+                }
                 continue;
             }
             auto* controller = dynamic_cast<PlayerController*>(game.instance(id));
@@ -1839,7 +1891,10 @@ struct PhysicsWorld::Impl {
             // the ground along under a walking controller, since Box3D sees no
             // push for the script's Velocity write.
             if (b3Body_IsValid(ground.body) && b3Body_GetType(ground.body) == b3_dynamicBody) {
-                const float load = static_cast<float>(controller->mass()) * weight;
+                // The whole assembly's weight: what it carries stands on that ground too.
+                const float mass = record.compound != 0 ? b3Body_GetMass(record.body)
+                                                        : static_cast<float>(controller->mass());
+                const float load = mass * weight;
                 const b3Vec3 push = steep ? b3Vec3{-load * normal.y * normal.x, -load * normal.y * normal.y,
                                                    -load * normal.y * normal.z}
                                           : b3Vec3{0.f, -load, 0.f};
@@ -1892,6 +1947,11 @@ struct PhysicsWorld::Impl {
         for (int index = 0; index < count; ++index) {
             const b3ContactData& contact = contacts[static_cast<std::size_t>(index)];
             const bool first = B3_ID_EQUALS(b3Shape_GetBody(contact.shapeIdA), record.body);
+            // In an assembly, only the controller's own cylinder counts: what
+            // it carries touching a wall or a ceiling does not stop it walking.
+            if (record.compound != 0 && !owns_shape(record, first ? contact.shapeIdA : contact.shapeIdB)) {
+                continue;
+            }
             for (int which = 0; which < contact.manifoldCount; ++which) {
                 const b3Manifold& manifold = contact.manifolds[which];
                 if (manifold.pointCount == 0) {
@@ -1901,6 +1961,15 @@ struct PhysicsWorld::Impl {
                 each(first ? b3Vec3{-manifold.normal.x, -manifold.normal.y, -manifold.normal.z} : manifold.normal);
             }
         }
+    }
+
+    static bool owns_shape(const Body& record, b3ShapeId shape) {
+        for (const b3ShapeId own : record.shapes) {
+            if (B3_ID_EQUALS(own, shape)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     // A contact on ground too steep to stand on, pushing up on the controller.
@@ -1974,7 +2043,8 @@ struct PhysicsWorld::Impl {
     // the speed up and down it was to have.
     void unclimb(DataModel& game) {
         for (auto& [id, record] : bodies) {
-            if (!record.controller || b3Body_GetType(record.body) != b3_dynamicBody) {
+            if (!record.controller || b3Body_GetType(record.body) != b3_dynamicBody ||
+                (record.compound != 0 && record.compound_root != id)) {
                 continue;
             }
             const auto* controller = dynamic_cast<const PlayerController*>(game.instance(id));
@@ -2525,6 +2595,14 @@ std::size_t PhysicsWorld::body_count() const {
         }
     }
     return own + impl_->compounds.size() + impl_->terrain_bodies.size();
+}
+
+std::optional<Vec3> PhysicsWorld::body_center(InstanceId id) const {
+    const auto found = impl_->bodies.find(id);
+    if (found == impl_->bodies.end() || !b3Body_IsValid(found->second.body)) {
+        return std::nullopt;
+    }
+    return from_b3(b3Body_GetWorldCenter(found->second.body));
 }
 
 float PhysicsWorld::body_damping(InstanceId id) const {

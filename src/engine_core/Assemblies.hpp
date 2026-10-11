@@ -121,6 +121,11 @@ public:
     // editor follow (§4); playing, the play hooks (§5).
     void transform_written(DataModel& game, InstanceId id);
     void attachment_changed(DataModel& game, InstanceId id);
+    // Playing: a member's Velocity (has_linear) or AngularVelocity
+    // (has_angular) was written. It is the assembly's: stored on every
+    // physics member at once, and given to the body at the next sync.
+    void velocity_written(DataModel& game, InstanceId id, bool has_linear, Vec3 linear, bool has_angular,
+                          Vec3 angular);
     // A constraint's ends or Enabled changed, or a relevant instance moved in
     // the tree: the revision moves and, stopped, one follow pass runs.
     void constraint_changed(DataModel& game, InstanceId id);

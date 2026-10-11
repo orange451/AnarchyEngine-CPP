@@ -1,5 +1,6 @@
 #include "Brush.hpp"
 
+#include "Assemblies.hpp"
 #include "Containment.hpp"
 #include "LuaApi.hpp"
 #include "PropertyBag.hpp"
@@ -257,7 +258,11 @@ std::optional<std::string> Brush::set_faces_json(const std::string& json) {
 }
 
 std::optional<std::string> Brush::set_angular_velocity(Vec3 velocity) {
-    return set_vec("AngularVelocity", angular_velocity_, velocity, kDirtyVelocity);
+    std::optional<std::string> refused = set_vec("AngularVelocity", angular_velocity_, velocity, kDirtyVelocity);
+    if (!refused) {
+        assemblies().velocity_written(*this, id(), false, Vec3{}, true, velocity);
+    }
+    return refused;
 }
 
 std::optional<std::string> Brush::set_friction(double friction) {

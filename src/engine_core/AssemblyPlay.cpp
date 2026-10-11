@@ -8,6 +8,7 @@
 #include "GameObject.hpp"
 #include "PhysicsBase.hpp"
 #include "PhysicsObject.hpp"
+#include "PlayerController.hpp"
 #include "SpatialObject.hpp"
 
 namespace engine_core {
@@ -137,8 +138,92 @@ void Assemblies::pose_members(DataModel& game, std::size_t assembly, const Matri
     }
 }
 
-// Task 7 fills it: a member moved in play moves the whole assembly.
-void Assemblies::play_transform_written(DataModel&, InstanceId) {}
+// A checked write to a member moves the whole assembly at once: the body
+// frame that puts the written instance where it was written, upright when a
+// PlayerController is root (and then the written member too is put back on
+// that frame). The physics world moves the body there at its next sync.
+void Assemblies::play_transform_written(DataModel& game, InstanceId id) {
+    if ((flags(id) & kMember) == 0) {
+        return;
+    }
+    const InstanceId node = node_of(id);
+    const int index = play_of(node);
+    const auto* placed = dynamic_cast<const PVInstance*>(game.instance(id));
+    if (index < 0 || placed == nullptr) {
+        return;
+    }
+    const std::int32_t member = play_member_index_[id_slot(node)];
+    if (member < 0) {
+        return;
+    }
+    PlayAssembly& assembly = play_[static_cast<std::size_t>(index)];
+    const Matrix4 frame = matrix4_multiply(matrix4_orthonormalize(placed->transform()),
+                                           matrix4_inverse(play_members_[static_cast<std::size_t>(member)].offset));
+    const auto* root = dynamic_cast<const PhysicsBase*>(game.instance(assembly.root));
+    const bool controller = dynamic_cast<const PlayerController*>(root) != nullptr;
+    assembly.frame = controller ? upright_transform(frame) : matrix4_orthonormalize(frame);
+    assembly.teleport = true;
+    Vec3 velocity{};
+    Vec3 angular{};
+    if (root != nullptr) {
+        velocity = root->velocity();
+        if (const auto* rigid = dynamic_cast<const PhysicsObject*>(root)) {
+            angular = rigid->angular_velocity();
+        } else if (const auto* brush = dynamic_cast<const Brush*>(root)) {
+            angular = brush->angular_velocity();
+        }
+    }
+    pose_members(game, static_cast<std::size_t>(index), assembly.frame, velocity, angular, controller ? 0 : id);
+}
+
+void Assemblies::velocity_written(DataModel& game, InstanceId id, bool has_linear, Vec3 linear, bool has_angular,
+                                  Vec3 angular) {
+    if (suspended_ > 0 || busy_ > 0 || !game.simulation_running()) {
+        return;
+    }
+    refresh(game);
+    if ((flags(id) & kMember) == 0) {
+        return;
+    }
+    const int index = play_of(node_of(id));
+    if (index < 0) {
+        return;
+    }
+    PlayAssembly& assembly = play_[static_cast<std::size_t>(index)];
+    if (has_linear) {
+        assembly.velocity_pending = true;
+        assembly.velocity = linear;
+    }
+    if (has_angular) {
+        assembly.angular_pending = true;
+        assembly.angular = angular;
+    }
+    // Every member reads the assembly's velocity at once.
+    const auto store = [&](PhysicsBase& body) {
+        if (has_linear) {
+            body.store_simulated(body.transform(), linear);
+        }
+        if (has_angular) {
+            if (auto* rigid = dynamic_cast<PhysicsObject*>(&body)) {
+                rigid->store_angular_velocity(angular);
+            } else if (auto* brush = dynamic_cast<Brush*>(&body)) {
+                brush->store_angular_velocity(angular);
+            }
+        }
+    };
+    for (std::uint32_t i = assembly.first; i < assembly.first + assembly.count; ++i) {
+        if (auto* body = dynamic_cast<PhysicsBase*>(game.instance(play_members_[i].node))) {
+            store(*body);
+        }
+    }
+    for (const PlayLoser& loser : play_losers_) {
+        if (loser.member >= assembly.first && loser.member < assembly.first + assembly.count) {
+            if (auto* body = dynamic_cast<PhysicsBase*>(game.instance(loser.instance))) {
+                store(*body);
+            }
+        }
+    }
+}
 
 // Task 8 fills it: an end Attachment moved in play re-snaps its edge.
 void Assemblies::play_attachment_changed(DataModel&, InstanceId) {}

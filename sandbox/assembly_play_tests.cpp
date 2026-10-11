@@ -348,3 +348,253 @@ TEST_CASE("AP9d both ends of a long welded pair over terrain get colliders and l
     REQUIRE(y_of(far_end.transform()) > 0.f);
     REQUIRE(y_of(near_end.transform()) > 0.f);
 }
+
+namespace {
+
+// A GameObject with a PhysicsObject under it that moves it.
+struct Part {
+    GameObject* object = nullptr;
+    PhysicsObject* body = nullptr;
+};
+
+Part add_part(DataModel& game, Matrix4 where, double mass = PhysicsObject::kDefaultMass) {
+    Part part;
+    part.object = &create_part(game);
+    part.object->set_transform(where);
+    part.body = &game.create<PhysicsObject>();
+    REQUIRE_FALSE(part.body->set_mass(mass));
+    game.set_parent(part.body->id(), part.object->id());
+    return part;
+}
+
+}  // namespace
+
+TEST_CASE("AP10 writing a member's Transform in play moves the whole assembly at once", "[assembly][play-move]") {
+    ScriptRig rig;
+    engine_core::PhysicsWorld physics;
+    Part a = add_part(rig.game, at(0.f, 10.f, 0.f), 500.0);
+    rig.game.set_name(a.object->id(), "A");
+    Part b = add_part(rig.game, at(3.f, 10.f, 0.f));
+    rig.game.set_name(b.object->id(), "B");
+    weld(rig.game, a.object->id(), b.object->id());
+    add_script(rig.game, "Watch", R"(
+        _G.a = 0
+        _G.b = 0
+        workspace.A.Changed:Connect(function(name) if name == "Transform" then _G.a += 1 end end)
+        workspace.B.Changed:Connect(function(name) if name == "Transform" then _G.b += 1 end end)
+    )");
+    rig.game.capture_place();
+    rig.game.start_simulation();
+    rig.frames(1);
+    for (int i = 0; i < 40; ++i) {
+        physics.step(rig.game, kStep);
+    }
+    b.object->set_transform(at(20.f, 30.f, 0.f));
+    // At once, before any step: the root is 3 units to its -X.
+    REQUIRE(near(x_of(a.object->transform()), 17.f, 1e-3f));
+    REQUIRE(near(y_of(a.object->transform()), 30.f, 1e-3f));
+    REQUIRE(near(x_of(a.body->transform()), 17.f, 1e-3f));
+    rig.frames(1);
+    physics.step(rig.game, kStep);
+    REQUIRE(near(x_of(a.object->transform()), 17.f, 1e-2f));
+    REQUIRE(y_of(a.object->transform()) > 29.f);
+    double changes_a = -1;
+    double changes_b = -1;
+    REQUIRE(rig.runtime.global_number("a", changes_a));
+    REQUIRE(rig.runtime.global_number("b", changes_b));
+    REQUIRE(changes_a == 0);
+    REQUIRE(changes_b == 1);
+}
+
+TEST_CASE("AP10b writing a member's PhysicsObject Transform moves both members and both GameObjects",
+          "[assembly][play-move]") {
+    for (int before_first_step = 0; before_first_step < 2; ++before_first_step) {
+        PhysicsRig rig;
+        Part a = add_part(rig.game, at(0.f, 10.f, 0.f), 500.0);
+        Part b = add_part(rig.game, at(3.f, 10.f, 0.f));
+        weld(rig.game, a.object->id(), b.object->id());
+        rig.play();
+        if (before_first_step == 0) {
+            rig.steps(20);
+        }
+        REQUIRE_FALSE(b.body->set_transform(at(-10.f, 40.f, 5.f)));
+        INFO(before_first_step);
+        REQUIRE(near(x_of(b.object->transform()), -10.f, 1e-3f));
+        REQUIRE(near(x_of(a.object->transform()), -13.f, 1e-3f));
+        REQUIRE(near(z_of(a.body->transform()), 5.f, 1e-3f));
+        rig.steps(1);
+        REQUIRE(near(x_of(a.object->transform()), -13.f, 1e-2f));
+        REQUIRE(y_of(b.object->transform()) > 39.f);
+    }
+}
+
+TEST_CASE("AP10c two plain GameObjects welded move together, with no body", "[assembly][play-move]") {
+    PhysicsRig rig;
+    GameObject& a = create_part(rig.game);
+    a.set_transform(at(0.f, 1.f, 0.f));
+    GameObject& b = create_part(rig.game);
+    b.set_transform(at(0.f, 1.f, 2.f));
+    weld(rig.game, a.id(), b.id());
+    rig.play();
+    rig.steps(1);
+    const std::size_t bodies = rig.physics.body_count();
+    a.set_transform(at(5.f, 5.f, 5.f));
+    REQUIRE(near(z_of(b.transform()), 7.f, 1e-4f));
+    REQUIRE(near(x_of(b.transform()), 5.f, 1e-4f));
+    rig.steps(1);
+    REQUIRE(rig.physics.body_count() == bodies);
+}
+
+TEST_CASE("AP11 a member write before the first step moves the assembly, and its body starts there",
+          "[assembly][play-move]") {
+    PhysicsRig rig;
+    Part a = add_part(rig.game, at(0.f, 10.f, 0.f), 500.0);
+    Part b = add_part(rig.game, at(3.f, 10.f, 0.f));
+    weld(rig.game, a.object->id(), b.object->id());
+    rig.play();
+    b.object->set_transform(at(50.f, 10.f, 0.f));
+    REQUIRE(near(x_of(a.object->transform()), 47.f, 1e-3f));
+    rig.steps(1);
+    const auto position = rig.physics.body_position(a.body->id());
+    REQUIRE(position);
+    REQUIRE(near(position->x, 47.f, 1e-2f));
+}
+
+TEST_CASE("AP12 Velocity written through any member is the assembly's, and the last write wins",
+          "[assembly][play-move]") {
+    PhysicsRig rig;
+    Part a = add_part(rig.game, at(0.f, 10.f, 0.f), 500.0);
+    Part b = add_part(rig.game, at(3.f, 10.f, 0.f));
+    weld(rig.game, a.object->id(), b.object->id());
+    rig.play();
+    rig.steps(1);
+    REQUIRE_FALSE(a.body->set_velocity(Vec3{4.f, 0.f, 0.f}));
+    REQUIRE_FALSE(b.body->set_velocity(Vec3{0.f, 10.f, 0.f}));
+    // Read through the other member at once.
+    REQUIRE(near(a.body->velocity().y, 10.f, 1e-4f));
+    REQUIRE(near(a.body->velocity().x, 0.f, 1e-4f));
+    rig.steps(1);
+    REQUIRE(a.body->velocity().y > 9.f);
+    REQUIRE(near(a.body->velocity().x, 0.f, 1e-3f));
+    const float y = y_of(a.object->transform());
+    rig.seconds(0.2);
+    REQUIRE(y_of(a.object->transform()) > y);
+
+    // A welded Brush's AngularVelocity turns the whole assembly.
+    PhysicsRig spin;
+    engine_core::Brush& brush = spin.game.create<engine_core::Brush>();
+    brush.set_anchored(false);
+    REQUIRE_FALSE(brush.set_transform(at(0.f, 10.f, 0.f)));
+    spin.game.set_parent(brush.id(), workspace_of(spin.game));
+    PhysicsObject& box = spin.body(at(4.f, 10.f, 0.f), Vec3{1.f, 1.f, 1.f}, false);
+    weld(spin.game, brush.id(), box.id());
+    spin.play();
+    spin.steps(1);
+    REQUIRE_FALSE(brush.set_angular_velocity(Vec3{0.f, 4.f, 0.f}));
+    spin.steps(2);
+    REQUIRE(std::fabs(box.angular_velocity().y) > 3.f);
+}
+
+TEST_CASE("AP13 an assembly's Velocity is its centre of mass's", "[assembly][play-move]") {
+    PhysicsRig rig;
+    PhysicsObject& root = rig.body(at(0.f, 50.f, 0.f), Vec3{1.f, 1.f, 1.f}, false);
+    REQUIRE_FALSE(root.set_mass(60.0));
+    PhysicsObject& other = rig.body(at(4.f, 50.f, 0.f), Vec3{1.f, 1.f, 1.f}, false);
+    REQUIRE_FALSE(other.set_mass(60.0));
+    REQUIRE_FALSE(root.set_angular_velocity(Vec3{0.f, 5.f, 0.f}));
+    weld(rig.game, root.id(), other.id());
+    rig.play();
+    rig.steps(1);
+    const auto before = rig.physics.body_center(root.id());
+    REQUIRE(before);
+    REQUIRE(near(before->x, 2.f, 1e-3f));
+    rig.steps(24);
+    const auto after = rig.physics.body_center(root.id());
+    REQUIRE(after);
+    REQUIRE(near(after->x, 2.f, 1e-2f));
+    REQUIRE(near(after->z, 0.f, 1e-2f));
+    REQUIRE(near(root.velocity().x, 0.f, 1e-2f));
+    REQUIRE(near(root.velocity().z, 0.f, 1e-2f));
+}
+
+TEST_CASE("AP14 a PlayerController carrying a heavier crate stays root, hovers, and stays upright",
+          "[assembly][play-move]") {
+    PhysicsRig rig;
+    rig.floor();
+    engine_core::PlayerController& player = rig.controller(at(0.f, 0.5f, 0.f));
+    Part crate = add_part(rig.game, at(1.5f, 1.5f, 0.f), 500.0);
+    weld(rig.game, player.id(), crate.object->id());
+    rig.game.assemblies().refresh(rig.game);
+    REQUIRE(rig.game.assemblies().root_of(rig.game, crate.object->id()) == player.id());
+    rig.play();
+    rig.seconds(1.0);
+    // At rest its feet, its origin, are on the floor, and its cylinder floats its hover gap above.
+    INFO(y_of(player.transform()));
+    REQUIRE(near(y_of(player.transform()), 0.f, 0.05f));
+    REQUIRE(player.on_ground());
+    // Tilted, the crate's write leaves the player upright and puts the crate
+    // back where it rides.
+    const Matrix4 tilted = engine_core::matrix4_multiply(
+        at(1.5f, 3.f, 0.f), engine_core::matrix4_axis_angle(Vec3{1.f, 0.f, 0.f}, 30.0 * 3.14159265 / 180.0));
+    crate.object->set_transform(tilted);
+    REQUIRE(near(player.transform().m[5], 1.f, 1e-4f));
+    REQUIRE(near(crate.object->transform().m[5], 1.f, 1e-4f));
+}
+
+TEST_CASE("AP15 a PlayerController presses its whole assembly's weight into what it stands on",
+          "[assembly][play-move]") {
+    float tip[2] = {0.f, 0.f};
+    for (int loaded = 0; loaded < 2; ++loaded) {
+        PhysicsRig rig;
+        rig.floor();
+        // A plank balanced on a ridge along Z, as C13 has it.
+        rig.body(at(0.f, 0.25f, 0.f), Vec3{0.2f, 0.5f, 4.f}, true);
+        PhysicsObject& plank = rig.body(at(0.f, 0.6f, 0.f), Vec3{6.f, 0.2f, 2.f}, false);
+        REQUIRE_FALSE(plank.set_mass(10.0));
+        engine_core::PlayerController& c = rig.controller(at(2.5f, 1.2f, 0.f));
+        REQUIRE_FALSE(c.set_mass(5.0));
+        if (loaded == 1) {
+            // A heavy crate held over the plank's end, touching nothing.
+            PhysicsObject& crate = rig.body(at(2.5f, 4.f, 0.f), Vec3{0.5f, 0.5f, 0.5f}, false);
+            REQUIRE_FALSE(crate.set_mass(200.0));
+            weld(rig.game, c.id(), crate.id());
+        }
+        rig.play();
+        // Just after it lands, before either end reaches the floor: how fast it tips.
+        rig.seconds(0.4);
+        tip[loaded] = plank.transform().m[1];
+    }
+    INFO(tip[0] << " " << tip[1]);
+    REQUIRE(tip[1] < tip[0] - 0.05f);
+}
+
+TEST_CASE("AP16 a PlayerController that is not its assembly's root is never on ground", "[assembly][play-move]") {
+    PhysicsRig rig;
+    rig.floor();
+    engine_core::PlayerController& first = rig.controller(at(0.f, 0.5f, 0.f));
+    engine_core::PlayerController& second = rig.controller(at(2.f, 0.5f, 0.f));
+    REQUIRE_FALSE(first.set_mass(80.0));
+    weld(rig.game, first.id(), second.id());
+    rig.play();
+    rig.seconds(1.0);
+    REQUIRE(first.on_ground());
+    REQUIRE_FALSE(second.on_ground());
+    REQUIRE_FALSE(second.is_sliding());
+}
+
+TEST_CASE("AP16c a PlayerController jumps when its welded crate's Velocity is written upward",
+          "[assembly][play-move]") {
+    PhysicsRig rig;
+    rig.floor();
+    engine_core::PlayerController& player = rig.controller(at(0.f, 0.5f, 0.f));
+    PhysicsObject& crate = rig.body(at(1.5f, 1.f, 0.f), Vec3{0.5f, 0.5f, 0.5f}, false);
+    weld(rig.game, player.id(), crate.id());
+    rig.play();
+    rig.seconds(1.0);
+    const float rest = y_of(player.transform());
+    REQUIRE_FALSE(crate.set_velocity(Vec3{0.f, 20.f, 0.f}));
+    rig.seconds(0.2);
+    REQUIRE(y_of(player.transform()) > rest + 1.f);
+}
+
+

@@ -5,6 +5,7 @@
 #include "support.hpp"
 
 #include "AssetInstances.hpp"
+#include "CollisionGroups.hpp"
 #include "ConvexDecomposition.hpp"
 #include "Enum.hpp"
 #include "Folder.hpp"
@@ -1670,4 +1671,30 @@ TEST_CASE("P42 a PlayerController that cannot collide falls through the floor", 
     rig.play();
     rig.seconds(2.0);
     REQUIRE(y_of(player.transform()) < -5.f);
+}
+
+TEST_CASE("P43 every PhysicsBase has CollisionGroup, saved, Default; Play and Stop clear the groups",
+          "[physics][collision-group]") {
+    for (const char* name : {"PhysicsBase", "PhysicsObject", "PlayerController", "Brush"}) {
+        INFO(name);
+        REQUIRE(engine_core::lua_class_find(name, "CollisionGroup") != nullptr);
+    }
+    SimRole role;
+    engine_core::Game game;
+    PhysicsObject& body = game.create<PhysicsObject>();
+    REQUIRE(body.collision_group() == "Default");
+    REQUIRE_FALSE(body.set_collision_group("Crates"));
+    engine_core::PropertyBag saved;
+    body.save_properties(saved);
+    const engine_core::JsonValue* value = engine_core::bag_find(saved, "CollisionGroup");
+    REQUIRE(value != nullptr);
+    REQUIRE(value->as_string() == "Crates");
+
+    REQUIRE_FALSE(game.collision_groups().register_group("Crates", engine_core::CollisionGroups::Type::Whitelist));
+    game.capture_place();
+    game.start_simulation();
+    REQUIRE_FALSE(game.collision_groups().registered("Crates"));
+    REQUIRE_FALSE(game.collision_groups().register_group("Crates", engine_core::CollisionGroups::Type::Whitelist));
+    game.stop_simulation();
+    REQUIRE_FALSE(game.collision_groups().registered("Crates"));
 }

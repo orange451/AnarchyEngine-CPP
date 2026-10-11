@@ -29,6 +29,8 @@ namespace engine_core {
 //                            Mass, but they touch nothing: it meets nothing,
 //                            nothing rests on it, and unanchored it falls
 //                            through the ground. Rays still hit it.
+// CollisionGroup   string    "Default". Which PhysicsService collision group
+//                            it is in; an unregistered name behaves as Default.
 // Mass             number    50. Below kMinMass, as 0 is, is taken as kMinMass.
 // LinearDamping    number    0, not below 0.
 //
@@ -62,6 +64,7 @@ public:
     Vec3 velocity() const { return velocity_; }
     bool anchored() const { return anchored_; }
     bool can_collide() const { return can_collide_; }
+    const std::string& collision_group() const { return collision_group_; }
     double mass() const { return mass_; }
     double linear_damping() const { return linear_damping_; }
 
@@ -77,6 +80,7 @@ public:
     std::optional<std::string> set_velocity(Vec3 velocity);
     void set_anchored(bool anchored);
     std::optional<std::string> set_can_collide(bool can_collide);
+    std::optional<std::string> set_collision_group(const std::string& group);
     std::optional<std::string> set_mass(double mass);
     std::optional<std::string> set_linear_damping(double damping);
 
@@ -110,6 +114,7 @@ private:
     Vec3 velocity_{};
     bool anchored_ = false;
     bool can_collide_ = true;
+    std::string collision_group_ = "Default";
     double mass_ = kDefaultMass;
     double linear_damping_ = 0.0;
     std::uint32_t dirty_ = kDirtyAll;

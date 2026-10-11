@@ -1767,6 +1767,9 @@ void TestClassGroups() {
     Expect(!Has(player, "Behavior:GameObject"), "a PlayerController has no GameObject row");
     const std::vector<std::string> body = GroupedRows(rig, rig.add<engine_core::PhysicsObject>("Body"));
     Expect(Has(body, "Behavior:GameObject"), "a PhysicsObject keeps its GameObject row, in Behavior");
+    for (const std::vector<std::string>& sheet : {brush, player, body}) {
+        Expect(Has(sheet, "Physics:CollisionGroup"), "every body has CollisionGroup, in Physics");
+    }
     for (const std::string& row : brush) {
         // PVInstance's read-only AssemblyRoot reads last, under Data, on every PVInstance.
         if (row == "Data:AssemblyRoot") {

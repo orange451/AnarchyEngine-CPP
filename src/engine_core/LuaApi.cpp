@@ -1613,6 +1613,10 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
         "When false, nothing collides with this body: it keeps its Mass, nothing rests on it, and unanchored it "
         "falls through the ground. Rays still hit it.",
         "boolean", false, {});
+    add("PhysicsBase", "CollisionGroup",
+        "Which PhysicsService collision group this body is in. A name no script has registered behaves as "
+        "Default until one does.",
+        "string", false, {});
     add("Brush", "Color", "Tints every face, over its Material.", "Color3", false, {});
     add("Brush", "Transparency", "Fades every face, over its Material.", "number", false, {});
     add("Brush", "GetFaces", "Every face, in order.", "{BrushFace}", false, {});

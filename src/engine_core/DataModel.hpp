@@ -84,6 +84,7 @@ public:
 
 class ChangeHistoryService;
 class Assemblies;
+class CollisionGroups;
 class Engine;
 class GameObject;
 class SpatialObject;
@@ -485,6 +486,9 @@ public:
     // Which PVInstances move together (Assemblies): one cache per world,
     // refreshed by whoever reads it. Under the lock.
     Assemblies& assemblies() const;
+    // PhysicsService's collision groups (CollisionGroups.hpp): not saved,
+    // reset at Play and Stop.
+    CollisionGroups& collision_groups() const;
     // A GameObject's Transform as the physics world moved it: stored and
     // drawn, as integrate_simulated moves one, with no Changed, no history,
     // and no check. SimulationThread. A dead id or a non-GameObject does nothing.

@@ -18,6 +18,7 @@ EcsIds register_ecs(flecs::world& world) {
     ids.in_workspace = world.component<ecs::InWorkspace>().id();
     ids.in_lighting = world.component<ecs::InLighting>().id();
     ids.in_core = world.component<ecs::InCore>().id();
+    ids.in_viewport = world.component<ecs::InViewport>().id();
     ids.steps = world.component<ecs::Steps>().id();
     ids.physics_body = world.component<ecs::PhysicsBody>().id();
     ids.terrain = world.component<ecs::TerrainTag>().id();
@@ -25,6 +26,7 @@ EcsIds register_ecs(flecs::world& world) {
     ids.dragger = world.component<ecs::DraggerTag>().id();
     ids.animator = world.component<ecs::AnimatorTag>().id();
     ids.billboard = world.component<ecs::BillboardTag>().id();
+    ids.viewport = world.component<ecs::ViewportTag>().id();
     ids.wireframe = world.component<ecs::WireframeTag>().id();
     ids.constraint = world.component<ecs::ConstraintTag>().id();
     ids.simulated = world.component<ecs::Simulated>().id();

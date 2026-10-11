@@ -20,6 +20,14 @@ void step_animators(DataModel& game, double dt) {
             animator->step(dt);
         }
     }
+    // Animators inside a ViewportPane step in play too, so a preview animates.
+    game.viewport_animators(ids);
+    for (const InstanceId id : ids) {
+        auto* animator = dynamic_cast<Animator*>(game.instance(id));
+        if (animator != nullptr && animator->auto_step()) {
+            animator->step(dt);
+        }
+    }
 }
 
 }  // namespace engine_core

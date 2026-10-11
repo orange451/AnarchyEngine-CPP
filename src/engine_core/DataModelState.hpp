@@ -120,6 +120,10 @@ struct DataModel::State {
     flecs::query<> animator_query;
     // BillboardGuis under game: Instance (in), with BillboardTag and InGame.
     flecs::query<> billboard_query;
+    // ViewportPanes under game: Instance (in), with ViewportTag and InGame.
+    flecs::query<> viewport_query;
+    // Animators inside a ViewportPane: Instance (in), with AnimatorTag and InViewport.
+    flecs::query<> viewport_animator_query;
     // WireframeAdornments under game: Instance (in), with WireframeTag and InGame.
     flecs::query<> wireframe_query;
     // Constraints in Workspace: Instance (in), with ConstraintTag and InWorkspace.

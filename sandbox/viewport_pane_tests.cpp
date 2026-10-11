@@ -11,12 +11,22 @@
 #include "LuaApi.hpp"
 #include "Project.hpp"
 #include "PropertyBag.hpp"
+#include "Animator.hpp"
+#include "GameObject.hpp"
+#include "Light.hpp"
+#include "PhysicsObject.hpp"
+#include "SceneService.hpp"
 #include "Skybox.hpp"
+#include "SnapshotPump.hpp"
+#include "SoundEmitter.hpp"
+#include "WireframeAdornment.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <initializer_list>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -38,6 +48,10 @@ void require_globals(ScriptRig& rig, std::initializer_list<const char*> names) {
         REQUIRE(rig.runtime.global_boolean(name, value));
         REQUIRE(value);
     }
+}
+
+bool listed(const std::vector<InstanceId>& ids, InstanceId id) {
+    return std::find(ids.begin(), ids.end(), id) != ids.end();
 }
 
 // A ViewportPane in a ScreenGui under Gui.
@@ -179,4 +193,145 @@ TEST_CASE("VP7 scripts make a ViewportPane and set its CurrentCamera", "[viewpor
     rig.game.start_simulation();
     rig.frames(1, 0.05);
     require_globals(rig, {"defaults", "set", "refused"});
+}
+
+TEST_CASE("VW1 what is in a ViewportPane is InViewport, never in Workspace or Lighting", "[viewport]") {
+    SimRole role;
+    engine_core::Game game;
+    const InstanceId workspace = game.scene_service("Workspace");
+    // A pane under a BillboardGui in Workspace: the case that leaked.
+    engine_core::GameObject& anchor = game.create_game_object();
+    game.set_parent(anchor.id(), workspace);
+    engine_core::BillboardGui& board = game.create<engine_core::BillboardGui>();
+    game.set_parent(board.id(), anchor.id());
+    engine_core::ViewportPane& pane = game.create<engine_core::ViewportPane>();
+    game.set_parent(pane.id(), board.id());
+    engine_core::GameObject& inside = game.create_game_object();
+    game.set_parent(inside.id(), pane.id());
+    REQUIRE(game.in_workspace(pane.id()));
+    REQUIRE_FALSE(game.in_viewport(pane.id()));
+    REQUIRE(game.in_viewport(inside.id()));
+    REQUIRE_FALSE(game.in_workspace(inside.id()));
+    REQUIRE(game.in_game(inside.id()));
+    std::vector<InstanceId> panes;
+    game.viewport_panes(panes);
+    REQUIRE(listed(panes, pane.id()));
+    // Out of the pane, back in Workspace.
+    game.set_parent(inside.id(), workspace);
+    REQUIRE_FALSE(game.in_viewport(inside.id()));
+    REQUIRE(game.in_workspace(inside.id()));
+}
+
+TEST_CASE("VW2 a pane in Core keeps InCore below it but draws nothing in the Scene View", "[viewport]") {
+    SimRole role;
+    engine_core::Game game;
+    engine_core::ViewportPane& pane = game.create<engine_core::ViewportPane>();
+    game.set_parent(pane.id(), game.core());
+    engine_core::GameObject& inside = game.create_game_object();
+    game.set_parent(inside.id(), pane.id());
+    engine_core::PointLight& light = game.create<engine_core::PointLight>();
+    game.set_parent(light.id(), pane.id());
+    REQUIRE(game.in_core(inside.id()));
+    REQUIRE(game.in_viewport(inside.id()));
+    engine_core::SnapshotPump pump;
+    pump.reserve(engine_core::DataModel::kMaxInstances);
+    pump.prepare_copy(game);
+    pump.publish();
+    REQUIRE(pump.find(inside.id()) == nullptr);
+    REQUIRE(pump.find(light.id()) == nullptr);
+}
+
+TEST_CASE("VW3 a light in a pane under Lighting does not light the place", "[viewport]") {
+    SimRole role;
+    engine_core::Game game;
+    engine_core::ViewportPane& pane = game.create<engine_core::ViewportPane>();
+    game.set_parent(pane.id(), game.scene_service("Lighting"));
+    engine_core::DirectionalLight& sun = game.create<engine_core::DirectionalLight>();
+    game.set_parent(sun.id(), pane.id());
+    engine_core::PointLight& lamp = game.create<engine_core::PointLight>();
+    game.set_parent(lamp.id(), pane.id());
+    REQUIRE_FALSE(game.in_lighting(sun.id()));
+    engine_core::SnapshotPump pump;
+    pump.reserve(engine_core::DataModel::kMaxInstances);
+    pump.prepare_copy(game);
+    pump.publish();
+    REQUIRE(pump.find(sun.id()) == nullptr);
+    REQUIRE(pump.find(lamp.id()) == nullptr);
+    // Stop asks for a resync, which walks Lighting and must stop at the pane too.
+    game.capture_place();
+    game.start_simulation();
+    game.stop_simulation();
+    pump.prepare_copy(game);
+    pump.publish();
+    REQUIRE(pump.find(sun.id()) == nullptr);
+    REQUIRE(pump.find(lamp.id()) == nullptr);
+}
+
+TEST_CASE("VW4 physics, sound, and Draggers skip a pane's contents; Animators there have their own list", "[viewport]") {
+    SimRole role;
+    engine_core::Game game;
+    const InstanceId workspace = game.scene_service("Workspace");
+    engine_core::GameObject& anchor = game.create_game_object();
+    game.set_parent(anchor.id(), workspace);
+    engine_core::BillboardGui& board = game.create<engine_core::BillboardGui>();
+    game.set_parent(board.id(), anchor.id());
+    engine_core::ViewportPane& pane = game.create<engine_core::ViewportPane>();
+    game.set_parent(pane.id(), board.id());
+    engine_core::PhysicsObject& body = game.create<engine_core::PhysicsObject>();
+    game.set_parent(body.id(), pane.id());
+    engine_core::SoundEmitter& sound = game.create<engine_core::SoundEmitter>();
+    game.set_parent(sound.id(), pane.id());
+    engine_core::GameObject& rig = game.create_game_object();
+    game.set_parent(rig.id(), pane.id());
+    engine_core::Animator& animator = game.create<engine_core::Animator>();
+    game.set_parent(animator.id(), rig.id());
+    std::vector<InstanceId> ids;
+    game.physics_bodies(ids);
+    REQUIRE_FALSE(listed(ids, body.id()));
+    game.sound_sources(ids);
+    REQUIRE_FALSE(listed(ids, sound.id()));
+    game.animators(ids);
+    REQUIRE_FALSE(listed(ids, animator.id()));
+    game.viewport_animators(ids);
+    REQUIRE(listed(ids, animator.id()));
+}
+
+TEST_CASE("VW5 a Simulated GameObject with Velocity does not move inside a pane", "[viewport]") {
+    SimRole role;
+    engine_core::Game game;
+    engine_core::ViewportPane& pane = make_pane(game);
+    engine_core::GameObject& thing = game.create_game_object();
+    game.set_parent(thing.id(), pane.id());
+    game.set_simulated(thing.id(), true);
+    thing.set_linear_velocity(1.f, 0.f, 0.f);
+    game.integrate_simulated(1.0);
+    REQUIRE(thing.transform().m[12] == 0.f);
+}
+
+TEST_CASE("VW6 Workspace.CurrentCamera refuses a Camera inside a ViewportPane", "[viewport]") {
+    ScriptRig rig;
+    add_script(rig.game, "Ui", R"(
+        local screen = Instance.new("ScreenGui", game.Gui)
+        local pane = Instance.new("ViewportPane", screen)
+        local camera = Instance.new("Camera", pane)
+        local ok, why = pcall(function() workspace.CurrentCamera = camera end)
+        _G.refused = not ok and string.find(tostring(why), "CurrentCamera cannot be a Camera inside a ViewportPane", 1, true) ~= nil
+    )");
+    rig.game.start_simulation();
+    rig.frames(1, 0.05);
+    require_globals(rig, {"refused"});
+}
+
+TEST_CASE("VW7 a WireframeAdornment in a pane under Workspace is not drawn", "[viewport]") {
+    SimRole role;
+    engine_core::Game game;
+    engine_core::GameObject& anchor = game.create_game_object();
+    game.set_parent(anchor.id(), game.scene_service("Workspace"));
+    engine_core::BillboardGui& board = game.create<engine_core::BillboardGui>();
+    game.set_parent(board.id(), anchor.id());
+    engine_core::ViewportPane& pane = game.create<engine_core::ViewportPane>();
+    game.set_parent(pane.id(), board.id());
+    engine_core::WireframeAdornment& wire = game.create<engine_core::WireframeAdornment>();
+    game.set_parent(wire.id(), pane.id());
+    REQUIRE_FALSE(wire.drawn());
 }

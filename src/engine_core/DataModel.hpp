@@ -429,6 +429,10 @@ public:
     bool in_workspace(InstanceId id) const;
     bool in_lighting(InstanceId id) const;
     bool in_core(InstanceId id) const;
+    // Below a ViewportPane, at any depth. Such an instance is never in
+    // Workspace or Lighting, wherever the pane is; in_game and in_core pass
+    // through the pane as through any instance.
+    bool in_viewport(InstanceId id) const;
     // Core or anything under it: what is never saved, never undone, and left
     // alone by New, Open, Play, and Stop. False for 0 and for a dead id.
     bool core_holds(InstanceId id) const;
@@ -479,6 +483,12 @@ public:
     // The BillboardGuis under game (billboard_gui()), in no set order, into
     // out, which is cleared first. Whether each is drawn is BillboardGui::drawn.
     void billboards(std::vector<InstanceId>& out) const;
+    // The ViewportPanes under game (viewport_pane()), in no set order, into
+    // out, which is cleared first.
+    void viewport_panes(std::vector<InstanceId>& out) const;
+    // The Animators inside a ViewportPane, in no set order, into out, which is
+    // cleared first.
+    void viewport_animators(std::vector<InstanceId>& out) const;
     // The WireframeAdornments under game (wireframe()), in no set order, into
     // out, which is cleared first. Whether each is drawn is WireframeAdornment::drawn.
     void wireframes(std::vector<InstanceId>& out) const;
@@ -742,7 +752,10 @@ private:
     // Recomputes id's scope tags from its parent. Unchanged tags return at
     // once; changed tags walk the subtree. Runs after every tree change.
     void refresh_scope(InstanceId id);
-    void apply_scope(InstanceId id, bool in_game_now, bool in_workspace_now, bool in_lighting_now, bool in_core_now);
+    void apply_scope(InstanceId id, bool in_game_now, bool in_workspace_now, bool in_lighting_now, bool in_core_now,
+                     bool in_viewport_now);
+    // Whether id is a ViewportPane, whose children are a world of their own.
+    bool walls_scope(InstanceId id) const;
     void rebind(InstanceId id) { id_ = id; }
 
     void require_simulation_thread(const char* message) const;

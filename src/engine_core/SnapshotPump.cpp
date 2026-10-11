@@ -103,9 +103,10 @@ bool is_light(const DataModel* instance) {
 }
 
 // Whether id has a row: a SpatialObject or DirectionalLight in Workspace or Core,
-// or any light under Lighting.
+// or any light under Lighting. A ViewportPane's contents never have one.
 bool has_row(const DataModel& game, InstanceId id) {
-    return game.in_workspace(id) || game.in_core(id) || (game.in_lighting(id) && is_light(game.instance(id)));
+    return game.in_workspace(id) || (game.in_core(id) && !game.in_viewport(id)) ||
+           (game.in_lighting(id) && is_light(game.instance(id)));
 }
 
 // A DirectionalLight's row: no Transform, no Prefab, only what it shines.
@@ -298,6 +299,10 @@ void SnapshotPump::resync(DataModel& game) {
             }
             base_ids_.insert(id);
             base_.instances.push_back(row);
+        }
+        // A ViewportPane's contents are its own world, not the place's.
+        if (instance != nullptr && instance->viewport_pane()) {
+            continue;
         }
         for (InstanceId child = game.first_child(id); child != 0; child = game.next_sibling(child)) {
             walk.push_back(child);

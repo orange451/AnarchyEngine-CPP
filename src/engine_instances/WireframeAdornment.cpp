@@ -57,7 +57,9 @@ InstanceId WireframeAdornment::adornee_id() const {
     return object != nullptr && lua_class_inherits(object->class_name(), "PVInstance") ? target : 0;
 }
 
-bool WireframeAdornment::drawn() const { return visible_ && (in_workspace(id()) || in_core(id())); }
+bool WireframeAdornment::drawn() const {
+    return visible_ && (in_workspace(id()) || in_core(id())) && !in_viewport(id());
+}
 
 std::optional<std::string> WireframeAdornment::set_adornee(const LuaSlot& value) {
     require_thread(*this);

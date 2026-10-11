@@ -482,7 +482,7 @@ TEST_CASE("BP7 a Brush under a GameObject with an off-centre Prefab keeps its hu
     REQUIRE(brush.anchored());
 
     rig.play();
-    REQUIRE_FALSE(mesh.edit_geometry(box_above_origin));
+    REQUIRE_FALSE(edit_geometry(game, mesh, box_above_origin));
     REQUIRE(prefab.origin_offset().y != 0.f);
     rig.steps(1);
     const int made = rig.physics.shapes_made(brush.id());

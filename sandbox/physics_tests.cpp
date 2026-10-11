@@ -274,7 +274,7 @@ TEST_CASE("P11 a Hull from a Mesh rests like a box; no Mesh falls back to a Box"
     rig.play();
     // A 2 wide box in the Mesh's session geometry: the hull is it, at its own
     // size, whatever Size was.
-    REQUIRE_FALSE(mesh.edit_geometry([](anarchy::amesh::Data& data) {
+    REQUIRE_FALSE(edit_geometry(rig.game, mesh, [](anarchy::amesh::Data& data) {
         engine_core::add_box(data, Vec3{2.f, 2.f, 2.f}, Vec3{0.f, 0.f, 0.f});
     }));
     rig.seconds(3.0);
@@ -353,7 +353,7 @@ TEST_CASE("P16 an anchored Custom collides as its whole mesh, and still falls wh
     // Two slabs, x from -10 to 0 one unit higher than x from 0 to 10, so the
     // whole surface fitted to Size runs from y -1.5 to 0.5 with its top step at
     // x = 0: the high slab's top is 0.5, the low one's -0.5.
-    REQUIRE_FALSE(mesh.edit_geometry([](anarchy::amesh::Data& data) {
+    REQUIRE_FALSE(edit_geometry(rig.game, mesh, [](anarchy::amesh::Data& data) {
         engine_core::add_box(data, Vec3{10.f, 2.f, 20.f}, Vec3{-5.f, 0.f, 0.f});
         engine_core::add_box(data, Vec3{10.f, 1.f, 20.f}, Vec3{5.f, -0.5f, 0.f});
     }));
@@ -711,7 +711,7 @@ TEST_CASE("P19 a body sits in the middle of its GameObject's Prefab", "[physics]
     SECTION("its shape is centered on the Prefab's OriginOffset, so the mesh's bottom rests on the floor") {
         PrefabBody pot = prefab_body(rig, at(0.f, 5.f, 0.f), Vec3{2.f, 2.f, 2.f});
         rig.play();
-        REQUIRE_FALSE(pot.mesh->edit_geometry(box_above_origin));
+        REQUIRE_FALSE(edit_geometry(rig.game, *pot.mesh, box_above_origin));
         rig.seconds(3.0);
         INFO(y_of(pot.object->transform()));
         REQUIRE(near(y_of(pot.object->transform()), 0.f, 0.05f));
@@ -724,7 +724,7 @@ TEST_CASE("P19 a body sits in the middle of its GameObject's Prefab", "[physics]
         tall.m[5] = 2.f;
         PrefabBody pot = prefab_body(rig, tall, Vec3{2.f, 2.f, 2.f});
         rig.play();
-        REQUIRE_FALSE(pot.mesh->edit_geometry(box_above_origin));
+        REQUIRE_FALSE(edit_geometry(rig.game, *pot.mesh, box_above_origin));
         rig.seconds(3.0);
         INFO(y_of(pot.object->transform()));
         // The middle is 2 above the origin, and the shape, 4 tall at that scale, reaches down to it.
@@ -735,7 +735,7 @@ TEST_CASE("P19 a body sits in the middle of its GameObject's Prefab", "[physics]
     SECTION("a GameObject that gets its Prefab during play centers its body then") {
         PrefabBody pot = prefab_body(rig, at(0.f, 3.f, 0.f), Vec3{2.f, 2.f, 2.f}, false);
         rig.play();
-        REQUIRE_FALSE(pot.mesh->edit_geometry(box_above_origin));
+        REQUIRE_FALSE(edit_geometry(rig.game, *pot.mesh, box_above_origin));
         rig.seconds(2.0);
         REQUIRE(near(y_of(pot.object->transform()), 1.f, 0.05f));
         REQUIRE_FALSE(pot.object->set_prefab(instance_slot(pot.prefab->id())));
@@ -757,7 +757,7 @@ TEST_CASE("P20 a collision outline is centered where the body's shape is", "[phy
     PhysicsRig rig;
     PrefabBody pot = prefab_body(rig, at(0.f, 5.f, 0.f), Vec3{2.f, 2.f, 2.f});
     rig.play();
-    REQUIRE_FALSE(pot.mesh->edit_geometry(box_above_origin));
+    REQUIRE_FALSE(edit_geometry(rig.game, *pot.mesh, box_above_origin));
     const Vec3 center = engine_core::PhysicsWorld::shape_center(rig.game, *pot.body);
     REQUIRE(near(center.x, 0.f, 1e-5f));
     REQUIRE(near(center.y, 1.f, 1e-5f));
@@ -823,7 +823,7 @@ TEST_CASE("P22 a GameObject's Scale scales the body that moves it", "[physics]")
         PrefabBody pot = prefab_body(rig, at(0.f, 5.f, 0.f), Vec3{2.f, 2.f, 2.f});
         REQUIRE_FALSE(pot.object->set_scale(2.0));
         rig.play();
-        REQUIRE_FALSE(pot.mesh->edit_geometry(box_above_origin));
+        REQUIRE_FALSE(edit_geometry(rig.game, *pot.mesh, box_above_origin));
         const Vec3 center = engine_core::PhysicsWorld::shape_center(rig.game, *pot.body);
         REQUIRE(near(center.y, 2.f, 1e-5f));
         rig.seconds(3.0);
@@ -968,7 +968,7 @@ TEST_CASE("P27 an unanchored Custom cup catches a ball", "[physics]") {
     PhysicsRig rig;
     CupScene scene = cup_scene(rig, Vec3{4.f, 3.f, 4.f});
     rig.play();
-    REQUIRE_FALSE(scene.mesh->edit_geometry(add_cup));
+    REQUIRE_FALSE(edit_geometry(rig.game, *scene.mesh, add_cup));
     rig.seconds(4.0);
     INFO(y_of(scene.ball->transform()));
     // On the cup's floor: 0.5 up, plus the ball's radius. A single hull would hold it at 3.5.
@@ -981,7 +981,7 @@ TEST_CASE("P28 a body of pieces weighs its Mass", "[physics]") {
     PhysicsRig rig;
     CupScene scene = cup_scene(rig, Vec3{4.f, 3.f, 4.f});
     rig.play();
-    REQUIRE_FALSE(scene.mesh->edit_geometry(add_cup));
+    REQUIRE_FALSE(edit_geometry(rig.game, *scene.mesh, add_cup));
     rig.steps(1);
     REQUIRE(near(rig.physics.body_mass(scene.cup->id()), 20.f, 0.01f));
     // Every shape kind still weighs its Mass, with one shape.
@@ -1005,7 +1005,7 @@ TEST_CASE("P29 a Custom whose Mesh has no pieces falls back to a Hull and says s
     }
     // Known to split into nothing.
     engine_core::remember_pieces(points, cube.indices, {});
-    REQUIRE_FALSE(mesh.edit_geometry([&cube](anarchy::amesh::Data& data) { data = cube; }));
+    REQUIRE_FALSE(edit_geometry(rig.game, mesh, [&cube](anarchy::amesh::Data& data) { data = cube; }));
     rig.seconds(3.0);
     // The unit cube at its own size: its middle rests half a unit up.
     REQUIRE(near(y_of(body.transform()), 0.5f, 0.05f));
@@ -1018,7 +1018,7 @@ TEST_CASE("P30 Friction set during play reaches every piece", "[physics]") {
     PhysicsRig rig;
     CupScene scene = cup_scene(rig, Vec3{4.f, 3.f, 4.f});
     rig.play();
-    REQUIRE_FALSE(scene.mesh->edit_geometry(add_cup));
+    REQUIRE_FALSE(edit_geometry(rig.game, *scene.mesh, add_cup));
     rig.steps(1);
     REQUIRE_FALSE(scene.cup->set_friction(0.125));
     rig.steps(1);
@@ -1045,7 +1045,7 @@ TEST_CASE("P31 a cup stretched by its GameObject's Transform still holds a ball"
     PhysicsObject& ball = rig.body(at(2.f, 8.f, 0.f), Vec3{1.f, 1.f, 1.f}, false);
     REQUIRE_FALSE(ball.set_shape(static_cast<int>(PhysicsObject::Shape::Sphere)));
     rig.play();
-    REQUIRE_FALSE(mesh.edit_geometry(add_cup));
+    REQUIRE_FALSE(edit_geometry(rig.game, mesh, add_cup));
     rig.seconds(4.0);
     INFO(x_of(ball.transform()) << " " << y_of(ball.transform()));
     REQUIRE(y_of(ball.transform()) < 2.f);
@@ -1061,7 +1061,7 @@ TEST_CASE("P32 pieces in the Mesh's file are used without decomposing, anchored 
     rig.game.set_resources_root(resources);
     CupScene scene = cup_scene(rig, Vec3{4.f, 3.f, 4.f});
     // Stopped: the cup goes into the Mesh's file, then its pieces do.
-    REQUIRE_FALSE(scene.mesh->edit_geometry(add_cup));
+    REQUIRE_FALSE(edit_geometry(rig.game, *scene.mesh, add_cup));
     std::vector<Vec3> points;
     std::vector<std::uint32_t> triangles;
     REQUIRE_FALSE(scene.mesh->vertex_positions(points, &triangles));
@@ -1118,7 +1118,7 @@ TEST_CASE("P34 Mass set during play reweighs a body of pieces", "[physics]") {
     PhysicsRig rig;
     CupScene scene = cup_scene(rig, Vec3{4.f, 3.f, 4.f});
     rig.play();
-    REQUIRE_FALSE(scene.mesh->edit_geometry(add_cup));
+    REQUIRE_FALSE(edit_geometry(rig.game, *scene.mesh, add_cup));
     rig.steps(1);
     REQUIRE(rig.physics.shape_frictions(scene.cup->id()).size() >= 2);
     REQUIRE(near(rig.physics.body_mass(scene.cup->id()), 20.f, 0.01f));
@@ -1277,7 +1277,7 @@ TEST_CASE("P37 a Hull or a Custom takes its Mesh at its own size, and Size, hidd
         REQUIRE_FALSE(body.set_size(Vec3{9.f, 9.f, 9.f}));
         rig.play();
         // A 3 by 1 by 3 slab: its middle, the body's origin, rests half a unit up.
-        REQUIRE_FALSE(mesh.edit_geometry([](anarchy::amesh::Data& data) {
+        REQUIRE_FALSE(edit_geometry(rig.game, mesh, [](anarchy::amesh::Data& data) {
             engine_core::add_box(data, Vec3{3.f, 1.f, 3.f}, Vec3{0.f, 0.5f, 0.f});
         }));
         rig.seconds(3.0);

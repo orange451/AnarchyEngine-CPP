@@ -133,7 +133,7 @@ struct QueueRig {
         std::filesystem::create_directories(resources);
         game.set_resources_root(resources);
         mesh = &game.create<engine_core::Mesh>();
-        REQUIRE_FALSE(mesh->edit_geometry([](anarchy::amesh::Data& data) {
+        REQUIRE_FALSE(edit_geometry(game, *mesh, [](anarchy::amesh::Data& data) {
             engine_core::add_box(data, Vec3{3.f, 1.f, 1.f}, Vec3{1.5f, 0.5f, 0.f});
             engine_core::add_box(data, Vec3{1.f, 2.f, 1.f}, Vec3{0.5f, 2.f, 0.f});
         }));
@@ -189,7 +189,7 @@ TEST_CASE("Q2 a result for a Mesh edited or deleted since is dropped", "[decompo
     QueueRig rig;
     rig.custom(false);
     rig.decomposer.update(rig.game);
-    REQUIRE_FALSE(rig.mesh->edit_geometry([](anarchy::amesh::Data& data) {
+    REQUIRE_FALSE(edit_geometry(rig.game, *rig.mesh, [](anarchy::amesh::Data& data) {
         engine_core::add_box(data, Vec3{1.f, 1.f, 1.f}, Vec3{5.f, 0.f, 0.f});
     }));
     rig.wait();
@@ -226,7 +226,7 @@ TEST_CASE("Q3 nothing is written while playing; a result waits for Stop", "[deco
 
 TEST_CASE("Q4 a Mesh that splits into nothing is not queued again until it changes", "[decomposition]") {
     QueueRig rig;
-    REQUIRE_FALSE(rig.mesh->edit_geometry([](anarchy::amesh::Data& data) { data = anarchy::amesh::Data{}; }));
+    REQUIRE_FALSE(edit_geometry(rig.game, *rig.mesh, [](anarchy::amesh::Data& data) { data = anarchy::amesh::Data{}; }));
     rig.custom(false);
     const std::uint64_t before = engine_core::decompose_count();
     for (int frame = 0; frame < 5; ++frame) {
@@ -252,7 +252,7 @@ TEST_CASE("Q5 a stopped Engine writes a Custom's pieces into its Mesh's file", "
         game.set_resources_root(resources);
         auto& mesh = game.create<engine_core::Mesh>();
         mesh_id = mesh.id();
-        REQUIRE_FALSE(mesh.edit_geometry([](anarchy::amesh::Data& data) {
+        REQUIRE_FALSE(edit_geometry(game, mesh, [](anarchy::amesh::Data& data) {
             engine_core::add_box(data, Vec3{3.f, 1.f, 1.f}, Vec3{1.5f, 0.5f, 0.f});
             engine_core::add_box(data, Vec3{1.f, 2.f, 1.f}, Vec3{0.5f, 2.f, 0.f});
         }));
@@ -281,7 +281,7 @@ TEST_CASE("Q6 an update queues one Mesh; the next is queued by a later update", 
     QueueRig rig;
     rig.custom(false);
     engine_core::Mesh& second = rig.game.create<engine_core::Mesh>();
-    REQUIRE_FALSE(second.edit_geometry([](anarchy::amesh::Data& data) {
+    REQUIRE_FALSE(edit_geometry(rig.game, second, [](anarchy::amesh::Data& data) {
         engine_core::add_box(data, Vec3{3.f, 1.f, 1.f}, Vec3{1.5f, 0.5f, 0.f});
         engine_core::add_box(data, Vec3{1.f, 2.f, 1.f}, Vec3{2.5f, 2.f, 0.f});
     }));

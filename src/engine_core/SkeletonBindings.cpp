@@ -6,6 +6,7 @@
 #include "Bone.hpp"
 #include "GameObject.hpp"
 #include "LuaApi.hpp"
+#include "MeshEditors.hpp"
 #include "Skeleton.hpp"
 #include "Skinning.hpp"
 
@@ -29,6 +30,13 @@ InstanceId find_bone(const GameObject& object, const std::string& name) {
         }
     }
     return 0;
+}
+
+// This frame's MeshEditor edits count: a bone added this frame can be posed this frame.
+void commit_mesh_edits(lua_State* state) {
+    if (DataModel* game = ScriptBindings::game_of(state)) {
+        game->mesh_editors().commit(*game);
+    }
 }
 
 ANARCHY_LUA_REGISTER(register_skeleton_methods) {
@@ -57,6 +65,7 @@ GameObject& ScriptBindings::game_object_self(lua_State* state) {
 int ScriptBindings::game_object_get_bone_names(lua_State* state) {
     return lua_guard(state, [&] {
         const GameObject& object = game_object_self(state);
+        commit_mesh_edits(state);
         const std::shared_ptr<const Skeleton> skeleton = prefab_skeleton(object, object.prefab_guid());
         const int count = skeleton != nullptr ? static_cast<int>(skeleton->bones.size()) : 0;
         lua_createtable(state, count, 0);
@@ -75,6 +84,7 @@ int ScriptBindings::game_object_get_bone_names(lua_State* state) {
 int ScriptBindings::game_object_get_bone(lua_State* state) {
     return lua_guard(state, [&] {
         GameObject& object = game_object_self(state);
+        commit_mesh_edits(state);
         const std::string name = luaL_checkstring(state, 2);
         ScriptRuntime* runtime = runtime_from(state);
         if (const InstanceId found = find_bone(object, name); found != 0) {

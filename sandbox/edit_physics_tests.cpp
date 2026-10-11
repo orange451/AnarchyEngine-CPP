@@ -67,7 +67,7 @@ PhysicsObject& custom_cube(PhysicsRig& rig, engine_core::Mesh*& mesh_out) {
     REQUIRE_FALSE(body.set_mesh(instance_slot(mesh.id())));
     anarchy::amesh::Data cube;
     engine_core::add_box(cube, Vec3{1.f, 1.f, 1.f}, Vec3{0.f, 0.f, 0.f});
-    REQUIRE_FALSE(mesh.edit_geometry([&cube](anarchy::amesh::Data& data) { data = cube; }));
+    REQUIRE_FALSE(edit_geometry(rig.game, mesh, [&cube](anarchy::amesh::Data& data) { data = cube; }));
     mesh_out = &mesh;
     return body;
 }
@@ -148,7 +148,7 @@ TEST_CASE("E7 a body made without pieces is made again at Play, with pieces", "[
     engine_core::Mesh* mesh = nullptr;
     PhysicsObject& body = custom_cube(rig, mesh);
     // Two apart boxes, not one cube, so the pieces are more than the one Hull.
-    REQUIRE_FALSE(mesh->edit_geometry([](anarchy::amesh::Data& data) {
+    REQUIRE_FALSE(edit_geometry(rig.game, *mesh, [](anarchy::amesh::Data& data) {
         data = anarchy::amesh::Data{};
         engine_core::add_box(data, Vec3{0.4f, 1.f, 1.f}, Vec3{-0.3f, 0.f, 0.f});
         engine_core::add_box(data, Vec3{0.4f, 1.f, 1.f}, Vec3{0.3f, 0.f, 0.f});

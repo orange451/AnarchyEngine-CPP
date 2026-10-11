@@ -2,6 +2,7 @@
 
 // Helpers the sandbox test files share.
 
+#include "AssetInstances.hpp"
 #include "ChangeHistoryService.hpp"
 #include "DataModel.hpp"
 #include "DataModelLock.hpp"
@@ -18,6 +19,9 @@
 #include <atomic>
 #include <chrono>
 #include <filesystem>
+#include <functional>
+#include <memory>
+#include <optional>
 #include <random>
 #include <string>
 #include <system_error>
@@ -56,6 +60,28 @@ inline std::string process_id() {
 #else
     return std::to_string(getpid());
 #endif
+}
+
+// Lets fill change mesh's geometry at once, through its MeshEditor: stopped,
+// into its file (which the Mesh draws again); playing, into the session's
+// copy. Returns why it could not, as Mesh::edit_geometry did before MeshEditor.
+inline std::optional<std::string> edit_geometry(engine_core::DataModel& game, engine_core::Mesh& mesh,
+                                                const std::function<void(anarchy::amesh::Data&)>& fill) {
+    std::string error;
+    const std::shared_ptr<engine_core::MeshEditor> editor = game.mesh_editors().open(game, mesh, error);
+    if (editor == nullptr) {
+        return error;
+    }
+    anarchy::amesh::Data data = editor->build();
+    fill(data);
+    editor->clear();
+    editor->add_shape([&data](anarchy::amesh::Data& out) { out = data; });
+    if (game.simulation_running()) {
+        game.mesh_editors().commit(game);
+    } else {
+        game.mesh_editors().write_all(game, true);
+    }
+    return std::nullopt;
 }
 
 // Marks this thread as SimulationThread while it lives.

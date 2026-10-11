@@ -648,6 +648,7 @@ add_library(engine_core STATIC
     src/engine_core/TerrainBindings.cpp
     src/engine_core/SkeletonBindings.cpp
     src/engine_core/MeshEditors.cpp
+    src/engine_core/MeshEditorBindings.cpp
     src/engine_core/AnimationBindings.cpp
     src/engine_core/ScriptRuntime.cpp
     src/engine_core/TableSnapshot.cpp
@@ -1023,6 +1024,7 @@ add_executable(sandbox
     sandbox/mesh_shapes_tests.cpp
     sandbox/mesh_editor_tests.cpp
     sandbox/mesh_editors_tests.cpp
+    sandbox/mesh_editor_lua_tests.cpp
     sandbox/matrix4_tests.cpp
     sandbox/plugin_tests.cpp
     sandbox/instance_file_tests.cpp

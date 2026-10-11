@@ -4,6 +4,7 @@
 #include "AudioWorld.hpp"
 #include "Contract.hpp"
 #include "LuaApi.hpp"
+#include "MeshEditors.hpp"
 #include "Project.hpp"
 #include "PropertyBag.hpp"
 #include "Animation.hpp"
@@ -169,52 +170,6 @@ std::optional<std::string> Mesh::read_file(const std::filesystem::path& root, co
     // New triangles would fall past the last LOD's range.
     if (!allow_lods && out.lods.size() >= 2) {
         return path + " has LODs, and shapes are added only to a mesh without them";
-    }
-    return std::nullopt;
-}
-
-std::optional<std::string> Mesh::edit_geometry(const std::function<void(anarchy::amesh::Data&)>& edit) {
-    if (!on_gameplay_thread()) {
-        contract_fail("asset setters run on SimulationThread");
-    }
-    if (simulation_running()) {
-        // Built on this session's copy, or on the file the first time.
-        anarchy::amesh::Data data;
-        if (const SessionGeometry current = session_geometry(); current.data) {
-            data = *current.data;
-        } else if (std::optional<std::string> error = read_file(resources_root(), path(), data)) {
-            return error;
-        }
-        edit(data);
-        data.lods.clear();
-        data.pieces.clear();
-        if (data.vertices.size() > anarchy::amesh::kMaxVertices || data.indices.size() / 3 > anarchy::amesh::kMaxTriangles) {
-            return std::string("The shapes are more than one mesh can hold");
-        }
-        set_live_geometry(std::make_shared<const anarchy::amesh::Data>(std::move(data)));
-        return std::nullopt;
-    }
-
-    const std::filesystem::path root = resources_root();
-    if (root.empty()) {
-        return std::string("Open or save a project first: a Mesh's shapes are written to its resources folder");
-    }
-    // The GUID keeps two Meshes with one Name from sharing a file.
-    const std::string path =
-        !this->path().empty() ? this->path() : "meshes/" + sanitize_file_name(name(id())) + "." + guid(id()) + ".amesh";
-    anarchy::amesh::Data data;
-    if (std::optional<std::string> error = read_file(root, path, data)) {
-        return error;
-    }
-    edit(data);
-    // One LOD over every triangle, whatever the edit added.
-    data.lods.clear();
-    data.pieces.clear();
-    if (std::optional<std::string> error = write_file(root, path, data)) {
-        return error;
-    }
-    if (this->path() != path) {
-        return set_path(path);
     }
     return std::nullopt;
 }
@@ -945,7 +900,11 @@ bool read_animation_looped(DataModel&, DataModel& object, LuaSlot& out) {
 }
 
 // OriginOffset, of a Mesh or a Prefab.
-bool read_origin_offset(DataModel&, DataModel& object, LuaSlot& out) {
+bool read_origin_offset(DataModel& world, DataModel& object, LuaSlot& out) {
+    // A script's read counts this frame's MeshEditor edits; another thread sees the last commit.
+    if (world.on_gameplay_thread()) {
+        world.mesh_editors().commit(world);
+    }
     Vec3 offset{};
     if (const auto* mesh = dynamic_cast<const Mesh*>(&object)) {
         offset = mesh->origin_offset();

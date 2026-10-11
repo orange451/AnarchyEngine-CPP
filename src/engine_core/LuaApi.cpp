@@ -1358,25 +1358,95 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
         "For terrain texturing: how much HeightTexture's height, over the plain blend weight, decides which "
         "material wins. Must not be negative.",
         "number", false, {});
-    // Every Add writes the Mesh's AMESH file under the project's resources folder, giving
-    // the Mesh a Path first if it has none. During play they change a copy for the session
-    // instead, which the Scene View draws and Stop drops.
-    add("Mesh", "AddBox", "Adds a box of size, centered on position, to this mesh's file.", "nil", false,
-        {P("size", "Vector3"), P("position", "Vector3?")});
-    add("Mesh", "AddSphere", "Adds a sphere, segments around (24 by default), centered on position.", "nil", false,
-        {P("radius", "number"), P("segments", "number?"), P("position", "Vector3?")});
-    add("Mesh", "AddCylinder", "Adds a cylinder along Y, segments around (16 by default), capped unless capped is false.",
-        "nil", false,
+    add("Mesh", "Edit",
+        "This Mesh's MeshEditor: the same one for every script while it lasts. Stopped, a Mesh with no Path gets "
+        "meshes/<Name>.<guid>.amesh first. Refused for a file with LODs, or stopped with no open project.",
+        "MeshEditor", false, {});
+    add("", "MeshEditor",
+        "Edits a Mesh's vertices, triangles, and bones by id: what Mesh:Edit returns. Not an instance. An id stays "
+        "the same, and is never reused, while the editor lasts. Edits draw from the next frame. Stopped, they reach "
+        "the Mesh's file once there has been none for a second, and before Play and a save; playing, the file is "
+        "left alone and Stop drops them. Play, Stop, or the Mesh's file changing otherwise ends it.",
+        nullptr, false, {});
+    add("MeshEditor", "AddVertex",
+        "Adds a vertex and returns its id. It has no normal of its own (one is computed), UV (0, 0), white, and no "
+        "bones.",
+        "number", false, {P("position", "Vector3")});
+    add("MeshEditor", "RemoveVertex", "Removes the vertex and every triangle that uses it.", "nil", false,
+        {P("vertex", "number")});
+    add("MeshEditor", "GetVertices", "Every vertex's id, smallest first.", "{number}", false, {});
+    add("MeshEditor", "GetPosition", "Where the vertex is, in the mesh's space.", "Vector3", false,
+        {P("vertex", "number")});
+    add("MeshEditor", "SetPosition", "Moves the vertex.", "nil", false, {P("vertex", "number"), P("position", "Vector3")});
+    add("MeshEditor", "GetNormal", "The vertex's normal: its own, or else the one its triangles give.", "Vector3", false,
+        {P("vertex", "number")});
+    add("MeshEditor", "SetNormal", "Gives the vertex its own normal, made unit length. nil goes back to the computed one.",
+        "nil", false, {P("vertex", "number"), P("normal", "Vector3?")});
+    add("MeshEditor", "GetUV", "The vertex's texture coordinate.", "Vector2", false, {P("vertex", "number")});
+    add("MeshEditor", "SetUV", "Sets the vertex's texture coordinate.", "nil", false,
+        {P("vertex", "number"), P("uv", "Vector2")});
+    add("MeshEditor", "GetColor", "The vertex's color, and its alpha from 0 to 1.", "Color3", false,
+        {P("vertex", "number")});
+    add("MeshEditor", "SetColor", "Sets the vertex's color, and its alpha from 0 to 1 (1 when none).", "nil", false,
+        {P("vertex", "number"), P("color", "Color3"), P("alpha", "number?")});
+    add("MeshEditor", "AddTriangle",
+        "Adds a triangle of three different vertices and returns its id. Its front is the side they go "
+        "counter-clockwise around.",
+        "number", false, {P("a", "number"), P("b", "number"), P("c", "number")});
+    add("MeshEditor", "RemoveTriangle", "Removes the triangle. Its vertices stay.", "nil", false,
+        {P("triangle", "number")});
+    add("MeshEditor", "GetTriangles", "Every triangle's id, smallest first.", "{number}", false, {});
+    add("MeshEditor", "GetTriangleVertices", "The triangle's three vertices, in order.", "number", false,
+        {P("triangle", "number")});
+    add("MeshEditor", "AddBox", "Adds a box of size, centered on position, and returns its vertices' ids.", "{number}",
+        false, {P("size", "Vector3"), P("position", "Vector3?")});
+    add("MeshEditor", "AddSphere",
+        "Adds a sphere, segments around (24 by default), centered on position, and returns its vertices' ids.",
+        "{number}", false, {P("radius", "number"), P("segments", "number?"), P("position", "Vector3?")});
+    add("MeshEditor", "AddCylinder",
+        "Adds a cylinder along Y, segments around (16 by default), capped unless capped is false, and returns its "
+        "vertices' ids.",
+        "{number}", false,
         {P("radius", "number"), P("height", "number"), P("segments", "number?"), P("capped", "boolean?"),
          P("position", "Vector3?")});
-    add("Mesh", "AddCone", "Adds a cone along Y, its point up, its base capped unless capped is false.", "nil", false,
+    add("MeshEditor", "AddCone",
+        "Adds a cone along Y, its point up, its base capped unless capped is false, and returns its vertices' ids.",
+        "{number}", false,
         {P("radius", "number"), P("height", "number"), P("segments", "number?"), P("capped", "boolean?"),
          P("position", "Vector3?")});
-    add("Mesh", "AddPlane", "Adds a flat rectangle facing up, centered on position.", "nil", false,
-        {P("width", "number"), P("depth", "number"), P("position", "Vector3?")});
-    add("Mesh", "AddTeapot", "Adds a teapot size tall, standing on position, its spout toward +X.", "nil", false,
-        {P("size", "number"), P("position", "Vector3?")});
-    add("Mesh", "Clear", "Empties this mesh's file.", "nil", false, {});
+    add("MeshEditor", "AddPlane", "Adds a flat rectangle facing up, centered on position, and returns its vertices' ids.",
+        "{number}", false, {P("width", "number"), P("depth", "number"), P("position", "Vector3?")});
+    add("MeshEditor", "AddTeapot",
+        "Adds a teapot size tall, standing on position, its spout toward +X, and returns its vertices' ids.",
+        "{number}", false, {P("size", "number"), P("position", "Vector3?")});
+    add("MeshEditor", "Clear", "Removes every vertex, triangle, and bone. New ids carry on from the old ones.", "nil",
+        false, {});
+    add("MeshEditor", "AddBone",
+        "Adds a bone and returns its id. rest is where it rests, in the mesh's space (no rotation at the origin when "
+        "none). Its name must be new. Pose it with GameObject:GetBone(name).",
+        "number", false, {P("name", "string"), P("parent", "number?"), P("rest", "Matrix4?")});
+    add("MeshEditor", "RemoveBone",
+        "Removes the bone. Its children move to its parent; each vertex's other weights are made to add up to 1 "
+        "again.",
+        "nil", false, {P("bone", "number")});
+    add("MeshEditor", "GetBones", "Every bone's id, smallest first.", "{number}", false, {});
+    add("MeshEditor", "FindBone", "The id of the bone with this name, or nil.", "number?", false, {P("name", "string")});
+    add("MeshEditor", "GetBoneName", "The bone's name.", "string", false, {P("bone", "number")});
+    add("MeshEditor", "SetBoneName", "Renames the bone. The name must be new.", "nil", false,
+        {P("bone", "number"), P("name", "string")});
+    add("MeshEditor", "GetBoneParent", "The bone's parent's id, or nil.", "number?", false, {P("bone", "number")});
+    add("MeshEditor", "SetBoneParent", "Moves the bone under parent, or to the top with nil. Its rest stays put.", "nil",
+        false, {P("bone", "number"), P("parent", "number?")});
+    add("MeshEditor", "GetBoneTransform", "Where the bone rests, in the mesh's space.", "Matrix4", false,
+        {P("bone", "number")});
+    add("MeshEditor", "SetBoneTransform", "Sets where the bone rests, in the mesh's space.", "nil", false,
+        {P("bone", "number"), P("rest", "Matrix4")});
+    add("MeshEditor", "SetVertexBones",
+        "Sets the bones that move the vertex and how much, equal shares when weights is nil. The 4 largest are kept, "
+        "made to add up to 1. An empty list clears them; a vertex with none follows the first bone with no parent.",
+        "nil", false, {P("vertex", "number"), P("bones", "{number}"), P("weights", "{number}?")});
+    add("MeshEditor", "GetVertexBones", "The bones that move the vertex, largest first, and their weights.", "{number}",
+        false, {P("vertex", "number")});
 
     add("SoundEmitter", "Play",
         "Plays Sound from TimePosition, or from the start when it is already playing. Parented to a PVInstance, it is "

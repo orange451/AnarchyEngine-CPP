@@ -101,22 +101,6 @@ public:
     // AssetLoads hears it. Any thread.
     bool loaded(const std::filesystem::path& root) const;
 
-    // What the Add methods and Clear do.
-    //
-    // Stopped: reads the AMESH file at Path, or starts empty when there is no
-    // Path or no file yet, lets edit change it, and writes it back. A Mesh with
-    // no Path gets meshes/<Name>.<guid>.amesh first. Needs an open project,
-    // whose resources folder takes the file. Undo puts back a Path it set, not
-    // the file.
-    //
-    // Playing: changes the session geometry instead, starting from the file
-    // the first time. The file and Path are left alone, and Stop drops what
-    // the session made, so the Mesh draws its file again.
-    //
-    // Never reads from a file that is not AMESH, or adds to one with LODs.
-    // Returns why nothing changed.
-    std::optional<std::string> edit_geometry(const std::function<void(anarchy::amesh::Data&)>& edit);
-
     // The live copy: what a MeshEditor last committed, shared with the
     // renderer and drawn instead of the file. data is replaced whole by each
     // commit and never changed after, so a frame can hold it while the next
@@ -164,7 +148,7 @@ public:
     // the DataModel lock; a read lock is enough.
     bool file_pieces(std::uint32_t recipe, std::vector<anarchy::amesh::ConvexPiece>& out) const;
 
-    // Reads the file, sets its pieces, and writes it back as edit_geometry
+    // Reads the file, sets its pieces, and writes it back as write_geometry
     // does, keeping its LODs. Refused while playing or with no file. Not an
     // undo step. Returns why nothing changed.
     std::optional<std::string> store_pieces(std::uint32_t recipe, std::vector<anarchy::amesh::ConvexPiece> pieces);

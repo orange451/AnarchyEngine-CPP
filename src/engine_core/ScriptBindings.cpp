@@ -19,7 +19,7 @@
 #include "LuaUserdata.hpp"
 #include "LuauSandbox.hpp"
 #include "Matrix4.hpp"
-#include "MeshShapes.hpp"
+#include "MeshEditors.hpp"
 #include "ModuleScript.hpp"
 #include "PhysicsObject.hpp"
 #include "PlayerController.hpp"
@@ -1192,45 +1192,6 @@ int ScriptBindings::history_reset_waypoints(lua_State* state) {
     });
 }
 
-namespace {
-
-// A size the shape methods take: a number above 0.
-float shape_size(lua_State* state, int index, const char* what) {
-    const double value = luaL_checknumber(state, index);
-    if (!(value > 0.0) || !std::isfinite(value)) {
-        luaL_error(state, "%s must be a number above 0", what);
-    }
-    return static_cast<float>(value);
-}
-
-// An optional Vector3 argument; nil or none is the origin.
-Vec3 shape_position(lua_State* state, int index) {
-    if (lua_isnoneornil(state, index)) {
-        return Vec3{};
-    }
-    const float* components = lua_tovector(state, index);
-    if (components == nullptr) {
-        luaL_error(state, "position must be a Vector3");
-    }
-    return Vec3{components[0], components[1], components[2]};
-}
-
-int shape_segments(lua_State* state, int index, int fallback) {
-    return lua_isnoneornil(state, index) ? fallback : static_cast<int>(luaL_checkinteger(state, index));
-}
-
-bool shape_flag(lua_State* state, int index, bool fallback) {
-    return lua_isnoneornil(state, index) ? fallback : lua_toboolean(state, index) != 0;
-}
-
-void edit_mesh(lua_State* state, Mesh& mesh, const std::function<void(anarchy::amesh::Data&)>& edit) {
-    if (const std::optional<std::string> error = mesh.edit_geometry(edit)) {
-        luaL_error(state, "%s", error->c_str());
-    }
-}
-
-}  // namespace
-
 Mesh& ScriptBindings::mesh_self(lua_State* state) {
     auto* ud = static_cast<InstanceUd*>(luaL_checkudata(state, 1, kInstanceMeta));
     ScriptRuntime* runtime = runtime_from(state);
@@ -1274,6 +1235,8 @@ int ScriptBindings::prefab_get_bounding_box(lua_State* state) {
         if (prefab == nullptr) {
             luaL_error(state, "instance is gone");
         }
+        // This frame's MeshEditor edits count.
+        runtime->game_->mesh_editors().commit(*runtime->game_);
         // bounds sets nothing when no Model has a Mesh, leaving a size of (0, 0, 0).
         Vec3 low{};
         Vec3 high{};
@@ -1283,86 +1246,24 @@ int ScriptBindings::prefab_get_bounding_box(lua_State* state) {
     });
 }
 
-int ScriptBindings::mesh_add_box(lua_State* state) {
+// The Mesh's editor, opened (and, stopped, its file made) the first time.
+int ScriptBindings::mesh_edit(lua_State* state) {
     return lua_guard(state, [&] {
         Mesh& mesh = mesh_self(state);
-        const float* size = lua_tovector(state, 2);
-        if (size == nullptr || !(size[0] > 0.f && size[1] > 0.f && size[2] > 0.f) ||
-            !(std::isfinite(size[0]) && std::isfinite(size[1]) && std::isfinite(size[2]))) {
-            luaL_error(state, "size must be a Vector3 above 0 on every axis");
+        DataModel& game = *runtime_from(state)->game_;
+        std::string error;
+        std::shared_ptr<MeshEditor> editor = game.mesh_editors().open(game, mesh, error);
+        if (editor == nullptr) {
+            luaL_error(state, "%s", error.c_str());
         }
-        const Vec3 extent{size[0], size[1], size[2]};
-        const Vec3 at = shape_position(state, 3);
-        edit_mesh(state, mesh, [&](anarchy::amesh::Data& data) { add_box(data, extent, at); });
-        return 0;
+        push_mesh_editor(state, std::move(editor));
+        return 1;
     });
 }
 
-int ScriptBindings::mesh_add_sphere(lua_State* state) {
-    return lua_guard(state, [&] {
-        Mesh& mesh = mesh_self(state);
-        const float radius = shape_size(state, 2, "radius");
-        const int segments = shape_segments(state, 3, 24);
-        const Vec3 at = shape_position(state, 4);
-        edit_mesh(state, mesh, [&](anarchy::amesh::Data& data) { add_sphere(data, radius, segments, at); });
-        return 0;
-    });
-}
-
-int ScriptBindings::mesh_add_cylinder(lua_State* state) {
-    return lua_guard(state, [&] {
-        Mesh& mesh = mesh_self(state);
-        const float radius = shape_size(state, 2, "radius");
-        const float height = shape_size(state, 3, "height");
-        const int segments = shape_segments(state, 4, 16);
-        const bool capped = shape_flag(state, 5, true);
-        const Vec3 at = shape_position(state, 6);
-        edit_mesh(state, mesh,
-                  [&](anarchy::amesh::Data& data) { add_cylinder(data, radius, height, segments, capped, at); });
-        return 0;
-    });
-}
-
-int ScriptBindings::mesh_add_cone(lua_State* state) {
-    return lua_guard(state, [&] {
-        Mesh& mesh = mesh_self(state);
-        const float radius = shape_size(state, 2, "radius");
-        const float height = shape_size(state, 3, "height");
-        const int segments = shape_segments(state, 4, 16);
-        const bool capped = shape_flag(state, 5, true);
-        const Vec3 at = shape_position(state, 6);
-        edit_mesh(state, mesh, [&](anarchy::amesh::Data& data) { add_cone(data, radius, height, segments, capped, at); });
-        return 0;
-    });
-}
-
-int ScriptBindings::mesh_add_plane(lua_State* state) {
-    return lua_guard(state, [&] {
-        Mesh& mesh = mesh_self(state);
-        const float width = shape_size(state, 2, "width");
-        const float depth = shape_size(state, 3, "depth");
-        const Vec3 at = shape_position(state, 4);
-        edit_mesh(state, mesh, [&](anarchy::amesh::Data& data) { add_plane(data, width, depth, at); });
-        return 0;
-    });
-}
-
-int ScriptBindings::mesh_add_teapot(lua_State* state) {
-    return lua_guard(state, [&] {
-        Mesh& mesh = mesh_self(state);
-        const float size = shape_size(state, 2, "size");
-        const Vec3 at = shape_position(state, 3);
-        edit_mesh(state, mesh, [&](anarchy::amesh::Data& data) { add_teapot(data, size, at); });
-        return 0;
-    });
-}
-
-int ScriptBindings::mesh_clear(lua_State* state) {
-    return lua_guard(state, [&] {
-        Mesh& mesh = mesh_self(state);
-        edit_mesh(state, mesh, [](anarchy::amesh::Data& data) { data = anarchy::amesh::Data{}; });
-        return 0;
-    });
+DataModel* ScriptBindings::game_of(lua_State* state) {
+    ScriptRuntime* runtime = runtime_from(state);
+    return runtime != nullptr ? runtime->game_ : nullptr;
 }
 
 UserInputService* ScriptBindings::input_service(lua_State* state) {
@@ -1618,13 +1519,7 @@ ANARCHY_LUA_REGISTER(register_script_methods) {
 
     // AssetInstances.cpp declares the class and its Path.
     const LuaField mesh[] = {
-        lua_method("AddBox", "nil", reinterpret_cast<void*>(&ScriptBindings::mesh_add_box)),
-        lua_method("AddSphere", "nil", reinterpret_cast<void*>(&ScriptBindings::mesh_add_sphere)),
-        lua_method("AddCylinder", "nil", reinterpret_cast<void*>(&ScriptBindings::mesh_add_cylinder)),
-        lua_method("AddCone", "nil", reinterpret_cast<void*>(&ScriptBindings::mesh_add_cone)),
-        lua_method("AddPlane", "nil", reinterpret_cast<void*>(&ScriptBindings::mesh_add_plane)),
-        lua_method("AddTeapot", "nil", reinterpret_cast<void*>(&ScriptBindings::mesh_add_teapot)),
-        lua_method("Clear", "nil", reinterpret_cast<void*>(&ScriptBindings::mesh_clear)),
+        lua_method("Edit", "MeshEditor", reinterpret_cast<void*>(&ScriptBindings::mesh_edit)),
     };
     register_lua_class("Mesh", nullptr, mesh, static_cast<int>(sizeof(mesh) / sizeof(mesh[0])));
 

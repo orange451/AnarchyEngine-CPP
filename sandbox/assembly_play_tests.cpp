@@ -217,7 +217,7 @@ TEST_CASE("AP6 a Custom welded to an anchored body is a mesh; unanchored, it is 
         REQUIRE_FALSE(custom.set_mesh(instance_slot(mesh.id())));
         weld(rig.game, base.id(), custom.id());
         rig.play();
-        REQUIRE_FALSE(mesh.edit_geometry([](anarchy::amesh::Data& data) {
+        REQUIRE_FALSE(edit_geometry(rig.game, mesh, [](anarchy::amesh::Data& data) {
             engine_core::add_box(data, Vec3{2.f, 2.f, 2.f}, Vec3{0.f, 0.f, 0.f});
         }));
         rig.steps(2);
@@ -671,7 +671,7 @@ TEST_CASE("AP19 un-anchoring the anchored member makes a welded Custom collide a
     REQUIRE_FALSE(custom.set_mesh(instance_slot(mesh.id())));
     weld(rig.game, base.id(), custom.id());
     rig.play();
-    REQUIRE_FALSE(mesh.edit_geometry([](anarchy::amesh::Data& data) {
+    REQUIRE_FALSE(edit_geometry(rig.game, mesh, [](anarchy::amesh::Data& data) {
         engine_core::add_box(data, Vec3{2.f, 2.f, 2.f}, Vec3{0.f, 0.f, 0.f});
     }));
     rig.steps(2);

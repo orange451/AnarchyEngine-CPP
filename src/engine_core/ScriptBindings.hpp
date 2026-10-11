@@ -28,6 +28,7 @@ namespace engine_core {
 class ChangeHistoryService;
 class CollisionGroups;
 class Mesh;
+class MeshEditor;
 class Brush;
 class SoundEmitter;
 class Camera;
@@ -332,15 +333,10 @@ struct ScriptBindings {
     static int history_get_can_undo(lua_State* state);
     static int history_get_can_redo(lua_State* state);
     static int history_reset_waypoints(lua_State* state);
-    // A Mesh's shape methods. Each adds to the Mesh's AMESH file; see Mesh::edit_geometry.
+    // Mesh:Edit, and the game a state's script runs in, for MeshEditorBindings.cpp's handles.
     static Mesh& mesh_self(lua_State* state);
-    static int mesh_add_box(lua_State* state);
-    static int mesh_add_sphere(lua_State* state);
-    static int mesh_add_cylinder(lua_State* state);
-    static int mesh_add_cone(lua_State* state);
-    static int mesh_add_plane(lua_State* state);
-    static int mesh_add_teapot(lua_State* state);
-    static int mesh_clear(lua_State* state);
+    static int mesh_edit(lua_State* state);
+    static DataModel* game_of(lua_State* state);
     // Terrain's methods, in TerrainBindings.cpp. Every voxel edit goes through
     // Terrain::edit_volume. self as a Terrain, or raises.
     static Terrain& terrain_self(lua_State* state);
@@ -459,6 +455,10 @@ void open_raycast(lua_State* state);
 void open_brush_face(lua_State* state);
 // The AnimationTrack metatable, AE.AnimationTrack.
 void open_animation_track(lua_State* state);
+// The MeshEditor metatable, AE.MeshEditor, in MeshEditorBindings.cpp.
+void open_mesh_editor(lua_State* state);
+// Pushes a handle on editor, whose metatable open_mesh_editor made.
+void push_mesh_editor(lua_State* state, std::shared_ptr<MeshEditor> editor);
 // The Plugin, PluginToolbar, and PluginToolbarButton metatables and the plugin
 // cache, in PluginBindings.cpp. The plugin global itself is set per thread.
 void open_plugin_api(lua_State* state);

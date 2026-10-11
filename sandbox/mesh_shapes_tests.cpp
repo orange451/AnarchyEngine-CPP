@@ -1,10 +1,11 @@
-// A Mesh's shape methods: the shapes themselves, and AddBox and the rest
-// writing the Mesh's AMESH file from the console while the place is stopped.
+// A Mesh's shapes: the shapes themselves, and a MeshEditor's AddBox and the
+// rest writing the Mesh's AMESH file from the console while the place is stopped.
 
 #include "support.hpp"
 
 #include "AssetInstances.hpp"
 #include "ChangeHistoryService.hpp"
+#include "MeshEditors.hpp"
 #include "MeshShapes.hpp"
 #include "Project.hpp"
 #include "ScriptRuntime.hpp"
@@ -100,9 +101,16 @@ struct ShapeRig : ScriptRig {
     }
 
     // Runs source on the command line and returns what it printed and any error, one line each.
+    // Then, as the Mesh's own shape methods did before MeshEditor: stopped,
+    // every edit is in its file at once; playing, in the session's copy.
     std::string run(const std::string& source) {
         runtime.drain_output();
         runtime.run_chunk(source);
+        if (game.simulation_running()) {
+            game.mesh_editors().commit(game);
+        } else {
+            game.mesh_editors().write_all(game, true);
+        }
         std::string out;
         for (const auto& line : runtime.drain_output().lines) {
             out += line.text;
@@ -193,8 +201,8 @@ TEST_CASE("the console builds a Mesh's file, and Clear empties it", "[shapes]") 
     REQUIRE(cube.path().empty());
     const std::string printed = rig.run(R"(
         local m = game.Assets.Meshes.Cube
-        m:AddBox(Vector3.new(1, 2, 3))
-        m:AddCylinder(1, 4, 2, true, Vector3.new(0, 5, 0))
+        m:Edit():AddBox(Vector3.new(1, 2, 3))
+        m:Edit():AddCylinder(1, 4, 2, true, Vector3.new(0, 5, 0))
         print(m.Path)
     )");
     INFO(printed);
@@ -206,10 +214,10 @@ TEST_CASE("the console builds a Mesh's file, and Clear empties it", "[shapes]") 
     REQUIRE(built.indices.size() / 3 == 12 + 12);
     REQUIRE(near(bounds(built).hi[1], 7.f));
 
-    rig.run("game.Assets.Meshes.Cube:AddTeapot(1)");
+    rig.run("game.Assets.Meshes.Cube:Edit():AddTeapot(1)");
     REQUIRE(rig.file_of(cube).vertices.size() > built.vertices.size());
 
-    rig.run("game.Assets.Meshes.Cube:Clear()");
+    rig.run("game.Assets.Meshes.Cube:Edit():Clear()");
     REQUIRE(rig.file_of(cube).vertices.empty());
     REQUIRE(cube.path() == expected);
 }
@@ -218,7 +226,7 @@ TEST_CASE("undo puts back the Path a shape set, and the file stays", "[shapes]")
     ShapeRig rig;
     engine_core::Mesh& cube = rig.mesh("Cube");
     begin_step(rig.game);
-    rig.run("game.Assets.Meshes.Cube:AddSphere(1)");
+    rig.run("game.Assets.Meshes.Cube:Edit():AddSphere(1)");
     end_step(rig.game);
     const std::string path = cube.path();
     REQUIRE_FALSE(path.empty());
@@ -231,19 +239,21 @@ TEST_CASE("shape methods say why they wrote nothing", "[shapes]") {
     ShapeRig rig;
     engine_core::Mesh& cube = rig.mesh("Cube");
 
-    CHECK(rig.run("game.Assets.Meshes.Cube:AddSphere(0)").find("radius must be a number above 0") !=
+    CHECK(rig.run("game.Assets.Meshes.Cube:Edit():AddSphere(0)").find("radius must be a number above 0") !=
           std::string::npos);
-    CHECK(rig.run("game.Assets.Meshes.Cube:AddBox(Vector3.new(1, 0, 1))").find("size must be a Vector3") !=
+    CHECK(rig.run("game.Assets.Meshes.Cube:Edit():AddBox(Vector3.new(1, 0, 1))").find("size must be a Vector3") !=
           std::string::npos);
-    CHECK(rig.run("game.Assets.Meshes.Cube:AddPlane(1, 1, 'up')").find("position must be a Vector3") !=
+    CHECK(rig.run("game.Assets.Meshes.Cube:Edit():AddPlane(1, 1, 'up')").find("position must be a Vector3") !=
           std::string::npos);
-    REQUIRE(cube.path().empty());
+    // Edit gave the Mesh its file, which the refused shapes left empty.
+    REQUIRE(cube.path() == "meshes/Cube." + rig.game.guid(cube.id()) + ".amesh");
+    REQUIRE(rig.file_of(cube).vertices.empty());
 
     // A Path naming a file that is not AMESH: the file is left as it is.
     REQUIRE_FALSE(cube.set_path("meshes/notes.amesh"));
     std::filesystem::create_directories(rig.resources / "meshes");
     std::ofstream(rig.resources / "meshes" / "notes.amesh") << "not a mesh";
-    CHECK(rig.run("game.Assets.Meshes.Cube:AddBox(Vector3.new(1, 1, 1))").find("is not an AMESH file") !=
+    CHECK(rig.run("game.Assets.Meshes.Cube:Edit():AddBox(Vector3.new(1, 1, 1))").find("is not an AMESH file") !=
           std::string::npos);
     std::ifstream kept(rig.resources / "meshes" / "notes.amesh");
     std::string text;
@@ -258,17 +268,19 @@ TEST_CASE("shape methods say why they wrote nothing", "[shapes]") {
     std::ofstream(rig.resources / "meshes" / "lods.amesh", std::ios::binary)
         .write(reinterpret_cast<const char*>(lodded_bytes.data()), static_cast<std::streamsize>(lodded_bytes.size()));
     REQUIRE_FALSE(cube.set_path("meshes/lods.amesh"));
-    CHECK(rig.run("game.Assets.Meshes.Cube:AddBox(Vector3.new(1, 1, 1))").find("has LODs") != std::string::npos);
+    CHECK(rig.run("game.Assets.Meshes.Cube:Edit():AddBox(Vector3.new(1, 1, 1))").find("has LODs") != std::string::npos);
     REQUIRE(rig.file_of(cube).lods.size() == 2);
 
     // No project: nowhere to write.
     rig.game.set_resources_root({});
-    CHECK(rig.run("game.Assets.Meshes.Cube:Clear()").find("Open or save a project first") != std::string::npos);
+    CHECK(rig.run("game.Assets.Meshes.Cube:Edit():Clear()").find("Open or save a project first") != std::string::npos);
 
     // During play, a file with LODs still cannot be added to.
     rig.game.set_resources_root(rig.resources);
     rig.game.start_simulation();
-    REQUIRE(cube.edit_geometry([](Data&) {}).value_or("").find("has LODs") != std::string::npos);
+    std::string error;
+    REQUIRE(rig.game.mesh_editors().open(rig.game, cube, error) == nullptr);
+    REQUIRE(error.find("has LODs") != std::string::npos);
     REQUIRE(cube.session_geometry().data == nullptr);
     rig.game.stop_simulation();
 }
@@ -320,7 +332,7 @@ TEST_CASE("during play, shapes change the session's copy and leave the file alon
     engine_core::Mesh& cube = rig.mesh("Cube");
     rig.run(R"(
         local mesh = game.Assets.Meshes.Cube
-        mesh:AddBox(Vector3.new(1, 1, 1))
+        mesh:Edit():AddBox(Vector3.new(1, 1, 1))
         local prefab = Instance.new("Prefab", game.Assets.Prefabs)
         local model = Instance.new("Model", prefab)
         model.Mesh = mesh
@@ -339,7 +351,7 @@ TEST_CASE("during play, shapes change the session's copy and leave the file alon
 
     // Play: the first edit starts from the file, and the file stays as it was.
     rig.game.start_simulation();
-    INFO(rig.run("game.Assets.Meshes.Cube:AddSphere(0.5, 8, Vector3.new(3, 0, 0))"));
+    INFO(rig.run("game.Assets.Meshes.Cube:Edit():AddSphere(0.5, 8, Vector3.new(3, 0, 0))"));
     REQUIRE(triangles(rig.file_of(cube)) == 12);
     REQUIRE(cube.path() == path);
     const engine_core::Mesh::SessionGeometry first = cube.session_geometry();
@@ -354,7 +366,7 @@ TEST_CASE("during play, shapes change the session's copy and leave the file alon
     REQUIRE(meshes[0].path.empty());
 
     // Each edit is a new copy with a new revision; the frame still holding the old one keeps it.
-    rig.run("game.Assets.Meshes.Cube:Clear()");
+    rig.run("game.Assets.Meshes.Cube:Edit():Clear()");
     const engine_core::Mesh::SessionGeometry cleared = cube.session_geometry();
     REQUIRE(cleared.data != nullptr);
     REQUIRE(cleared.data->vertices.empty());
@@ -371,7 +383,7 @@ TEST_CASE("during play, shapes change the session's copy and leave the file alon
 
     // A new session starts from the file, not from the last session's copy.
     rig.game.start_simulation();
-    rig.run("game.Assets.Meshes.Cube:AddBox(Vector3.new(1, 1, 1), Vector3.new(0, 2, 0))");
+    rig.run("game.Assets.Meshes.Cube:Edit():AddBox(Vector3.new(1, 1, 1), Vector3.new(0, 2, 0))");
     REQUIRE(triangles(*cube.session_geometry().data) == 24);
     rig.game.stop_simulation();
 }
@@ -384,8 +396,8 @@ TEST_CASE("a Mesh made during play draws what its script builds, with no project
     rig.game.start_simulation();
     const std::string printed = rig.run(R"(
         local mesh = Instance.new("Mesh", game.Assets.Meshes)
-        mesh:AddTeapot(1)
-        mesh:AddCone(0.5, 1, nil, true, Vector3.new(2, 0, 0))
+        mesh:Edit():AddTeapot(1)
+        mesh:Edit():AddCone(0.5, 1, nil, true, Vector3.new(2, 0, 0))
         local prefab = Instance.new("Prefab", game.Assets.Prefabs)
         Instance.new("Model", prefab).Mesh = mesh
         local object = Instance.new("GameObject", workspace)
@@ -407,7 +419,7 @@ TEST_CASE("a Mesh made during play draws what its script builds, with no project
 TEST_CASE("a Script that rebuilds a Mesh every Heartbeat never writes its file", "[shapes]") {
     ShapeRig rig;
     engine_core::Mesh& cube = rig.mesh("Cube");
-    rig.run("game.Assets.Meshes.Cube:AddBox(Vector3.new(1, 1, 1))");
+    rig.run("game.Assets.Meshes.Cube:Edit():AddBox(Vector3.new(1, 1, 1))");
     const std::filesystem::path file = rig.resources / std::filesystem::u8path(cube.path());
     const auto written = std::filesystem::last_write_time(file);
     add_script(rig.game, "Pulse", R"(
@@ -415,8 +427,8 @@ TEST_CASE("a Script that rebuilds a Mesh every Heartbeat never writes its file",
         local t = 0
         game:GetService("RunService").Heartbeat:Connect(function(dt)
             t += dt
-            mesh:Clear()
-            mesh:AddSphere(0.5 + t, 8)
+            mesh:Edit():Clear()
+            mesh:Edit():AddSphere(0.5 + t, 8)
         end)
     )");
     for (int session = 0; session < 2; ++session) {
@@ -460,8 +472,8 @@ TEST_CASE("OriginOffset runs from a Mesh's origin to the middle of its box, and 
     REQUIRE(same(pair->origin_offset(), Vec3{}));
 
     INFO(rig.run(R"(
-        game.Assets.Meshes.Low:AddBox(Vector3.new(2, 2, 2), Vector3.new(0, 1, 0))
-        game.Assets.Meshes.High:AddBox(Vector3.new(2, 2, 2), Vector3.new(4, 0, 0))
+        game.Assets.Meshes.Low:Edit():AddBox(Vector3.new(2, 2, 2), Vector3.new(0, 1, 0))
+        game.Assets.Meshes.High:Edit():AddBox(Vector3.new(2, 2, 2), Vector3.new(4, 0, 0))
     )"));
     REQUIRE(same(low.origin_offset(), Vec3{0.f, 1.f, 0.f}));
     REQUIRE(same(high.origin_offset(), Vec3{4.f, 0.f, 0.f}));
@@ -473,7 +485,7 @@ TEST_CASE("OriginOffset runs from a Mesh's origin to the middle of its box, and 
 
     // The file is read again when it changes on disk. Its time is moved on, so
     // a file system that keeps whole seconds still sees the change.
-    rig.run("game.Assets.Meshes.Low:AddBox(Vector3.new(2, 2, 2), Vector3.new(0, 5, 0))");
+    rig.run("game.Assets.Meshes.Low:Edit():AddBox(Vector3.new(2, 2, 2), Vector3.new(0, 5, 0))");
     const std::filesystem::path file = rig.resources / std::filesystem::u8path(low.path());
     std::filesystem::last_write_time(file, std::filesystem::last_write_time(file) + std::chrono::seconds(5));
     REQUIRE(same(low.origin_offset(), Vec3{0.f, 3.f, 0.f}));
@@ -490,7 +502,7 @@ TEST_CASE("OriginOffset runs from a Mesh's origin to the middle of its box, and 
 
     // During play it is the session's geometry.
     rig.game.start_simulation();
-    rig.run("game.Assets.Meshes.Low:AddBox(Vector3.new(2, 2, 2), Vector3.new(0, -10, 0))");
+    rig.run("game.Assets.Meshes.Low:Edit():AddBox(Vector3.new(2, 2, 2), Vector3.new(0, -10, 0))");
     REQUIRE(same(low.origin_offset(), Vec3{0.f, -2.5f, 0.f}));
 }
 
@@ -508,8 +520,8 @@ TEST_CASE("GetBoundingBox gives the size of the box around a Prefab's Models' Me
     )") == "true\n");
 
     REQUIRE(rig.run(R"(
-        game.Assets.Meshes.Low:AddBox(Vector3.new(2, 2, 2), Vector3.new(0, 1, 0))
-        game.Assets.Meshes.High:AddBox(Vector3.new(2, 2, 2), Vector3.new(4, 0, 0))
+        game.Assets.Meshes.Low:Edit():AddBox(Vector3.new(2, 2, 2), Vector3.new(0, 1, 0))
+        game.Assets.Meshes.High:Edit():AddBox(Vector3.new(2, 2, 2), Vector3.new(4, 0, 0))
         print(game.Assets.Prefabs.Pair:GetBoundingBox() == Vector3.new(2, 2, 2))
     )") == "true\n");
 
@@ -537,7 +549,7 @@ std::vector<anarchy::amesh::ConvexPiece> two_tetras() {
 TEST_CASE("M1 pieces stored in a Mesh's file are read back for their recipe", "[shapes]") {
     ShapeRig rig;
     engine_core::Mesh& cube = rig.mesh("Cube");
-    rig.run("game.Assets.Meshes.Cube:AddBox(Vector3.new(1, 1, 1))");
+    rig.run("game.Assets.Meshes.Cube:Edit():AddBox(Vector3.new(1, 1, 1))");
     const std::string before = cube.file_stamp();
     REQUIRE_FALSE(before.empty());
     std::vector<anarchy::amesh::ConvexPiece> found;
@@ -556,7 +568,7 @@ TEST_CASE("M1 pieces stored in a Mesh's file are read back for their recipe", "[
 TEST_CASE("M2 pieces of another recipe are not found", "[shapes]") {
     ShapeRig rig;
     engine_core::Mesh& cube = rig.mesh("Cube");
-    rig.run("game.Assets.Meshes.Cube:AddBox(Vector3.new(1, 1, 1))");
+    rig.run("game.Assets.Meshes.Cube:Edit():AddBox(Vector3.new(1, 1, 1))");
     REQUIRE_FALSE(cube.store_pieces(5, two_tetras()));
     std::vector<anarchy::amesh::ConvexPiece> found;
     REQUIRE_FALSE(cube.file_pieces(6, found));
@@ -566,9 +578,9 @@ TEST_CASE("M2 pieces of another recipe are not found", "[shapes]") {
 TEST_CASE("M3 a shape added after pieces drops them", "[shapes]") {
     ShapeRig rig;
     engine_core::Mesh& cube = rig.mesh("Cube");
-    rig.run("game.Assets.Meshes.Cube:AddBox(Vector3.new(1, 1, 1))");
+    rig.run("game.Assets.Meshes.Cube:Edit():AddBox(Vector3.new(1, 1, 1))");
     REQUIRE_FALSE(cube.store_pieces(5, two_tetras()));
-    rig.run("game.Assets.Meshes.Cube:AddBox(Vector3.new(1, 1, 1), Vector3.new(3, 0, 0))");
+    rig.run("game.Assets.Meshes.Cube:Edit():AddBox(Vector3.new(1, 1, 1), Vector3.new(3, 0, 0))");
     std::vector<anarchy::amesh::ConvexPiece> found;
     REQUIRE_FALSE(cube.file_pieces(5, found));
     REQUIRE(rig.file_of(cube).pieces.empty());
@@ -580,7 +592,7 @@ TEST_CASE("M4 pieces are not stored while playing, or without a file", "[shapes]
     REQUIRE(bare.file_stamp().empty());
     REQUIRE(bare.store_pieces(5, two_tetras()));
     engine_core::Mesh& cube = rig.mesh("Cube");
-    rig.run("game.Assets.Meshes.Cube:AddBox(Vector3.new(1, 1, 1))");
+    rig.run("game.Assets.Meshes.Cube:Edit():AddBox(Vector3.new(1, 1, 1))");
     const std::string stamp = cube.file_stamp();
     rig.game.start_simulation();
     REQUIRE(cube.store_pieces(5, two_tetras()));

@@ -7,8 +7,8 @@
 namespace ide {
 
 // Where a class's cluster sits in the explorer and the Insert list. Lower
-// comes first. The Camera leads, then Folders, then scripts and CSS, then the things
-// in the world: Terrain, the other physics objects, then plain GameObjects. A class
+// comes first. The Camera leads, then Terrain, then Folders, then scripts and CSS, then the things
+// in the world: the physics objects, then plain GameObjects. A class
 // not listed comes after every listed one.
 inline int class_rank(std::string_view class_name) {
     struct Rank {
@@ -17,11 +17,11 @@ inline int class_rank(std::string_view class_name) {
     };
     static constexpr Rank kRanks[] = {
         {"Camera", 0},
-        {"Folder", 1},
-        {"Script", 2},
-        {"ModuleScript", 2},
-        {"CSS", 2},
-        {"Terrain", 3},
+        {"Terrain", 1},
+        {"Folder", 2},
+        {"Script", 3},
+        {"ModuleScript", 3},
+        {"CSS", 3},
         {"PhysicsObject", 4},
         {"Brush", 4},
         {"PlayerController", 4},

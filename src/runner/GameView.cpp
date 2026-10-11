@@ -7,6 +7,7 @@
 #include "Assemblies.hpp"
 #include "AssetInstances.hpp"
 #include "Camera.hpp"
+#include "Constraint.hpp"
 #include "ConvexDecomposition.hpp"
 #include "DataModelLock.hpp"
 #include "Engine.hpp"
@@ -847,8 +848,30 @@ void GameView::readSelectedBodies() {
     if (selection.revision() != selectionSeen_) {
         selected_ = selection.get(selectionSeen_);
     }
-    outlineScratch_.clear();
+    outlined_.assign(selected_.begin(), selected_.end());
+    constraintPivots_.clear();
     for (const engine_core::InstanceId id : selected_) {
+        const auto* constraint = dynamic_cast<const engine_core::Constraint*>(game_->instance(id));
+        if (constraint == nullptr || !game_->in_workspace(id)) {
+            continue;
+        }
+        engine_core::Assemblies& assemblies = game_->assemblies();
+        assemblies.refresh(*game_);
+        engine_core::ConstraintPivots& pivots = constraintPivots_.emplace_back();
+        pivots.rigid = constraint->rigid();
+        pivots.active = assemblies.active(id);
+        pivots.has1 = assemblies.end_pivot(*game_, id, 1, pivots.pivot1);
+        pivots.has2 = assemblies.end_pivot(*game_, id, 2, pivots.pivot2);
+        // Both ends' bodies are outlined, as if they were selected too.
+        for (const engine_core::InstanceId end : {constraint->pv_instance1_id(), constraint->pv_instance2_id()}) {
+            const engine_core::InstanceId node = end != 0 ? assemblies.node_of(end) : 0;
+            if (node != 0 && std::find(outlined_.begin(), outlined_.end(), node) == outlined_.end()) {
+                outlined_.push_back(node);
+            }
+        }
+    }
+    outlineScratch_.clear();
+    for (const engine_core::InstanceId id : outlined_) {
         if (const auto* controller = dynamic_cast<const engine_core::PlayerController*>(game_->instance(id))) {
             if (!game_->in_workspace(id)) {
                 continue;
@@ -1010,6 +1033,16 @@ void GameView::collectOutlines(const engine_core::VisualSnapshot& snapshot) {
     }
     toolLines_.clear();
     toolLines_.insert(toolLines_.end(), snapshot.wire_lines.begin(), snapshot.wire_lines.end());
+    // Each selected constraint's pivots, joined, with crosses sized as the handles are.
+    if (!constraintPivots_.empty() && viewFov_ > 0.f && getWidth() > 0.0 && getHeight() > 0.0) {
+        engine_core::DraggerView view;
+        view.camera = viewCamera_;
+        view.fov_degrees = viewFov_;
+        view.size = engine_core::Vec2{static_cast<float>(getWidth()), static_cast<float>(getHeight())};
+        for (const engine_core::ConstraintPivots& pivots : constraintPivots_) {
+            engine_core::constraint_lines(pivots, view, toolLines_);
+        }
+    }
     renderer_.setToolLines(toolLines_.data(), static_cast<int>(toolLines_.size() / 7));
     renderer_.setOutlines(outlinePoints_.data(), static_cast<int>(outlinePoints_.size() / 3));
 }

@@ -2,6 +2,7 @@
 
 #include "ide/IdePane.hpp"
 #include "amesh.hpp"
+#include "ConstraintLines.hpp"
 #include "DraggerMath.hpp"
 #include "GuiLayer.hpp"
 #include "MeshCache.hpp"
@@ -273,6 +274,10 @@ private:
     // The selection and the revision it was read at.
     std::vector<engine_core::InstanceId> selected_;
     std::uint64_t selectionSeen_ = ~std::uint64_t{0};
+    // What is outlined: the selection, and the bodies at each selected
+    // constraint's ends. And each selected constraint's pivots, as of the last read.
+    std::vector<engine_core::InstanceId> outlined_;
+    std::vector<engine_core::ConstraintPivots> constraintPivots_;
     // Per frame: the outlines in world space, as Renderer::setOutlines takes them.
     std::vector<float> outlinePoints_;
     // The camera followCamera last followed, which the handles are sized for.

@@ -692,6 +692,7 @@ add_library(engine_core STATIC
     src/engine_core/terrain/TerrainStash.cpp
     src/engine_core/ConvexDecomposition.cpp
     src/engine_core/DraggerMath.cpp
+    src/engine_core/ConstraintLines.cpp
     src/engine_core/DraggerWorld.cpp
     src/engine_core/AudioWorld.cpp
     src/engine_core/SoundPreview.cpp
@@ -998,6 +999,7 @@ add_executable(sandbox
     sandbox/assembly_tests.cpp
     sandbox/assembly_edit_tests.cpp
     sandbox/assembly_play_tests.cpp
+    sandbox/constraint_lines_tests.cpp
     sandbox/alloc_counter.cpp
     sandbox/copy_remap_tests.cpp
     sandbox/analysis_tests.cpp

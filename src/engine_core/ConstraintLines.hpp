@@ -1,0 +1,29 @@
+#pragma once
+
+#include "DraggerMath.hpp"
+#include "types.hpp"
+
+#include <vector>
+
+namespace engine_core {
+
+// What the Scene View reads under the lock for one selected constraint: its
+// kind, whether it is Active, and the pivots of the ends that resolve
+// (Assemblies::end_pivot).
+struct ConstraintPivots {
+    bool rigid = false;
+    bool active = false;
+    bool has1 = false;
+    Matrix4 pivot1{};
+    bool has2 = false;
+    Matrix4 pivot2{};
+};
+
+// Its lines, appended to out as Renderer::setToolLines takes them (7 floats a
+// point, xyz rgba, two points a line): a segment between the two pivots when
+// both resolve, and a cross of three short axes at each that does, a few
+// pixels across at its depth (handle_scale). A WeldConstraint is light blue,
+// a RigidConstraint orange, and an inactive one gray. Pure: no DataModel.
+void constraint_lines(const ConstraintPivots& constraint, const DraggerView& view, std::vector<float>& out);
+
+}  // namespace engine_core

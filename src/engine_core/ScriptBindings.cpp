@@ -1612,6 +1612,7 @@ ANARCHY_LUA_REGISTER(register_script_methods) {
     ScriptBindings::link_skeleton_methods();
     ScriptBindings::link_animation_methods();
     ScriptBindings::link_wireframe_methods();
+    ScriptBindings::link_physics_service_methods();
 
     // AssetInstances.cpp declares the class and its Path.
     const LuaField mesh[] = {

@@ -26,6 +26,7 @@
 namespace engine_core {
 
 class ChangeHistoryService;
+class CollisionGroups;
 class Mesh;
 class Brush;
 class SoundEmitter;
@@ -95,7 +96,7 @@ struct ServiceUd {
 };
 
 inline constexpr const char* kServiceClasses[] = {"RunService", "Selection", "UserInputService",
-                                                 "ChangeHistoryService"};
+                                                 "ChangeHistoryService", "PhysicsService"};
 constexpr int kUserInputServiceKind = 2;
 
 // SignalUd kinds. An instance's Changed, a RunService phase, an UserInputService
@@ -398,6 +399,9 @@ struct ScriptBindings {
     static int track_destroy(lua_State* state);
     // Camera's methods, in CameraBindings.cpp.
     static void link_camera_methods();
+    static void link_physics_service_methods();
+    // The DataModel's collision groups, for PhysicsService's methods (self at 1).
+    static CollisionGroups& physics_service_groups(lua_State* state);
     static Camera& camera_self(lua_State* state);
     // WireframeAdornment's methods, in WireframeBindings.cpp.
     static void link_wireframe_methods();

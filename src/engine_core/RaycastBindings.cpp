@@ -16,6 +16,7 @@
 #include "lualib.h"
 
 #include <cstring>
+#include <string>
 #include <new>
 #include <vector>
 
@@ -29,6 +30,7 @@ const char* kRaycastResultMeta = "AE.RaycastResult";
 struct RaycastParamsUd {
     int filter_type = 0;
     std::vector<InstanceId> instances;
+    std::string collision_group = "Default";
 };
 
 struct RaycastResultUd {
@@ -76,6 +78,10 @@ int params_newindex(lua_State* state) {
             lua_pop(state, 1);
         }
         params->instances = std::move(instances);
+        return 0;
+    }
+    if (std::strcmp(key, "CollisionGroup") == 0) {
+        params->collision_group = luaL_checkstring(state, 3);
         return 0;
     }
     luaL_error(state, "%s is not a valid member of RaycastParams", key);
@@ -145,6 +151,10 @@ int ScriptBindings::raycast_params_index(lua_State* state) {
                 lua_rawseti(state, -2, slot++);
             }
         }
+        return 1;
+    }
+    if (std::strcmp(key, "CollisionGroup") == 0) {
+        lua_pushlstring(state, params->collision_group.data(), params->collision_group.size());
         return 1;
     }
     luaL_error(state, "%s is not a valid member of RaycastParams", key);
@@ -232,6 +242,7 @@ int ScriptBindings::workspace_raycast(lua_State* state) {
         const Vec3 origin = check_vector(state, 2, "origin");
         const Vec3 direction = check_vector(state, 3, "direction");
         RayFilter filter;
+        filter.collision_group = "Default";
         if (!lua_isnoneornil(state, 4)) {
             auto* params = static_cast<RaycastParamsUd*>(test_userdata(state, 4, kRaycastParamsMeta));
             if (params == nullptr) {
@@ -239,6 +250,7 @@ int ScriptBindings::workspace_raycast(lua_State* state) {
             }
             filter.include = params->filter_type == static_cast<int>(RaycastFilterType::Include);
             filter.instances = params->instances;
+            filter.collision_group = params->collision_group;
         }
         PhysicsWorld* physics = runtime->game_->physics();
         if (physics == nullptr) {
@@ -273,6 +285,7 @@ ANARCHY_LUA_REGISTER(register_raycast_lua) {
     const LuaField params[] = {
         lua_property("FilterType", "Enum.RaycastFilterType", true, nullptr, nullptr),
         lua_property("FilterDescendantsInstances", "{Instance}", true, nullptr, nullptr),
+        lua_property("CollisionGroup", "string", true, nullptr, nullptr),
     };
     register_lua_class("RaycastParams", nullptr, params, static_cast<int>(sizeof(params) / sizeof(params[0])));
     lua_note_result("RaycastParams", "new", "RaycastParams", false);

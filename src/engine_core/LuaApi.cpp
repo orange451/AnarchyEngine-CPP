@@ -1568,6 +1568,40 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
         "RaycastResult?", false, {P("origin", "Vector3"), P("direction", "Vector3"), P("params", "RaycastParams?")});
 
     add("RaycastParams", "new", "A new RaycastParams, excluding nothing.", "RaycastParams", false, {});
+    add("RaycastParams", "CollisionGroup",
+        "The ray's collision group: it hits only bodies whose group collides with this one. \"Default\" at first.",
+        "string", false, {});
+
+    add("PhysicsService", "RegisterCollisionGroup",
+        "Registers a collision group for this run. collisionType is \"Blacklist\" (the default: it collides with "
+        "every group but those set not to) or \"Whitelist\" (with none but those set to). A name already "
+        "registered changes nothing. Groups are not saved: each run starts with Default alone.",
+        "nil", false, {P("name", "string"), P("collisionType", "string?")});
+    add("PhysicsService", "UnregisterCollisionGroup",
+        "Removes a group and its settings; its bodies behave as Default. Default cannot be unregistered.", "nil",
+        false, {P("name", "string")});
+    add("PhysicsService", "SetCollisionGroupCollisionType",
+        "Makes a group \"Blacklist\" or \"Whitelist\", keeping the settings made for it.", "nil", false,
+        {P("name", "string"), P("collisionType", "string")});
+    add("PhysicsService", "CollisionGroupSetCollidable",
+        "Sets whether two registered groups collide, both ways, whatever their types. A group may be set against "
+        "itself.",
+        "nil", false, {P("name1", "string"), P("name2", "string"), P("collidable", "boolean")});
+    add("PhysicsService", "CollisionGroupSetCollidableBulk",
+        "CollisionGroupSetCollidable for name against each of names.", "nil", false,
+        {P("name", "string"), P("names", "{string}"), P("collidable", "boolean")});
+    add("PhysicsService", "CollisionGroupsAreCollidable",
+        "Whether two groups collide: as set, else only when both are Blacklist. An unregistered name counts as "
+        "Default.",
+        "boolean", false, {P("name1", "string"), P("name2", "string")});
+    add("PhysicsService", "IsCollisionGroupRegistered", "Whether a script has registered this group.", "boolean",
+        false, {P("name", "string")});
+    add("PhysicsService", "GetRegisteredCollisionGroups",
+        "Each registered group, Default first, as {name, type, list}: list is the exceptions to its type (for a "
+        "Blacklist group, the groups it does not collide with; for a Whitelist group, those it does).",
+        "table", false, {});
+    add("PhysicsService", "GetMaxCollisionGroups", "How many groups may be registered at once: 62.", "number", false,
+        {});
     add("RaycastParams", "FilterType",
         "Whether FilterDescendantsInstances is what the ray sees (Include) or what it does not (Exclude, the "
         "default).",

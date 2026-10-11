@@ -921,23 +921,28 @@ struct PhysicsWorld::Impl {
     // nothing waits for the end of the step: made again in place, it
     // touches again and nothing fires.
     void forget_shapes(const Body& record) {
-        if (shape_touches.empty() || record.shapes.empty()) {
+        for (const b3ShapeId shape : record.shapes) {
+            forget_shape(shape);
+        }
+    }
+
+    // One shape going, a body's or a Terrain chunk's.
+    void forget_shape(b3ShapeId shape) {
+        if (shape_touches.empty() || !b3Shape_IsValid(shape)) {
             return;
         }
-        for (const b3ShapeId shape : record.shapes) {
-            const std::uint64_t key = shape_key(shape);
-            for (auto it = shape_touches.begin(); it != shape_touches.end();) {
-                if (it->first.first != key && it->first.second != key) {
-                    ++it;
-                    continue;
-                }
-                const auto pair = pair_touches.find(pair_key(it->second.a, it->second.b));
-                if (pair != pair_touches.end() && --pair->second.count <= 0) {
-                    pair->second.count = 0;
-                    pair->second.pending_end = true;
-                }
-                it = shape_touches.erase(it);
+        const std::uint64_t key = shape_key(shape);
+        for (auto it = shape_touches.begin(); it != shape_touches.end();) {
+            if (it->first.first != key && it->first.second != key) {
+                ++it;
+                continue;
             }
+            const auto pair = pair_touches.find(pair_key(it->second.a, it->second.b));
+            if (pair != pair_touches.end() && --pair->second.count <= 0) {
+                pair->second.count = 0;
+                pair->second.pending_end = true;
+            }
+            it = shape_touches.erase(it);
         }
     }
 
@@ -1994,8 +1999,9 @@ struct PhysicsWorld::Impl {
 
     // Destroys the chunk's shape, waking what touched it, and only then
     // lets go of the mesh it pointed into.
-    static void drop_chunk(TerrainChunkShape& chunk) {
+    void drop_chunk(TerrainChunkShape& chunk) {
         if (b3Shape_IsValid(chunk.shape)) {
+            forget_shape(chunk.shape);
             b3DestroyShape(chunk.shape, false);
         }
         chunk.shape = b3_nullShapeId;

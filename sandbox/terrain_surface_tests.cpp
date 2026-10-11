@@ -1118,6 +1118,45 @@ TEST_CASE("TP4 a box resting on terrain stays up while its chunk is re-meshed", 
     REQUIRE(near(y_of(box.transform()), 0.5f, 0.05f));
 }
 
+TEST_CASE("TP4b a body touching terrain through a re-mesh ends its touch once when lifted off",
+          "[terrain][physics][touch]") {
+    using physics_rig::at;
+    using physics_rig::kStep;
+    PhysicsRig rig;
+    Terrain& t = terrain_in_workspace(rig.game);
+    REQUIRE_FALSE(t.edit_volume([&](VoxelVolume& v) { return v.fill(slab(48.f, 8.f), 1); }));
+    TerrainWorld world(PhysicsWorld::build_terrain_collider);
+    rig.physics.set_terrain_world(&world);
+    settle(world, rig.game);
+    rig.play();
+    PhysicsObject& box = rig.body(at(8.f, 3.f, 8.f), Vec3{1.f, 1.f, 1.f}, false);
+    int touched = 0;
+    int ended = 0;
+    rig.game.event_signal(box.id(), "Touched").connect([&](engine_core::InstanceId, engine_core::Field) { ++touched; });
+    rig.game.event_signal(box.id(), "TouchEnded").connect([&](engine_core::InstanceId, engine_core::Field) { ++ended; });
+    const auto frames = [&](int count) {
+        for (int frame = 0; frame < count; ++frame) {
+            world.update(rig.game);
+            for (int step = 0; step < 4; ++step) {
+                rig.physics.step(rig.game, kStep);
+                rig.game.events().drain();
+            }
+        }
+    };
+    frames(120);
+    REQUIRE(touched == 1);
+    // The chunk under it is meshed again: its shape is made again.
+    REQUIRE_FALSE(t.edit_volume([&](VoxelVolume& v) { return v.paint(ball_at(24.f, -1.f, 24.f, 3.f), 2); }));
+    world.update(rig.game);
+    world.wait_idle();
+    frames(60);
+    REQUIRE(touched == 1);
+    REQUIRE(ended == 0);
+    REQUIRE_FALSE(box.set_transform(at(8.f, 30.f, 8.f)));
+    frames(5);
+    REQUIRE(ended == 1);
+}
+
 TEST_CASE("TP5 a Terrain's body survives a play then Stop round trip", "[terrain][physics]") {
     using physics_rig::kStep;
     PhysicsRig rig;

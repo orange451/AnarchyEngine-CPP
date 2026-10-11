@@ -437,3 +437,19 @@ TEST_CASE("T16 writing CollisionGroup or Anchored on a touching body keeps the t
     run_for(rig, 0.1);
     REQUIRE(count(heard, box.id(), true) == 1);
 }
+
+TEST_CASE("T17 remaking the anchored body a box rests on keeps the touch", "[touch][physics]") {
+    PhysicsRig rig;
+    PhysicsObject& floor = rig.floor();
+    PhysicsObject& box = rig.body(at(0.f, 1.f, 0.f), Vec3{1.f, 1.f, 1.f}, false);
+    std::vector<Heard> heard;
+    listen(rig.game, box.id(), heard);
+    rig.play();
+    // Long enough for the box to fall asleep: its proxy no longer moves.
+    run_for(rig, 3.0);
+    REQUIRE(count(heard, box.id(), false) == 1);
+    REQUIRE_FALSE(floor.set_size(Vec3{30.f, 1.f, 30.f}));
+    run_for(rig, 0.5);
+    REQUIRE(count(heard, box.id(), false) == 1);
+    REQUIRE(count(heard, box.id(), true) == 0);
+}

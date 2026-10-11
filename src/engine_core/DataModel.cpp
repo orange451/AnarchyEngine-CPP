@@ -120,6 +120,13 @@ DataModel::DataModel(const char* root_name) : owned_(std::make_unique<State>()),
                                  .with<ecs::InGame>()
                                  .cached()
                                  .build();
+    world.constraint_query = world.ecs.query_builder<>()
+                                 .with<ecs::Instance>()
+                                 .in()
+                                 .with<ecs::ConstraintTag>()
+                                 .with<ecs::InWorkspace>()
+                                 .cached()
+                                 .build();
     // Every dispatch of this world's input passes through its Draggers first.
     world.input.set_filter([this](std::vector<InputRecord>& records) { state_->draggers.dispatch(*this, records); });
     world.slots.reserve(kMaxInstances);
@@ -560,6 +567,9 @@ void tag_entity(ecs_world_t* world, ecs_entity_t entity, const EcsIds& ids, cons
     }
     if (object.wireframe()) {
         ecs_add_id(world, entity, ids.wireframe);
+    }
+    if (object.constraint()) {
+        ecs_add_id(world, entity, ids.constraint);
     }
 }
 
@@ -1019,6 +1029,17 @@ void DataModel::sound_sources(std::vector<InstanceId>& out) const {
 void DataModel::wireframes(std::vector<InstanceId>& out) const {
     out.clear();
     ecs_iter_t it = ecs_query_iter(ecs_world(), state_->wireframe_query.c_ptr());
+    while (ecs_query_next(&it)) {
+        const auto* owners = static_cast<const ecs::Instance*>(ecs_field_w_size(&it, sizeof(ecs::Instance), 0));
+        for (std::int32_t i = 0; i < it.count; ++i) {
+            out.push_back(owners[i].id);
+        }
+    }
+}
+
+void DataModel::constraints(std::vector<InstanceId>& out) const {
+    out.clear();
+    ecs_iter_t it = ecs_query_iter(ecs_world(), state_->constraint_query.c_ptr());
     while (ecs_query_next(&it)) {
         const auto* owners = static_cast<const ecs::Instance*>(ecs_field_w_size(&it, sizeof(ecs::Instance), 0));
         for (std::int32_t i = 0; i < it.count; ++i) {

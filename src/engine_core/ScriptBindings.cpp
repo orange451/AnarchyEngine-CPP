@@ -30,6 +30,7 @@
 #include "Skybox.hpp"
 #include "Dragger.hpp"
 #include "WireframeAdornment.hpp"
+#include "Constraint.hpp"
 #include "SoundEmitter.hpp"
 #include "Brush.hpp"
 #include "Terrain.hpp"
@@ -205,6 +206,8 @@ DataModel& create_bone(DataModel& world) { return world.create<Bone>(); }
 DataModel& create_animator(DataModel& world) { return world.create<Animator>(); }
 DataModel& create_dragger(DataModel& world) { return world.create<Dragger>(); }
 DataModel& create_wireframe(DataModel& world) { return world.create<WireframeAdornment>(); }
+DataModel& create_weld_constraint(DataModel& world) { return world.create<WeldConstraint>(); }
+DataModel& create_rigid_constraint(DataModel& world) { return world.create<RigidConstraint>(); }
 DataModel& create_skybox(DataModel& world) { return world.create<Skybox>(); }
 DataModel& create_dynamic_sky(DataModel& world) { return world.create<DynamicSky>(); }
 DataModel& create_bloom_effect(DataModel& world) { return world.create<BloomEffect>(); }
@@ -254,6 +257,8 @@ ANARCHY_LUA_REGISTER(register_creatable_instances) {
     register_lua_creatable("Animator", create_animator);
     register_lua_creatable("Dragger", create_dragger);
     register_lua_creatable("WireframeAdornment", create_wireframe);
+    register_lua_creatable("WeldConstraint", create_weld_constraint);
+    register_lua_creatable("RigidConstraint", create_rigid_constraint);
     register_lua_creatable("Skybox", create_skybox);
     register_lua_creatable("DynamicSky", create_dynamic_sky);
     register_lua_creatable("BloomEffect", create_bloom_effect);

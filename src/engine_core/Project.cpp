@@ -3,6 +3,7 @@
 #include "AmbientOcclusionEffect.hpp"
 #include "AssetInstances.hpp"
 #include "Attachment.hpp"
+#include "Constraint.hpp"
 #include "Animator.hpp"
 #include "Bone.hpp"
 #include "BloomEffect.hpp"
@@ -154,6 +155,10 @@ std::vector<ClassEntry>& class_registry() {
         out.push_back(
             {"SoundEmitter", [](DataModel& world) -> DataModel& { return world.create<SoundEmitter>(); }});
         out.push_back({"Attachment", [](DataModel& world) -> DataModel& { return world.create<Attachment>(); }});
+        out.push_back(
+            {"WeldConstraint", [](DataModel& world) -> DataModel& { return world.create<WeldConstraint>(); }});
+        out.push_back(
+            {"RigidConstraint", [](DataModel& world) -> DataModel& { return world.create<RigidConstraint>(); }});
         out.push_back({"Bone", [](DataModel& world) -> DataModel& { return world.create<Bone>(); }});
         out.push_back({"Animator", [](DataModel& world) -> DataModel& { return world.create<Animator>(); }});
         out.push_back({"Skybox", [](DataModel& world) -> DataModel& { return world.create<Skybox>(); }});

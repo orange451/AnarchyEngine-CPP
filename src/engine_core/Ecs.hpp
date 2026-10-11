@@ -47,6 +47,8 @@ struct AnimatorTag {};
 struct BillboardTag {};
 // A WireframeAdornment: its class's wireframe() is true.
 struct WireframeTag {};
+// A Constraint (WeldConstraint, RigidConstraint): its class's constraint() is true.
+struct ConstraintTag {};
 // Heartbeat steps it: its class's steps() is true.
 struct Steps {};
 // DataModel::set_simulated and set_visual_only.
@@ -72,6 +74,7 @@ struct EcsIds {
     ecs_id_t animator = 0;
     ecs_id_t billboard = 0;
     ecs_id_t wireframe = 0;
+    ecs_id_t constraint = 0;
     ecs_id_t simulated = 0;
     ecs_id_t visual_only = 0;
 };

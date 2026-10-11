@@ -121,6 +121,8 @@ struct DataModel::State {
     flecs::query<> billboard_query;
     // WireframeAdornments under game: Instance (in), with WireframeTag and InGame.
     flecs::query<> wireframe_query;
+    // Constraints in Workspace: Instance (in), with ConstraintTag and InWorkspace.
+    flecs::query<> constraint_query;
 
     // Guards slots, free lists, invalidation, and resync.
     // SimulationThread may hold Write across a whole step and may re-enter

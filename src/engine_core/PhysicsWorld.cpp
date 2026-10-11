@@ -23,6 +23,7 @@
 #pragma warning(pop)
 
 #include <algorithm>
+#include <iterator>
 #include <array>
 #include <atomic>
 #include <cmath>
@@ -643,6 +644,14 @@ struct PhysicsWorld::Impl {
     bool played = false;
     bool poses_from_game_objects = true;
     std::unordered_map<InstanceId, Body> bodies;
+    // Active NoCollisionConstraints' pairs as last applied
+    // (Assemblies::no_collide_pairs), as keys, and every body in one: only
+    // those bodies' shapes ask the custom filter (no_collide_filter).
+    std::vector<std::pair<InstanceId, InstanceId>> no_collide;
+    std::unordered_set<std::uint64_t> no_collide_keys;
+    std::unordered_set<InstanceId> no_collide_ids;
+    std::vector<std::pair<InstanceId, InstanceId>> no_collide_diff;
+    std::vector<InstanceId> no_collide_changed;
     // The DataModel's collision groups, set at each sync, and the revision
     // whose filters the shapes have.
     const CollisionGroups* groups = nullptr;
@@ -740,13 +749,69 @@ struct PhysicsWorld::Impl {
         compounds.clear();
         // Terrain colliders go only now that no shape points into them.
         terrain_bodies.clear();
+        // A new world has no shapes: the pairs are applied again as they are made.
+        no_collide.clear();
+        no_collide_keys.clear();
+        no_collide_ids.clear();
     }
+
+    static std::uint64_t pair_key(InstanceId a, InstanceId b) {
+        const InstanceId low = std::min(a, b);
+        const InstanceId high = std::max(a, b);
+        return (static_cast<std::uint64_t>(low) << 32) | high;
+    }
+
+    // Box3D asks this of a new pair when either shape enables custom
+    // filtering: false keeps a NoCollisionConstraint's two bodies apart.
+    static bool no_collide_filter(b3ShapeId a, b3ShapeId b, void* context) {
+        const auto* self = static_cast<const Impl*>(context);
+        const auto id_of = [](b3ShapeId shape) {
+            return static_cast<InstanceId>(reinterpret_cast<std::uintptr_t>(b3Shape_GetUserData(shape)));
+        };
+        return self->no_collide_keys.count(pair_key(id_of(a), id_of(b))) == 0;
+    }
+
+    // The pairs changed: every body in a pair added or dropped gets its
+    // shapes made again, since Box3D asks the filter only of a new proxy
+    // pair, so two bodies already touching let go at once, and two kept
+    // apart meet again.
+    void update_no_collide(DataModel& game) {
+        const std::vector<std::pair<InstanceId, InstanceId>>& pairs = game.assemblies().no_collide_pairs();
+        if (pairs == no_collide) {
+            return;
+        }
+        no_collide_diff.clear();
+        std::set_symmetric_difference(pairs.begin(), pairs.end(), no_collide.begin(), no_collide.end(),
+                                      std::back_inserter(no_collide_diff));
+        no_collide_changed.clear();
+        for (const auto& [a, b] : no_collide_diff) {
+            no_collide_changed.push_back(a);
+            no_collide_changed.push_back(b);
+        }
+        no_collide = pairs;
+        no_collide_keys.clear();
+        no_collide_ids.clear();
+        for (const auto& [a, b] : no_collide) {
+            no_collide_keys.insert(pair_key(a, b));
+            no_collide_ids.insert(a);
+            no_collide_ids.insert(b);
+        }
+        for (const InstanceId id : no_collide_changed) {
+            const auto found = bodies.find(id);
+            auto* object = dynamic_cast<PhysicsBase*>(game.instance(id));
+            if (found != bodies.end() && object != nullptr) {
+                make_shape(game, *object, found->second);
+            }
+        }
+    }
+
 
     void begin(std::uint32_t next_generation) {
         reset();
         b3WorldDef def = b3DefaultWorldDef();
         def.gravity = b3Vec3{0.f, gravity, 0.f};
         world = b3CreateWorld(&def);
+        b3World_SetCustomFilterCallback(world, &no_collide_filter, this);
         generation = next_generation;
         played = false;
         interests.clear();
@@ -770,6 +835,7 @@ struct PhysicsWorld::Impl {
         pull_gravity(game);
         // Assemblies first: which bodies are one body this sync.
         game.assemblies().sync_play(game);
+        update_no_collide(game);
         const bool running = game.simulation_running();
         poses_from_game_objects = !running || !played;
         {
@@ -2551,6 +2617,7 @@ struct PhysicsWorld::Impl {
         record.prefab = driven != nullptr ? driven->prefab_guid() : std::string();
         b3ShapeDef def = b3DefaultShapeDef();
         def.filter = filter_of(brush);
+        def.enableCustomFiltering = no_collide_ids.count(brush.id()) != 0;
         def.baseMaterial.friction = static_cast<float>(brush.friction());
         def.baseMaterial.restitution = static_cast<float>(brush.bounciness());
         def.userData = user_data(brush.id());
@@ -2594,6 +2661,7 @@ struct PhysicsWorld::Impl {
                          Vec3{0.f, gap + tall * 0.5f, 0.f}, points);
         b3ShapeDef def = b3DefaultShapeDef();
         def.filter = filter_of(controller);
+        def.enableCustomFiltering = no_collide_ids.count(controller.id()) != 0;
         def.baseMaterial.friction = 0.f;
         def.baseMaterial.restitution = 0.f;
         def.userData = user_data(controller.id());
@@ -2627,6 +2695,7 @@ struct PhysicsWorld::Impl {
         record.pieces_stamp.clear();
         b3ShapeDef def = b3DefaultShapeDef();
         def.filter = filter_of(object);
+        def.enableCustomFiltering = no_collide_ids.count(object.id()) != 0;
         def.baseMaterial.friction = static_cast<float>(object.friction());
         def.baseMaterial.restitution = static_cast<float>(object.bounciness());
         def.userData = user_data(object.id());

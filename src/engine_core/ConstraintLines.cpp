@@ -36,6 +36,7 @@ void cross(std::vector<float>& out, const Matrix4& pivot, const DraggerView& vie
 
 void constraint_lines(const ConstraintPivots& constraint, const DraggerView& view, std::vector<float>& out) {
     const Rgb color = !constraint.active ? Rgb{0.55f, 0.55f, 0.55f}
+                      : constraint.no_collide ? Rgb{1.f, 0.35f, 0.35f}
                       : constraint.rigid ? Rgb{1.f, 0.7f, 0.2f}
                                          : Rgb{0.35f, 0.75f, 1.f};
     if (constraint.has1 && constraint.has2) {

@@ -160,6 +160,8 @@ std::vector<ClassEntry>& class_registry() {
             {"WeldConstraint", [](DataModel& world) -> DataModel& { return world.create<WeldConstraint>(); }});
         out.push_back(
             {"RigidConstraint", [](DataModel& world) -> DataModel& { return world.create<RigidConstraint>(); }});
+        out.push_back({"NoCollisionConstraint",
+                       [](DataModel& world) -> DataModel& { return world.create<NoCollisionConstraint>(); }});
         out.push_back({"Bone", [](DataModel& world) -> DataModel& { return world.create<Bone>(); }});
         out.push_back({"Animator", [](DataModel& world) -> DataModel& { return world.create<Animator>(); }});
         out.push_back({"Skybox", [](DataModel& world) -> DataModel& { return world.create<Skybox>(); }});

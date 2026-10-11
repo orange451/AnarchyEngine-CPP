@@ -82,3 +82,12 @@ TEST_CASE("VZ3 with one end unset, only that end's cross is drawn", "[assembly][
     REQUIRE(arm > 0.01f);
     REQUIRE(arm < 1.f);
 }
+
+TEST_CASE("VZ4 an active NoCollisionConstraint is drawn red", "[assembly][viz]") {
+    ConstraintPivots apart = weld();
+    apart.no_collide = true;
+    std::vector<float> lines;
+    engine_core::constraint_lines(apart, view(), lines);
+    REQUIRE(lines.size() == kPoint * 2 * 7);
+    REQUIRE(colored(lines, 1.f, 0.35f, 0.35f));
+}

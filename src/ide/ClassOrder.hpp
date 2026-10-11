@@ -43,6 +43,7 @@ inline int class_rank(std::string_view class_name) {
         {"Animator", 10},
         {"WeldConstraint", 10},
         {"RigidConstraint", 10},
+        {"NoCollisionConstraint", 10},
         {"ScreenGui", 11},
         {"BillboardGui", 11},
         {"Pane", 12},

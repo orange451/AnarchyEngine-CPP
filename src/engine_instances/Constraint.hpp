@@ -8,9 +8,10 @@
 
 namespace engine_core {
 
-// Joins two PVInstances into one assembly (Assemblies), so they move as one
-// rigid thing. Abstract: the Lua class Constraint cannot be made;
-// WeldConstraint and RigidConstraint can. It has no Transform of its own and
+// Relates two PVInstances: WeldConstraint and RigidConstraint join them into
+// one assembly (Assemblies), so they move as one rigid thing;
+// NoCollisionConstraint keeps them from colliding with each other. Abstract:
+// the Lua class Constraint cannot be made; the three can. It has no Transform of its own and
 // acts only while it and both its ends are in Workspace.
 //
 // PVInstance1  PVInstance?  nil. Saved, by GUID. One end.
@@ -30,6 +31,9 @@ public:
     bool constraint() const override { return true; }
     // True for a RigidConstraint, whose sub is snapped onto its parent.
     virtual bool rigid() const = 0;
+    // Whether it joins its ends into one assembly: false for a
+    // NoCollisionConstraint, which only keeps them apart.
+    virtual bool joins() const { return true; }
 
     LuaSlot pv_instance1() const;
     LuaSlot pv_instance2() const;
@@ -73,6 +77,20 @@ public:
     RigidConstraint(DataModel::ChildTag tag, DataModel::State& state, InstanceId id) : Constraint(tag, state, id) {}
     const char* class_name() const override { return "RigidConstraint"; }
     bool rigid() const override { return true; }
+};
+
+// Keeps two PVInstances' bodies from colliding with each other, while each
+// still collides with everything else. It joins nothing: each end stays in
+// its own assembly. Active when Enabled, in Workspace, and both ends resolve
+// to two different physics bodies (an Attachment end stands for its holder,
+// a GameObject for the body that moves it).
+class NoCollisionConstraint final : public Constraint {
+public:
+    NoCollisionConstraint(DataModel::ChildTag tag, DataModel::State& state, InstanceId id)
+        : Constraint(tag, state, id) {}
+    const char* class_name() const override { return "NoCollisionConstraint"; }
+    bool rigid() const override { return false; }
+    bool joins() const override { return false; }
 };
 
 }  // namespace engine_core

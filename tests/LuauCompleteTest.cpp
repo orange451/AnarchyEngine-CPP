@@ -1206,7 +1206,7 @@ void testInsertFilter() {
         "AmbientOcclusionEffect", "BloomEffect", "ScreenSpaceReflections",
         "DirectionalLight", "PointLight", "SpotLight",
         "Sound", "SoundEmitter",
-        "Animator", "Attachment", "Bone", "RigidConstraint", "WeldConstraint",
+        "Animator", "Attachment", "Bone", "NoCollisionConstraint", "RigidConstraint", "WeldConstraint",
         "BillboardGui", "ScreenGui",
         "HBox", "ImagePane", "Pane", "VBox", "ViewportPane",
         "AssetPicker", "Button", "Label", "Slider", "TextField",

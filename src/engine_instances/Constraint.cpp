@@ -154,8 +154,10 @@ ANARCHY_LUA_REGISTER(register_constraint_lua) {
     register_lua_class("Constraint", "Instance", fields, static_cast<int>(std::size(fields)));
     register_lua_class("WeldConstraint", "Constraint", nullptr, 0);
     register_lua_class("RigidConstraint", "Constraint", nullptr, 0);
+    register_lua_class("NoCollisionConstraint", "Constraint", nullptr, 0);
     register_suited_parents("WeldConstraint", {"Workspace", "PVInstance"});
     register_suited_parents("RigidConstraint", {"Workspace", "PVInstance"});
+    register_suited_parents("NoCollisionConstraint", {"Workspace", "PVInstance"});
 }
 
 }  // namespace

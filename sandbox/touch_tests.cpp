@@ -5,6 +5,7 @@
 #include "support.hpp"
 
 #include "Brush.hpp"
+#include "CollisionGroups.hpp"
 #include "Constraint.hpp"
 #include "AssetInstances.hpp"
 #include "Events.hpp"
@@ -409,6 +410,29 @@ TEST_CASE("T15 a body lifted off an anchored Custom mesh ends its touch", "[touc
     run_for(rig, 1.0);
     REQUIRE(count(heard, box.id(), false) == 1);
     REQUIRE(heard.back().touch.instance == ground.id());
+    REQUIRE_FALSE(box.set_transform(at(0.f, 20.f, 0.f)));
+    run_for(rig, 0.1);
+    REQUIRE(count(heard, box.id(), true) == 1);
+}
+
+TEST_CASE("T16 writing CollisionGroup or Anchored on a touching body keeps the touch", "[touch][physics]") {
+    PhysicsRig rig;
+    PhysicsObject& floor = rig.floor();
+    PhysicsObject& box = rig.body(at(0.f, 1.f, 0.f), Vec3{1.f, 1.f, 1.f}, false);
+    std::vector<Heard> heard;
+    listen(rig.game, box.id(), heard);
+    rig.play();
+    REQUIRE_FALSE(rig.game.collision_groups().register_group("Crates", engine_core::CollisionGroups::FilterType::Exclude));
+    run_for(rig, 1.0);
+    REQUIRE(count(heard, box.id(), false) == 1);
+    // A filter change resets the contact in Box3D: still touching, nothing fires.
+    REQUIRE_FALSE(box.set_collision_group("Crates"));
+    run_for(rig, 0.2);
+    floor.set_anchored(false);
+    floor.set_anchored(true);
+    run_for(rig, 0.2);
+    REQUIRE(count(heard, box.id(), false) == 1);
+    REQUIRE(count(heard, box.id(), true) == 0);
     REQUIRE_FALSE(box.set_transform(at(0.f, 20.f, 0.f)));
     run_for(rig, 0.1);
     REQUIRE(count(heard, box.id(), true) == 1);

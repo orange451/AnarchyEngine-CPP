@@ -675,6 +675,10 @@ struct PhysicsWorld::Impl {
     struct ShapeTouch {
         InstanceId a = 0;
         InstanceId b = 0;
+        // The Box3D contact that touches (contact_key), 0 for a sensor or a
+        // stand. A filter or type change replaces the contact while the shapes
+        // keep touching: the new one begins before the old one's end is seen.
+        std::uint64_t contact = 0;
     };
     struct PairTouch {
         int count = 0;
@@ -840,6 +844,9 @@ struct PhysicsWorld::Impl {
     // ---- Touched and TouchEnded ------------------------------------------
 
     static std::uint64_t shape_key(b3ShapeId shape) { return b3StoreShapeId(shape); }
+    static std::uint64_t contact_key(b3ContactId contact) {
+        return (static_cast<std::uint64_t>(static_cast<std::uint32_t>(contact.index1)) << 32) | contact.generation;
+    }
     static InstanceId instance_of(b3ShapeId shape) {
         return static_cast<InstanceId>(reinterpret_cast<std::uintptr_t>(b3Shape_GetUserData(shape)));
     }
@@ -935,21 +942,24 @@ struct PhysicsWorld::Impl {
     }
 
     // A shape pair began touching: true when its instance pair did too.
-    PairTouch* begin_pair(b3ShapeId a, b3ShapeId b, bool& began) {
-        return begin_keys(shape_key(a), shape_key(b), instance_of(a), instance_of(b), began);
+    PairTouch* begin_pair(b3ShapeId a, b3ShapeId b, bool& began, std::uint64_t contact = 0) {
+        return begin_keys(shape_key(a), shape_key(b), instance_of(a), instance_of(b), began, contact);
     }
 
     // The same, by key: a shape's, or a stand's (stand_key).
-    PairTouch* begin_keys(std::uint64_t ka, std::uint64_t kb, InstanceId ia, InstanceId ib, bool& began) {
+    PairTouch* begin_keys(std::uint64_t ka, std::uint64_t kb, InstanceId ia, InstanceId ib, bool& began,
+                          std::uint64_t contact = 0) {
         began = false;
         if (ia == 0 || ib == 0 || ia == ib) {
             return nullptr;
         }
         const auto key = std::make_pair(std::min(ka, kb), std::max(ka, kb));
-        if (shape_touches.count(key) != 0) {
+        if (const auto found = shape_touches.find(key); found != shape_touches.end()) {
+            // A contact made again for shapes still touching: the new one stands for it.
+            found->second.contact = contact;
             return nullptr;
         }
-        shape_touches[key] = ShapeTouch{ia, ib};
+        shape_touches[key] = ShapeTouch{ia, ib, contact};
         PairTouch& pair = pair_touches[pair_key(ia, ib)];
         if (pair.count++ == 0) {
             // Back from a pending end: it never stopped touching.
@@ -960,15 +970,18 @@ struct PhysicsWorld::Impl {
     }
 
     // A shape pair stopped touching: true when its instance pair did too.
-    PairTouch* end_pair(b3ShapeId a, b3ShapeId b, bool& ended) {
-        return end_keys(shape_key(a), shape_key(b), ended);
+    PairTouch* end_pair(b3ShapeId a, b3ShapeId b, bool& ended, std::uint64_t contact = 0) {
+        return end_keys(shape_key(a), shape_key(b), ended, contact);
     }
 
-    PairTouch* end_keys(std::uint64_t ka, std::uint64_t kb, bool& ended) {
+    PairTouch* end_keys(std::uint64_t ka, std::uint64_t kb, bool& ended, std::uint64_t contact = 0) {
         ended = false;
         const auto found = shape_touches.find(std::make_pair(std::min(ka, kb), std::max(ka, kb)));
         if (found == shape_touches.end()) {
             return nullptr;
+        }
+        if (contact != 0 && found->second.contact != 0 && found->second.contact != contact) {
+            return nullptr;  // the end of a contact already replaced by a newer one
         }
         const std::uint64_t key = pair_key(found->second.a, found->second.b);
         shape_touches.erase(found);
@@ -1170,7 +1183,7 @@ struct PhysicsWorld::Impl {
                 continue;
             }
             bool began = false;
-            PairTouch* pair = begin_pair(event.shapeIdA, event.shapeIdB, began);
+            PairTouch* pair = begin_pair(event.shapeIdA, event.shapeIdB, began, contact_key(event.contactId));
             if (pair == nullptr || !began) {
                 continue;
             }
@@ -1203,7 +1216,7 @@ struct PhysicsWorld::Impl {
                 continue;  // shapes PhysicsWorld removed: forget_shapes settled them
             }
             bool ended = false;
-            PairTouch* pair = end_pair(event.shapeIdA, event.shapeIdB, ended);
+            PairTouch* pair = end_pair(event.shapeIdA, event.shapeIdB, ended, contact_key(event.contactId));
             if (pair == nullptr || !ended) {
                 continue;
             }

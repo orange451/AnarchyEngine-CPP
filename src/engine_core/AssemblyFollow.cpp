@@ -103,12 +103,7 @@ void Assemblies::carry(DataModel& game, InstanceId mover, const Matrix4& delta) 
     }
 }
 
-// Puts edge's sub node where its pivot sits on the parent's. True when it wrote.
-bool Assemblies::snap(DataModel& game, const RigidEdge& edge, InstanceId camera) {
-    const InstanceId mover = mover_of(game, edge.sub_node);
-    if (mover == camera || (camera != 0 && mover_of(game, edge.parent_node) == camera)) {
-        return false;
-    }
+bool Assemblies::sub_target(const DataModel& game, const RigidEdge& edge, Matrix4& frame, Matrix4& target) const {
     Matrix4 parent_pivot;
     Matrix4 sub_pivot;
     const int sub_end = 3 - edge.parent_end;
@@ -116,8 +111,7 @@ bool Assemblies::snap(DataModel& game, const RigidEdge& edge, InstanceId camera)
         !end_pivot(game, edge.constraint, sub_end, sub_pivot)) {
         return false;
     }
-    const Matrix4 frame = node_frame(game, edge.sub_node);
-    Matrix4 target;
+    frame = node_frame(game, edge.sub_node);
     const auto* constraint = dynamic_cast<const Constraint*>(game.instance(edge.constraint));
     const InstanceId grip_id =
         constraint == nullptr ? 0 : sub_end == 1 ? constraint->pv_instance1_id() : constraint->pv_instance2_id();
@@ -136,6 +130,20 @@ bool Assemblies::snap(DataModel& game, const RigidEdge& edge, InstanceId camera)
         target = upright_transform(target);
     } else {
         target = matrix4_orthonormalize(target);
+    }
+    return true;
+}
+
+// Puts edge's sub node where its pivot sits on the parent's. True when it wrote.
+bool Assemblies::snap(DataModel& game, const RigidEdge& edge, InstanceId camera) {
+    const InstanceId mover = mover_of(game, edge.sub_node);
+    if (mover == camera || (camera != 0 && mover_of(game, edge.parent_node) == camera)) {
+        return false;
+    }
+    Matrix4 frame;
+    Matrix4 target;
+    if (!sub_target(game, edge, frame, target)) {
+        return false;
     }
     if (settled(frame, target)) {
         return false;

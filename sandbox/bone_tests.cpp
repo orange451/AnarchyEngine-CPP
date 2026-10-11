@@ -10,6 +10,7 @@
 #include "Constraint.hpp"
 #include "LuaApi.hpp"
 #include "PhysicsObject.hpp"
+#include "PhysicsWorld.hpp"
 #include "Skeleton.hpp"
 
 using namespace skinning_test;
@@ -261,4 +262,61 @@ TEST_CASE("BONE11 a hand holds what it holds however heavy, and the two stay apa
     REQUIRE(assemblies.active(grip.id()));
     REQUIRE(assemblies.root_of(rig.game, held.id()) == body.id());
     REQUIRE(assemblies.root_of(rig.game, object.id()) == object.id());
+}
+
+TEST_CASE("BONE12 in play a hand carries what it holds, kinematic, wherever the pose and its GameObject take it",
+          "[bone][assembly][play]") {
+    Rig rig;
+    engine_core::PhysicsWorld physics;
+    constexpr double kStep = 1.0 / 240.0;
+    const auto at = [](float x, float y, float z) { return engine_core::matrix4_translation(x, y, z); };
+    const auto near3 = [](Vec3 a, Vec3 b, float tolerance) {
+        return std::fabs(a.x - b.x) <= tolerance && std::fabs(a.y - b.y) <= tolerance && std::fabs(a.z - b.z) <= tolerance;
+    };
+    engine_core::GameObject& object = rig.arm_object();
+    object.set_transform(at(0.f, 1.f, 0.f));
+    engine_core::PhysicsObject& stand = rig.game.create<engine_core::PhysicsObject>();
+    rig.game.set_parent(stand.id(), object.id());
+    stand.set_anchored(true);
+    engine_core::Bone& root = add_bone(rig.game, object.id(), "Root");
+    engine_core::Bone& hand = add_bone(rig.game, object.id(), "Hand");
+    // An unanchored box: let go of, it would fall.
+    engine_core::PhysicsObject& box = rig.game.create<engine_core::PhysicsObject>();
+    REQUIRE_FALSE(box.set_transform(at(5.f, 0.f, 0.f)));
+    REQUIRE_FALSE(box.set_size(Vec3{0.5f, 0.5f, 0.5f}));
+    rig.game.set_parent(box.id(), workspace_of(rig.game));
+    engine_core::RigidConstraint& grip = rig.game.create<engine_core::RigidConstraint>();
+    rig.game.set_parent(grip.id(), workspace_of(rig.game));
+    REQUIRE_FALSE(grip.set_pv_instance1(id_slot(hand.id())));
+    REQUIRE_FALSE(grip.set_pv_instance2(id_slot(box.id())));
+    REQUIRE(near_vec(origin(box.transform()), Vec3{0.f, 3.f, 0.f}));
+
+    rig.game.capture_place();
+    rig.game.start_simulation();
+    for (int i = 0; i < 240; ++i) {
+        physics.step(rig.game, kStep);
+    }
+    // A second on: still in the hand, and its body with it.
+    REQUIRE(near3(origin(box.transform()), Vec3{0.f, 3.f, 0.f}, 1e-3f));
+    REQUIRE(physics.body_position(box.id()).has_value());
+    REQUIRE(near3(*physics.body_position(box.id()), Vec3{0.f, 3.f, 0.f}, 1e-3f));
+
+    // The pose changes, as an animation's does: the box is drawn on the hand
+    // after the next step, and its body gets there by moving.
+    REQUIRE_FALSE(root.set_offset(spin_z()));
+    physics.step(rig.game, kStep);
+    REQUIRE(near3(origin(box.transform()), Vec3{-2.f, 1.f, 0.f}, 1e-3f));
+    for (int i = 0; i < 4; ++i) {
+        physics.step(rig.game, kStep);
+    }
+    REQUIRE(near3(*physics.body_position(box.id()), Vec3{-2.f, 1.f, 0.f}, 1e-2f));
+
+    // Its GameObject moves: the hand, and what it holds, go with it.
+    object.set_transform(at(4.f, 1.f, 0.f));
+    physics.step(rig.game, kStep);
+    REQUIRE(near3(origin(box.transform()), Vec3{2.f, 1.f, 0.f}, 1e-3f));
+    for (int i = 0; i < 4; ++i) {
+        physics.step(rig.game, kStep);
+    }
+    REQUIRE(near3(*physics.body_position(box.id()), Vec3{2.f, 1.f, 0.f}, 1e-2f));
 }

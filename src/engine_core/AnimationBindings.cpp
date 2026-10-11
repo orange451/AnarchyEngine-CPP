@@ -8,6 +8,7 @@
 
 #include "Animation.hpp"
 #include "Animator.hpp"
+#include "Assemblies.hpp"
 #include "AssetInstances.hpp"
 #include "LuaApi.hpp"
 
@@ -170,6 +171,8 @@ int ScriptBindings::animator_step_animations(lua_State* state) {
             luaL_error(state, "dt must be a finite number");
         }
         animator.step(dt);
+        // Stopped, nothing else steps: what the GameObject's hands hold follows now.
+        animator.assemblies().pose_changed(animator, animator.parent(animator.id()));
         return 0;
     });
 }

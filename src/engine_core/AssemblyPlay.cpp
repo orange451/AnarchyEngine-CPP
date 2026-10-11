@@ -265,6 +265,61 @@ void Assemblies::play_rebuilt(DataModel& game) {
     index_play();
 }
 
+void Assemblies::held_targets(const DataModel& game, std::vector<HeldTarget>& out) const {
+    out.clear();
+    for (const RigidEdge& edge : bone_) {
+        Matrix4 frame;
+        HeldTarget held;
+        held.node = edge.sub_node;
+        if (!sub_target(game, edge, frame, held.frame)) {
+            continue;
+        }
+        held.assembly = play_of(edge.sub_node);
+        if (held.assembly >= 0) {
+            // The body's frame that puts this member on the hand.
+            const std::int32_t member = play_member_index_[id_slot(edge.sub_node)];
+            if (member < 0) {
+                continue;
+            }
+            const Matrix4& offset = play_members_[static_cast<std::size_t>(member)].offset;
+            held.frame = matrix4_orthonormalize(matrix4_multiply(held.frame, matrix4_inverse(offset)));
+        }
+        out.push_back(held);
+    }
+}
+
+void Assemblies::place_held(DataModel& game) {
+    if (!game.simulation_running()) {
+        return;
+    }
+    sync_play(game);
+    if (bone_.empty()) {
+        return;
+    }
+    // In follow order, so a held thing that holds another (a hand on a
+    // handle) is placed before what it holds is worked out from it.
+    for (const RigidEdge& edge : bone_) {
+        Matrix4 frame;
+        Matrix4 target;
+        if (!sub_target(game, edge, frame, target)) {
+            continue;
+        }
+        const int assembly = play_of(edge.sub_node);
+        if (assembly >= 0) {
+            const std::int32_t member = play_member_index_[id_slot(edge.sub_node)];
+            if (member < 0) {
+                continue;
+            }
+            const Matrix4 body = matrix4_orthonormalize(
+                matrix4_multiply(target, matrix4_inverse(play_members_[static_cast<std::size_t>(member)].offset)));
+            pose_members(game, static_cast<std::size_t>(assembly), body, Vec3{}, Vec3{});
+            continue;
+        }
+        const PhysicsBase* body = dynamic_cast<const PhysicsBase*>(game.instance(edge.sub_node));
+        write_member(game, edge.sub_node, body != nullptr ? body->driven_game_object() : 0, target, Vec3{}, Vec3{}, 0);
+    }
+}
+
 int Assemblies::play_of(InstanceId node) const {
     const std::uint32_t slot = id_slot(node);
     return node != 0 && slot < play_seen_.size() && play_seen_[slot] == node ? play_index_[slot] : -1;
@@ -443,7 +498,8 @@ void Assemblies::play_attachment_changed(DataModel& game, InstanceId id) {
         bool loops = false;
         for (std::size_t at = 0; at < side_.size() && !loops; ++at) {
             for (const Edge& other : edges_) {
-                if (!other.live || other.constraint == edge.constraint) {
+                // Holding joins no sides: a hand and what it holds are apart.
+                if (!other.live || other.bone_end != 0 || other.constraint == edge.constraint) {
                     continue;
                 }
                 InstanceId next = 0;

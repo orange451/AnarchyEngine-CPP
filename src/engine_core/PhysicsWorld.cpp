@@ -613,6 +613,8 @@ struct PhysicsWorld::Impl {
     bool poses_from_game_objects = true;
     std::unordered_map<InstanceId, Body> bodies;
     std::unordered_map<std::uint32_t, Compound> compounds;
+    // Where each body a hand holds must go this step (drive_held).
+    std::vector<Assemblies::HeldTarget> held;
     std::function<void(const std::string&)> warn;
 
     // A Terrain's static body: one mesh shape per chunk collider.
@@ -733,6 +735,7 @@ struct PhysicsWorld::Impl {
         {
             PROFILE_SCOPE("Physics reconcile", profiler::Group::Physics);
             reconcile(game);
+            settle_held_types(game);
         }
         {
             PROFILE_SCOPE("Terrain collider interest", profiler::Group::Physics);
@@ -752,6 +755,7 @@ struct PhysicsWorld::Impl {
         {
             PROFILE_SCOPE("Physics control", profiler::Group::Physics);
             control(game, dt);
+            drive_held(game, dt);
         }
         {
             PROFILE_SCOPE("Box3D step", profiler::Group::Physics);
@@ -761,6 +765,74 @@ struct PhysicsWorld::Impl {
         {
             PROFILE_SCOPE("Physics pull", profiler::Group::Physics);
             pull(game);
+            // The hand moved with its GameObject this step: what it holds is
+            // drawn on it, though its body comes along only next step.
+            game.assemblies().place_held(game);
+        }
+    }
+
+    // A body a hand holds is kinematic in play: the hand moves it, and
+    // gravity and contacts do not. Let go, it is what it was again.
+    static void settle_type(b3BodyId body, bool anchored, bool held) {
+        const b3BodyType now = b3Body_GetType(body);
+        if (held) {
+            if (now != b3_kinematicBody) {
+                b3Body_SetType(body, b3_kinematicBody);
+            }
+            return;
+        }
+        if (now == b3_kinematicBody) {
+            b3Body_SetType(body, anchored ? b3_staticBody : b3_dynamicBody);
+            b3Body_SetLinearVelocity(body, b3Vec3{});
+            b3Body_SetAngularVelocity(body, b3Vec3{});
+        }
+    }
+
+    void settle_held_types(DataModel& game) {
+        const bool running = game.simulation_running();
+        const Assemblies& assemblies = game.assemblies();
+        for (auto& [id, record] : bodies) {
+            if (record.compound != 0 || !b3Body_IsValid(record.body)) {
+                continue;
+            }
+            const auto* object = dynamic_cast<const PhysicsBase*>(game.instance(id));
+            if (object != nullptr) {
+                settle_type(record.body, object->anchored(), running && (assemblies.flags(id) & Assemblies::kHeld) != 0);
+            }
+        }
+        for (auto& [stamp, compound] : compounds) {
+            if (b3Body_IsValid(compound.body)) {
+                settle_type(compound.body, compound.anchored,
+                            running && (assemblies.flags(compound.root) & Assemblies::kHeld) != 0);
+            }
+        }
+    }
+
+    // Gives each held body the velocity that takes it to its hand over this
+    // step, so it pushes what it swings into.
+    void drive_held(DataModel& game, double dt) {
+        const Assemblies& assemblies = game.assemblies();
+        assemblies.held_targets(game, held);
+        const std::vector<Assemblies::PlayAssembly>& plays = assemblies.play();
+        for (const Assemblies::HeldTarget& target : held) {
+            b3BodyId body = b3_nullBodyId;
+            if (target.assembly >= 0) {
+                const auto found = compounds.find(plays[static_cast<std::size_t>(target.assembly)].stamp);
+                if (found != compounds.end()) {
+                    body = found->second.body;
+                }
+            } else if (const auto found = bodies.find(target.node); found != bodies.end() && found->second.compound == 0) {
+                body = found->second.body;
+            }
+            if (!b3Body_IsValid(body) || b3Body_GetType(body) != b3_kinematicBody) {
+                continue;
+            }
+            // A move too small to set a velocity leaves the last one: none.
+            b3Body_SetLinearVelocity(body, b3Vec3{});
+            b3Body_SetAngularVelocity(body, b3Vec3{});
+            b3WorldTransform to{};
+            pose_of(target.frame, to.p, to.q);
+            b3Body_SetTargetTransform(body, to, static_cast<float>(dt), true);
         }
     }
 
@@ -2779,6 +2851,11 @@ struct PhysicsWorld::Impl {
     bool follow_driven(DataModel& game, PhysicsBase& object, Body& record) {
         const GameObject* driven = record.driven != 0 ? game.game_object(record.driven) : nullptr;
         if (driven == nullptr) {
+            return false;
+        }
+        // Held, the hand puts the GameObject where it is drawn, and the body
+        // goes there by its own velocity (drive_held), not by a jump.
+        if (game.simulation_running() && (game.assemblies().flags(object.id()) & Assemblies::kHeld) != 0) {
             return false;
         }
         const Matrix4 now = driven->transform();

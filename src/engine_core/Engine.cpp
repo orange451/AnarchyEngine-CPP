@@ -494,6 +494,12 @@ void Engine::simulation_loop() {
                     PROFILE_SCOPE("Events", profiler::Group::Engine);
                     game_.events().drain();
                 }
+                {
+                    // After the scripts' writes (a character turned to face
+                    // where it goes), what a hand holds is drawn on the hand.
+                    PROFILE_SCOPE("Held", profiler::Group::Engine);
+                    game_.assemblies().place_held(game_);
+                }
                 // After the scripts, so a Play, Stop, or Destroy this frame is heard this frame.
                 PROFILE_SCOPE("Audio", profiler::Group::Engine);
                 audio_.step(game_, step_dt);

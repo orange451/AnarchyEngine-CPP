@@ -299,6 +299,16 @@ void Assemblies::attachment_changed(DataModel& game, InstanceId id) {
     }
 }
 
+void Assemblies::pose_changed(DataModel& game, InstanceId game_object) {
+    if (suspended_ > 0 || busy_ > 0 || game.simulation_running()) {
+        return;
+    }
+    refresh(game);
+    if ((flags(game_object) & kRigid) != 0) {
+        follow(game, node_of(game_object));
+    }
+}
+
 InstanceId Assemblies::end_of(const DataModel& game, InstanceId constraint, const InstanceRef& ref, int end) {
     if (ref.guid().empty()) {
         return 0;
@@ -707,6 +717,16 @@ void Assemblies::rebuild(const DataModel& game) {
                 node_[id_slot(child)] = out.parent_node;
             }
             flags_[id_slot(child)] |= kLinked;
+        }
+        // Held, with everything welded to it: in play, one kinematic body.
+        const std::int32_t group = group_[id_slot(out.sub_node)];
+        if (group < 0) {
+            flags_[id_slot(out.sub_node)] |= kHeld;
+        } else {
+            const Group& held = groups_[static_cast<std::size_t>(group)];
+            for (std::uint32_t i = held.first; i < held.first + held.count; ++i) {
+                flags_[id_slot(group_nodes_[i])] |= kHeld;
+            }
         }
     }
 

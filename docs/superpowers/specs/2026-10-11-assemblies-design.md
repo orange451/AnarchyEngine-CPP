@@ -41,7 +41,8 @@ Engine distances are units.
 | Velocity of a member | The assembly's center-of-mass velocity, read and written through any physics member, as Roblox's `AssemblyLinearVelocity`. |
 | Terrain | Not a member in v1. A constraint with a Terrain end is inactive. |
 | Duplicate / Copy / Paste / instance files | References that point inside the copied set are remapped to the copies, for one whole user action. Instance files carry GUIDs so inserting one remaps too. |
-| Out of scope | Terrain ends; following an animated Bone during play; breakable welds; hinges, ropes, and other non-rigid constraints; a root-priority override; a weld-selection command; `AssemblyMass` and other read-only assembly queries beyond `AssemblyRoot`. |
+| A RigidConstraint to a Bone (a hand) | The Bone's side is always the parent, and the two sides stay apart, each its own assembly: the hand moves under its GameObject as the pose changes. In play what it holds is a kinematic body moved to the hand each step (§5, Held by a hand). Added 2026-10-11. |
+| Out of scope | Terrain ends; breakable welds; hinges, ropes, and other non-rigid constraints; a root-priority override; a weld-selection command; `AssemblyMass` and other read-only assembly queries beyond `AssemblyRoot`. |
 
 ## 1. Classes
 
@@ -534,6 +535,32 @@ Members whose assembly did not change keep their body, offsets, and contacts.
 Stop restores the place from its snapshot under a suspend scope, as §3 says.
 Members return to their authored poses. `world_generation` moves, and
 `Assemblies` and `PhysicsWorld` drop their state.
+
+### Held by a hand
+
+A RigidConstraint with an end that is a `Bone` posing a bone of its
+GameObject is a **bone edge**: a hand holding something. Added 2026-10-11.
+
+- **Pivot.** The Bone's pivot is the bone where it is posed: its GameObject's
+  frame times the bone's posed global, with the Bone's Offset in it, scale
+  removed. An Attachment under the Bone measures from that.
+- **Direction and joining.** The Bone's end is always the parent, whatever
+  the root rule says, and the edge joins nothing: the held thing (with
+  whatever is welded to it) is its own assembly, never in the GameObject's,
+  and in no rigid tree. Its AssemblyRoot is its own.
+- **Editor.** The held thing follows as any rigid sub does (§4), and also
+  when the pose changes: every Bone under the GameObject is linked, so an
+  Offset written to one higher up the arm moves it, and so does an
+  Animator's `StepAnimations` while stopped.
+- **Play.** What a hand holds is flagged held. Its body (its own, or its
+  assembly's one body) is kinematic while held: gravity and contacts do not
+  move it. Before each Box3D step its velocity is set to reach the hand over
+  that step (`b3Body_SetTargetTransform`), so it pushes what it swings into.
+  After each step, and after the frame's scripts, it is written where the
+  hand is now, as a body write-back (no Changed, no history), so what is drawn
+  is on the hand; its body follows a step behind. Its GameObject is not
+  jumped to by its body while held. Let go (the constraint disabled or gone),
+  it is anchored or dynamic again, at rest.
 
 ## 6. Copy, Paste, Duplicate, and instance files keep their links
 

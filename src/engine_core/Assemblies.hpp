@@ -40,6 +40,8 @@ public:
                                                       // member of a multi-node assembly, or a contested GameObject
     static constexpr std::uint8_t kMember = 1u << 1;  // in an assembly of more than one node (never an Attachment)
     static constexpr std::uint8_t kRigid = 1u << 2;   // on either side of an active RigidConstraint
+    static constexpr std::uint8_t kHeld = 1u << 3;    // held by a hand (a bone edge's sub), or welded to what is:
+                                                      // in play its body is kinematic, moved to the hand each step
 
     struct Group {
         InstanceId root = 0;  // the root node: a physics node's PhysicsBase, or a plain node
@@ -128,6 +130,10 @@ public:
     // editor follow (§4); playing, the play hooks (§5).
     void transform_written(DataModel& game, InstanceId id);
     void attachment_changed(DataModel& game, InstanceId id);
+    // A skinned GameObject's pose changed by other than its Bones' Offsets
+    // (an Animator stepped by a script): stopped, what its hands hold
+    // follows. Playing, place_held and the physics step see to it.
+    void pose_changed(DataModel& game, InstanceId game_object);
     // Playing: a member's Velocity (has_linear) or AngularVelocity
     // (has_angular) was written. It is the assembly's: stored on every
     // physics member at once, and given to the body at the next sync.
@@ -200,6 +206,21 @@ public:
     const std::vector<PlayMember>& play_members() const { return play_members_; }
     // The play assembly a node is in, or -1.
     int play_of(InstanceId node) const;
+    // Play: where each held thing (a bone edge's sub) must be for its hand
+    // now. assembly is its play assembly, whose body must be at frame; -1
+    // when the node is alone, and then frame is the node's. Scale removed.
+    struct HeldTarget {
+        InstanceId node = 0;
+        int assembly = -1;
+        Matrix4 frame{};
+    };
+    void held_targets(const DataModel& game, std::vector<HeldTarget>& out) const;
+    // Playing: writes each held thing where its hand is now, as the physics
+    // world writes a body back: no Changed, no history. The physics world
+    // calls it after each step, and the engine after the frame's scripts, so
+    // what is drawn is on the hand however the hand moved.
+    void place_held(DataModel& game);
+
     // Writes every member of play()[assembly] from body_pose × its offset,
     // keeping each one's own scale, as the physics world writes a body back:
     // no Changed, no history. skip: one already written by its own setter.
@@ -233,6 +254,9 @@ private:
     void mark_follow(InstanceId node, std::uint8_t bits);
     std::uint8_t follow_marks(InstanceId node) const;
     bool snap(DataModel& game, const RigidEdge& edge, InstanceId camera);
+    // Where edge's sub node must be (target) for its pivot to sit on its
+    // parent's, from where it is (frame). False when an end does not resolve.
+    bool sub_target(const DataModel& game, const RigidEdge& edge, Matrix4& frame, Matrix4& target) const;
     void carry(DataModel& game, InstanceId mover, const Matrix4& delta);
     // Play hooks, filled by AssemblyPlay.cpp (Tasks 7 and 8).
     void play_transform_written(DataModel& game, InstanceId id);

@@ -967,6 +967,10 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
         false, {});
     add("DataModel", "Changed", "Fires with the name of the property that changed.", "Signal", false, {});
     add("DataModel", "Destroy", "Unparents this instance and its descendants.", nullptr, false, {});
+    add("DataModel", "Clone",
+        "A copy of this instance and everything under it, with no parent. References inside the copy point at "
+        "the copies: a cloned car's constraints join the cloned parts.",
+        "Instance", false, {});
     add("DataModel", "GetChildren", "The direct children of this instance.", "{Instance}", false, {});
     add("DataModel", "FindFirstChild", "The direct child with this name, or nil.", "Instance?", false, {P("name", "string")});
     add("DataModel", "WaitForChild",

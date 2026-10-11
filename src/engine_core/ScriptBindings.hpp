@@ -301,6 +301,7 @@ struct ScriptBindings {
     // authorize's reason, when there was none before it (deferred_before).
     static void raise_window_refusal(lua_State* state, ScriptRuntime& runtime, const char* key, bool deferred_before);
     static int instance_destroy(lua_State* state);
+    static int instance_clone(lua_State* state);
     static int instance_children(lua_State* state);
     static int instance_find(lua_State* state);
     static int instance_wait_child(lua_State* state);

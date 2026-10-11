@@ -1023,6 +1023,7 @@ add_executable(sandbox
     sandbox/joint_frame_tests.cpp
     sandbox/joint_constraint_tests.cpp
     sandbox/joint_tests.cpp
+    sandbox/clone_tests.cpp
     sandbox/alloc_counter.cpp
     sandbox/copy_remap_tests.cpp
     sandbox/analysis_tests.cpp

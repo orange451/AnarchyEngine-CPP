@@ -31,6 +31,7 @@
 #include "Dragger.hpp"
 #include "WireframeAdornment.hpp"
 #include "Constraint.hpp"
+#include "InstanceFile.hpp"
 #include "JointConstraint.hpp"
 #include "SoundEmitter.hpp"
 #include "Brush.hpp"
@@ -601,6 +602,23 @@ int ScriptBindings::instance_destroy(lua_State* state) {
         }
         runtime->game_->destroy(ud->id);
         return 0;
+    });
+}
+
+int ScriptBindings::instance_clone(lua_State* state) {
+    return lua_guard(state, [&] {
+        auto* ud = static_cast<InstanceUd*>(luaL_checkudata(state, 1, kInstanceMeta));
+        ScriptRuntime* runtime = runtime_from(state);
+        if (runtime == nullptr || runtime->resolve_id(ud->id, ud->world) == nullptr) {
+            luaL_error(state, "instance is gone");
+        }
+        std::string refused;
+        const InstanceId copy = clone_tree(*runtime->game_, ud->id, &refused);
+        if (copy == 0) {
+            luaL_error(state, "%s", refused.empty() ? "it can't be cloned" : refused.c_str());
+        }
+        runtime->push_instance(state, copy);
+        return 1;
     });
 }
 
@@ -1511,13 +1529,14 @@ ANARCHY_LUA_REGISTER(register_script_methods) {
     get_service.service_arg = true;
     const LuaField methods[] = {
         lua_method("Destroy", "nil", reinterpret_cast<void*>(&ScriptBindings::instance_destroy)),
+        lua_method("Clone", "Instance", reinterpret_cast<void*>(&ScriptBindings::instance_clone)),
         lua_method("GetChildren", "Instance", reinterpret_cast<void*>(&ScriptBindings::instance_children), false, false, true),
         lua_method("FindFirstChild", "Instance?", reinterpret_cast<void*>(&ScriptBindings::instance_find), false, true, false),
         lua_method("WaitForChild", "Instance", reinterpret_cast<void*>(&ScriptBindings::instance_wait_child), false, true,
                    false),
         lua_method("IsA", "boolean", reinterpret_cast<void*>(&ScriptBindings::instance_isa)),
     };
-    register_lua_class("DataModel", nullptr, methods, 5);
+    register_lua_class("DataModel", nullptr, methods, static_cast<int>(std::size(methods)));
     // Services hang off game alone. Game.cpp declares the class.
     register_lua_class("Game", nullptr, &get_service, 1);
 

@@ -47,12 +47,15 @@ InstanceId build_copy(DataModel& world, const CopiedNode& node, InstanceId paren
     if (!world.rename_error(id, node.name)) {
         world.set_name(id, node.name);
     }
-    if (std::optional<std::string> error = world.parent_error(id, parent)) {
-        refuse(std::move(*error));
-        world.destroy_tree(id);
-        return 0;
+    // kNoParent: a clone's root, left with no parent.
+    if (parent != DataModel::kNoParent) {
+        if (std::optional<std::string> error = world.parent_error(id, parent)) {
+            refuse(std::move(*error));
+            world.destroy_tree(id);
+            return 0;
+        }
+        world.set_parent(id, parent);
     }
-    world.set_parent(id, parent);
     for (const CopiedNode& child : node.children) {
         build_copy(world, child, id, refused, map);
     }
@@ -191,6 +194,19 @@ bool paste_copies(DataModel& world, const std::vector<CopiedNode>& roots, Instan
         }
     }
     return any;
+}
+
+InstanceId clone_tree(DataModel& world, InstanceId id, std::string* refused) {
+    if (!world.alive(id)) {
+        return 0;
+    }
+    const CopiedNode root = copy_tree(world, id);
+    CopyMap map;
+    const InstanceId made = build_copy(world, root, DataModel::kNoParent, refused, &map);
+    if (made != 0) {
+        remap_references(world, map);
+    }
+    return made;
 }
 
 void remap_references(DataModel& world, const CopyMap& map) {

@@ -41,6 +41,12 @@ using CopyMap = std::unordered_map<std::string, InstanceId>;
 bool paste_copies(DataModel& world, const std::vector<CopiedNode>& roots, InstanceId parent,
                   std::vector<InstanceId>* made = nullptr, std::string* refused = nullptr, CopyMap* map = nullptr);
 
+// A copy of id and everything under it with no parent, as Instance:Clone
+// makes: references inside it point at the copies, as a paste's do, and
+// references outside stay. 0 for a dead id or a full place, with refused,
+// when given, saying why. SimulationThread.
+InstanceId clone_tree(DataModel& world, InstanceId id, std::string* refused = nullptr);
+
 // Points every saved reference property (any X? field) of the copies in map
 // whose GUID names a source in map at that source's copy, through the
 // property's own write, so the action's recording keeps it. References to

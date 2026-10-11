@@ -169,6 +169,10 @@ public:
     // For tests: whether the body has shapes and every one asks Box3D for
     // contact events (only listened bodies do).
     bool contact_events_enabled(InstanceId id) const;
+    // For tests: how many Box3D joints JointConstraints have now, and one's
+    // Box3D joint id (b3StoreJointId), 0 when it has none.
+    std::size_t joint_count() const;
+    std::uint64_t joint_key(InstanceId constraint) const;
 
     // For tests: one ray's result from ray_cast_mesh_for_test or
     // ray_cast_terrain_collider_for_test. fraction, triangle, and material

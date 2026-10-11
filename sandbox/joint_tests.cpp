@@ -202,3 +202,144 @@ TEST_CASE("JA4 joints are listed by constraint id, and read the same in play", "
     REQUIRE(active(rig.game, first));
     REQUIRE(active(rig.game, second));
 }
+
+TEST_CASE("JP1 a jointed part hangs where it was placed from an anchored base", "[joint][physics]") {
+    PhysicsRig rig;
+    PhysicsObject& base = rig.body(at(0.f, 5.f, 0.f), Vec3{1.f, 1.f, 1.f}, true);
+    // A Revolute and a Spherical hold their pivot (the part's centre); a
+    // Prismatic slides across gravity; a Distance hangs straight down.
+    PhysicsObject& hinged = rig.body(at(3.f, 5.f, 0.f), Vec3{1.f, 1.f, 1.f}, false);
+    PhysicsObject& balled = rig.body(at(-3.f, 5.f, 0.f), Vec3{1.f, 1.f, 1.f}, false);
+    PhysicsObject& slid = rig.body(turned(at(0.f, 5.f, 3.f), Vec3{0.f, 0.f, 1.f}, 90.0), Vec3{1.f, 1.f, 1.f}, false);
+    PhysicsObject& hung = rig.body(at(0.f, 3.f, 0.f), Vec3{1.f, 1.f, 1.f}, false);
+    joint<engine_core::RevoluteConstraint>(rig.game, base.id(), hinged.id());
+    joint<engine_core::SphericalConstraint>(rig.game, base.id(), balled.id());
+    joint<engine_core::PrismaticConstraint>(rig.game, base.id(), slid.id());
+    joint<engine_core::DistanceConstraint>(rig.game, base.id(), hung.id());
+    const Matrix4 placed[4] = {hinged.transform(), balled.transform(), slid.transform(), hung.transform()};
+    rig.play();
+    rig.seconds(1.0);
+    REQUIRE(rig.physics.joint_count() == 4);
+    REQUIRE(distance(hinged.transform(), placed[0]) < 0.02f);
+    REQUIRE(distance(balled.transform(), placed[1]) < 0.02f);
+    REQUIRE(distance(slid.transform(), placed[2]) < 0.02f);
+    REQUIRE(distance(hung.transform(), placed[3]) < 0.02f);
+}
+
+TEST_CASE("JP2 with gravity off, nothing jointed moves at Play, however its parts are turned", "[joint][physics]") {
+    PhysicsRig rig;
+    no_gravity(rig.game);
+    PhysicsObject& base = rig.body(turned(at(0.f, 2.f, 0.f), Vec3{0.f, 1.f, 0.f}, 25.0), Vec3{2.f, 1.f, 2.f}, false);
+    std::vector<PhysicsObject*> parts;
+    for (int i = 0; i < 5; ++i) {
+        parts.push_back(&rig.body(turned(at(3.f * static_cast<float>(i) - 6.f, 4.f, 2.f), Vec3{1.f, 0.f, 0.f},
+                                         30.0 + 10.0 * i),
+                                  Vec3{1.f, 1.f, 1.f}, false));
+    }
+    joint<engine_core::RevoluteConstraint>(rig.game, base.id(), parts[0]->id());
+    joint<engine_core::PrismaticConstraint>(rig.game, base.id(), parts[1]->id());
+    joint<engine_core::DistanceConstraint>(rig.game, base.id(), parts[2]->id());
+    joint<engine_core::SphericalConstraint>(rig.game, base.id(), parts[3]->id());
+    joint<engine_core::WheelConstraint>(rig.game, base.id(), parts[4]->id());
+    std::vector<Matrix4> placed;
+    for (PhysicsObject* part : parts) {
+        placed.push_back(part->transform());
+    }
+    const Matrix4 base_placed = base.transform();
+    rig.play();
+    rig.seconds(1.0);
+    REQUIRE(rig.physics.joint_count() == 5);
+    REQUIRE(distance(base.transform(), base_placed) < 1e-3f);
+    for (std::size_t i = 0; i < parts.size(); ++i) {
+        INFO(i);
+        REQUIRE(distance(parts[i]->transform(), placed[i]) < 1e-3f);
+        REQUIRE(degrees_between(column(parts[i]->transform(), 1), column(placed[i], 1)) < 0.1f);
+    }
+}
+
+TEST_CASE("JP3 a weld made in play remakes the joint on the new body, without a jump", "[joint][physics]") {
+    PhysicsRig rig;
+    PhysicsObject& base = rig.body(at(0.f, 5.f, 0.f), Vec3{1.f, 1.f, 1.f}, true);
+    PhysicsObject& hinged = rig.body(at(3.f, 5.f, 0.f), Vec3{1.f, 1.f, 1.f}, false);
+    PhysicsObject& extra = rig.body(at(3.f, 6.f, 0.f), Vec3{0.5f, 0.5f, 0.5f}, false);
+    auto& hinge = joint<engine_core::RevoluteConstraint>(rig.game, base.id(), hinged.id());
+    const Matrix4 placed = hinged.transform();
+    rig.play();
+    rig.seconds(0.5);
+    const std::uint64_t before = rig.physics.joint_key(hinge.id());
+    REQUIRE(before != 0);
+    weld(rig.game, hinged.id(), extra.id());
+    rig.seconds(1.0);
+    REQUIRE(rig.physics.joint_count() == 1);
+    REQUIRE(rig.physics.joint_key(hinge.id()) != before);
+    REQUIRE(distance(hinged.transform(), placed) < 0.02f);
+}
+
+TEST_CASE("JP4 an end destroyed in play takes its joint with it", "[joint][physics]") {
+    PhysicsRig rig;
+    rig.floor();
+    PhysicsObject& base = rig.body(at(0.f, 5.f, 0.f), Vec3{1.f, 1.f, 1.f}, true);
+    PhysicsObject& hinged = rig.body(at(3.f, 5.f, 0.f), Vec3{1.f, 1.f, 1.f}, false);
+    auto& hinge = joint<engine_core::RevoluteConstraint>(rig.game, base.id(), hinged.id());
+    rig.play();
+    rig.seconds(0.5);
+    REQUIRE(rig.physics.joint_count() == 1);
+    rig.game.destroy(hinged.id());
+    rig.seconds(0.5);
+    REQUIRE(rig.physics.joint_count() == 0);
+    REQUIRE(rig.physics.joint_key(hinge.id()) == 0);
+    REQUIRE_FALSE(active(rig.game, hinge));
+}
+
+TEST_CASE("JP5 a weld made in play between a joint's two ends ends the joint", "[joint][physics]") {
+    PhysicsRig rig;
+    rig.floor();
+    PhysicsObject& a = rig.body(at(0.f, 3.f, 0.f), Vec3{1.f, 1.f, 1.f}, false);
+    PhysicsObject& b = rig.body(at(2.f, 3.f, 0.f), Vec3{1.f, 1.f, 1.f}, false);
+    auto& hinge = joint<engine_core::RevoluteConstraint>(rig.game, a.id(), b.id());
+    rig.play();
+    rig.seconds(0.25);
+    REQUIRE(rig.physics.joint_count() == 1);
+    weld(rig.game, a.id(), b.id());
+    rig.seconds(1.0);
+    REQUIRE(rig.physics.joint_count() == 0);
+    REQUIRE_FALSE(active(rig.game, hinge));
+    REQUIRE(finite(a.transform()));
+    REQUIRE(near(distance(a.transform(), b.transform()), 2.f, 0.02f));
+}
+
+TEST_CASE("JP6 Stop takes every joint away, and the next Play makes them again", "[joint][physics]") {
+    PhysicsRig rig;
+    PhysicsObject& base = rig.body(at(0.f, 5.f, 0.f), Vec3{1.f, 1.f, 1.f}, true);
+    PhysicsObject& hinged = rig.body(at(3.f, 5.f, 0.f), Vec3{1.f, 1.f, 1.f}, false);
+    joint<engine_core::RevoluteConstraint>(rig.game, base.id(), hinged.id());
+    // Nothing is made while stopped.
+    rig.sync_steps(2);
+    REQUIRE(rig.physics.joint_count() == 0);
+    rig.play();
+    rig.steps(1);
+    REQUIRE(rig.physics.joint_count() == 1);
+    rig.game.stop_simulation();
+    rig.sync_steps(1);
+    REQUIRE(rig.physics.joint_count() == 0);
+    rig.game.start_simulation();
+    rig.steps(1);
+    REQUIRE(rig.physics.joint_count() == 1);
+}
+
+TEST_CASE("JP7 a jointed part a script moves away is pulled back, and stays finite", "[joint][physics]") {
+    PhysicsRig rig;
+    PhysicsObject& base = rig.body(at(0.f, 5.f, 0.f), Vec3{1.f, 1.f, 1.f}, true);
+    PhysicsObject& hinged = rig.body(at(3.f, 5.f, 0.f), Vec3{1.f, 1.f, 1.f}, false);
+    joint<engine_core::RevoluteConstraint>(rig.game, base.id(), hinged.id());
+    const Matrix4 placed = hinged.transform();
+    rig.play();
+    rig.seconds(0.25);
+    REQUIRE_FALSE(hinged.set_transform(at(6.f, 7.f, 1.f)));
+    for (int i = 0; i < 480; ++i) {
+        rig.steps(1);
+        REQUIRE(finite(hinged.transform()));
+    }
+    REQUIRE(rig.physics.joint_count() == 1);
+    REQUIRE(distance(hinged.transform(), placed) < 0.05f);
+}

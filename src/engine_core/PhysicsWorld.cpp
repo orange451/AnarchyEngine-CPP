@@ -7,6 +7,8 @@
 #include "ConvexDecomposition.hpp"
 #include "DataModel.hpp"
 #include "GameObject.hpp"
+#include "JointConstraint.hpp"
+#include "JointFrame.hpp"
 #include "LuaApi.hpp"
 #include "MeshShapes.hpp"
 #include "PhysicsObject.hpp"
@@ -666,6 +668,28 @@ struct PhysicsWorld::Impl {
     std::unordered_set<InstanceId> no_collide_ids;
     std::vector<std::pair<InstanceId, InstanceId>> no_collide_diff;
     std::vector<InstanceId> no_collide_changed;
+    // Joint constraints (docs/superpowers/specs/2026-10-11-joint-constraints-design.md
+    // §3): per active JointConstraint, its Box3D joint and what it was made from.
+    struct Joint {
+        b3JointId joint = b3_nullJointId;
+        JointKind kind = JointKind::Revolute;
+        InstanceId node1 = 0;
+        InstanceId node2 = 0;
+        // The bodies it was made between: another body under a node remakes it.
+        b3BodyId body1 = b3_nullBodyId;
+        b3BodyId body2 = b3_nullBodyId;
+        // Each end's joint frame in its node's frame, taken when it started
+        // (spec §2, Capture), so a body made again places it where it was.
+        b3Transform local1 = b3Transform_identity;
+        b3Transform local2 = b3Transform_identity;
+        // A Distance's length as placed, for a Length of 0.
+        float placed_length = 0.f;
+        std::uint32_t capture_revision = 0;
+        std::uint32_t settings_revision = 0;
+        std::uint64_t seen = 0;
+    };
+    std::unordered_map<InstanceId, Joint> joints;
+    std::uint64_t joint_pass = 0;
     // Touching (docs/superpowers/specs/2026-10-11-touched-design.md): each
     // touching shape pair (b3StoreShapeId, lower first) with the two
     // instances; per instance pair (pair_key) how many shape pairs touch and
@@ -799,6 +823,7 @@ struct PhysicsWorld::Impl {
         claimed.reserve(DataModel::kMaxInstances);
         claimants.reserve(1024);
         gone.reserve(1024);
+        joints.reserve(1024);
     }
 
     ~Impl() { reset(); }
@@ -827,6 +852,8 @@ struct PhysicsWorld::Impl {
         no_collide.clear();
         no_collide_keys.clear();
         no_collide_ids.clear();
+        // The world took the joints with it.
+        joints.clear();
     }
 
     static std::uint64_t pair_key(InstanceId a, InstanceId b) {
@@ -1432,6 +1459,204 @@ struct PhysicsWorld::Impl {
     }
 
 
+    static float radians(double degrees) { return static_cast<float>(degrees) * (kPi / 180.f); }
+
+    static b3Transform pose_of_body(b3BodyId body) {
+        b3Transform pose = b3Transform_identity;
+        pose.p = b3Body_GetPosition(body);
+        pose.q = b3Body_GetRotation(body);
+        return pose;
+    }
+
+    // The Box3D body a node moves with in play: its own, its assembly's (a
+    // compound), or, for a plain node, its play assembly's. Null for none.
+    b3BodyId body_for_node(const Assemblies& assemblies, InstanceId node) const {
+        std::uint32_t stamp = 0;
+        if (const auto found = bodies.find(node); found != bodies.end()) {
+            if (found->second.compound == 0) {
+                return found->second.body;
+            }
+            stamp = found->second.compound;
+        } else if (const int play = assemblies.play_of(node); play >= 0) {
+            stamp = assemblies.play()[static_cast<std::size_t>(play)].stamp;
+        }
+        const auto compound = stamp != 0 ? compounds.find(stamp) : compounds.end();
+        return compound != compounds.end() ? compound->second.body : b3_nullBodyId;
+    }
+
+    // Takes a joint's frames from where its ends are now (spec §2, Capture).
+    // False when an end does not resolve.
+    bool capture_joint(DataModel& game, const JointConstraint& constraint, const Assemblies::JointEdge& edge,
+                       Joint& joint) const {
+        const Assemblies& assemblies = game.assemblies();
+        Matrix4 pivot1{};
+        Matrix4 pivot2{};
+        if (!assemblies.end_pivot(game, edge.constraint, 1, pivot1) ||
+            !assemblies.end_pivot(game, edge.constraint, 2, pivot2)) {
+            return false;
+        }
+        Matrix4 frame1{};
+        Matrix4 frame2{};
+        joint_frames(constraint.kind(), pivot1, pivot2, frame1, frame2);
+        joint.kind = constraint.kind();
+        joint.node1 = edge.node1;
+        joint.node2 = edge.node2;
+        joint.local1 = b3InvMulTransforms(transform_of(assemblies.node_frame(game, edge.node1)), transform_of(frame1));
+        joint.local2 = b3InvMulTransforms(transform_of(assemblies.node_frame(game, edge.node2)), transform_of(frame2));
+        const Vec3 a = matrix4_position(pivot1);
+        const Vec3 b = matrix4_position(pivot2);
+        joint.placed_length = std::sqrt((a.x - b.x) * (a.x - b.x) + (a.y - b.y) * (a.y - b.y) + (a.z - b.z) * (a.z - b.z));
+        joint.capture_revision = constraint.capture_revision();
+        return true;
+    }
+
+    // Makes the Box3D joint between body1 and body2 from the captured frames,
+    // as the nodes are now, and gives it every setting.
+    void make_joint(DataModel& game, const JointConstraint& constraint, Joint& joint, b3BodyId body1,
+                    b3BodyId body2) {
+        const Assemblies& assemblies = game.assemblies();
+        const b3Transform frame1 = b3MulTransforms(transform_of(assemblies.node_frame(game, joint.node1)), joint.local1);
+        const b3Transform frame2 = b3MulTransforms(transform_of(assemblies.node_frame(game, joint.node2)), joint.local2);
+        const auto place = [&](b3JointDef& def) {
+            def.bodyIdA = body1;
+            def.bodyIdB = body2;
+            def.localFrameA = b3InvMulTransforms(pose_of_body(body1), frame1);
+            def.localFrameB = b3InvMulTransforms(pose_of_body(body2), frame2);
+            def.collideConnected = constraint.flag(JointParam::CollideConnected);
+        };
+        switch (joint.kind) {
+            case JointKind::Revolute: {
+                b3RevoluteJointDef def = b3DefaultRevoluteJointDef();
+                place(def.base);
+                joint.joint = b3CreateRevoluteJoint(world, &def);
+                break;
+            }
+            case JointKind::Prismatic: {
+                b3PrismaticJointDef def = b3DefaultPrismaticJointDef();
+                place(def.base);
+                joint.joint = b3CreatePrismaticJoint(world, &def);
+                break;
+            }
+            case JointKind::Distance: {
+                b3DistanceJointDef def = b3DefaultDistanceJointDef();
+                place(def.base);
+                def.length = std::max(joint.placed_length, 0.001f);
+                joint.joint = b3CreateDistanceJoint(world, &def);
+                break;
+            }
+            case JointKind::Spherical: {
+                b3SphericalJointDef def = b3DefaultSphericalJointDef();
+                place(def.base);
+                joint.joint = b3CreateSphericalJoint(world, &def);
+                break;
+            }
+            case JointKind::Wheel: {
+                b3WheelJointDef def = b3DefaultWheelJointDef();
+                place(def.base);
+                joint.joint = b3CreateWheelJoint(world, &def);
+                break;
+            }
+        }
+        joint.body1 = body1;
+        joint.body2 = body2;
+        apply_joint(constraint, joint);
+        joint.settings_revision = constraint.settings_revision();
+    }
+
+    // Gives Box3D every setting the constraint holds (spec §1), and wakes
+    // both bodies. Task 6 fills in the kinds.
+    void apply_joint(const JointConstraint& constraint, const Joint& joint) {
+        b3Joint_SetCollideConnected(joint.joint, constraint.flag(JointParam::CollideConnected));
+        b3Joint_WakeBodies(joint.joint);
+    }
+
+    static void destroy_joint(Joint& joint) {
+        if (b3Joint_IsValid(joint.joint)) {
+            b3DestroyJoint(joint.joint, true);
+        }
+        joint.joint = b3_nullJointId;
+    }
+
+    void drop_joint(DataModel& game, InstanceId constraint) {
+        const auto found = joints.find(constraint);
+        if (found == joints.end()) {
+            return;
+        }
+        destroy_joint(found->second);
+        if (auto* made = dynamic_cast<JointConstraint*>(game.instance(constraint))) {
+            made->set_reading(0.0);
+        }
+        joints.erase(found);
+    }
+
+    void drop_joints(DataModel& game) {
+        for (auto& [id, joint] : joints) {
+            destroy_joint(joint);
+            if (auto* made = dynamic_cast<JointConstraint*>(game.instance(id))) {
+                made->set_reading(0.0);
+            }
+        }
+        joints.clear();
+    }
+
+    // Each sync: one Box3D joint per active JointConstraint in play, made,
+    // remade, given its settings, or dropped (spec §3). Stopped, none.
+    void update_joints(DataModel& game, bool running) {
+        if (!running) {
+            if (!joints.empty()) {
+                drop_joints(game);
+            }
+            return;
+        }
+        const Assemblies& assemblies = game.assemblies();
+        const std::vector<Assemblies::JointEdge>& list = assemblies.joints();
+        if (list.empty() && joints.empty()) {
+            return;
+        }
+        ++joint_pass;
+        for (const Assemblies::JointEdge& edge : list) {
+            auto* constraint = dynamic_cast<JointConstraint*>(game.instance(edge.constraint));
+            if (constraint == nullptr) {
+                continue;
+            }
+            const b3BodyId body1 = body_for_node(assemblies, edge.node1);
+            const b3BodyId body2 = body_for_node(assemblies, edge.node2);
+            if (!b3Body_IsValid(body1) || !b3Body_IsValid(body2) || B3_ID_EQUALS(body1, body2)) {
+                drop_joint(game, edge.constraint);
+                continue;
+            }
+            auto [found, made] = joints.try_emplace(edge.constraint);
+            Joint& joint = found->second;
+            joint.seen = joint_pass;
+            const bool recapture = made || joint.capture_revision != constraint->capture_revision() ||
+                                   joint.node1 != edge.node1 || joint.node2 != edge.node2;
+            if (recapture && !capture_joint(game, *constraint, edge, joint)) {
+                destroy_joint(joint);
+                joints.erase(found);
+                continue;
+            }
+            if (recapture || !b3Joint_IsValid(joint.joint) || !B3_ID_EQUALS(joint.body1, body1) ||
+                !B3_ID_EQUALS(joint.body2, body2)) {
+                destroy_joint(joint);
+                make_joint(game, *constraint, joint, body1, body2);
+            } else if (joint.settings_revision != constraint->settings_revision()) {
+                apply_joint(*constraint, joint);
+                joint.settings_revision = constraint->settings_revision();
+            }
+        }
+        for (auto it = joints.begin(); it != joints.end();) {
+            if (it->second.seen == joint_pass) {
+                ++it;
+                continue;
+            }
+            destroy_joint(it->second);
+            if (auto* dropped = dynamic_cast<JointConstraint*>(game.instance(it->first))) {
+                dropped->set_reading(0.0);
+            }
+            it = joints.erase(it);
+        }
+    }
+
     void begin(std::uint32_t next_generation) {
         reset();
         b3WorldDef def = b3DefaultWorldDef();
@@ -1468,6 +1693,10 @@ struct PhysicsWorld::Impl {
             PROFILE_SCOPE("Physics reconcile", profiler::Group::Physics);
             reconcile(game);
             settle_held_types(game);
+        }
+        {
+            PROFILE_SCOPE("Physics joints", profiler::Group::Physics);
+            update_joints(game, running);
         }
         {
             PROFILE_SCOPE("Terrain collider interest", profiler::Group::Physics);
@@ -3988,6 +4217,20 @@ bool PhysicsWorld::contact_events_enabled(InstanceId id) const {
         }
     }
     return true;
+}
+
+std::size_t PhysicsWorld::joint_count() const {
+    std::size_t count = 0;
+    for (const auto& [id, joint] : impl_->joints) {
+        count += b3Joint_IsValid(joint.joint) ? 1 : 0;
+    }
+    return count;
+}
+
+std::uint64_t PhysicsWorld::joint_key(InstanceId constraint) const {
+    const auto found = impl_->joints.find(constraint);
+    return found != impl_->joints.end() && b3Joint_IsValid(found->second.joint) ? b3StoreJointId(found->second.joint)
+                                                                                : 0;
 }
 
 std::size_t PhysicsWorld::shape_count(InstanceId id) const {

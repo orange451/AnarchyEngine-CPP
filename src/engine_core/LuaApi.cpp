@@ -1730,6 +1730,27 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
         "Which PhysicsService collision group this body is in. A name no script has registered behaves as "
         "Default until one does.",
         "string", false, {});
+    add("PhysicsBase", "Touched",
+        "Fires once when this body starts touching another, or overlapping a CanCollide-off one (a trigger "
+        "zone), while the place runs. Its TouchObject says with what, where, which way, and how fast.",
+        "Signal", false, {});
+    add("PhysicsBase", "TouchEnded",
+        "Fires once when this body stops touching another, with a TouchObject from the step they parted.",
+        "Signal", false, {});
+    add("TouchObject", "Time", "Seconds since Play, at the physics step the touch began or ended.", "number", false,
+        {});
+    add("TouchObject", "Instance",
+        "The other body, or the Terrain. Nil when the other was destroyed.", "Instance?", false, {});
+    add("TouchObject", "Point",
+        "Where they touch, in world space: the contact points averaged. For a trigger zone, the other body's "
+        "position.",
+        "Vector3", false, {});
+    add("TouchObject", "Normal",
+        "A unit vector pointing away from this body, toward the other. Zero for a trigger zone.", "Vector3", false,
+        {});
+    add("TouchObject", "RelativeVelocity",
+        "The other body's velocity at Point minus this one's, from before the step resolved the collision.",
+        "Vector3", false, {});
     add("Brush", "Color", "Tints every face, over its Material.", "Color3", false, {});
     add("Brush", "Transparency", "Fades every face, over its Material.", "number", false, {});
     add("Brush", "GetFaces", "Every face, in order.", "{BrushFace}", false, {});

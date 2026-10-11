@@ -24,12 +24,12 @@ signals every body has. Trigger zones (CanCollide-off bodies) work too.
 
 ## 1. `TouchObject`
 
-A read-only Luau value (frozen table, `typeof` reads `"TouchObject"`):
+A read-only Luau userdata (as InputObject is), `typeof` reads `"TouchObject"`:
 
 | Field | Type | Touched | TouchEnded |
 | --- | --- | --- | --- |
 | `Time` | number | The simulation time (seconds since Play) of the step it began. | Of the step it ended. |
-| `Instance` | Instance | The other body, or the Terrain it touched. | The same. Still given when the other was destroyed or left Workspace. |
+| `Instance` | Instance | The other body, or the Terrain it touched. | The same; nil when the other was destroyed (it is freed), given when it only left Workspace. |
 | `Point` | Vector3 | The contact's manifold points, averaged, world space. | The closest point between the two at the step they parted (Box3D distance query between their shapes). |
 | `Normal` | Vector3 | Unit, pointing away from this body toward the other. | Along the gap at parting, away from this body. |
 | `RelativeVelocity` | Vector3 | The other body's velocity at `Point` minus this body's, both from the start of the step (before the collision was resolved). | The same at the parting step. |

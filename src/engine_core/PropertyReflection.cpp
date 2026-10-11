@@ -162,6 +162,8 @@ bool same_slot(const LuaSlot& a, const LuaSlot& b) {
         return std::memcmp(a.transform.m, b.transform.m, sizeof(a.transform.m)) == 0;
     case LuaSlot::Kind::Enum:
         return a.enum_type == b.enum_type && a.number == b.number;
+    case LuaSlot::Kind::TouchObject:
+        return a.touch.time == b.touch.time && a.touch.instance == b.touch.instance;
     case LuaSlot::Kind::InputObject:
         return a.input.type == b.input.type && a.input.state == b.input.state && a.input.key == b.input.key &&
                a.input.position.x == b.input.position.x && a.input.position.y == b.input.position.y &&

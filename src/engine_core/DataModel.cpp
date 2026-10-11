@@ -1271,6 +1271,20 @@ Signal& DataModel::ancestry_changed(InstanceId id) {
     return ensure_signal(id, SignalKind::AncestryChanged, Field::Parent);
 }
 
+bool DataModel::event_listened(InstanceId id, std::string_view name) const {
+    const std::uint32_t index = id_slot(id);
+    if (id == 0 || slot(id) == nullptr || index >= state_->bags.size() || !state_->bags[index] ||
+        state_->bags[index]->owner != id) {
+        return false;
+    }
+    for (const std::unique_ptr<InstanceSignals::Event>& event : state_->bags[index]->events) {
+        if (event->name == name) {
+            return event->signal.bound() && event->signal.listeners_ > 0;
+        }
+    }
+    return false;
+}
+
 Signal& DataModel::event_signal(InstanceId id, std::string_view name) {
     InstanceSignals& bag = ensure_bag(id);
     for (const std::unique_ptr<InstanceSignals::Event>& event : bag.events) {
@@ -1352,6 +1366,9 @@ bool type_fits(std::string_view type, const LuaSlot& slot) {
     }
     if (type == "InputObject") {
         return slot.kind == Kind::InputObject;
+    }
+    if (type == "TouchObject") {
+        return slot.kind == Kind::TouchObject;
     }
     // Value types such as Vector3 are registered classes too, so only an
     // Instance class takes an instance.

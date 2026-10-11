@@ -1,6 +1,7 @@
 #pragma once
 
 #include "InputRecord.hpp"
+#include "TouchRecord.hpp"
 #include "types.hpp"
 
 #include <cstdint>
@@ -22,7 +23,7 @@ struct EnumType;
 struct LuaSlot {
     // A Vec2 (a Vector2) keeps its x and y in vec, with z 0. An InputObject is
     // only ever an event's value, never a property's.
-    enum class Kind { Nil, Bool, Number, String, Instance, Vec3, Color, Matrix4, Signal, Enum, Vec2, InputObject };
+    enum class Kind { Nil, Bool, Number, String, Instance, Vec3, Color, Matrix4, Signal, Enum, Vec2, InputObject, TouchObject };
     Kind kind = Kind::Nil;
     bool flag = false;
     // A Number's value, or an Enum item's value.
@@ -36,6 +37,8 @@ struct LuaSlot {
     Matrix4 transform{};
     // An InputObject's record.
     InputRecord input{};
+    // A TouchObject's record: only ever an event's value.
+    TouchRecord touch{};
     // Why a write refused the value, for the user. Empty when it did not say.
     std::string error;
 };

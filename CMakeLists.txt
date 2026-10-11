@@ -1016,6 +1016,7 @@ add_executable(sandbox
     sandbox/collision_group_tests.cpp
     sandbox/collision_group_lua_tests.cpp
     sandbox/no_collision_tests.cpp
+    sandbox/touch_tests.cpp
     sandbox/constraint_lines_tests.cpp
     sandbox/alloc_counter.cpp
     sandbox/copy_remap_tests.cpp

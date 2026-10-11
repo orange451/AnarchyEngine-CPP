@@ -397,6 +397,9 @@ public:
     // An event the instance's class declares with lua_event, such as a Button's
     // Action, made on first use. name is the field's name.
     Signal& event_signal(InstanceId id, std::string_view name);
+    // Whether id's lua_event signal called name has a connection. Makes no
+    // bag and no signal. SimulationThread.
+    bool event_listened(InstanceId id, std::string_view name) const;
     // Fires that event for whatever is connected to it; nothing when nothing
     // is. Its handlers get the instance, Field::Reflected, and args through
     // EventQueue::current_args. args must match the event's declared arguments

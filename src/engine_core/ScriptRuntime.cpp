@@ -720,6 +720,17 @@ void open_host_libraries(lua_State* state) {
     lua_pushcfunction(state, &ScriptBindings::input_object_tostring, "tostring");
     lua_setfield(state, input_mt, "__tostring");
     lua_setreadonly(state, input_mt, 1);
+
+    const int touch_mt = metatable(kTouchObjectMeta);
+    lua_pushcfunction(state, &ScriptBindings::touch_object_index, "index");
+    lua_setfield(state, touch_mt, "__index");
+    lua_pushcfunction(state, &ScriptBindings::touch_object_newindex, "newindex");
+    lua_setfield(state, touch_mt, "__newindex");
+    lua_pushcfunction(state, &ScriptBindings::touch_object_tostring, "tostring");
+    lua_setfield(state, touch_mt, "__tostring");
+    lua_pushstring(state, "TouchObject");
+    lua_setfield(state, touch_mt, "__type");
+    lua_setreadonly(state, touch_mt, 1);
     lua_settop(state, top);
 
     // One userdata per instance, as Roblox does, so == and rawequal hold and an

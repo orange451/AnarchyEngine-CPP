@@ -269,6 +269,7 @@ bool write_collision_group(DataModel&, DataModel& object, LuaSlot& in) {
 }
 
 ANARCHY_LUA_REGISTER(register_physics_base_lua) {
+    static const LuaParam kTouchArgs[] = {{"touch", "TouchObject"}};
     static const std::string mass = write_json(JsonValue::number(PhysicsBase::kDefaultMass));
     static const std::string identity = [] {
         const Matrix4 value = matrix4_identity();
@@ -290,6 +291,10 @@ ANARCHY_LUA_REGISTER(register_physics_base_lua) {
         lua_slider(lua_saved_property("LinearDamping", "number", read_number<PhysicsBase, &PhysicsBase::linear_damping>,
                                       write_number<PhysicsBase, &PhysicsBase::set_linear_damping>, "0"),
                    0.0, 1.0),
+        // While the place runs, after a physics step: this body started or
+        // stopped touching another (PhysicsWorld).
+        lua_event("Touched", kTouchArgs, 1),
+        lua_event("TouchEnded", kTouchArgs, 1),
     };
     // Abstract: no factory registers it.
     register_lua_class("PhysicsBase", "PVInstance", fields, static_cast<int>(std::size(fields)));

@@ -409,6 +409,9 @@ void push_registered(lua_State* state, ScriptRuntime* runtime, const LuaSlot& sl
     case LuaSlot::Kind::InputObject:
         push_input_object(state, slot.input);
         return;
+    case LuaSlot::Kind::TouchObject:
+        push_touch_object(state, slot.touch);
+        return;
     case LuaSlot::Kind::Signal: {
         auto* signal = static_cast<SignalUd*>(lua_newuserdata(state, sizeof(SignalUd)));
         *signal = SignalUd{};
@@ -1392,6 +1395,43 @@ int ScriptBindings::input_object_index(lua_State* state) {
     } else {
         luaL_error(state, "%s is not a valid member of InputObject", key != nullptr ? key : "");
     }
+    return 1;
+}
+
+int ScriptBindings::touch_object_index(lua_State* state) {
+    const auto* record = static_cast<const TouchRecord*>(luaL_checkudata(state, 1, kTouchObjectMeta));
+    const char* key = luaL_checkstring(state, 2);
+    const std::string_view name = key != nullptr ? key : "";
+    if (name == "Time") {
+        lua_pushnumber(state, record->time);
+    } else if (name == "Instance") {
+        ScriptRuntime* runtime = runtime_from(state);
+        if (runtime != nullptr && runtime->game_ != nullptr && runtime->game_->instance(record->instance) != nullptr) {
+            runtime->push_instance(state, record->instance);
+        } else {
+            lua_pushnil(state);
+        }
+    } else if (name == "Point") {
+        lua_pushvector(state, record->point.x, record->point.y, record->point.z);
+    } else if (name == "Normal") {
+        lua_pushvector(state, record->normal.x, record->normal.y, record->normal.z);
+    } else if (name == "RelativeVelocity") {
+        lua_pushvector(state, record->relative_velocity.x, record->relative_velocity.y,
+                       record->relative_velocity.z);
+    } else {
+        luaL_error(state, "%s is not a valid member of TouchObject", key != nullptr ? key : "");
+    }
+    return 1;
+}
+
+int ScriptBindings::touch_object_newindex(lua_State* state) {
+    luaL_checkudata(state, 1, kTouchObjectMeta);
+    luaL_error(state, "%s cannot be assigned to", luaL_checkstring(state, 2));
+}
+
+int ScriptBindings::touch_object_tostring(lua_State* state) {
+    luaL_checkudata(state, 1, kTouchObjectMeta);
+    lua_pushstring(state, "TouchObject");
     return 1;
 }
 

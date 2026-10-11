@@ -73,6 +73,7 @@ inline constexpr const char* kConnectionMeta = "AE.Connection";
 inline constexpr const char* kThreadMeta = "AE.Thread";
 inline constexpr const char* kServiceMeta = "AE.Service";
 inline constexpr const char* kInputObjectMeta = "AE.InputObject";
+inline constexpr const char* kTouchObjectMeta = "AE.TouchObject";
 inline constexpr const char* kPluginMeta = "AE.Plugin";
 // Registry table: plugin serial -> its one Plugin userdata in this state, weak values.
 inline constexpr const char* kPluginCache = "AE.PluginCache";
@@ -230,6 +231,13 @@ inline void with_global(lua_State* state, const char* name, Read&& read) {
     lua_pop(state, 2);
 }
 
+
+inline void push_touch_object(lua_State* state, const TouchRecord& record) {
+    auto* ud = static_cast<TouchRecord*>(lua_newuserdata(state, sizeof(TouchRecord)));
+    new (ud) TouchRecord(record);
+    luaL_getmetatable(state, kTouchObjectMeta);
+    lua_setmetatable(state, -2);
+}
 
 inline void push_input_object(lua_State* state, const InputRecord& record) {
     auto* ud = static_cast<InputRecord*>(lua_newuserdata(state, sizeof(InputRecord)));
@@ -431,6 +439,10 @@ struct ScriptBindings {
     static int run_is_running(lua_State* state);
     static int input_object_index(lua_State* state);
     static int input_object_tostring(lua_State* state);
+    // TouchObject: read-only; Instance reads nil once the other is gone.
+    static int touch_object_index(lua_State* state);
+    static int touch_object_newindex(lua_State* state);
+    static int touch_object_tostring(lua_State* state);
     static int thread_index(lua_State* state);
 
     // The plugin global, its toolbars, and their buttons, in PluginBindings.cpp.

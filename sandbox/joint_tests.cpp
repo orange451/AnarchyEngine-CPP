@@ -515,3 +515,83 @@ TEST_CASE("JB8 a setting written every step changes the joint in place", "[joint
     REQUIRE(rig.physics.joint_key(hinge.id()) == made);
     REQUIRE(hinge.reading() > 20.0);
 }
+
+namespace {
+
+struct Car {
+    PhysicsObject* chassis = nullptr;
+    // Front left, front right, back left, back right.
+    std::vector<engine_core::WheelConstraint*> axles;
+};
+
+// A chassis on four cylinder wheels, resting on the rig's floor, facing +Z.
+// Every value is a default but the shape and size.
+Car build_car(PhysicsRig& rig) {
+    Car car;
+    car.chassis = &rig.body(at(0.f, 1.f, 0.f), Vec3{2.f, 0.5f, 4.f}, false);
+    const float xs[2] = {-1.3f, 1.3f};
+    const float zs[2] = {1.5f, -1.5f};
+    for (const float z : zs) {
+        for (const float x : xs) {
+            // On its side: its Y, the axle, lies along -X.
+            PhysicsObject& wheel =
+                rig.body(turned(at(x, 0.5f, z), Vec3{0.f, 0.f, 1.f}, 90.0), Vec3{1.f, 0.4f, 1.f}, false);
+            REQUIRE_FALSE(wheel.set_shape(static_cast<int>(PhysicsObject::Shape::Cylinder)));
+            car.axles.push_back(&joint<engine_core::WheelConstraint>(rig.game, car.chassis->id(), wheel.id()));
+        }
+    }
+    return car;
+}
+
+void throttle(Car& car, double degrees_per_second) {
+    for (engine_core::WheelConstraint* axle : car.axles) {
+        set(*axle, JointParam::EnableSpinMotor, 1.0);
+        set(*axle, JointParam::SpinMotorSpeed, degrees_per_second);
+    }
+}
+
+}  // namespace
+
+TEST_CASE("JK1 a car of default parts drives forward on its motors, upright, and turns when it steers",
+          "[joint][physics][car]") {
+    PhysicsRig rig;
+    rig.floor();
+    Car car = build_car(rig);
+    rig.play();
+    rig.seconds(1.0);
+    // Resting on its suspension: upright, a little below where it was placed.
+    REQUIRE(column(car.chassis->transform(), 1).y > 0.99f);
+    REQUIRE(y_of(car.chassis->transform()) < 1.f);
+    REQUIRE(y_of(car.chassis->transform()) > 0.8f);
+    // The axle is -X: spinning negative about it rolls the wheel toward +Z.
+    throttle(car, -360.0);
+    rig.seconds(3.0);
+    REQUIRE(z_of(car.chassis->transform()) > 4.f);
+    REQUIRE(std::fabs(x_of(car.chassis->transform())) < 0.5f);
+    REQUIRE(column(car.chassis->transform(), 1).y > 0.9f);
+    const Vec3 heading = column(car.chassis->transform(), 2);
+    for (int front = 0; front < 2; ++front) {
+        set(*car.axles[static_cast<std::size_t>(front)], JointParam::EnableSteering, 1.0);
+        set(*car.axles[static_cast<std::size_t>(front)], JointParam::TargetSteeringAngle, 25.0);
+    }
+    rig.seconds(3.0);
+    const Vec3 turned_to = column(car.chassis->transform(), 2);
+    REQUIRE(degrees_between(Vec3{turned_to.x, 0.f, turned_to.z}, Vec3{heading.x, 0.f, heading.z}) > 15.f);
+    REQUIRE(column(car.chassis->transform(), 1).y > 0.9f);
+}
+
+TEST_CASE("JK2 a step of a driving car allocates nothing", "[joint][physics][alloc]") {
+#if defined(_ITERATOR_DEBUG_LEVEL) && _ITERATOR_DEBUG_LEVEL != 0
+    SKIP("Debug containers allocate proxies; run in Release");
+#endif
+    PhysicsRig rig;
+    rig.floor();
+    Car car = build_car(rig);
+    throttle(car, -360.0);
+    rig.play();
+    rig.seconds(1.0);
+    alloc_counter::arm();
+    rig.seconds(0.5);
+    alloc_counter::disarm();
+    REQUIRE(alloc_counter::count() == 0u);
+}

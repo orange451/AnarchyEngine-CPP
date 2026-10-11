@@ -299,6 +299,16 @@ ANARCHY_LUA_REGISTER(register_physics_base_lua) {
     };
     // Abstract: no factory registers it.
     register_lua_class("PhysicsBase", "PVInstance", fields, static_cast<int>(std::size(fields)));
+    // What Touched and TouchEnded pass. Read-only; ScriptBindings reads its
+    // fields. Registered so the editor completes them.
+    const LuaField touch_object[] = {
+        lua_property("Time", "number", false, nullptr, nullptr),
+        lua_property("Instance", "Instance?", false, nullptr, nullptr),
+        lua_property("Point", "Vector3", false, nullptr, nullptr),
+        lua_property("Normal", "Vector3", false, nullptr, nullptr),
+        lua_property("RelativeVelocity", "Vector3", false, nullptr, nullptr),
+    };
+    register_lua_class("TouchObject", nullptr, touch_object, static_cast<int>(std::size(touch_object)));
 }
 
 }  // namespace

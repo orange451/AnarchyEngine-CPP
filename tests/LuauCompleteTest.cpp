@@ -359,6 +359,15 @@ void testVector3() {
         "local input = game:GetService(\"UserInputService\")\ninput.InputChanged.Connect(input.InputChanged, function(io)\n"
         "    io.");
     expect_has(inferred_dot, "Delta", "inferred InputObject in a dot call");
+    const ide::CompletionList touched = at_end(
+        "local part = Instance.new(\"PhysicsObject\")\npart.Touched:Connect(function(touch)\n    touch.");
+    expect_has(touched, "RelativeVelocity", "inferred TouchObject.RelativeVelocity");
+    expect_has(touched, "Instance", "inferred TouchObject.Instance");
+    expect_has(touched, "Time", "inferred TouchObject.Time");
+    const ide::CompletionList touch_ended = at_end(
+        "local part = Instance.new(\"PhysicsObject\")\npart.TouchEnded:Connect(function(touch)\n    touch.");
+    expect_has(touch_ended, "Normal", "inferred TouchObject.Normal on TouchEnded");
+    expect_has(touch_ended, "Point", "inferred TouchObject.Point on TouchEnded");
     const ide::CompletionList inferred_dt =
         at_end("game:GetService(\"RunService\").Heartbeat:Connect(function(dt)\n    local step = dt\n    step.");
     expect_missing(inferred_dt, "KeyCode", "dt is a number");

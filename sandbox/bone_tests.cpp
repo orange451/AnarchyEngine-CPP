@@ -6,12 +6,14 @@
 
 #include "Assemblies.hpp"
 #include "Bone.hpp"
+#include "Brush.hpp"
 #include "ChangeHistoryService.hpp"
 #include "Constraint.hpp"
 #include "LuaApi.hpp"
 #include "PhysicsObject.hpp"
 #include "PhysicsWorld.hpp"
 #include "Skeleton.hpp"
+#include "brush/BrushGeometry.hpp"
 
 using namespace skinning_test;
 
@@ -316,4 +318,44 @@ TEST_CASE("BONE12 in play a hand carries what it holds, kinematic, wherever the 
         physics.step(rig.game, kStep);
     }
     REQUIRE(near3(*physics.body_position(box.id()), Vec3{2.f, 1.f, 0.f}, 1e-2f));
+}
+
+TEST_CASE("BONE13 a hand brings a welded gun whole when enabled, and keeps it whole as the pose moves",
+          "[bone][assembly]") {
+    Rig rig;
+    engine_core::GameObject& object = rig.arm_object();
+    object.set_transform(engine_core::matrix4_translation(3.f, 0.f, 0.f));
+    engine_core::Bone& root = add_bone(rig.game, object.id(), "Root");
+    engine_core::Bone& hand = add_bone(rig.game, object.id(), "Hand");
+    // Two Brushes welded into a gun: a grip, and a larger barrel that is its root.
+    engine_core::Brush& grip = rig.game.create<engine_core::Brush>();
+    rig.game.set_parent(grip.id(), workspace_of(rig.game));
+    REQUIRE_FALSE(grip.set_transform(engine_core::matrix4_translation(0.f, 9.f, 0.f)));
+    engine_core::Brush& barrel = rig.game.create<engine_core::Brush>();
+    rig.game.set_parent(barrel.id(), workspace_of(rig.game));
+    REQUIRE_FALSE(barrel.set_faces(engine_core::brush::make_box({8.0, 2.0, 2.0})));
+    REQUIRE_FALSE(barrel.set_transform(engine_core::matrix4_translation(2.f, 11.f, 0.f)));
+    engine_core::WeldConstraint& weld = rig.game.create<engine_core::WeldConstraint>();
+    REQUIRE_FALSE(weld.set_pv_instance1(id_slot(barrel.id())));
+    REQUIRE_FALSE(weld.set_pv_instance2(id_slot(grip.id())));
+    rig.game.set_parent(weld.id(), barrel.id());
+    engine_core::RigidConstraint& hold = rig.game.create<engine_core::RigidConstraint>();
+    rig.game.set_parent(hold.id(), workspace_of(rig.game));
+    REQUIRE_FALSE(hold.set_enabled(false));
+    REQUIRE_FALSE(hold.set_pv_instance1(id_slot(grip.id())));
+    REQUIRE_FALSE(hold.set_pv_instance2(id_slot(hand.id())));
+    const Matrix4 offset =
+        engine_core::matrix4_multiply(engine_core::matrix4_inverse(grip.transform()), barrel.transform());
+    REQUIRE_FALSE(hold.set_enabled(true));
+    REQUIRE(near_matrix(grip.transform(), engine_core::matrix4_orthonormalize(hand.transform())));
+    REQUIRE(near_matrix(barrel.transform(), engine_core::matrix4_multiply(grip.transform(), offset)));
+    // Posing the arm moves the whole gun.
+    REQUIRE_FALSE(root.set_offset(spin_z()));
+    REQUIRE(near_matrix(grip.transform(), engine_core::matrix4_orthonormalize(hand.transform())));
+    REQUIRE(near_matrix(barrel.transform(), engine_core::matrix4_multiply(grip.transform(), offset)));
+    // The grip dragged alone snaps back by itself; the barrel stays where it is.
+    const Matrix4 barrel_before = barrel.transform();
+    REQUIRE_FALSE(grip.set_transform(engine_core::matrix4_translation(50.f, 50.f, 50.f)));
+    REQUIRE(near_matrix(grip.transform(), engine_core::matrix4_orthonormalize(hand.transform())));
+    REQUIRE(near_matrix(barrel.transform(), barrel_before));
 }

@@ -22,6 +22,7 @@ namespace {
 // Bits of a node's follow mark.
 constexpr std::uint8_t kMoved = 1u << 0;      // its subs must follow it
 constexpr std::uint8_t kDisplaced = 1u << 1;  // it must go back onto its own parent
+constexpr std::uint8_t kAlone = 1u << 2;      // moved by itself: as a sub, it goes back by itself
 // A chain settles in one pass in follow order; more only when a carried
 // child is itself a sub further up that order.
 constexpr int kMaxPasses = 8;
@@ -134,8 +135,46 @@ bool Assemblies::sub_target(const DataModel& game, const RigidEdge& edge, Matrix
     return true;
 }
 
-// Puts edge's sub node where its pivot sits on the parent's. True when it wrote.
-bool Assemblies::snap(DataModel& game, const RigidEdge& edge, InstanceId camera) {
+void Assemblies::gather_side(const RigidEdge& edge, bool alone) {
+    for (const InstanceId node : side_) {
+        side_mark_[id_slot(node)] = 0;
+    }
+    side_.clear();
+    side_.push_back(edge.sub_node);
+    side_mark_[id_slot(edge.sub_node)] = 1;
+    if (alone) {
+        return;
+    }
+    for (std::size_t at = 0; at < side_.size(); ++at) {
+        for (const Edge& other : edges_) {
+            if (!other.live || other.bone_end != 0 || other.constraint == edge.constraint) {
+                continue;
+            }
+            InstanceId next = 0;
+            if (other.node1 == side_[at]) {
+                next = other.node2;
+            } else if (other.node2 == side_[at]) {
+                next = other.node1;
+            }
+            if (next == 0 || side_mark_[id_slot(next)] != 0) {
+                continue;
+            }
+            if (next == edge.parent_node) {
+                for (std::size_t i = 1; i < side_.size(); ++i) {
+                    side_mark_[id_slot(side_[i])] = 0;
+                }
+                side_.resize(1);
+                return;
+            }
+            side_mark_[id_slot(next)] = 1;
+            side_.push_back(next);
+        }
+    }
+}
+
+// Puts edge's sub node where its pivot sits on the parent's, and its side
+// (gather_side) with it, each keeping its offset. True when it wrote.
+bool Assemblies::snap(DataModel& game, const RigidEdge& edge, InstanceId camera, bool alone) {
     const InstanceId mover = mover_of(game, edge.sub_node);
     if (mover == camera || (camera != 0 && mover_of(game, edge.parent_node) == camera)) {
         return false;
@@ -148,18 +187,57 @@ bool Assemblies::snap(DataModel& game, const RigidEdge& edge, InstanceId camera)
     if (settled(frame, target)) {
         return false;
     }
-    auto* placed = dynamic_cast<PVInstance*>(game.instance(mover));
-    if (placed == nullptr) {
+    if (dynamic_cast<PVInstance*>(game.instance(mover)) == nullptr) {
         return false;
     }
-    if (placed->set_pv_transform(with_scale(target, placed->transform()))) {
-        return false;
+    const Matrix4 delta = matrix4_multiply(target, matrix4_inverse(frame));
+    gather_side(edge, alone);
+    // Each node's mover once. One under another mover in the tree is carried
+    // by it, so it is not written itself.
+    side_movers_.clear();
+    for (const InstanceId node : side_) {
+        const InstanceId placed = mover_of(game, node);
+        if (placed == 0 || placed == camera || (side_mark_[id_slot(placed)] & 2u) != 0) {
+            continue;
+        }
+        side_mark_[id_slot(placed)] = static_cast<std::uint8_t>(side_mark_[id_slot(placed)] | 2u);
+        side_movers_.push_back(placed);
     }
-    carry(game, mover, matrix4_multiply(target, matrix4_inverse(frame)));
-    return true;
+    bool wrote = false;
+    for (const InstanceId placed : side_movers_) {
+        bool carried = false;
+        int guard = 0;
+        for (InstanceId above = game.parent(placed); above != DataModel::kNoParent && above != 0 &&
+                                                     guard < static_cast<int>(DataModel::kMaxInstances);
+             above = game.parent(above), ++guard) {
+            if ((side_mark_[id_slot(above)] & 2u) != 0) {
+                carried = true;
+                break;
+            }
+        }
+        auto* object = dynamic_cast<PVInstance*>(game.instance(placed));
+        if (carried || object == nullptr) {
+            continue;
+        }
+        // The sub goes exactly to its target; the rest keep their offsets from it.
+        const Matrix4 next = placed == mover ? with_scale(target, object->transform())
+                                             : matrix4_multiply(delta, object->transform());
+        if (object->set_pv_transform(next)) {
+            continue;
+        }
+        carry(game, placed, delta);
+        wrote = true;
+    }
+    for (std::size_t i = 1; i < side_.size(); ++i) {
+        mark_follow(side_[i], kMoved);
+    }
+    for (const InstanceId placed : side_movers_) {
+        side_mark_[id_slot(placed)] = static_cast<std::uint8_t>(side_mark_[id_slot(placed)] & ~2u);
+    }
+    return wrote;
 }
 
-int Assemblies::follow(DataModel& game, InstanceId start) {
+int Assemblies::follow(DataModel& game, InstanceId start, bool alone) {
     if (game.simulation_running() || busy_ > 0) {
         return 0;
     }
@@ -177,7 +255,7 @@ int Assemblies::follow(DataModel& game, InstanceId start) {
     }
     follow_marked_.clear();
     if (start != 0) {
-        mark_follow(start, kMoved | kDisplaced);
+        mark_follow(start, static_cast<std::uint8_t>(kMoved | kDisplaced | (alone ? kAlone : 0u)));
     }
     const InstanceId camera = view_camera(game);
     int written = 0;
@@ -187,9 +265,12 @@ int Assemblies::follow(DataModel& game, InstanceId start) {
         // what it holds may be a parent further on, for the next pass.
         for (const std::vector<RigidEdge>* edges : {&rigid_, &bone_}) {
             for (const RigidEdge& edge : *edges) {
-                const bool due = (start == 0 && pass == 0) || (follow_marks(edge.parent_node) & kMoved) != 0 ||
-                                 (follow_marks(edge.sub_node) & kDisplaced) != 0;
-                if (due && snap(game, edge, camera)) {
+                const bool parent_moved = (start == 0 && pass == 0) || (follow_marks(edge.parent_node) & kMoved) != 0;
+                const std::uint8_t sub = follow_marks(edge.sub_node);
+                const bool due = parent_moved || (sub & kDisplaced) != 0;
+                // A sub moved by itself goes back by itself: what is welded to it did not move.
+                const bool by_itself = !parent_moved && (sub & kAlone) != 0;
+                if (due && snap(game, edge, camera, by_itself)) {
                     ++written;
                     wrote = true;
                     mark_follow(edge.sub_node, kMoved);

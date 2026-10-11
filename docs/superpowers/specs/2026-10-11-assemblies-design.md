@@ -35,8 +35,8 @@ Engine distances are units.
 | Unique id for the tie-break | The GUID (byte-wise compare): a physics node's PhysicsBase's, a plain node's own. Stable across save, load, Stop, undo, and cut. Script-made objects get random GUIDs, so two equal-mass script-made parts may pick different roots on different runs. |
 | Two anchored members | One assembly with one anchored root. Roblox splits them; we do not. |
 | RigidConstraint direction | Set by the root, not by which end is PVInstance1: the root never moves. The end on the root's side is the parent, the other the sub, and the sub moves. (Changed 2026-10-11 at the user's request; it was PVInstance1 the parent.) |
-| RigidConstraint in the editor | Live: the sub always sits on the parent's pivot. It snaps in the same call as the edit that moved it, so one undo reverts both. |
-| WeldConstraint in the editor | Does nothing. Objects move freely; the offset is captured when the weld becomes active in play. |
+| RigidConstraint in the editor | Live: the sub always sits on the parent's pivot. It snaps in the same call as the edit that moved it, so one undo reverts both. The sub brings its side, as in play: what it reaches through other active constraints (welds included) moves with it, keeping its offsets, unless that reaches the parent. A sub dragged by itself goes back by itself, and what is welded to it stays. (Added 2026-10-11: a welded gun held by a hand came apart when enabled.) |
+| WeldConstraint in the editor | Does nothing by itself. Objects move freely; the offset is captured when the weld becomes active in play. A RigidConstraint snapping a welded sub brings its weld partners along. |
 | A member's Transform written during play | The whole assembly moves at once, keeping every offset. |
 | Velocity of a member | The assembly's center-of-mass velocity, read and written through any physics member, as Roblox's `AssemblyLinearVelocity`. |
 | Terrain | Not a member in v1. A constraint with a Terrain end is inactive. |

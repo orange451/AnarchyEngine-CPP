@@ -194,6 +194,7 @@ Assemblies::Assemblies() {
     old_members_.reserve(slots);
     side_.reserve(slots);
     side_mark_.assign(slots, 0);
+    side_movers_.reserve(slots);
     follow_marked_.reserve(slots);
     carry_stack_.reserve(slots);
 }
@@ -279,7 +280,7 @@ void Assemblies::transform_written(DataModel& game, InstanceId id) {
         }
     }
     if ((flagged & kRigid) != 0) {
-        follow(game, node_of(id));
+        follow(game, node_of(id), true);
     }
 }
 

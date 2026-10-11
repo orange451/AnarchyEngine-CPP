@@ -149,8 +149,12 @@ public:
 
     // The editor follow (§4). Stopped only. start == 0 runs every active rigid
     // edge in follow order; else start's own incoming edge, then every edge
-    // downstream of it. Returns how many movers it wrote.
-    int follow(DataModel& game, InstanceId start);
+    // downstream of it. A snapped sub brings its side: what it reaches through
+    // other active constraints, as in play, unless that reaches its parent.
+    // alone: start was moved by itself (a write to its own Transform), so if it
+    // is a sub it goes back by itself, and what is welded to it stays. Returns
+    // how many snaps wrote.
+    int follow(DataModel& game, InstanceId start, bool alone = false);
 
     // For tests: how many times a rebuild searched for a GUID no instance holds.
     std::size_t find_guid_calls() const { return find_guid_calls_; }
@@ -253,7 +257,11 @@ private:
     // The editor follow's helpers (AssemblyFollow.cpp).
     void mark_follow(InstanceId node, std::uint8_t bits);
     std::uint8_t follow_marks(InstanceId node) const;
-    bool snap(DataModel& game, const RigidEdge& edge, InstanceId camera);
+    bool snap(DataModel& game, const RigidEdge& edge, InstanceId camera, bool alone);
+    // Fills side_ with edge's sub, then, unless alone, every node it reaches
+    // through active constraints but edge and bone edges. Only the sub when
+    // that reaches edge's parent: moving the rest would move the parent.
+    void gather_side(const RigidEdge& edge, bool alone);
     // Where edge's sub node must be (target) for its pivot to sit on its
     // parent's, from where it is (frame). False when an end does not resolve.
     bool sub_target(const DataModel& game, const RigidEdge& edge, Matrix4& frame, Matrix4& target) const;
@@ -366,6 +374,8 @@ private:
     std::vector<PlayMember> old_members_;
     std::vector<InstanceId> side_;
     std::vector<std::uint8_t> side_mark_;
+    // snap's scratch: the movers of side_ (mover_of), marked 2 in side_mark_.
+    std::vector<InstanceId> side_movers_;
     InstanceId pivot_change_ = 0;
     void play_rebuilt(DataModel& game);
     void index_play();

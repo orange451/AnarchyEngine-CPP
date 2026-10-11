@@ -533,3 +533,116 @@ TEST_CASE("AE23 of two Brushes of equal Mass, the larger stays and the smaller s
         REQUIRE(same_pose(small.transform(), at(0.f, 5.f, 0.f)));
     }
 }
+
+namespace {
+
+WeldConstraint& weld_parts(DataModel& game, InstanceId a, InstanceId b) {
+    WeldConstraint& made = game.create<WeldConstraint>();
+    game.set_parent(made.id(), workspace_of(game));
+    REQUIRE_FALSE(made.set_pv_instance1(instance_slot(a)));
+    REQUIRE_FALSE(made.set_pv_instance2(instance_slot(b)));
+    return made;
+}
+
+// b's frame in a's.
+Matrix4 offset_of(const Matrix4& a, const Matrix4& b) {
+    return engine_core::matrix4_multiply(engine_core::matrix4_inverse(engine_core::matrix4_orthonormalize(a)),
+                                         engine_core::matrix4_orthonormalize(b));
+}
+
+}  // namespace
+
+TEST_CASE("AE24 enabling a RigidConstraint brings what is welded to its sub, at its offset", "[assembly][follow]") {
+    SimRole role;
+    engine_core::Game game;
+    const Matrix4 home = turned({0, 1, 0}, 30.0, at(0.f, 5.f, 0.f));
+    Part a = add_part(game, home);
+    make_root(a);
+    Part grip = add_part(game, at(10.f, 0.f, 0.f));
+    Part barrel = add_part(game, turned({0, 0, 1}, 20.0, at(12.f, 1.f, 0.f)));
+    weld_parts(game, grip.object->id(), barrel.object->id());
+    const Matrix4 offset = offset_of(grip.object->transform(), barrel.object->transform());
+    RigidConstraint& r = game.create<RigidConstraint>();
+    game.set_parent(r.id(), workspace_of(game));
+    REQUIRE_FALSE(r.set_enabled(false));
+    REQUIRE_FALSE(r.set_pv_instance1(instance_slot(a.object->id())));
+    REQUIRE_FALSE(r.set_pv_instance2(instance_slot(grip.object->id())));
+    game.history().reset_waypoints();
+    begin_step(game, "Enable");
+    REQUIRE_FALSE(r.set_enabled(true));
+    end_step(game);
+    REQUIRE(same_pose(a.object->transform(), home));
+    REQUIRE(same_pose(grip.object->transform(), home));
+    REQUIRE(same_pose(offset_of(grip.object->transform(), barrel.object->transform()), offset));
+    // One undo puts all of it back.
+    REQUIRE(undo_all(game) == 1);
+    REQUIRE(same_pose(grip.object->transform(), at(10.f, 0.f, 0.f)));
+    REQUIRE(same_pose(barrel.object->transform(), turned({0, 0, 1}, 20.0, at(12.f, 1.f, 0.f))));
+}
+
+TEST_CASE("AE25 moving the parent brings the welded side; the sub dragged alone snaps back by itself",
+          "[assembly][follow]") {
+    SimRole role;
+    engine_core::Game game;
+    Part a = add_part(game, at(0.f, 5.f, 0.f));
+    make_root(a);
+    Part grip = add_part(game, at(10.f, 0.f, 0.f));
+    Part barrel = add_part(game, at(12.f, 1.f, 0.f));
+    weld_parts(game, grip.object->id(), barrel.object->id());
+    rigid(game, a.object->id(), grip.object->id());
+    const Matrix4 offset = offset_of(grip.object->transform(), barrel.object->transform());
+    a.object->set_transform(turned({1, 0, 0}, 45.0, at(7.f, 1.f, 2.f)));
+    REQUIRE(same_pose(grip.object->transform(), a.object->transform()));
+    REQUIRE(same_pose(offset_of(grip.object->transform(), barrel.object->transform()), offset));
+    const Matrix4 barrel_before = barrel.object->transform();
+    grip.object->set_transform(at(-30.f, 0.f, 0.f));
+    REQUIRE(same_pose(grip.object->transform(), a.object->transform()));
+    REQUIRE(same_pose(barrel.object->transform(), barrel_before));
+}
+
+TEST_CASE("AE26 a sub welded back to its parent's side snaps alone", "[assembly][follow]") {
+    SimRole role;
+    engine_core::Game game;
+    Part a = add_part(game, at(0.f, 5.f, 0.f));
+    make_root(a);
+    Part grip = add_part(game, at(10.f, 0.f, 0.f));
+    Part barrel = add_part(game, at(12.f, 1.f, 0.f));
+    weld_parts(game, grip.object->id(), barrel.object->id());
+    weld_parts(game, barrel.object->id(), a.object->id());
+    rigid(game, a.object->id(), grip.object->id());
+    REQUIRE(same_pose(a.object->transform(), at(0.f, 5.f, 0.f)));
+    REQUIRE(same_pose(grip.object->transform(), at(0.f, 5.f, 0.f)));
+    REQUIRE(same_pose(barrel.object->transform(), at(12.f, 1.f, 0.f)));
+}
+
+TEST_CASE("AE27 a welded partner under the sub in the tree moves once", "[assembly][follow]") {
+    SimRole role;
+    engine_core::Game game;
+    Part a = add_part(game, at(0.f, 5.f, 0.f));
+    make_root(a);
+    Part grip = add_part(game, at(10.f, 0.f, 0.f));
+    engine_core::Brush& barrel = game.create<engine_core::Brush>();
+    game.set_parent(barrel.id(), grip.object->id());
+    REQUIRE_FALSE(barrel.set_transform(at(12.f, 1.f, 0.f)));
+    weld_parts(game, grip.object->id(), barrel.id());
+    rigid(game, a.object->id(), grip.object->id());
+    REQUIRE(same_pose(grip.object->transform(), at(0.f, 5.f, 0.f)));
+    REQUIRE(same_pose(barrel.transform(), at(2.f, 6.f, 0.f)));
+}
+
+TEST_CASE("AE28 sliding the sub's own end Attachment moves its welded side with it", "[assembly][follow]") {
+    SimRole role;
+    engine_core::Game game;
+    Part a = add_part(game, at(0.f, 5.f, 0.f));
+    make_root(a);
+    Part grip = add_part(game, at(10.f, 0.f, 0.f));
+    Attachment& handle = add_attachment(game, grip.object->id(), at(0.f, 1.f, 0.f));
+    Part barrel = add_part(game, at(12.f, 1.f, 0.f));
+    weld_parts(game, grip.object->id(), barrel.object->id());
+    rigid(game, a.object->id(), handle.id());
+    const Matrix4 offset = offset_of(grip.object->transform(), barrel.object->transform());
+    REQUIRE(same_pose(grip.object->transform(), at(0.f, 4.f, 0.f)));
+    REQUIRE_FALSE(handle.set_offset(at(0.f, 3.f, 0.f)));
+    REQUIRE(same_pose(grip.object->transform(), at(0.f, 2.f, 0.f)));
+    REQUIRE(same_pose(offset_of(grip.object->transform(), barrel.object->transform()), offset));
+}

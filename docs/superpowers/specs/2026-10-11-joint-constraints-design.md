@@ -29,7 +29,8 @@ Studio. Engine distances are units.
 
 ### `JointConstraint` (abstract)
 
-`engine_instances/Constraint.{hpp,cpp}`, beside the others. Derives from
+`engine_instances/JointConstraint.{hpp,cpp}` (its own files: five classes and
+their properties would double Constraint.cpp). Derives from
 `Constraint`; `rigid()` false, `joins()` false. Lua class `JointConstraint`,
 base `Constraint`, no factory.
 
@@ -174,9 +175,11 @@ A `JointConstraint` is **Active** when all hold:
 - Both ends resolve (Assemblies' existing rules: an Attachment or Bone stands
   for its holder, a GameObject for the physics node that drives it).
 - The two ends are in **different assemblies**.
+- Each end's assembly has physics (a body to join): a lone Camera or plain
+  GameObject end is inactive.
 - Not both assemblies are anchored.
-- Neither end resolves to a PlayerController's node (its movement code would
-  fight the joint). A Terrain end never resolves, as today.
+- Neither end's node, nor its assembly's root, is a PlayerController (its
+  movement code would fight the joint). A Terrain end never resolves, as today.
 
 `Assemblies` computes this in edit mode and in play alike (as `AssemblyRoot`),
 so `Active` shows in the editor whether a joint will hold. Joints never join
@@ -262,7 +265,7 @@ Every setter returns why it refused, changing nothing:
   `SteeringDampingRatio`, max torque or force, `Length`, `MinLength`, or
   `MaxLength`.
 - **Clamped:** Revolute's `LowerAngle` and `UpperAngle` and Spherical's twist
-  angles to ±178.2° (Box3D's ±0.99π); `ConeAngle` to 0..180.
+  angles to ±178.2° (Box3D's ±0.99π); `ConeAngle` to 0..90 (Box3D's cone is at most π/2).
 - **Order:** a lower limit above its upper is saved as written; the joint uses
   the smaller as lower, as Box3D's setters do. So the two can be typed in
   either order.

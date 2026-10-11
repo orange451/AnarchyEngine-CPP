@@ -218,6 +218,7 @@ private:
     std::shared_ptr<InsertResult> pending_insert_;
     std::shared_ptr<jadefx::Node> insert_button_;
     std::unique_ptr<InsertPopup> insert_popup_;
+    std::shared_ptr<jadefx::Menu> menu_;
 
     // Hidden until a rename. Kept as a child so it is styled every frame.
     std::shared_ptr<jadefx::TextField> rename_field_;

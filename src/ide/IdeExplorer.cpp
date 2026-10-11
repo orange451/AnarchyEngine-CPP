@@ -424,28 +424,40 @@ void IdeExplorer::show_menu(jadefx::TreeItem& item, double x, double y) {
     if (!actions_for(id, actions)) {
         return;
     }
-    if (!tree_ || tree_->getScene() == nullptr) {
+    jadefx::Scene* scene = tree_ ? tree_->getScene() : nullptr;
+    if (scene == nullptr) {
         return;
     }
-    std::vector<InsertAction> buttons;
+    if (menu_) {
+        menu_->hide();
+    }
+    menu_ = jadefx::make<jadefx::Menu>();
+    bool any = false;
     for (const engine_core::ContextAction& offered : actions) {
         const InstanceAction action = offered.action;
-        InsertAction button;
-        button.label = engine_core::action_label(action);
-        if (const char* file = ActionIcon(action)) {
-            button.icon = file;
+        if (any && action == InstanceAction::Cut) {
+            menu_->getItems().add(jadefx::make<jadefx::SeparatorMenuItem>());
         }
-        button.enabled = !host_.enabled || host_.enabled(action);
+        auto entry = jadefx::make<jadefx::MenuItem>(engine_core::action_label(action));
+        if (const char* file = ActionIcon(action)) {
+            if (std::shared_ptr<jadefx::ImageView> icon = icon_graphic(file)) {
+                entry->setGraphic(std::move(icon));
+            }
+        }
+        const bool on = !host_.enabled || host_.enabled(action);
+        entry->setDisable(!on);
         const bool batch = many && Batchable(action);
-        button.run = [this, id, action, batch] {
+        entry->setOnAction([this, id, action, batch](jadefx::ActionEvent&) {
             if (!batch || !run_on_selection(action)) {
                 run(action, id);
             }
-        };
-        buttons.push_back(std::move(button));
+        });
+        menu_->getItems().add(std::move(entry));
+        any = true;
     }
-    insert_parent_ = id;
-    ensure_insert_popup().show_at(*tree_, x, y, std::move(buttons), insert_holder());
+    if (any) {
+        menu_->show(*scene, x, y);
+    }
 }
 
 void IdeExplorer::show_root_insert(double x, double y) {

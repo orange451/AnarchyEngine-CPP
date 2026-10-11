@@ -1147,36 +1147,32 @@ void TestRefusedInsertSaysWhy() {
     Expect(!rig.painted("Made"), "a refused insert shows nothing new");
 }
 
-void TestRightClickInsertsUnderTheRow() {
+// A right-click on a row opens the row's action menu, not the class list.
+void TestRightClickOpensTheMenu() {
     engine_core::register_lua_creatable("Folder", CreateFolder);
     Rig rig;
     rig.clickRow("Gamma", 0.1, 1);
     rig.frame(0.2);
+    Expect(rig.scene->getElementById("menu-label:Rename") != nullptr, "a right-click lists the row's actions");
     rig.key(jadefx::Key::Enter);
     rig.frame(0.3);
-    Expect(rig.inserts.size() == 1 && rig.inserts.front().second == rig.ids[2],
-           "a right-click insert goes under the row clicked");
+    Expect(rig.inserts.empty(), "a right-click on a row opens no class list");
 }
 
-void TestRightClickListCloses() {
-    engine_core::register_lua_creatable("Folder", CreateFolder);
+void TestRightClickMenuCloses() {
     Rig rig;
     rig.clickRow("Gamma", 0.1, 1);
     rig.frame(0.2);
-    Expect(rig.scene->getElementById("menu-label:Rename") != nullptr, "a right-click opens the list");
+    Expect(rig.scene->getElementById("menu-label:Rename") != nullptr, "a right-click opens the menu");
     rig.clickRow("Alpha", 0.5);
     rig.frame(0.6);
-    Expect(rig.scene->getElementById("menu-label:Rename") == nullptr, "a click on another row closes the list");
+    Expect(rig.scene->getElementById("menu-label:Rename") == nullptr, "a click on another row closes the menu");
     rig.clickRow("Gamma", 0.7, 1);
     rig.frame(0.8);
-    Expect(rig.scene->getElementById("menu-label:Rename") != nullptr, "the list opens again");
+    Expect(rig.scene->getElementById("menu-label:Rename") != nullptr, "the menu opens again");
     rig.clickRow("Beta", 0.9, 1);
     rig.frame(1.0);
-    Expect(rig.scene->getElementById("menu-label:Rename") != nullptr, "another right-click moves the list");
-    rig.key(jadefx::Key::Enter);
-    rig.frame(1.1);
-    Expect(rig.inserts.size() == 1 && rig.inserts.front().second == rig.ids[1],
-           "the moved list inserts under the row right-clicked last");
+    Expect(rig.scene->getElementById("menu-label:Rename") != nullptr, "another right-click opens the menu there");
 }
 
 void TestEmptySpaceInsertsUnderTheRoot() {
@@ -1246,8 +1242,8 @@ int main() {
     TestRevealScrolls();
     TestRevealClearsAHidingFilter();
     TestEmptySpaceInsertsUnderTheRoot();
-    TestRightClickInsertsUnderTheRow();
-    TestRightClickListCloses();
+    TestRightClickOpensTheMenu();
+    TestRightClickMenuCloses();
     TestRefusedInsertSaysWhy();
     hidden_services_have_no_rows();
     rows_cluster_by_class();

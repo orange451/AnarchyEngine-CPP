@@ -99,6 +99,7 @@ set(STUDIO_SOURCES
     src/runner/TextureCache.cpp
     src/amesh/amesh_gl.cpp
     src/runner/GameView.cpp
+    src/runner/SceneDraws.cpp
     src/runner/ProfilerOverlay.cpp
     src/runner/UiFrameProfile.cpp
     src/runner/GuiLayer.cpp

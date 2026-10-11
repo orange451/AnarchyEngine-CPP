@@ -27,6 +27,10 @@ bool LightDrawFor(const engine_core::VisualInstance& row, LightDraw& out);
 void AppendRowDraws(const engine_core::VisualInstance& row, const std::vector<MeshDraw>& templates,
                     std::vector<MeshDraw>& out);
 
+// brushes' draws, each mesh loaded through meshes; each draws alone (slot 0).
+void AppendBrushDraws(const std::vector<engine_core::VisualBrushDraw>& brushes, MeshCache& meshes,
+                      TextureCache& textures, std::vector<MeshDraw>& out);
+
 // sky's SceneSky, its image loaded through textures. Leaves out alone when
 // sky is not present.
 void SkyFor(const engine_core::VisualSky& sky, TextureCache& textures, SceneSky& out);

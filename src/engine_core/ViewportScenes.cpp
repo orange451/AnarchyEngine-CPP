@@ -1,5 +1,6 @@
 #include "ViewportScenes.hpp"
 
+#include "Brush.hpp"
 #include "Camera.hpp"
 #include "GameObject.hpp"
 #include "Gui.hpp"
@@ -27,6 +28,20 @@ bool same_mesh(const VisualMesh& a, const VisualMesh& b) {
            a.emissive_always_loaded == b.emissive_always_loaded && same_color(a.emissive, b.emissive) &&
            a.metalness == b.metalness && a.roughness == b.roughness && a.reflectivity == b.reflectivity &&
            a.transparency == b.transparency;
+}
+
+bool same_brushes(const std::vector<VisualBrushDraw>& a, const std::vector<VisualBrushDraw>& b) {
+    if (a.size() != b.size()) {
+        return false;
+    }
+    for (std::size_t i = 0; i < a.size(); ++i) {
+        if (a[i].owner != b[i].owner || a[i].lod != b[i].lod || !same_matrix(a[i].world, b[i].world) ||
+            a[i].transparency != b[i].transparency || a[i].casts_shadow != b[i].casts_shadow ||
+            !same_color(a[i].tint, b[i].tint) || !same_mesh(a[i].look, b[i].look)) {
+            return false;
+        }
+    }
+    return true;
 }
 
 bool same_prefab(const VisualPrefab& a, const VisualPrefab& b) {
@@ -64,7 +79,7 @@ bool same_scene(const VisualViewport& a, const VisualViewport& b) {
     if (a.camera != b.camera || a.has_camera != b.has_camera || a.camera_inside != b.camera_inside ||
         !same_matrix(a.camera_world, b.camera_world) || a.field_of_view != b.field_of_view ||
         !same_color(a.ambient, b.ambient) || !same_sky(a.sky, b.sky) || a.rows.size() != b.rows.size() ||
-        a.prefabs != b.prefabs) {
+        a.prefabs != b.prefabs || !same_brushes(a.brushes, b.brushes)) {
         return false;
     }
     for (std::size_t i = 0; i < a.rows.size(); ++i) {
@@ -193,6 +208,20 @@ bool ViewportScenes::outside_changed(const DataModel& game, const ViewportPane& 
             return true;
         }
     }
+    // A Brush's shape, color, transparency, Transform, or Materials: read again and compared.
+    if (!entry.brushes.empty()) {
+        brush_scratch_.clear();
+        for (const InstanceId id : entry.brushes) {
+            const auto* brush = dynamic_cast<const Brush*>(game.instance(id));
+            if (brush == nullptr) {
+                return true;
+            }
+            brush_visuals_.append_single(game, *brush, brush_scratch_);
+        }
+        if (!same_brushes(brush_scratch_, last.brushes)) {
+            return true;
+        }
+    }
     return false;
 }
 
@@ -204,6 +233,7 @@ void ViewportScenes::build(const DataModel& game, const ViewportPane& pane, Pane
     out.prefabs.clear();
     out.prefabs.push_back(nullptr);
     out.sky = VisualSky{};
+    out.brushes.clear();
     out.camera = 0;
     out.has_camera = false;
     out.camera_inside = false;
@@ -211,6 +241,7 @@ void ViewportScenes::build(const DataModel& game, const ViewportPane& pane, Pane
     out.field_of_view = 70.f;
     release_prefabs(entry);
     entry.skinned_rows.clear();
+    entry.brushes.clear();
     entry.first_camera = 0;
     entry.sky = 0;
 
@@ -271,6 +302,9 @@ void ViewportScenes::build(const DataModel& game, const ViewportPane& pane, Pane
                 }
             }
             out.rows.push_back(std::move(row));
+        } else if (const auto* brush = dynamic_cast<const Brush*>(object)) {
+            entry.brushes.push_back(id);
+            brush_visuals_.append_single(game, *brush, out.brushes);
         } else if (const auto* light = dynamic_cast<const Light*>(object)) {
             VisualInstance row;
             row.id = id;
@@ -303,6 +337,7 @@ void ViewportScenes::update(DataModel& game, std::vector<std::shared_ptr<const V
     const bool tree_moved = tree != tree_seen_;
     tree_seen_ = tree;
     refresh_prefabs(game);
+    brush_visuals_.begin_singles();
     std::sort(dirty_.begin(), dirty_.end());
     dirty_.erase(std::unique(dirty_.begin(), dirty_.end()), dirty_.end());
     for (const InstanceId id : pane_ids_) {
@@ -346,6 +381,8 @@ void ViewportScenes::update(DataModel& game, std::vector<std::shared_ptr<const V
             free_prefabs_.push_back(index);
         }
     }
+    // Every pane with Brushes asked for theirs above; the rest are forgotten.
+    brush_visuals_.end_singles();
     dirty_.clear();
     all_ = false;
 }

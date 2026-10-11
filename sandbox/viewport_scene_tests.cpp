@@ -5,6 +5,7 @@
 
 #include "AssetInstances.hpp"
 #include "Bone.hpp"
+#include "Brush.hpp"
 #include "Camera.hpp"
 #include "ChangeHistoryService.hpp"
 #include "GameObject.hpp"
@@ -290,4 +291,43 @@ TEST_CASE("VS10 a pane destroyed leaves the list", "[viewport]") {
     s.game.destroy_tree(gone);
     s.frame();
     REQUIRE(s.scene(gone) == nullptr);
+}
+
+TEST_CASE("VS11 a Brush in a pane draws in the pane, on its own, and not in the place", "[viewport]") {
+    PaneScene s;
+    engine_core::Brush& brush = s.game.create<engine_core::Brush>();
+    s.game.set_parent(brush.id(), s.pane->id());
+    s.frame();
+    const auto scene = s.scene(s.pane->id());
+    REQUIRE(scene != nullptr);
+    REQUIRE_FALSE(scene->brushes.empty());
+    for (const engine_core::VisualBrushDraw& draw : scene->brushes) {
+        REQUIRE(draw.owner == brush.id());
+        REQUIRE(draw.look.session != nullptr);
+    }
+    REQUIRE(s.pump.front().brushes.empty());
+    // Nothing changed: the same scene.
+    s.frame();
+    REQUIRE(s.scene(s.pane->id()) == scene);
+}
+
+TEST_CASE("VS12 a pane Brush's color, transparency, and Transform each move the revision", "[viewport]") {
+    PaneScene s;
+    engine_core::Brush& brush = s.game.create<engine_core::Brush>();
+    s.game.set_parent(brush.id(), s.pane->id());
+    s.frame();
+    std::uint64_t last = s.revision();
+    REQUIRE_FALSE(brush.set_color(engine_core::ColorRgb{1.f, 0.f, 0.f, 1.f}));
+    s.frame();
+    REQUIRE(s.revision() != last);
+    last = s.revision();
+    REQUIRE_FALSE(brush.set_transparency(0.5));
+    s.frame();
+    REQUIRE(s.revision() != last);
+    REQUIRE(s.scene(s.pane->id())->brushes[0].transparency == 0.5f);
+    last = s.revision();
+    REQUIRE_FALSE(brush.set_transform(engine_core::matrix4_translation(3.f, 0.f, 0.f)));
+    s.frame();
+    REQUIRE(s.revision() != last);
+    REQUIRE(s.scene(s.pane->id())->brushes[0].world.m[12] == 3.f);
 }

@@ -172,6 +172,57 @@ const Material* BrushVisuals::material(const DataModel& game, const std::string&
     return id ? dynamic_cast<const Material*>(game.instance(*id)) : nullptr;
 }
 
+void BrushVisuals::texture_scales(const DataModel& game, const brush::Mesh& mesh) {
+    scales_.clear();
+    for (const brush::MeshRange& range : mesh.ranges) {
+        const Material* look = material(game, range.material);
+        scales_.push_back(static_cast<float>(look != nullptr ? look->texture_scale() : Material::kDefaultTextureScale));
+    }
+}
+
+void BrushVisuals::begin_singles() {
+    for (auto& [id, single] : singles_) {
+        single.seen = false;
+    }
+}
+
+void BrushVisuals::end_singles() {
+    for (auto it = singles_.begin(); it != singles_.end();) {
+        it = it->second.seen ? std::next(it) : singles_.erase(it);
+    }
+}
+
+void BrushVisuals::append_single(const DataModel& game, const Brush& brush, std::vector<VisualBrushDraw>& out) {
+    const InstanceId id = brush.id();
+    Baked& single = singles_[id];
+    single.seen = true;
+    std::shared_ptr<const brush::Mesh> mesh = brush.mesh();
+    texture_scales(game, *mesh);
+    Hash hash;
+    hash.add(brush.revision());
+    hash.bytes(scales_.data(), scales_.size() * sizeof(float));
+    if (single.mesh == nullptr || single.signature != hash.value) {
+        Builder builder;
+        builder.append(*mesh, nullptr, brush.color(), scales_);
+        single.materials = builder.materials;
+        single.mesh = builder.finish();
+        single.signature = hash.value;
+        single.revision = brush::next_revision();
+        ++bakes_;
+    }
+    for (std::size_t i = 0; i < single.materials.size(); ++i) {
+        VisualBrushDraw& draw = out.emplace_back();
+        fill_visual_material(game, material(game, single.materials[i]), draw.look);
+        draw.look.session = single.mesh;
+        draw.look.revision = single.revision;
+        draw.lod = static_cast<std::uint32_t>(i + 1);
+        draw.world = brush.transform();
+        draw.transparency = unit(brush.transparency());
+        draw.casts_shadow = i == 0;
+        draw.owner = id;
+    }
+}
+
 void BrushVisuals::update(DataModel& game, std::vector<VisualBrushDraw>& out) {
     PROFILE_SCOPE("Brush visuals", profiler::Group::Engine);
     out.clear();
@@ -180,17 +231,7 @@ void BrushVisuals::update(DataModel& game, std::vector<VisualBrushDraw>& out) {
     for (auto& [key, members] : members_) {
         members.clear();
     }
-    for (auto& [id, single] : singles_) {
-        single.seen = false;
-    }
-    std::vector<float> scales;
-    const auto texture_scales = [&](const brush::Mesh& mesh) {
-        scales.clear();
-        for (const brush::MeshRange& range : mesh.ranges) {
-            const Material* look = material(game, range.material);
-            scales.push_back(static_cast<float>(look != nullptr ? look->texture_scale() : Material::kDefaultTextureScale));
-        }
-    };
+    begin_singles();
     const auto opaque = [&](const Brush& brush) {
         if (brush.transparency() > 0.0) {
             return false;
@@ -222,37 +263,9 @@ void BrushVisuals::update(DataModel& game, std::vector<VisualBrushDraw>& out) {
             members_[key].push_back(id);
             continue;
         }
-        Baked& single = singles_[id];
-        single.seen = true;
-        std::shared_ptr<const brush::Mesh> mesh = brush->mesh();
-        texture_scales(*mesh);
-        Hash hash;
-        hash.add(brush->revision());
-        hash.bytes(scales.data(), scales.size() * sizeof(float));
-        if (single.mesh == nullptr || single.signature != hash.value) {
-            Builder builder;
-            builder.append(*mesh, nullptr, brush->color(), scales);
-            single.materials = builder.materials;
-            single.mesh = builder.finish();
-            single.signature = hash.value;
-            single.revision = brush::next_revision();
-            ++bakes_;
-        }
-        for (std::size_t i = 0; i < single.materials.size(); ++i) {
-            VisualBrushDraw& draw = out.emplace_back();
-            fill_visual_material(game, material(game, single.materials[i]), draw.look);
-            draw.look.session = single.mesh;
-            draw.look.revision = single.revision;
-            draw.lod = static_cast<std::uint32_t>(i + 1);
-            draw.world = brush->transform();
-            draw.transparency = unit(brush->transparency());
-            draw.casts_shadow = i == 0;
-            draw.owner = id;
-        }
+        append_single(game, *brush, out);
     }
-    for (auto it = singles_.begin(); it != singles_.end();) {
-        it = it->second.seen ? std::next(it) : singles_.erase(it);
-    }
+    end_singles();
 
     // Bake the cells whose brushes changed.
     for (auto it = members_.begin(); it != members_.end();) {
@@ -281,9 +294,9 @@ void BrushVisuals::update(DataModel& game, std::vector<VisualBrushDraw>& out) {
             for (InstanceId id : members) {
                 const auto* brush = static_cast<const Brush*>(game.instance(id));
                 std::shared_ptr<const brush::Mesh> mesh = brush->mesh();
-                texture_scales(*mesh);
+                texture_scales(game, *mesh);
                 const Matrix4 world = brush->transform();
-                builder.append(*mesh, &world, brush->color(), scales);
+                builder.append(*mesh, &world, brush->color(), scales_);
             }
             cell.materials = builder.materials;
             cell.mesh = builder.finish();

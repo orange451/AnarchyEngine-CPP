@@ -5074,6 +5074,28 @@ int main(int argc, char** argv) {
                    "VR7 the cube is drawn, opaque and lit, with nothing around it (" + std::to_string(middle[0]) +
                        "," + std::to_string(middle[3]) + " corner " + std::to_string(drawn.rgba[3]) + ")");
         }
+        // VR9: a pane whose only geometry is a Brush draw draws it.
+        {
+            auto brushOnly = std::make_shared<engine_core::VisualViewport>(*scene);
+            brushOnly->pane = 4;
+            brushOnly->rows.erase(brushOnly->rows.begin());
+            engine_core::VisualBrushDraw brushDraw;
+            brushDraw.look.session = std::make_shared<const anarchy::amesh::Data>(Cube());
+            brushDraw.look.revision = 77;
+            brushDraw.look.color = engine_core::ColorRgb{1.f, 1.f, 1.f, 1.f};
+            brushDraw.lod = 0;
+            brushDraw.owner = 5;
+            brushOnly->brushes.push_back(brushDraw);
+            runner::ViewportQueue::Result brushResult = runner::ViewportQueue::Result::NotReady;
+            for (int attempt = 0; attempt < 4 && brushResult != runner::ViewportQueue::Result::Complete; ++attempt) {
+                brushResult = panes.renderNow(runner::ViewportQueue::Job{4, brushOnly, 64, 64});
+            }
+            runner::ViewPixels brushPixels;
+            Expect(brushResult == runner::ViewportQueue::Result::Complete && panes.read(4, brushPixels) &&
+                       brushPixels.rgba.size() == 64 * 64 * 4 && brushPixels.rgba[(32 * 64 + 32) * 4 + 3] == 255 &&
+                       brushPixels.rgba[3] == 0,
+                   "VR9 a pane's Brush is drawn, with nothing around it");
+        }
         auto empty = std::make_shared<engine_core::VisualViewport>(*scene);
         empty->has_camera = false;
         empty->revision = 2;

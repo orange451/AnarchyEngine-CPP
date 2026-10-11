@@ -166,6 +166,7 @@ ViewportQueue::Result ViewportRenderer::renderNow(const ViewportQueue::Job& job)
             AppendRowDraws(row, prefabDraws_[row.prefab], draws_);
         }
     }
+    AppendBrushDraws(scene.brushes, *meshes_, *textures_, draws_);
     // A new Lighting's tone settings, the pane's Ambient, and its own sky.
     SceneLighting lighting;
     lighting.ambient[0] = scene.ambient.r;
@@ -224,6 +225,12 @@ void ViewportRenderer::renderPending() {
         ownTextures_->pump();
     }
     queue_.renderPending([this](const ViewportQueue::Job& job) { return renderNow(job); });
+    if (ownMeshes_) {
+        // Owned caches are this renderer's alone: uploads no render asked for
+        // since the last pass go, and are made again when a pane draws again.
+        ownMeshes_->sweepBrushes();
+        ownMeshes_->sweepSessions();
+    }
     queue_.takeForgotten(forgotten_);
     for (const engine_core::InstanceId pane : forgotten_) {
         const auto found = targets_.find(pane);

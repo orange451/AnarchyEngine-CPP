@@ -1,5 +1,6 @@
 #pragma once
 
+#include "BrushVisuals.hpp"
 #include "SnapshotPump.hpp"
 #include "types.hpp"
 
@@ -53,6 +54,7 @@ private:
         std::vector<std::uint32_t> prefabs;            // entries in prefabs_
         std::vector<std::uint64_t> prefab_revisions;   // as built
         std::vector<std::uint32_t> skinned_rows;       // indexes into published->rows
+        std::vector<InstanceId> brushes;               // the Brushes drawn, in order
         bool seen = false;
     };
 
@@ -76,6 +78,10 @@ private:
     VisualViewport scratch_;
     VisualPrefab prefab_scratch_;
     VisualSky sky_scratch_;
+    // Pane Brushes' meshes, each drawn on its own; brush_scratch_ is their
+    // draws as read again to compare.
+    BrushVisuals brush_visuals_;
+    std::vector<VisualBrushDraw> brush_scratch_;
     std::uint64_t tree_seen_ = 0;
     std::uint64_t next_revision_ = 1;
     bool all_ = true;

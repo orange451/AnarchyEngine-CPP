@@ -286,6 +286,9 @@ struct VisualViewport {
     std::vector<std::shared_ptr<const VisualPrefab>> prefabs;
     // The first Skybox inside, in tree order; present false with none.
     VisualSky sky;
+    // Each Brush inside, drawn on its own in its own space (never baked into
+    // cells), in tree order.
+    std::vector<VisualBrushDraw> brushes;
 };
 
 // What one Prefab draws, filled into out as the DataModel is now. cached is

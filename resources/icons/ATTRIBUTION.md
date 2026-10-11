@@ -34,3 +34,8 @@ on it, the way ScriptLocal.png puts a person on it.
 
 Terrain.png is our own, drawn in the Fugue style: two grey peaks with snow
 caps over a green hill.
+
+TerrainAdd.png, TerrainGrow.png, TerrainSmooth.png and TerrainPaint.png are
+our own, the Terrain tool's buttons: Terrain.png's mountains with a green
+plus, an orange up arrow, or a paintbrush, and for Smooth a rounded hill
+with a blue wave.

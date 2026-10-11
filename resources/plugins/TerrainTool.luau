@@ -15,10 +15,10 @@ local Core = game:GetService("Core")
 
 local TOOLS = { "Add", "Grow", "Smooth", "Paint" }
 local ICONS = {
-	Add = "icons/box--plus.png",
-	Grow = "icons/shovel.png",
-	Smooth = "icons/layer-shape-curve.png",
-	Paint = "icons/paint-brush.png",
+	Add = "icons/TerrainAdd.png",
+	Grow = "icons/TerrainGrow.png",
+	Smooth = "icons/TerrainSmooth.png",
+	Paint = "icons/TerrainPaint.png",
 }
 local TIPS = {
 	Add = "Drag a footprint, let go, move to set the height, click to fill (Shift: square, then cube)",

@@ -652,6 +652,13 @@ struct PhysicsWorld::Impl {
     std::unordered_set<InstanceId> no_collide_ids;
     std::vector<std::pair<InstanceId, InstanceId>> no_collide_diff;
     std::vector<InstanceId> no_collide_changed;
+    // refilter_all's scratch: each group's name and filter bits this pass.
+    struct GroupBits {
+        const std::string* name;
+        std::uint64_t category;
+        std::uint64_t mask;
+    };
+    std::vector<GroupBits> refilter_bits;
     // The DataModel's collision groups, set at each sync, and the revision
     // whose filters the shapes have.
     const CollisionGroups* groups = nullptr;
@@ -1176,7 +1183,8 @@ struct PhysicsWorld::Impl {
         RayHits hits;
         hits.game = &game;
         hits.filter = &filter;
-        b3World_CastRay(world, to_b3(origin), to_b3(direction), ray_filter(*groups, filter.collision_group), ray_hit, &hits);
+        const b3QueryFilter rays = ray_filter(*groups, filter.collision_group);
+        b3World_CastRay(world, to_b3(origin), to_b3(direction), rays, ray_hit, &hits);
         // Task 9 (spec "Physics"): Box3D's cast above tested every chunk that
         // has a collider shape; march each Terrain's own voxel distance
         // field, in its own local space, over exactly the chunks that do
@@ -2030,9 +2038,29 @@ struct PhysicsWorld::Impl {
 
     // The groups changed: every body's shapes and every terrain chunk.
     void refilter_all(DataModel& game) {
+        // Each group's bits once per pass, not a scan of the group names per body.
+        refilter_bits.clear();
         for (auto& [id, record] : bodies) {
-            if (const auto* object = dynamic_cast<const PhysicsBase*>(game.instance(id))) {
-                set_filters(*object, record);
+            const auto* object = dynamic_cast<const PhysicsBase*>(game.instance(id));
+            if (object == nullptr) {
+                continue;
+            }
+            const std::string& group = object->collision_group();
+            const auto cached = std::find_if(refilter_bits.begin(), refilter_bits.end(),
+                                             [&](const auto& bits) { return *bits.name == group; });
+            const GroupBits bits = cached != refilter_bits.end()
+                                       ? *cached
+                                       : GroupBits{&group, groups->category(group), groups->collides_with(group)};
+            if (cached == refilter_bits.end()) {
+                refilter_bits.push_back(bits);
+            }
+            b3Filter filter = b3DefaultFilter();
+            filter.categoryBits = bits.category;
+            filter.maskBits = object->can_collide()
+                                  ? bits.mask | CollisionGroups::kGroundBit | CollisionGroups::kRayBit
+                                  : CollisionGroups::kRayBit;
+            for (const b3ShapeId shape : record.shapes) {
+                b3Shape_SetFilter(shape, filter, true);
             }
         }
         const b3Filter terrain = shape_filter(*groups, CollisionGroups::kDefault, true);
@@ -2156,6 +2184,7 @@ struct PhysicsWorld::Impl {
         const float start = gap + kProbeSkin;
         const float reach = start + std::max(gap, kSnapMin);
         const b3Vec3 origin{feet.x, feet.y + start, feet.z};
+        const b3QueryFilter underfoot = ground_filter(*groups, controller.collision_group());
         b3Vec3 ring[kProbeSides];
         for (float width = kProbeWidth; width > kProbeNarrowest - 1e-4f; width -= 0.1f) {
             for (int side = 0; side < kProbeSides; ++side) {
@@ -2168,8 +2197,7 @@ struct PhysicsWorld::Impl {
             proxy.radius = 0.f;
             ProbeHits hits;
             hits.self = record.body;
-            b3World_CastShape(world, origin, &proxy, b3Vec3{0.f, -reach, 0.f}, ground_filter(*groups, controller.collision_group()), probe_hit,
-                              &hits);
+            b3World_CastShape(world, origin, &proxy, b3Vec3{0.f, -reach, 0.f}, underfoot, probe_hit, &hits);
             if (hits.started_inside) {
                 continue;
             }
@@ -2193,7 +2221,7 @@ struct PhysicsWorld::Impl {
                 const float deeper = reach + gap;
                 ProbeHits middle;
                 middle.self = record.body;
-                b3World_CastRay(world, origin, b3Vec3{0.f, -deeper, 0.f}, ground_filter(*groups, controller.collision_group()), probe_hit, &middle);
+                b3World_CastRay(world, origin, b3Vec3{0.f, -deeper, 0.f}, underfoot, probe_hit, &middle);
                 if (middle.hit && !middle.started_inside && middle.normal.y >= steepest(controller)) {
                     ground.walled = true;
                     ground.wall = ground.normal;

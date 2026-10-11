@@ -34,3 +34,7 @@ on it, the way ScriptLocal.png puts a person on it.
 
 Terrain.png is our own, drawn in the Fugue style: two grey peaks with snow
 caps over a green hill.
+
+WeldConstraint.png and RigidConstraint.png are our own, drawn in the Fugue
+style: two grey chain links on a diagonal for a weld, and two links in a line
+held by a blue pin for a rigid joint.

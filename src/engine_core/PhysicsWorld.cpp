@@ -1597,8 +1597,12 @@ struct PhysicsWorld::Impl {
                 break;
             case JointKind::Distance:
                 b3DistanceJoint_SetLength(id, c.param(P::Length) > 0.0 ? f(P::Length) : joint.placed_length);
-                b3DistanceJoint_EnableSpring(id, c.flag(P::EnableSpring));
-                b3DistanceJoint_SetSpringHertz(id, f(P::Hertz));
+                // Box3D's rigid mode ignores the limit and the motor: either of
+                // them asks for its spring mode, with no stiffness unless
+                // EnableSpring, so a rope hangs free inside its limits.
+                b3DistanceJoint_EnableSpring(
+                    id, c.flag(P::EnableSpring) || c.flag(P::EnableLimit) || c.flag(P::EnableMotor));
+                b3DistanceJoint_SetSpringHertz(id, c.flag(P::EnableSpring) ? f(P::Hertz) : 0.f);
                 b3DistanceJoint_SetSpringDampingRatio(id, f(P::DampingRatio));
                 b3DistanceJoint_EnableLimit(id, c.flag(P::EnableLimit));
                 b3DistanceJoint_SetLengthRange(id, f(P::MinLength), f(P::MaxLength));

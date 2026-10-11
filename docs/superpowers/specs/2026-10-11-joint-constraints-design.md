@@ -105,6 +105,9 @@ when `EnableSpring` is off, a spring when on, a rope with a limit.
 | `CurrentLength` | number (units), read-only | | `b3DistanceJoint_GetCurrentLength` |
 
 Box3D's lower and upper spring forces are left at their defaults (unbounded).
+Box3D's rigid mode ignores the limit and the motor, so with `EnableLimit` or
+`EnableMotor` on the joint runs in Box3D's spring mode with no stiffness
+unless `EnableSpring` is on: a rope hangs free inside its limits.
 
 ### `SphericalConstraint` (`b3SphericalJoint`)
 
@@ -266,6 +269,8 @@ Every setter returns why it refused, changing nothing:
   `MaxLength`.
 - **Clamped:** Revolute's `LowerAngle` and `UpperAngle` and Spherical's twist
   angles to ±178.2° (Box3D's ±0.99π); `ConeAngle` to 0..90 (Box3D's cone is at most π/2).
+- **Wrapped:** `TargetAngle` and `TargetSteeringAngle` into (-180, 180]: 270
+  is -90, the same angle, where Box3D (whose targets are within ±π) can reach it.
 - **Order:** a lower limit above its upper is saved as written; the joint uses
   the smaller as lower, as Box3D's setters do. So the two can be typed in
   either order.

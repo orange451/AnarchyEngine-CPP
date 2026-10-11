@@ -67,6 +67,7 @@ enum class JointRule {
     NonNegative,  // refused below 0
     Hinge,        // degrees, clamped to ±178.2 (Box3D's ±0.99π)
     Cone,         // degrees, clamped to 0..90 (Box3D's cone is at most π/2)
+    Angle,        // degrees, wrapped into (-180, 180] (Box3D's targets are within ±π)
 };
 
 struct JointParamInfo {

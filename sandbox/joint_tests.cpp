@@ -595,3 +595,63 @@ TEST_CASE("JK2 a step of a driving car allocates nothing", "[joint][physics][all
     alloc_counter::disarm();
     REQUIRE(alloc_counter::count() == 0u);
 }
+
+TEST_CASE("JB9 an end written its own value every step keeps the joint", "[joint][physics]") {
+    PhysicsRig rig;
+    PhysicsObject& base = rig.body(at(0.f, 5.f, 0.f), Vec3{1.f, 1.f, 1.f}, true);
+    PhysicsObject& hinged = rig.body(at(3.f, 5.f, 0.f), Vec3{1.f, 1.f, 1.f}, false);
+    auto& hinge = joint<engine_core::RevoluteConstraint>(rig.game, base.id(), hinged.id());
+    rig.play();
+    rig.steps(1);
+    const std::uint64_t made = rig.physics.joint_key(hinge.id());
+    for (int i = 0; i < 240; ++i) {
+        REQUIRE_FALSE(hinge.set_pv_instance2(instance_slot(hinged.id())));
+        rig.steps(1);
+    }
+    REQUIRE(rig.physics.joint_key(hinge.id()) == made);
+}
+
+TEST_CASE("JB10 a Distance with a limit is a rope, and its motor winds it in, with no spring", "[joint][physics]") {
+    PhysicsRig rig;
+    PhysicsObject& base = rig.body(at(0.f, 5.f, 0.f), Vec3{1.f, 1.f, 1.f}, true);
+    PhysicsObject& weight = rig.body(at(0.f, 3.f, 0.f), Vec3{1.f, 1.f, 1.f}, false);
+    auto& rope = joint<engine_core::DistanceConstraint>(rig.game, base.id(), weight.id());
+    set(rope, JointParam::EnableLimit, 1.0);
+    set(rope, JointParam::MinLength, 0.5);
+    set(rope, JointParam::MaxLength, 3.0);
+    rig.play();
+    rig.seconds(2.0);
+    // Slack until it is taut at MaxLength.
+    REQUIRE(near(static_cast<float>(rope.reading()), 3.f, 0.02f));
+    set(rope, JointParam::EnableMotor, 1.0);
+    set(rope, JointParam::MotorSpeed, -0.5);
+    rig.seconds(1.0);
+    REQUIRE(near(static_cast<float>(rope.reading()), 2.5f, 0.1f));
+}
+
+TEST_CASE("JB11 a taut rope written every step holds as one left alone", "[joint][physics]") {
+    const auto hang = [](bool written) {
+        PhysicsRig rig;
+        PhysicsObject& base = rig.body(at(0.f, 5.f, 0.f), Vec3{1.f, 1.f, 1.f}, true);
+        PhysicsObject& weight = rig.body(at(0.f, 3.f, 0.f), Vec3{1.f, 1.f, 1.f}, false);
+        REQUIRE_FALSE(weight.set_mass(2000.0));
+        auto& rope = joint<engine_core::DistanceConstraint>(rig.game, base.id(), weight.id());
+        set(rope, JointParam::EnableLimit, 1.0);
+        set(rope, JointParam::MaxLength, 2.0);
+        rig.play();
+        rig.seconds(1.0);
+        float deepest = 0.f;
+        for (int i = 0; i < 240; ++i) {
+            if (written) {
+                set(rope, JointParam::MotorSpeed, (i % 2) * 0.001);
+            }
+            rig.steps(1);
+            deepest = std::max(deepest, static_cast<float>(rope.reading()));
+        }
+        return deepest;
+    };
+    const float alone = hang(false);
+    const float written = hang(true);
+    INFO(alone << " " << written);
+    REQUIRE(written <= alone + 0.002f);
+}

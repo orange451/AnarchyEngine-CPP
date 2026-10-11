@@ -45,8 +45,10 @@ InstanceId Constraint::pv_instance2_id() const { return end_id(ref2_); }
 
 std::optional<std::string> Constraint::set_pv_instance1(const LuaSlot& value) {
     require_thread(*this);
+    const std::string before = ref1_.guid();
     std::optional<std::string> refused = set_instance_reference("PVInstance1", "PVInstance", ref1_, value);
-    if (!refused) {
+    // The same end again changes nothing: a joint keeps its frame.
+    if (!refused && ref1_.guid() != before) {
         assemblies().constraint_changed(*this, id());
         link_changed();
     }
@@ -55,8 +57,10 @@ std::optional<std::string> Constraint::set_pv_instance1(const LuaSlot& value) {
 
 std::optional<std::string> Constraint::set_pv_instance2(const LuaSlot& value) {
     require_thread(*this);
+    const std::string before = ref2_.guid();
     std::optional<std::string> refused = set_instance_reference("PVInstance2", "PVInstance", ref2_, value);
-    if (!refused) {
+    // The same end again changes nothing: a joint keeps its frame.
+    if (!refused && ref2_.guid() != before) {
         assemblies().constraint_changed(*this, id());
         link_changed();
     }

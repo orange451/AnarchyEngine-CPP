@@ -25,7 +25,7 @@ const JointParamInfo kParams[] = {
     {"EnableSpring", R::Flag, 0.0},
     {"Hertz", R::NonNegative, 1.0},
     {"DampingRatio", R::NonNegative, 0.7},
-    {"TargetAngle", R::Any, 0.0},
+    {"TargetAngle", R::Angle, 0.0},
     {"TargetTranslation", R::Any, 0.0},
     {"EnableLimit", R::Flag, 0.0},
     {"LowerAngle", R::Hinge, -45.0},
@@ -56,7 +56,7 @@ const JointParamInfo kParams[] = {
     {"EnableSteering", R::Flag, 0.0},
     {"SteeringHertz", R::NonNegative, 5.0},
     {"SteeringDampingRatio", R::NonNegative, 0.7},
-    {"TargetSteeringAngle", R::Any, 0.0},
+    {"TargetSteeringAngle", R::Angle, 0.0},
     {"MaxSteeringTorque", R::NonNegative, 10000.0},
     {"EnableSteeringLimit", R::Flag, 0.0},
     {"LowerSteeringLimit", R::Any, -30.0},
@@ -139,6 +139,13 @@ std::optional<std::string> JointConstraint::set_param(JointParam p, double value
             break;
         case R::Cone:
             value = std::clamp(value, 0.0, kConeLimit);
+            break;
+        case R::Angle:
+            // 270 is -90: the same angle, where Box3D can reach it.
+            value = std::remainder(value, 360.0);
+            if (value <= -180.0) {
+                value = 180.0;
+            }
             break;
         case R::Any:
             break;

@@ -284,3 +284,37 @@ TEST_CASE("JC8 duplicating a jointed pair joins the copies, with the joint's val
     REQUIRE(copied->pv_instance1_id() == parts[0]);
     REQUIRE(copied->pv_instance2_id() == parts[1]);
 }
+
+TEST_CASE("JC9 a target angle wraps into (-180, 180], keeping what it means", "[joint]") {
+    SimRole role;
+    engine_core::Game game;
+    engine_core::RevoluteConstraint& hinge = game.create<engine_core::RevoluteConstraint>();
+    REQUIRE_FALSE(hinge.set_param(JointParam::TargetAngle, 270.0));
+    REQUIRE(hinge.param(JointParam::TargetAngle) == -90.0);
+    REQUIRE_FALSE(hinge.set_param(JointParam::TargetAngle, -190.0));
+    REQUIRE(hinge.param(JointParam::TargetAngle) == 170.0);
+    REQUIRE_FALSE(hinge.set_param(JointParam::TargetAngle, 180.0));
+    REQUIRE(hinge.param(JointParam::TargetAngle) == 180.0);
+    REQUIRE_FALSE(hinge.set_param(JointParam::TargetAngle, -180.0));
+    REQUIRE(hinge.param(JointParam::TargetAngle) == 180.0);
+    REQUIRE_FALSE(hinge.set_param(JointParam::TargetAngle, 720.0 + 45.0));
+    REQUIRE(hinge.param(JointParam::TargetAngle) == 45.0);
+    engine_core::WheelConstraint& wheel = game.create<engine_core::WheelConstraint>();
+    REQUIRE_FALSE(wheel.set_param(JointParam::TargetSteeringAngle, 350.0));
+    REQUIRE(wheel.param(JointParam::TargetSteeringAngle) == -10.0);
+}
+
+TEST_CASE("JC10 writing an end its own value again does not take the frame again", "[joint]") {
+    SimRole role;
+    engine_core::Game game;
+    PhysicsObject& a = part(game, "A");
+    PhysicsObject& b = part(game, "B");
+    engine_core::RevoluteConstraint& hinge =
+        joint<engine_core::RevoluteConstraint>(game, a.id(), b.id(), workspace_of(game));
+    const std::uint32_t capture = hinge.capture_revision();
+    REQUIRE_FALSE(hinge.set_pv_instance1(instance_slot(a.id())));
+    REQUIRE_FALSE(hinge.set_pv_instance2(instance_slot(b.id())));
+    REQUIRE(hinge.capture_revision() == capture);
+    REQUIRE_FALSE(hinge.set_pv_instance2(instance_slot(a.id())));
+    REQUIRE(hinge.capture_revision() != capture);
+}

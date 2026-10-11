@@ -1,9 +1,9 @@
 #pragma once
 
 // AMESH is the baked internal mesh asset.
-// Datamodel Mesh is a separate authoring instance
-// (AddTeapot / AddCylinder / etc.) and will be converted
-// to AMESH later. This module does not implement that instance.
+// The datamodel Mesh names an AMESH file; scripts author one through its
+// MeshEditor (engine_instances), whose build() makes this Data. This module
+// does not implement either.
 //
 // File: magic "AESH", version 1.0 without pieces and 1.1 with them, so a
 // mesh without pieces still reads in builds from before pieces. Little-endian,

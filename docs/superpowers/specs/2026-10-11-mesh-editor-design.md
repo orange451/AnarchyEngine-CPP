@@ -166,8 +166,9 @@ The Mesh's session copy becomes a **live copy**, used in both modes:
   from it (with `write_file`, atomic as now) when the editor has had no edit
   for 1 second, when the editor is freed, before a project save, and before
   Play. After the write the live copy is dropped and the Mesh draws its file.
-  A Mesh with no Path gets `meshes/<Name>.<guid>.amesh` on its first write, as
-  `edit_geometry` does; that Path change is the only undo step.
+  A Mesh with no Path gets `meshes/<Name>.<guid>.amesh`, and an empty file
+  there, when `Edit()` opens its editor, so the Path change lands in the
+  caller's undo step; that Path change is the only undo step.
 
 The idle delay reads an injectable clock, so tests never sleep.
 

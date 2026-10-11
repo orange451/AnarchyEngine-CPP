@@ -16,6 +16,7 @@
 #include "PropertySheet.hpp"
 #include "ScratchResources.hpp"
 #include "IdeResources.hpp"
+#include "Assemblies.hpp"
 #include "InstanceFile.hpp"
 #include "TextureImport.hpp"
 
@@ -287,7 +288,14 @@ bool IdeLayout::import_instance_files(const std::vector<std::string>& files) {
         ScopedRecording step(world, "Insert");
         std::vector<engine_core::InstanceId> made;
         std::string refused;
-        paste_copies(world, roots, world.scene_service("Workspace"), &made, &refused);
+        {
+            // What the file links inside itself stays linked in the copies.
+            engine_core::AssemblySuspend suspend(world);
+            engine_core::CopyMap map;
+            paste_copies(world, roots, world.scene_service("Workspace"), &made, &refused, &map);
+            engine_core::remap_references(world, map);
+            world.assemblies().follow_on_resume();
+        }
         if (!made.empty()) {
             world.selection().set(made);
         }

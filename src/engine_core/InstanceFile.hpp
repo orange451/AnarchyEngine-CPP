@@ -6,6 +6,7 @@
 
 #include <filesystem>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace engine_core {
@@ -14,6 +15,10 @@ namespace engine_core {
 // carry it: its class, name, saved properties (the ones its class does not
 // know too), a script's source, and its children in order.
 struct CopiedNode {
+    // The source's GUID, so a paste can point references inside what it
+    // copied at the copies. Empty from an instance file written before files
+    // carried it.
+    std::string guid;
     std::string class_name;
     std::string name;
     PropertyBag properties;
@@ -29,12 +34,24 @@ CopiedNode copy_tree(const DataModel& game, InstanceId id);
 // children. A class that cannot be made, a full place, or a parent that
 // refuses one leaves that root out, and refused, when given, gets the first
 // reason. False when none could be built. Runs on the simulation thread.
+// Source GUID to the copy one user action built from it, for every node of
+// every root it pasted.
+using CopyMap = std::unordered_map<std::string, InstanceId>;
+
 bool paste_copies(DataModel& world, const std::vector<CopiedNode>& roots, InstanceId parent,
-                  std::vector<InstanceId>* made = nullptr, std::string* refused = nullptr);
+                  std::vector<InstanceId>* made = nullptr, std::string* refused = nullptr, CopyMap* map = nullptr);
+
+// Points every saved reference property (any X? field) of the copies in map
+// whose GUID names a source in map at that source's copy, through the
+// property's own write, so the action's recording keeps it. References to
+// anything outside stay. A copied RigidConstraint whose parent end was
+// remapped but whose sub end was not loses its sub end: otherwise the
+// original sub would have a second rigid parent. SimulationThread.
+void remap_references(DataModel& world, const CopyMap& map);
 
 // An instance file (.aeinst, and .aeplugin, which is the same format):
 // {"format": "aeinst", "version": 1, "roots": [node...]}, where a node is
-// {"class", "name", "properties"?, "source"?, "children"?}.
+// {"class", "name", "guid"?, "properties"?, "source"?, "children"?}.
 JsonValue write_instance_file(const std::vector<CopiedNode>& roots);
 // False, with error naming the JSON path that is wrong, for another format
 // or version, a node missing its class or name, a class no one can make, or

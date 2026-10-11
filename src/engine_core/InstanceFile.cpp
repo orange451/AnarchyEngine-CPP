@@ -1,8 +1,10 @@
 #include "InstanceFile.hpp"
 
+#include "Constraint.hpp"
 #include "FileBytes.hpp"
 #include "LuaApi.hpp"
 #include "LuaSource.hpp"
+#include "PropertyReflection.hpp"
 
 #include <optional>
 #include <system_error>
@@ -11,7 +13,8 @@
 namespace engine_core {
 namespace {
 
-InstanceId build_copy(DataModel& world, const CopiedNode& node, InstanceId parent, std::string* refused) {
+InstanceId build_copy(DataModel& world, const CopiedNode& node, InstanceId parent, std::string* refused,
+                      CopyMap* map) {
     const auto refuse = [refused](std::string reason) {
         if (refused != nullptr && refused->empty()) {
             *refused = std::move(reason);
@@ -27,6 +30,9 @@ InstanceId build_copy(DataModel& world, const CopiedNode& node, InstanceId paren
         return 0;
     }
     const InstanceId id = made->id();
+    if (map != nullptr && !node.guid.empty()) {
+        (*map)[node.guid] = id;
+    }
     for (const JsonValue::Member& member : node.properties) {
         std::string error;
         if (!made->load_property(member.first, member.second, error) && error.empty()) {
@@ -48,7 +54,7 @@ InstanceId build_copy(DataModel& world, const CopiedNode& node, InstanceId paren
     }
     world.set_parent(id, parent);
     for (const CopiedNode& child : node.children) {
-        build_copy(world, child, id, refused);
+        build_copy(world, child, id, refused, map);
     }
     return id;
 }
@@ -57,6 +63,9 @@ JsonValue node_json(const CopiedNode& node) {
     JsonValue out = JsonValue::object();
     out.set("class", JsonValue::string(node.class_name));
     out.set("name", JsonValue::string(node.name));
+    if (!node.guid.empty()) {
+        out.set("guid", JsonValue::string(node.guid));
+    }
     if (!node.properties.empty()) {
         JsonValue properties = JsonValue::object();
         for (const JsonValue::Member& member : node.properties) {
@@ -99,6 +108,13 @@ bool read_node(const JsonValue& json, const std::string& where, CopiedNode& out,
     }
     out.class_name = klass->as_string();
     out.name = name->as_string();
+    if (const JsonValue* guid = json.find("guid")) {
+        if (!guid->is_string()) {
+            error = where + ".guid must be a string";
+            return false;
+        }
+        out.guid = guid->as_string();
+    }
     if (const JsonValue* properties = json.find("properties")) {
         if (!properties->is_object()) {
             error = where + ".properties must be an object";
@@ -140,6 +156,7 @@ CopiedNode copy_tree(const DataModel& game, InstanceId id) {
     if (object == nullptr) {
         return node;
     }
+    node.guid = game.guid(id);
     node.class_name = object->class_name();
     node.name = game.name(id);
     object->save_properties(node.properties);
@@ -159,13 +176,13 @@ CopiedNode copy_tree(const DataModel& game, InstanceId id) {
 }
 
 bool paste_copies(DataModel& world, const std::vector<CopiedNode>& roots, InstanceId parent,
-                  std::vector<InstanceId>* made, std::string* refused) {
+                  std::vector<InstanceId>* made, std::string* refused, CopyMap* map) {
     if (parent == DataModel::kNoParent || (parent != 0 && !world.alive(parent))) {
         return false;
     }
     bool any = false;
     for (const CopiedNode& root : roots) {
-        const InstanceId id = build_copy(world, root, parent, refused);
+        const InstanceId id = build_copy(world, root, parent, refused, map);
         if (id != 0) {
             any = true;
             if (made != nullptr) {
@@ -174,6 +191,43 @@ bool paste_copies(DataModel& world, const std::vector<CopiedNode>& roots, Instan
         }
     }
     return any;
+}
+
+void remap_references(DataModel& world, const CopyMap& map) {
+    for (const auto& [source, copy] : map) {
+        DataModel* object = world.instance(copy);
+        if (object == nullptr) {
+            continue;
+        }
+        // A RigidConstraint's ends as copied, before any is remapped.
+        bool parent_inside = false;
+        bool sub_outside = false;
+        if (const auto* rigid = dynamic_cast<const RigidConstraint*>(object)) {
+            parent_inside = map.count(rigid->pv_instance1_ref().guid()) != 0;
+            const std::string& sub = rigid->pv_instance2_ref().guid();
+            sub_outside = !sub.empty() && map.count(sub) == 0;
+        }
+        for (const LuaField& field : lua_saved_fields(object->class_name())) {
+            if (field.read == nullptr || field.write == nullptr || reference_class(field.type_name).empty()) {
+                continue;
+            }
+            LuaSlot slot;
+            if (!field.read(world, *object, slot) || slot.text.empty()) {
+                continue;
+            }
+            const auto found = map.find(slot.text);
+            if (found == map.end()) {
+                continue;
+            }
+            LuaSlot next;
+            next.kind = LuaSlot::Kind::Instance;
+            next.id = found->second;
+            field.write(world, *object, next);
+        }
+        if (parent_inside && sub_outside) {
+            dynamic_cast<RigidConstraint*>(object)->set_pv_instance2(LuaSlot{});
+        }
+    }
 }
 
 JsonValue write_instance_file(const std::vector<CopiedNode>& roots) {

@@ -6,6 +6,7 @@
 #include "IdeCssEditor.hpp"
 #include "IdeTerrainEditor.hpp"
 
+#include "Assemblies.hpp"
 #include "FileBytes.hpp"
 #include "Folder.hpp"
 #include "InstanceFile.hpp"
@@ -306,8 +307,16 @@ void IdeLayout::duplicate(const std::vector<std::uint32_t>& ids) {
         ScopedRecording step(world, "Duplicate");
         std::vector<engine_core::InstanceId> made;
         std::string refused;
-        for (const auto& group : groups) {
-            paste_copies(world, group.second, group.first, &made, &refused);
+        {
+            // One map for every group: a weld duplicated with the parts it
+            // joins, all selected as siblings, joins the copies.
+            engine_core::AssemblySuspend suspend(world);
+            engine_core::CopyMap map;
+            for (const auto& group : groups) {
+                paste_copies(world, group.second, group.first, &made, &refused, &map);
+            }
+            engine_core::remap_references(world, map);
+            world.assemblies().follow_on_resume();
         }
         if (!made.empty()) {
             world.selection().set(made);
@@ -485,10 +494,17 @@ void IdeLayout::paste(const std::vector<std::uint32_t>& ids, bool beside) {
             ScopedRecording step(world, "Paste");
             std::vector<engine_core::InstanceId> made;
             std::string refused;
-            for (engine_core::InstanceId target : targets) {
-                if (parent_ok(world, target)) {
-                    paste_copies(world, *copies, target, &made, &refused);
+            {
+                // Each target its own map: its copies point at one another.
+                engine_core::AssemblySuspend suspend(world);
+                for (engine_core::InstanceId target : targets) {
+                    if (parent_ok(world, target)) {
+                        engine_core::CopyMap map;
+                        paste_copies(world, *copies, target, &made, &refused, &map);
+                        engine_core::remap_references(world, map);
+                    }
                 }
+                world.assemblies().follow_on_resume();
             }
             if (!made.empty()) {
                 world.selection().set(made);
@@ -527,10 +543,16 @@ void IdeLayout::paste(const std::vector<std::uint32_t>& ids, bool beside) {
         // Copied once they are back in the tree, which copy_set walks.
         const std::vector<CopiedNode> copies = copy_set(world, made);
         std::string refused;
-        for (std::size_t i = 1; i < targets.size(); ++i) {
-            if (parent_ok(world, targets[i])) {
-                paste_copies(world, copies, targets[i], &made, &refused);
+        {
+            engine_core::AssemblySuspend suspend(world);
+            for (std::size_t i = 1; i < targets.size(); ++i) {
+                if (parent_ok(world, targets[i])) {
+                    engine_core::CopyMap map;
+                    paste_copies(world, copies, targets[i], &made, &refused, &map);
+                    engine_core::remap_references(world, map);
+                }
             }
+            world.assemblies().follow_on_resume();
         }
         world.selection().set(made);
         if (!refused.empty()) {

@@ -999,6 +999,7 @@ add_executable(sandbox
     sandbox/assembly_edit_tests.cpp
     sandbox/assembly_play_tests.cpp
     sandbox/alloc_counter.cpp
+    sandbox/copy_remap_tests.cpp
     sandbox/analysis_tests.cpp
     sandbox/analysis_world_tests.cpp
     sandbox/analysis_pool_tests.cpp

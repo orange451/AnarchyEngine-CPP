@@ -925,6 +925,9 @@ target_link_libraries(assets-demo PRIVATE studio)
 # By hand, not ctest: billboard-demo <out-dir> saves a depth-tested and an always-on-top BillboardGui beside a cube.
 add_executable(billboard-demo tests/BillboardDemo.cpp)
 target_link_libraries(billboard-demo PRIVATE studio)
+# By hand, not ctest: viewport-demo <out-dir> saves two ViewportPanes, an icon and a turning preview.
+add_executable(viewport-demo tests/ViewportDemo.cpp)
+target_link_libraries(viewport-demo PRIVATE studio)
 
 # By hand, not ctest: prefab-demo out-dir light saves the Prefab editor as PNGs.
 add_executable(prefab-demo
@@ -1103,7 +1106,7 @@ function(anarchy_warnings target)
     endif()
 endfunction()
 foreach(target IN ITEMS studio_core studio AnarchyStudio AnarchyPlayer engine-tests shell-tests properties-tests console-tests
-                        studio-tests mcp-tests explorer-tests assets-tests prefab-editor-tests terrain-editor-tests assets-demo billboard-demo prefab-demo terminal-tests terminal-probe anarchy-mcp
+                        studio-tests mcp-tests explorer-tests assets-tests prefab-editor-tests terrain-editor-tests assets-demo billboard-demo viewport-demo prefab-demo terminal-tests terminal-probe anarchy-mcp
                         sandbox amesh aanim amesh-tests amesh-gl-check scene-render-check gpu-timer-check grid-check profiler-demo profiler profiler-tests ${ENGINE_PACKAGES})
     anarchy_warnings(${target})
 endforeach()
@@ -1218,7 +1221,7 @@ option(ANARCHY_TESTS_IN_ALL "Build every test and demo program in a plain build"
 set(ANARCHY_TEST_PROGRAMS
     shell-tests explorer-tests assets-tests prefab-editor-tests terrain-editor-tests
     console-tests properties-tests studio-tests mcp-tests profiler-tests mcp-setup-tests
-    engine-tests terminal-tests terminal-probe terminal-demo assets-demo billboard-demo
+    engine-tests terminal-tests terminal-probe terminal-demo assets-demo billboard-demo viewport-demo
     prefab-demo amesh-tests amesh-gl-check profiler-demo grid-check gpu-timer-check
     scene-render-check sandbox)
 add_custom_target(tests)

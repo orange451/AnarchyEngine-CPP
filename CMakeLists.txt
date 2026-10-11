@@ -582,6 +582,7 @@ add_library(engine_instances STATIC
     src/engine_instances/AssetLoads.cpp
     src/engine_instances/Camera.cpp
     src/engine_instances/MeshShapes.cpp
+    src/engine_instances/MeshEditor.cpp
     src/engine_instances/Folder.cpp
     src/engine_instances/GameObject.cpp
     src/engine_instances/SpatialObject.cpp
@@ -1019,6 +1020,7 @@ add_executable(sandbox
     sandbox/dense_views_tests.cpp
     sandbox/prefab_render_tests.cpp
     sandbox/mesh_shapes_tests.cpp
+    sandbox/mesh_editor_tests.cpp
     sandbox/matrix4_tests.cpp
     sandbox/plugin_tests.cpp
     sandbox/instance_file_tests.cpp

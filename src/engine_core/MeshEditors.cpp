@@ -8,8 +8,8 @@
 namespace engine_core {
 
 std::shared_ptr<MeshEditor> MeshEditors::open(DataModel& game, Mesh& mesh, std::string& error) {
-    for (const Entry& entry : entries_) {
-        if (entry.editor->owner.mesh == mesh.id() && usable(game, *entry.editor)) {
+    for (Entry& entry : entries_) {
+        if (entry.editor->owner.mesh == mesh.id() && usable(game, *entry.editor) && !end_if_stale(game, entry)) {
             return entry.editor;
         }
     }
@@ -46,6 +46,21 @@ bool MeshEditors::usable(const DataModel& game, const MeshEditor& editor) const 
 Mesh* MeshEditors::mesh_of(DataModel& game, const Entry& entry) const {
     const InstanceId id = entry.editor->owner.mesh;
     return game.alive(id) ? dynamic_cast<Mesh*>(game.instance(id)) : nullptr;
+}
+
+bool MeshEditors::end_if_stale(DataModel& game, Entry& entry) {
+    Mesh* mesh = mesh_of(game, entry);
+    if (mesh == nullptr) {
+        return false;
+    }
+    const bool moved = mesh->path() != entry.path;
+    const bool rewritten = !entry.editor->owner.playing && mesh->file_stamp() != entry.stamp;
+    if (!moved && !rewritten) {
+        return false;
+    }
+    mesh->drop_live_geometry();
+    entry.editor->end();
+    return true;
 }
 
 void MeshEditors::commit_one(DataModel& game, Entry& entry) {
@@ -95,15 +110,12 @@ void MeshEditors::step(DataModel& game, Clock::time_point now) {
             editor.end();
             continue;
         }
-        Mesh* mesh = mesh_of(game, entry);
-        const bool playing = editor.owner.playing;
-        // Stopped, a new Path (an undo) or another writer means what it holds
-        // no longer applies: it ends, and the Mesh draws its file again.
-        if (!playing && (mesh->path() != entry.path || mesh->file_stamp() != entry.stamp)) {
-            mesh->drop_live_geometry();
-            editor.end();
+        // A new Path (an undo, or a script's) or, stopped, another writer.
+        if (end_if_stale(game, entry)) {
             continue;
         }
+        Mesh* mesh = mesh_of(game, entry);
+        const bool playing = editor.owner.playing;
         if (editor.edits() != entry.seen) {
             entry.seen = editor.edits();
             entry.changed = now;
@@ -136,7 +148,7 @@ void MeshEditors::step(DataModel& game, Clock::time_point now) {
 
 void MeshEditors::write_all(DataModel& game, bool end) {
     for (Entry& entry : entries_) {
-        if (entry.editor->owner.playing || !usable(game, *entry.editor)) {
+        if (entry.editor->owner.playing || !usable(game, *entry.editor) || end_if_stale(game, entry)) {
             continue;
         }
         commit_one(game, entry);

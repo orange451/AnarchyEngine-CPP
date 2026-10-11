@@ -276,3 +276,56 @@ TEST_CASE("H2 a project save writes pending edits, and the editor carries on", "
     // Still drawn from the live copy until the file has been seen.
     REQUIRE(cube.session_geometry().data != nullptr);
 }
+
+TEST_CASE("R7 a Path changed since an editor opened ends it at the next open or save, and nothing goes to either file", "[mesh-editors]") {
+    EditorRig rig;
+    Mesh& cube = rig.mesh("Cube");
+    const std::shared_ptr<MeshEditor> first = rig.open(cube);
+    add_box(*first);
+    rig.frames(1);
+    const std::string old_path = cube.path();
+
+    // A generator run again within the same few seconds, on a new Path.
+    REQUIRE_FALSE(cube.set_path("meshes/gen2.amesh"));
+    const std::shared_ptr<MeshEditor> second = rig.open(cube);
+    REQUIRE(second != first);
+    REQUIRE_FALSE(rig.editors().usable(rig.game, *first));
+    REQUIRE(second->vertices().empty());
+    second->add_shape([](Data& data) { engine_core::add_sphere(data, 1.f, 8, Vec3{}); });
+    rig.editors().write_all(rig.game, true);
+    Data sphere;
+    engine_core::add_sphere(sphere, 1.f, 8, Vec3{});
+    REQUIRE(rig.file_at("meshes/gen2.amesh").vertices.size() == sphere.vertices.size());
+    REQUIRE(rig.file_at(old_path).vertices.empty());
+
+    // A save the same tick another Mesh is pointed at that file does not write over it.
+    Mesh& other = rig.mesh("Other");
+    const std::shared_ptr<MeshEditor> third = rig.open(other);
+    add_box(*third);
+    rig.frames(1);
+    REQUIRE_FALSE(other.set_path("meshes/gen2.amesh"));
+    rig.editors().write_all(rig.game, false);
+    REQUIRE(rig.file_at("meshes/gen2.amesh").vertices.size() == sphere.vertices.size());
+    REQUIRE_FALSE(rig.editors().usable(rig.game, *third));
+    REQUIRE(other.session_geometry().data == nullptr);
+}
+
+TEST_CASE("R8 playing, a Path change ends the editor and the Mesh draws its new file", "[mesh-editors]") {
+    EditorRig rig;
+    Mesh& cube = rig.mesh("Cube");
+    add_box(*rig.open(cube));
+    Mesh& rock = rig.mesh("Rock");
+    rig.open(rock)->add_shape([](Data& data) { engine_core::add_sphere(data, 1.f, 8, Vec3{}); });
+    rig.editors().write_all(rig.game, true);
+
+    rig.game.start_simulation();
+    const std::shared_ptr<MeshEditor> editor = rig.open(cube);
+    editor->clear();
+    rig.frames(1);
+    REQUIRE(cube.session_geometry().data != nullptr);
+    REQUIRE_FALSE(cube.set_path(rock.path()));
+    rig.frames(1);
+    REQUIRE_FALSE(rig.editors().usable(rig.game, *editor));
+    REQUIRE(cube.session_geometry().data == nullptr);
+    rig.game.stop_simulation();
+}

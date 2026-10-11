@@ -255,7 +255,9 @@ void ConvexDecomposer::update(DataModel& game) {
         // Right for its geometry whatever became of the Mesh.
         remember_pieces(job.points, job.triangles, job.pieces);
         auto* mesh = dynamic_cast<Mesh*>(game.instance(job.mesh));
-        if (mesh == nullptr || job.pieces.empty() || mesh->file_stamp() != job.stamp) {
+        // A live copy since: the file is about to change, and is queued again once it has.
+        if (mesh == nullptr || job.pieces.empty() || mesh->file_stamp() != job.stamp ||
+            mesh->session_geometry().data != nullptr) {
             continue;
         }
         if (!mesh->store_pieces(kRecipe, std::move(job.pieces))) {
@@ -275,7 +277,10 @@ void ConvexDecomposer::update(DataModel& game) {
             continue;
         }
         const std::string stamp = mesh->file_stamp();
-        if (stamp.empty()) {
+        // A MeshEditor's live copy holds edits the file does not have yet: cut it
+        // once the file has them and draws again, not before, so the pieces
+        // match the file and storing them does not end the editor.
+        if (stamp.empty() || mesh->session_geometry().data != nullptr) {
             continue;
         }
         const auto seen = queued_.find(mesh->id());

@@ -415,6 +415,10 @@ std::optional<std::string> Mesh::store_pieces(std::uint32_t recipe, std::vector<
     if (simulation_running()) {
         return std::string("Pieces are stored only while the place is stopped");
     }
+    // The file is about to be replaced by what the live copy holds.
+    if (session_geometry().data != nullptr) {
+        return std::string("The Mesh has edits its file does not have yet");
+    }
     if (file_stamp().empty()) {
         return std::string("The Mesh has no file");
     }

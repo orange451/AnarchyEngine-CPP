@@ -59,7 +59,7 @@ private:
         Clock::time_point changed{};
         // Stopped: the live copy holds edits the file does not.
         bool unwritten = false;
-        // Stopped: the Path, and Mesh::file_stamp(), at open or the last write.
+        // The Path at open; stopped, also Mesh::file_stamp() at open or the last write.
         std::string path;
         std::string stamp;
         // Stopped: when to drop the live copy after a write.
@@ -67,6 +67,10 @@ private:
     };
 
     Mesh* mesh_of(DataModel& game, const Entry& entry) const;
+    // Ends a usable editor whose Mesh has a new Path, or (stopped) a file some
+    // other writer changed: what it holds no longer applies, so its live copy
+    // goes and the Mesh draws its file. True when it ended it.
+    bool end_if_stale(DataModel& game, Entry& entry);
     void commit_one(DataModel& game, Entry& entry);
     void write_one(DataModel& game, Entry& entry, Clock::time_point now);
 

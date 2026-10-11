@@ -107,6 +107,8 @@ public:
 
     // Counts every change, so a caller can tell when there is something new to build.
     std::uint64_t edits() const { return edits_; }
+    // The vertex, triangle, and bone slots held: live, or removed since the last clear.
+    std::size_t slot_count() const { return vertices_.size() + triangles_.size() + bones_.size(); }
 
     Owner owner;
     bool ended() const { return ended_; }
@@ -146,9 +148,14 @@ private:
     void drop_triangle(Id triangle);
     void check_bone_name(const std::string& name, std::optional<Id> self) const;
 
+    // Slot i holds id base + i. clear() lets go of every slot by moving each
+    // base past them, so ids carry on while the memory does not grow.
     std::vector<VertexSlot> vertices_;
     std::vector<TriangleSlot> triangles_;
     std::vector<BoneSlot> bones_;
+    Id vertex_base_ = 0;
+    Id triangle_base_ = 0;
+    Id bone_base_ = 0;
     std::unordered_map<std::string, Id> bone_names_;
     std::size_t live_vertices_ = 0;
     std::size_t live_triangles_ = 0;

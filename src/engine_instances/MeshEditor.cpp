@@ -113,10 +113,10 @@ MeshEditor::MeshEditor(const Data& data) {
 }
 
 const MeshEditor::VertexSlot& MeshEditor::vertex_slot(Id vertex) const {
-    if (vertex >= vertices_.size() || !vertices_[vertex].live) {
+    if (vertex < vertex_base_ || vertex - vertex_base_ >= vertices_.size() || !vertices_[vertex - vertex_base_].live) {
         throw MeshEditError("no vertex " + text(vertex));
     }
-    return vertices_[vertex];
+    return vertices_[vertex - vertex_base_];
 }
 
 MeshEditor::VertexSlot& MeshEditor::vertex_slot(Id vertex) {
@@ -124,17 +124,18 @@ MeshEditor::VertexSlot& MeshEditor::vertex_slot(Id vertex) {
 }
 
 const MeshEditor::TriangleSlot& MeshEditor::triangle_slot(Id triangle) const {
-    if (triangle >= triangles_.size() || !triangles_[triangle].live) {
+    if (triangle < triangle_base_ || triangle - triangle_base_ >= triangles_.size() ||
+        !triangles_[triangle - triangle_base_].live) {
         throw MeshEditError("no triangle " + text(triangle));
     }
-    return triangles_[triangle];
+    return triangles_[triangle - triangle_base_];
 }
 
 const MeshEditor::BoneSlot& MeshEditor::bone_slot(Id bone) const {
-    if (bone >= bones_.size() || !bones_[bone].live) {
+    if (bone < bone_base_ || bone - bone_base_ >= bones_.size() || !bones_[bone - bone_base_].live) {
         throw MeshEditError("no bone " + text(bone));
     }
-    return bones_[bone];
+    return bones_[bone - bone_base_];
 }
 
 MeshEditor::BoneSlot& MeshEditor::bone_slot(Id bone) {
@@ -142,24 +143,24 @@ MeshEditor::BoneSlot& MeshEditor::bone_slot(Id bone) {
 }
 
 MeshEditor::Id MeshEditor::push_triangle(const std::array<Id, 3>& corners) {
-    const Id id = static_cast<Id>(triangles_.size());
+    const Id id = triangle_base_ + static_cast<Id>(triangles_.size());
     TriangleSlot slot;
     slot.corners = corners;
     triangles_.push_back(slot);
     for (const Id corner : corners) {
-        if (corner < vertices_.size()) {
-            vertices_[corner].triangles.push_back(id);
+        if (corner >= vertex_base_ && corner - vertex_base_ < vertices_.size()) {
+            vertices_[corner - vertex_base_].triangles.push_back(id);
         }
     }
     return id;
 }
 
 void MeshEditor::drop_triangle(Id triangle) {
-    TriangleSlot& slot = triangles_[triangle];
+    TriangleSlot& slot = triangles_[triangle - triangle_base_];
     slot.live = false;
     for (const Id corner : slot.corners) {
-        if (corner < vertices_.size()) {
-            std::vector<Id>& using_it = vertices_[corner].triangles;
+        if (corner >= vertex_base_ && corner - vertex_base_ < vertices_.size()) {
+            std::vector<Id>& using_it = vertices_[corner - vertex_base_].triangles;
             using_it.erase(std::remove(using_it.begin(), using_it.end(), triangle), using_it.end());
         }
     }
@@ -178,7 +179,7 @@ MeshEditor::Id MeshEditor::add_vertex(Vec3 position) {
     vertices_.push_back(std::move(slot));
     ++live_vertices_;
     ++edits_;
-    return static_cast<Id>(vertices_.size() - 1);
+    return vertex_base_ + static_cast<Id>(vertices_.size() - 1);
 }
 
 void MeshEditor::remove_vertex(Id vertex) {
@@ -186,7 +187,7 @@ void MeshEditor::remove_vertex(Id vertex) {
     // A copy: dropping a triangle edits the list.
     const std::vector<Id> using_it = slot.triangles;
     for (const Id triangle : using_it) {
-        if (triangles_[triangle].live) {
+        if (triangles_[triangle - triangle_base_].live) {
             drop_triangle(triangle);
         }
     }
@@ -201,7 +202,7 @@ std::vector<MeshEditor::Id> MeshEditor::vertices() const {
     out.reserve(live_vertices_);
     for (std::size_t id = 0; id < vertices_.size(); ++id) {
         if (vertices_[id].live) {
-            out.push_back(static_cast<Id>(id));
+            out.push_back(vertex_base_ + static_cast<Id>(id));
         }
     }
     return out;
@@ -225,8 +226,9 @@ Vec3 MeshEditor::normal(Id vertex) const {
     }
     Vec3 sum{};
     for (const Id triangle : slot.triangles) {
-        const std::array<Id, 3>& c = triangles_[triangle].corners;
-        const Vec3 face = cross(minus(vertices_[c[1]].p, vertices_[c[0]].p), minus(vertices_[c[2]].p, vertices_[c[0]].p));
+        const std::array<Id, 3>& c = triangles_[triangle - triangle_base_].corners;
+        const Vec3 a = vertices_[c[0] - vertex_base_].p;
+        const Vec3 face = cross(minus(vertices_[c[1] - vertex_base_].p, a), minus(vertices_[c[2] - vertex_base_].p, a));
         sum = Vec3{sum.x + face.x, sum.y + face.y, sum.z + face.z};
     }
     const float size = length(sum);
@@ -308,7 +310,7 @@ std::vector<MeshEditor::Id> MeshEditor::triangles() const {
     out.reserve(live_triangles_);
     for (std::size_t id = 0; id < triangles_.size(); ++id) {
         if (triangles_[id].live) {
-            out.push_back(static_cast<Id>(id));
+            out.push_back(triangle_base_ + static_cast<Id>(id));
         }
     }
     return out;
@@ -326,12 +328,12 @@ std::vector<MeshEditor::Id> MeshEditor::add_shape(const std::function<void(Data&
         live_triangles_ + new_triangles > anarchy::amesh::kMaxTriangles) {
         throw MeshEditError("the shape is more than one mesh can hold");
     }
-    const Id first = static_cast<Id>(vertices_.size());
+    const Id first = vertex_base_ + static_cast<Id>(vertices_.size());
     std::vector<Id> ids;
     ids.reserve(made.vertices.size());
     for (const anarchy::amesh::Vertex& vertex : made.vertices) {
         vertices_.push_back(slot_of(vertex, 0));
-        ids.push_back(static_cast<Id>(vertices_.size() - 1));
+        ids.push_back(vertex_base_ + static_cast<Id>(vertices_.size() - 1));
     }
     for (std::size_t t = 0; t < new_triangles; ++t) {
         push_triangle({{first + made.indices[t * 3], first + made.indices[t * 3 + 1], first + made.indices[t * 3 + 2]}});
@@ -343,17 +345,13 @@ std::vector<MeshEditor::Id> MeshEditor::add_shape(const std::function<void(Data&
 }
 
 void MeshEditor::clear() {
-    for (VertexSlot& slot : vertices_) {
-        slot = VertexSlot{};
-        slot.live = false;
-    }
-    for (TriangleSlot& slot : triangles_) {
-        slot.live = false;
-    }
-    for (BoneSlot& slot : bones_) {
-        slot = BoneSlot{};
-        slot.live = false;
-    }
+    vertex_base_ += static_cast<Id>(vertices_.size());
+    triangle_base_ += static_cast<Id>(triangles_.size());
+    bone_base_ += static_cast<Id>(bones_.size());
+    // Swapped out, not cleared, so the memory goes too.
+    std::vector<VertexSlot>().swap(vertices_);
+    std::vector<TriangleSlot>().swap(triangles_);
+    std::vector<BoneSlot>().swap(bones_);
     bone_names_.clear();
     live_vertices_ = 0;
     live_triangles_ = 0;
@@ -384,7 +382,7 @@ MeshEditor::Id MeshEditor::add_bone(const std::string& name, std::optional<Id> p
     slot.name = name;
     slot.parent = parent;
     slot.rest = rest;
-    const Id id = static_cast<Id>(bones_.size());
+    const Id id = bone_base_ + static_cast<Id>(bones_.size());
     bones_.push_back(std::move(slot));
     bone_names_[name] = id;
     ++live_bones_;
@@ -427,7 +425,7 @@ std::vector<MeshEditor::Id> MeshEditor::bones() const {
     out.reserve(live_bones_);
     for (std::size_t id = 0; id < bones_.size(); ++id) {
         if (bones_[id].live) {
-            out.push_back(static_cast<Id>(id));
+            out.push_back(bone_base_ + static_cast<Id>(id));
         }
     }
     return out;
@@ -523,17 +521,18 @@ const std::vector<MeshEditor::Influence>& MeshEditor::vertex_bones(Id vertex) co
 Data MeshEditor::build() const {
     Data out;
 
-    // Bones: each one's unplaced ancestors first, root down, otherwise in id order.
+    // Bones, by slot: each one's unplaced ancestors first, root down, otherwise in id order.
     std::vector<std::uint16_t> bone_index(bones_.size(), kNoBone);
-    std::vector<Id> order;
+    std::vector<std::size_t> order;
     order.reserve(live_bones_);
-    std::vector<Id> chain;
+    std::vector<std::size_t> chain;
     for (std::size_t id = 0; id < bones_.size(); ++id) {
         if (!bones_[id].live || bone_index[id] != kNoBone) {
             continue;
         }
         chain.clear();
-        for (std::optional<Id> at = static_cast<Id>(id); at && bone_index[*at] == kNoBone; at = bones_[*at].parent) {
+        for (std::optional<std::size_t> at = id; at && bone_index[*at] == kNoBone;
+             at = bones_[*at].parent ? std::optional<std::size_t>(*bones_[*at].parent - bone_base_) : std::nullopt) {
             chain.push_back(*at);
         }
         for (auto it = chain.rbegin(); it != chain.rend(); ++it) {
@@ -549,11 +548,11 @@ Data MeshEditor::build() const {
         }
     }
     out.bones.reserve(order.size());
-    for (const Id id : order) {
+    for (const std::size_t id : order) {
         const BoneSlot& slot = bones_[id];
         anarchy::amesh::Bone bone;
         bone.name = slot.name;
-        bone.parent = slot.parent ? bone_index[*slot.parent] : kNoBone;
+        bone.parent = slot.parent ? bone_index[*slot.parent - bone_base_] : kNoBone;
         for (int row = 0; row < 3; ++row) {
             for (int column = 0; column < 3; ++column) {
                 bone.m[row][column] = slot.rest.m[column * 4 + row];
@@ -589,7 +588,7 @@ Data MeshEditor::build() const {
                 vertex.weight[0] = 1.f;
             } else {
                 for (std::size_t k = 0; k < slot.skin.size(); ++k) {
-                    vertex.bone[k] = bone_index[slot.skin[k].first];
+                    vertex.bone[k] = bone_index[slot.skin[k].first - bone_base_];
                     vertex.weight[k] = slot.skin[k].second;
                 }
             }
@@ -609,7 +608,7 @@ Data MeshEditor::build() const {
     for (const TriangleSlot& triangle : triangles_) {
         if (triangle.live) {
             for (const Id corner : triangle.corners) {
-                out.indices.push_back(index_of[corner]);
+                out.indices.push_back(index_of[corner - vertex_base_]);
             }
         }
     }

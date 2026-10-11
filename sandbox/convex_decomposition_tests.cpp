@@ -306,3 +306,37 @@ TEST_CASE("Q6 an update queues one Mesh; the next is queued by a later update", 
     REQUIRE(rig.decomposer.idle());
     REQUIRE(engine_core::decompose_count() == before + 2);
 }
+
+TEST_CASE("Q6 a Mesh whose MeshEditor has edits its file lacks is cut only once the file has them", "[decomposition]") {
+    QueueRig rig;
+    rig.custom(false);
+    std::string error;
+    const std::shared_ptr<engine_core::MeshEditor> editor = rig.game.mesh_editors().open(rig.game, *rig.mesh, error);
+    REQUIRE(editor != nullptr);
+    editor->add_shape([](anarchy::amesh::Data& data) {
+        engine_core::add_box(data, Vec3{1.f, 1.f, 1.f}, Vec3{5.f, 0.f, 0.f});
+    });
+    // Drawn from the live copy; the file is not written yet.
+    rig.game.mesh_editors().commit(rig.game);
+    REQUIRE(rig.mesh->session_geometry().data != nullptr);
+    const std::uint64_t before = engine_core::decompose_count();
+    rig.decomposer.update(rig.game);
+    rig.wait();
+    rig.decomposer.update(rig.game);
+    REQUIRE(engine_core::decompose_count() == before);
+    REQUIRE_FALSE(rig.has_pieces());
+    // Pieces are not stored over a file a live copy is about to replace.
+    REQUIRE(rig.mesh->store_pieces(engine_core::kRecipe, {}));
+    REQUIRE(rig.game.mesh_editors().usable(rig.game, *editor));
+
+    // Written and drawn from the file again: now it is cut, from the edited geometry.
+    rig.game.mesh_editors().write_all(rig.game, true);
+    rig.decomposer.update(rig.game);
+    rig.wait();
+    rig.decomposer.update(rig.game);
+    REQUIRE(engine_core::decompose_count() == before + 1);
+    REQUIRE(rig.has_pieces());
+    std::vector<Vec3> points;
+    REQUIRE_FALSE(rig.mesh->vertex_positions(points));
+    REQUIRE(points.size() == 48 + 24);
+}

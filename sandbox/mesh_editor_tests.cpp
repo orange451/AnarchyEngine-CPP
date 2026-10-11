@@ -193,7 +193,7 @@ TEST_CASE("MB1 bones come out parents first, whatever order they were made in", 
     const Id b = editor.add_bone("B", a, engine_core::matrix4_translation(0.f, 1.f, 0.f));
     const Id c = editor.add_bone("C", std::nullopt, engine_core::matrix4_translation(0.f, -1.f, 0.f));
     editor.set_bone_parent(a, c);
-    REQUIRE(editor.bone_parent(a) == c);
+    REQUIRE((editor.bone_parent(a) == std::optional<Id>(c)));
     const Data built = editor.build();
     REQUIRE(built.bones.size() == 3);
     REQUIRE(built.bones[0].name == "C");
@@ -218,7 +218,7 @@ TEST_CASE("MB2 removing a bone moves its children up and renormalizes its vertic
     editor.set_vertex_bones(only_mid, {mid}, nullptr);
 
     editor.remove_bone(mid);
-    REQUIRE(editor.bone_parent(tip) == root);
+    REQUIRE((editor.bone_parent(tip) == std::optional<Id>(root)));
     // Its rest stays where it was, in mesh space.
     REQUIRE(engine_core::matrix4_position(editor.bone_transform(tip)).y == 2.f);
     REQUIRE(editor.vertex_bones(shared).size() == 1);
@@ -226,7 +226,7 @@ TEST_CASE("MB2 removing a bone moves its children up and renormalizes its vertic
     REQUIRE(near(editor.vertex_bones(shared)[0].second, 1.f));
     REQUIRE(editor.vertex_bones(only_mid).empty());
     REQUIRE(refusal([&] { editor.bone_name(mid); }) == "no bone 1");
-    REQUIRE_FALSE(editor.find_bone("Mid"));
+    REQUIRE_FALSE(editor.find_bone("Mid").has_value());
 
     const Data built = editor.build();
     REQUIRE(built.bones.size() == 2);
@@ -327,8 +327,8 @@ TEST_CASE("MB6 bone names, parents, and rest transforms are checked", "[mesh-edi
     REQUIRE(refusal([&] { editor.set_bone_transform(a, flat); }) == "a bone's rest transform must have an inverse");
 
     editor.set_bone_name(a, "Renamed");
-    REQUIRE(editor.find_bone("Renamed") == a);
-    REQUIRE_FALSE(editor.find_bone("A"));
+    REQUIRE((editor.find_bone("Renamed") == std::optional<Id>(a)));
+    REQUIRE_FALSE(editor.find_bone("A").has_value());
     REQUIRE(editor.add_bone("A", std::nullopt, engine_core::matrix4_identity()) == 2);
     REQUIRE(refusal([&] { editor.set_bone_name(b, "Renamed"); }) == "a bone named Renamed already exists");
     // A bone may keep its own name.
@@ -390,4 +390,35 @@ TEST_CASE("MB8 a skinned build is AMESH, and its skeleton rests where the bones 
         REQUIRE(near(skeleton->bones[1].rest.m[i], turned.m[i]));
     }
     REQUIRE(skeleton->find("Tip") == 1);
+}
+
+TEST_CASE("ME8 clearing frees what was cleared, so a mesh rebuilt every frame does not grow", "[mesh-editor]") {
+    MeshEditor editor;
+    const auto box = [](Data& data) { engine_core::add_box(data, Vec3{1.f, 1.f, 1.f}, Vec3{}); };
+    for (int frame = 0; frame < 50; ++frame) {
+        editor.clear();
+        editor.add_shape(box);
+        editor.add_bone("Root", std::nullopt, engine_core::matrix4_identity());
+    }
+    REQUIRE(editor.slot_count() == 24 + 12 + 1);
+    // Ids still carry on, and the cleared ones stay dead.
+    REQUIRE(editor.vertices().front() == 49 * 24);
+    REQUIRE(editor.triangles().front() == 49 * 12);
+    REQUIRE(editor.bones().front() == 49);
+    REQUIRE(refusal([&] { editor.position(0); }) == "no vertex 0");
+    REQUIRE(refusal([&] { editor.triangle_vertices(5); }) == "no triangle 5");
+    REQUIRE(refusal([&] { editor.bone_name(3); }) == "no bone 3");
+    // What is live still edits and builds as before.
+    const Id last = editor.vertices().back();
+    editor.remove_vertex(last);
+    const Id tip = editor.add_bone("Tip", 49, engine_core::matrix4_translation(0.f, 1.f, 0.f));
+    editor.set_vertex_bones(editor.vertices().front(), {tip}, nullptr);
+    const Data built = editor.build();
+    REQUIRE(built.vertices.size() == 23);
+    REQUIRE(built.bones.size() == 2);
+    REQUIRE(built.bones[1].parent == 0);
+    REQUIRE(built.vertices[0].bone[0] == 1);
+    for (const std::uint32_t index : built.indices) {
+        REQUIRE(index < 23);
+    }
 }

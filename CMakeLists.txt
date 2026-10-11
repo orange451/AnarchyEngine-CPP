@@ -600,6 +600,7 @@ add_library(engine_instances STATIC
     src/engine_instances/SoundEmitter.cpp
     src/engine_instances/Attachment.cpp
     src/engine_instances/Bone.cpp
+    src/engine_instances/Animator.cpp
     src/engine_instances/Dragger.cpp
     src/engine_instances/WireframeAdornment.cpp
     src/engine_instances/Brush.cpp
@@ -628,6 +629,7 @@ add_library(engine_core STATIC
     src/engine_core/Skeleton.cpp
     src/engine_core/Skinning.cpp
     src/engine_core/Animation.cpp
+    src/engine_core/AnimatorStep.cpp
     src/engine_core/TaskScheduler.cpp
     src/engine_core/Events.cpp
     src/engine_core/Engine.cpp
@@ -1058,6 +1060,7 @@ add_executable(sandbox
     sandbox/bone_tests.cpp
     sandbox/aanim_tests.cpp
     sandbox/animation_tests.cpp
+    sandbox/animator_tests.cpp
 )
 target_link_libraries(sandbox PRIVATE studio_core Catch2::Catch2WithMain)
 # The dense views tests check flecs state the engine keeps private.

@@ -38,6 +38,7 @@ inline int class_rank(std::string_view class_name) {
         {"SoundEmitter", 6},
         {"Attachment", 7},
         {"Bone", 7},
+        {"Animator", 7},
         {"ScreenGui", 8},
         {"BillboardGui", 8},
         {"Pane", 9},

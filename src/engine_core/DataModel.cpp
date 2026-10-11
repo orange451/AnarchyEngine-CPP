@@ -99,6 +99,13 @@ DataModel::DataModel(const char* root_name) : owned_(std::make_unique<State>()),
                               .with<ecs::InGame>()
                               .cached()
                               .build();
+    world.animator_query = world.ecs.query_builder<>()
+                               .with<ecs::Instance>()
+                               .in()
+                               .with<ecs::AnimatorTag>()
+                               .with<ecs::InWorkspace>()
+                               .cached()
+                               .build();
     world.billboard_query = world.ecs.query_builder<>()
                                  .with<ecs::Instance>()
                                  .in()
@@ -545,6 +552,9 @@ void tag_entity(ecs_world_t* world, ecs_entity_t entity, const EcsIds& ids, cons
     if (object.dragger()) {
         ecs_add_id(world, entity, ids.dragger);
     }
+    if (object.animator()) {
+        ecs_add_id(world, entity, ids.animator);
+    }
     if (object.billboard_gui()) {
         ecs_add_id(world, entity, ids.billboard);
     }
@@ -963,6 +973,17 @@ void DataModel::terrains(std::vector<InstanceId>& out) const {
 void DataModel::draggers(std::vector<InstanceId>& out) const {
     out.clear();
     ecs_iter_t it = ecs_query_iter(ecs_world(), state_->dragger_query.c_ptr());
+    while (ecs_query_next(&it)) {
+        const auto* owners = static_cast<const ecs::Instance*>(ecs_field_w_size(&it, sizeof(ecs::Instance), 0));
+        for (std::int32_t i = 0; i < it.count; ++i) {
+            out.push_back(owners[i].id);
+        }
+    }
+}
+
+void DataModel::animators(std::vector<InstanceId>& out) const {
+    out.clear();
+    ecs_iter_t it = ecs_query_iter(ecs_world(), state_->animator_query.c_ptr());
     while (ecs_query_next(&it)) {
         const auto* owners = static_cast<const ecs::Instance*>(ecs_field_w_size(&it, sizeof(ecs::Instance), 0));
         for (std::int32_t i = 0; i < it.count; ++i) {

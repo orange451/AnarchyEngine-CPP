@@ -1,5 +1,6 @@
 #include "GameObject.hpp"
 
+#include "Animator.hpp"
 #include "Bone.hpp"
 #include "Containment.hpp"
 #include "LuaApi.hpp"
@@ -104,11 +105,22 @@ std::shared_ptr<const Pose> GameObject::pose() const {
         std::lock_guard<std::mutex> lock(pose_mutex_);
         pose_.reset();
         pose_inputs_.clear();
+        pose_animated_.reset();
         return nullptr;
     }
     std::vector<PoseInput> inputs;
     std::vector<bool> claimed(skeleton->bones.size(), false);
+    std::shared_ptr<const AnimatedPose> animated;
+    bool animator_seen = false;
     for (InstanceId child = first_child(id_); child != 0; child = next_sibling(child)) {
+        // The first Animator's last step lies under every Offset.
+        if (const auto* animator = dynamic_cast<const Animator*>(instance(child))) {
+            if (!animator_seen) {
+                animator_seen = true;
+                animated = animator->animated();
+            }
+            continue;
+        }
         const auto* bone = dynamic_cast<const Bone*>(instance(child));
         if (bone == nullptr) {
             continue;
@@ -120,16 +132,23 @@ std::shared_ptr<const Pose> GameObject::pose() const {
         claimed[static_cast<std::size_t>(index)] = true;
         inputs.push_back({static_cast<std::uint16_t>(index), bone->offset(), child});
     }
+    // A step made for another skeleton waits for the next one.
+    if (animated != nullptr &&
+        (animated->skeleton != skeleton->signature || animated->deltas.size() != skeleton->bones.size())) {
+        animated.reset();
+    }
     std::lock_guard<std::mutex> lock(pose_mutex_);
     const auto same_input = [](const PoseInput& a, const PoseInput& b) {
         return a.bone == b.bone && a.owner == b.owner && same_matrix4(a.offset, b.offset);
     };
-    if (pose_ != nullptr && pose_->skeleton == skeleton &&
+    if (pose_ != nullptr && pose_->skeleton == skeleton && pose_animated_ == animated &&
         std::equal(inputs.begin(), inputs.end(), pose_inputs_.begin(), pose_inputs_.end(), same_input)) {
         return pose_;
     }
-    pose_ = std::make_shared<const Pose>(compute_pose(std::move(skeleton), inputs));
+    pose_ = std::make_shared<const Pose>(
+        compute_pose(std::move(skeleton), inputs, animated != nullptr ? &animated->deltas : nullptr));
     pose_inputs_ = std::move(inputs);
+    pose_animated_ = std::move(animated);
     return pose_;
 }
 
@@ -142,6 +161,7 @@ void GameObject::on_reuse() {
     std::lock_guard<std::mutex> lock(pose_mutex_);
     pose_.reset();
     pose_inputs_.clear();
+    pose_animated_.reset();
 }
 
 namespace {

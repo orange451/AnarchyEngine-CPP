@@ -1002,6 +1002,10 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
         "Where this is in the world: Offset, measured from the parent PVInstance as OffsetSpace says. Writing it "
         "sets Offset.",
         "Matrix4", false, {});
+    add("Animator", "AutoStep",
+        "While true, Play steps this Animator's tracks once a frame. Edit mode never does; StepAnimations "
+        "steps them in either.",
+        "boolean", false, {});
     add("Bone", "Offset",
         "Turns and moves the bone this Bone is named for, after its own pose: the bones below it move with it.",
         "Matrix4", false, {});

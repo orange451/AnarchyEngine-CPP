@@ -116,6 +116,7 @@ struct DataModel::State {
     flecs::query<> source_query;
     // Draggers under game: Instance (in), with DraggerTag and InGame.
     flecs::query<> dragger_query;
+    flecs::query<> animator_query;
     // BillboardGuis under game: Instance (in), with BillboardTag and InGame.
     flecs::query<> billboard_query;
     // WireframeAdornments under game: Instance (in), with WireframeTag and InGame.

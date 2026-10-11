@@ -41,6 +41,8 @@ struct TerrainTag {};
 struct SoundSource {};
 // Draws and takes handle drags: its class's dragger() is true (Dragger).
 struct DraggerTag {};
+// Plays animation tracks on its GameObject: its class's animator() is true (Animator).
+struct AnimatorTag {};
 // A BillboardGui: its class's billboard_gui() is true.
 struct BillboardTag {};
 // A WireframeAdornment: its class's wireframe() is true.
@@ -67,6 +69,7 @@ struct EcsIds {
     ecs_id_t terrain = 0;
     ecs_id_t sound_source = 0;
     ecs_id_t dragger = 0;
+    ecs_id_t animator = 0;
     ecs_id_t billboard = 0;
     ecs_id_t wireframe = 0;
     ecs_id_t simulated = 0;

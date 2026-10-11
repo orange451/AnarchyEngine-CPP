@@ -198,6 +198,9 @@ public:
     // True for a class DraggerWorld drives while it is under game (Dragger).
     // Read once, when its entity is issued.
     virtual bool dragger() const { return false; }
+    // True for a class the engine steps animation on while it is in Workspace
+    // (Animator). Read once, when its entity is issued.
+    virtual bool animator() const { return false; }
     // True for a class runner::GuiLayer draws in the 3D world (BillboardGui).
     // Read once, when its entity is issued.
     virtual bool billboard_gui() const { return false; }
@@ -458,6 +461,9 @@ public:
     // The Draggers under game (dragger()), in no set order, into out, which
     // is cleared first.
     void draggers(std::vector<InstanceId>& out) const;
+    // The Animators in Workspace (animator()), in no set order, into out,
+    // which is cleared first.
+    void animators(std::vector<InstanceId>& out) const;
     // SimulationThread. Hands records to the Draggers' handles as the game's input
     // does at dispatch: for the active plugin's mouse, which the game's input does
     // not see. Each one the handles took comes back processed.

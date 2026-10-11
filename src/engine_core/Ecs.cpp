@@ -23,6 +23,7 @@ EcsIds register_ecs(flecs::world& world) {
     ids.terrain = world.component<ecs::TerrainTag>().id();
     ids.sound_source = world.component<ecs::SoundSource>().id();
     ids.dragger = world.component<ecs::DraggerTag>().id();
+    ids.animator = world.component<ecs::AnimatorTag>().id();
     ids.billboard = world.component<ecs::BillboardTag>().id();
     ids.wireframe = world.component<ecs::WireframeTag>().id();
     ids.simulated = world.component<ecs::Simulated>().id();

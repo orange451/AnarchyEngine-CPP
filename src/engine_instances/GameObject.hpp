@@ -12,6 +12,8 @@
 
 namespace engine_core {
 
+struct AnimatedPose;
+
 // A SpatialObject that draws a Prefab, tinted by its Color and Transparency
 // and sized by its Scale. A PhysicsObject may move it.
 class GameObject : public SpatialObject {
@@ -72,6 +74,7 @@ private:
     mutable std::mutex pose_mutex_;
     mutable std::shared_ptr<const Pose> pose_;
     mutable std::vector<PoseInput> pose_inputs_;
+    mutable std::shared_ptr<const AnimatedPose> pose_animated_;
 };
 
 }  // namespace engine_core

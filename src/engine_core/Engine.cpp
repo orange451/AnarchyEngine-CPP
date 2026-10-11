@@ -1,6 +1,7 @@
 #include "profiler/Profiler.hpp"
 #include "Engine.hpp"
 
+#include "AnimatorStep.hpp"
 #include "DataModelLock.hpp"
 #include "ScriptAnalysis.hpp"
 #include "ScriptRuntime.hpp"
@@ -423,6 +424,12 @@ void Engine::simulation_loop() {
                     // after the phase that queued them and before Prepare can copy.
                     PROFILE_SCOPE("Events", profiler::Group::Engine);
                     game_.events().drain();
+                }
+                {
+                    // After the frame's input and its handlers (a script's Play
+                    // or Stop counts this frame), before physics moves anything.
+                    PROFILE_SCOPE("Animation", profiler::Group::Engine);
+                    step_animators(game_, step_dt);
                 }
                 {
                     // Once per frame, not per substep: the camera for job

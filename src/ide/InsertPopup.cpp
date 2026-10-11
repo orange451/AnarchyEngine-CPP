@@ -57,6 +57,11 @@ const char* describe_class(const std::string& name) {
         {"RigidConstraint", "Snaps one object's pivot onto another's and holds it there. The root stays put."},
         {"ViewportPane", "Shows the 3D objects inside it, seen from its CurrentCamera."},
         {"NoCollisionConstraint", "Keeps two objects from colliding with each other."},
+        {"RevoluteConstraint", "Lets one object turn about an axis on another: a hinge, an axle."},
+        {"PrismaticConstraint", "Lets one object slide along an axis on another."},
+        {"DistanceConstraint", "Holds two objects a distance apart: a rod, a rope, or a spring."},
+        {"SphericalConstraint", "Lets one object turn freely about a point on another: a ball joint."},
+        {"WheelConstraint", "A car wheel: it spins, rides on a suspension, and can steer."},
     };
     for (const Row& row : kRows) {
         if (name == row.name) {

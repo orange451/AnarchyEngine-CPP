@@ -368,6 +368,15 @@ void testVector3() {
         "local part = Instance.new(\"PhysicsObject\")\npart.TouchEnded:Connect(function(touch)\n    touch.");
     expect_has(touch_ended, "Normal", "inferred TouchObject.Normal on TouchEnded");
     expect_has(touch_ended, "Point", "inferred TouchObject.Point on TouchEnded");
+    const ide::CompletionList wheel = at_end("local wheel = Instance.new(\"WheelConstraint\")\nwheel.");
+    expect_has(wheel, "SpinMotorSpeed", "WheelConstraint.SpinMotorSpeed");
+    expect_has(wheel, "SpinSpeed", "WheelConstraint.SpinSpeed");
+    expect_has(wheel, "CollideConnected", "WheelConstraint inherits JointConstraint.CollideConnected");
+    expect_has(wheel, "Enabled", "WheelConstraint inherits Constraint.Enabled");
+    expect_missing(wheel, "LowerAngle", "a WheelConstraint has no LowerAngle");
+    const ide::CompletionList hinge = at_end("local hinge = Instance.new(\"RevoluteConstraint\")\nhinge.");
+    expect_has(hinge, "MaxMotorTorque", "RevoluteConstraint.MaxMotorTorque");
+    expect_has(hinge, "Angle", "RevoluteConstraint.Angle");
     const ide::CompletionList inferred_dt =
         at_end("game:GetService(\"RunService\").Heartbeat:Connect(function(dt)\n    local step = dt\n    step.");
     expect_missing(inferred_dt, "KeyCode", "dt is a number");
@@ -1215,7 +1224,8 @@ void testInsertFilter() {
         "AmbientOcclusionEffect", "BloomEffect", "ScreenSpaceReflections",
         "DirectionalLight", "PointLight", "SpotLight",
         "Sound", "SoundEmitter",
-        "Animator", "Attachment", "Bone", "NoCollisionConstraint", "RigidConstraint", "WeldConstraint",
+        "Animator", "Attachment", "Bone", "DistanceConstraint", "NoCollisionConstraint", "PrismaticConstraint",
+        "RevoluteConstraint", "RigidConstraint", "SphericalConstraint", "WeldConstraint", "WheelConstraint",
         "BillboardGui", "ScreenGui",
         "HBox", "ImagePane", "Pane", "VBox", "ViewportPane",
         "AssetPicker", "Button", "Label", "Slider", "TextField",

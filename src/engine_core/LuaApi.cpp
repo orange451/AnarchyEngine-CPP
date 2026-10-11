@@ -1058,18 +1058,123 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
         "Errors until a view shows the camera.",
         "Vector3,boolean", false, {P("point", "Vector3")});
     add("Constraint", "PVInstance1",
-        "One end. Which end is which does not matter: the end on the assembly root's side stays, and a "
-        "RigidConstraint snaps the other so its pivot is on this one's, or this one's onto the other's.",
+        "One end. For a weld, rigid, or no-collision constraint, which end is which does not matter: the end on "
+        "the assembly root's side stays, and a RigidConstraint snaps the other so its pivot is on this one's. For "
+        "a joint (RevoluteConstraint and the others), this is the base.",
         "PVInstance?", false, {});
     add("Constraint", "PVInstance2",
-        "The other end. Which end is which does not matter: the root never moves, and a RigidConstraint snaps "
-        "the end away from it.",
+        "The other end. For a joint (RevoluteConstraint and the others), this is the moving part: the joint sits "
+        "at its pivot and turns or slides along its Y axis.",
         "PVInstance?", false, {});
     add("Constraint", "Enabled", "Off disconnects the constraint without deleting it.", "boolean", false, {});
     add("Constraint", "Active",
         "Whether it holds anything now: Enabled, it and both its ends in Workspace, and the ends two different "
         "objects. Read-only.",
         "boolean", false, {});
+    // Joint constraints (docs/superpowers/specs/2026-10-11-joint-constraints-design.md).
+    {
+        struct JointDoc {
+            const char* owner;
+            const char* name;
+            const char* summary;
+            const char* type;
+        };
+        const char* const hertz = "The spring's stiffness, in cycles per second.";
+        const char* const damping = "How fast the spring settles: 1 settles without overshooting.";
+        const char* const torque = "The most torque the motor uses.";
+        const char* const force = "The most force the motor uses.";
+        const JointDoc joint_docs[] = {
+            {"JointConstraint", "CollideConnected",
+             "When true, the two ends collide with each other. Off by default, so a wheel does not rub its wheel "
+             "well.",
+             "boolean"},
+            {"RevoluteConstraint", "EnableSpring", "Pulls the angle toward TargetAngle, like a spring.", "boolean"},
+            {"RevoluteConstraint", "Hertz", hertz, "number"},
+            {"RevoluteConstraint", "DampingRatio", damping, "number"},
+            {"RevoluteConstraint", "TargetAngle", "The angle the spring pulls toward, in degrees. 0 is as placed.",
+             "number"},
+            {"RevoluteConstraint", "EnableLimit", "Keeps the angle between LowerAngle and UpperAngle.", "boolean"},
+            {"RevoluteConstraint", "LowerAngle", "The lowest angle, in degrees, down to -178.2.", "number"},
+            {"RevoluteConstraint", "UpperAngle", "The highest angle, in degrees, up to 178.2.", "number"},
+            {"RevoluteConstraint", "EnableMotor", "Turns it at MotorSpeed.", "boolean"},
+            {"RevoluteConstraint", "MotorSpeed", "The motor's speed, in degrees per second.", "number"},
+            {"RevoluteConstraint", "MaxMotorTorque", torque, "number"},
+            {"RevoluteConstraint", "Angle",
+             "How far it has turned from as placed, in degrees, while the place runs. Read-only.", "number"},
+            {"PrismaticConstraint", "EnableSpring", "Pulls the slide toward TargetTranslation, like a spring.",
+             "boolean"},
+            {"PrismaticConstraint", "Hertz", hertz, "number"},
+            {"PrismaticConstraint", "DampingRatio", damping, "number"},
+            {"PrismaticConstraint", "TargetTranslation",
+             "Where along the axis the spring pulls toward, in units. 0 is as placed.", "number"},
+            {"PrismaticConstraint", "EnableLimit", "Keeps the slide between LowerTranslation and UpperTranslation.",
+             "boolean"},
+            {"PrismaticConstraint", "LowerTranslation", "The lowest place along the axis, in units.", "number"},
+            {"PrismaticConstraint", "UpperTranslation", "The highest place along the axis, in units.", "number"},
+            {"PrismaticConstraint", "EnableMotor", "Slides it at MotorSpeed.", "boolean"},
+            {"PrismaticConstraint", "MotorSpeed", "The motor's speed, in units per second.", "number"},
+            {"PrismaticConstraint", "MaxMotorForce", force, "number"},
+            {"PrismaticConstraint", "Translation",
+             "How far it has slid from as placed, in units, while the place runs. Read-only.", "number"},
+            {"DistanceConstraint", "Length",
+             "The distance it holds, in units. 0 holds the distance the ends were at when the joint started.",
+             "number"},
+            {"DistanceConstraint", "EnableSpring", "Makes the distance springy instead of rigid.", "boolean"},
+            {"DistanceConstraint", "Hertz", hertz, "number"},
+            {"DistanceConstraint", "DampingRatio", damping, "number"},
+            {"DistanceConstraint", "EnableLimit", "Keeps the distance between MinLength and MaxLength, as a rope.",
+             "boolean"},
+            {"DistanceConstraint", "MinLength", "The shortest distance, in units.", "number"},
+            {"DistanceConstraint", "MaxLength", "The longest distance, in units.", "number"},
+            {"DistanceConstraint", "EnableMotor", "Lengthens or shortens it at MotorSpeed.", "boolean"},
+            {"DistanceConstraint", "MotorSpeed", "The motor's speed, in units per second.", "number"},
+            {"DistanceConstraint", "MaxMotorForce", force, "number"},
+            {"DistanceConstraint", "CurrentLength",
+             "The distance between the ends now, in units, while the place runs. Read-only.", "number"},
+            {"SphericalConstraint", "EnableSpring", "Pulls it back toward its rotation as placed, like a spring.",
+             "boolean"},
+            {"SphericalConstraint", "Hertz", hertz, "number"},
+            {"SphericalConstraint", "DampingRatio", damping, "number"},
+            {"SphericalConstraint", "EnableConeLimit", "Keeps its axis within ConeAngle of where it was placed.",
+             "boolean"},
+            {"SphericalConstraint", "ConeAngle", "The cone's half-angle, in degrees, from 0 to 90.", "number"},
+            {"SphericalConstraint", "EnableTwistLimit",
+             "Keeps the twist about its axis between LowerTwistAngle and UpperTwistAngle.", "boolean"},
+            {"SphericalConstraint", "LowerTwistAngle", "The lowest twist, in degrees, down to -178.2.", "number"},
+            {"SphericalConstraint", "UpperTwistAngle", "The highest twist, in degrees, up to 178.2.", "number"},
+            {"SphericalConstraint", "EnableMotor", "Turns it at MotorVelocity.", "boolean"},
+            {"SphericalConstraint", "MotorVelocity",
+             "The motor's turning speed about each world axis, in degrees per second.", "Vector3"},
+            {"SphericalConstraint", "MaxMotorTorque", torque, "number"},
+            {"WheelConstraint", "EnableSuspension", "Rides the wheel on a spring along the chassis's up.", "boolean"},
+            {"WheelConstraint", "SuspensionHertz", "The suspension's stiffness, in cycles per second.", "number"},
+            {"WheelConstraint", "SuspensionDampingRatio", damping, "number"},
+            {"WheelConstraint", "EnableSuspensionLimit",
+             "Keeps the suspension's travel between LowerSuspensionLimit and UpperSuspensionLimit.", "boolean"},
+            {"WheelConstraint", "LowerSuspensionLimit", "The lowest travel, in units.", "number"},
+            {"WheelConstraint", "UpperSuspensionLimit", "The highest travel, in units.", "number"},
+            {"WheelConstraint", "EnableSpinMotor", "Spins the wheel at SpinMotorSpeed.", "boolean"},
+            {"WheelConstraint", "SpinMotorSpeed",
+             "The spin motor's speed about the wheel's Y axis, in degrees per second.", "number"},
+            {"WheelConstraint", "MaxSpinTorque", torque, "number"},
+            {"WheelConstraint", "EnableSteering",
+             "Turns the wheel toward TargetSteeringAngle. Off, it is held facing forward.", "boolean"},
+            {"WheelConstraint", "SteeringHertz", "The steering's stiffness, in cycles per second.", "number"},
+            {"WheelConstraint", "SteeringDampingRatio", damping, "number"},
+            {"WheelConstraint", "TargetSteeringAngle",
+             "The steering angle about the chassis's up, in degrees. 0 is as placed.", "number"},
+            {"WheelConstraint", "MaxSteeringTorque", "The most torque the steering uses.", "number"},
+            {"WheelConstraint", "EnableSteeringLimit",
+             "Keeps the steering between LowerSteeringLimit and UpperSteeringLimit.", "boolean"},
+            {"WheelConstraint", "LowerSteeringLimit", "The lowest steering angle, in degrees.", "number"},
+            {"WheelConstraint", "UpperSteeringLimit", "The highest steering angle, in degrees.", "number"},
+            {"WheelConstraint", "SpinSpeed",
+             "How fast the wheel spins now, in degrees per second, while the place runs. Read-only.", "number"},
+        };
+        for (const JointDoc& doc : joint_docs) {
+            add(doc.owner, doc.name, doc.summary, doc.type, false, {});
+        }
+    }
     add("PVInstance", "AssemblyRoot",
         "The root of the assembly this is in: what constraints join it to. The root's PhysicsObject when the "
         "assembly has physics. Read-only; nil outside Workspace.",

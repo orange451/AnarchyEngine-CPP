@@ -46,3 +46,9 @@ held by a blue pin for a rigid joint.
 
 NoCollisionConstraint.png is our own, in the same style: two grey blocks
 overlapping on a diagonal, under a red circle with a slash.
+
+RevoluteConstraint.png, PrismaticConstraint.png, DistanceConstraint.png,
+SphericalConstraint.png, and WheelConstraint.png are our own, in the same
+style: two grey arms on a blue pin; a grey block on a rail under a blue arrow;
+two grey balls joined by a blue spring; a blue ball in a grey socket; and a
+dark tire with a grey hub on a blue spring.

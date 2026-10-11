@@ -399,6 +399,17 @@ public:
     int shadowAtlasPages() const { return shadows_.atlasPages(); }
     // Whether meshes outside the view are skipped: true unless turned off to compare.
     void setCulling(bool culling) { culling_ = culling; }
+    // 0 (the default) destroys a size's buffers when another size draws, as
+    // the Scene View wants. Above 0, a size's buffers are parked instead, and
+    // parked sets are deleted least recently used first while they and the
+    // new set total more than bytes: one Renderer drawing panes of a few
+    // sizes in turn does not make its buffers again each time.
+    void setTargetPool(std::size_t bytes) { targetPool_ = bytes; }
+    // How many Skybox images' cubes stay made at once (1 by default).
+    void setSkyCacheSize(int images) { environment_.setImageCacheSize(images); }
+    // For checks: how many times draw made a size's buffers, and filtered a sky image.
+    int targetsMade() const { return targetsMade_; }
+    int skyBuilds() const { return environment_.imageBuilds(); }
     // The last draw's counts. Zero for a draw that drew no meshes.
     const RenderStats& stats() const { return stats_; }
 
@@ -630,6 +641,25 @@ private:
     // False, with nothing made, when the driver will not render into them.
     bool ensureTargets(int width, int height);
     void destroyTargets();
+    // Every size-dependent buffer but bloom's, reflections', and occlusion's,
+    // which a pool does not keep: what it parks while another size draws.
+    struct TargetSet {
+        int width = 0;
+        int height = 0;
+        unsigned gbufferFbo = 0, albedo = 0, normal = 0, material = 0, emissive = 0, depth = 0;
+        unsigned accumulationFbo = 0, accumulation = 0, transparencyFbo = 0, transparency = 0;
+        unsigned mergeFbo = 0, merge = 0, ldrFbo = 0, ldr = 0;
+        bool fxaaValid = false;
+        // The ensureTargets call that last used it, for eviction.
+        std::uint64_t used = 0;
+    };
+    // Moves the current buffers into a set and leaves none current.
+    TargetSet parkTargets();
+    // Makes set the current buffers.
+    void unparkTargets(const TargetSet& set);
+    static std::size_t TargetBytes(int width, int height) {
+        return std::size_t(48) * static_cast<std::size_t>(width) * static_cast<std::size_t>(height);
+    }
     void createSphere();
 
     // Each pass is false, having stopped before its first draw, when its program cannot draw yet.
@@ -827,6 +857,11 @@ private:
     // The offscreen buffers, all targetWidth_ by targetHeight_.
     int targetWidth_ = 0;
     int targetHeight_ = 0;
+    // The pool's parked sets and its size, 0 for none; see setTargetPool.
+    std::vector<TargetSet> parked_;
+    std::size_t targetPool_ = 0;
+    std::uint64_t targetUses_ = 0;
+    int targetsMade_ = 0;
     // Albedo, normal, material, emissive, and the depth every pass shares.
     unsigned gbufferFbo_ = 0;
     unsigned albedoTexture_ = 0;

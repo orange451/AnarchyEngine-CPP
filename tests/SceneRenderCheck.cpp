@@ -4950,7 +4950,48 @@ int main(int argc, char** argv) {
         runner::ViewPixels opaque;
         target.shoot(clear, draws, sun, opaque);
         Expect(opaque.rgba.size() == 64 * 64 * 4 && opaque.rgba[3] == 255, "VR1 off, the corner is opaque");
+
+        // VR4: two sizes in turn make each size's targets once with a pool.
+        clear.setTargetPool(std::size_t(64) << 20);
+        OffscreenTarget small(32, 32);
+        runner::ViewPixels shot;
+        const int made = clear.targetsMade();
+        for (int round = 0; round < 3; ++round) {
+            target.shoot(clear, draws, &sun, 1, 1, shot);
+            small.shoot(clear, draws, &sun, 1, 1, shot);
+        }
+        Expect(clear.targetsMade() - made <= 2, "VR4 alternating two sizes makes each size's targets once (" +
+                                                    std::to_string(clear.targetsMade() - made) + " made)");
+
+        // VR5: two Skyboxes in turn filter each image once with a cache of 3.
+        const std::filesystem::path skies = std::filesystem::temp_directory_path() / "anarchy-vr-skies";
+        std::filesystem::create_directories(skies / "textures");
+        std::ofstream(skies / "textures" / "a.hdr", std::ios::binary)
+            << Hdr(16, 8, [](int, int) { return std::array<float, 3>{1.f, 0.5f, 0.2f}; });
+        std::ofstream(skies / "textures" / "b.hdr", std::ios::binary)
+            << Hdr(16, 8, [](int, int) { return std::array<float, 3>{0.2f, 0.5f, 1.f}; });
+        runner::TextureCache skyTextures;
+        skyTextures.setRoot(skies);
+        const runner::EnvironmentTexture skyA = skyTextures.getEnvironment("textures/a.hdr");
+        const runner::EnvironmentTexture skyB = skyTextures.getEnvironment("textures/b.hdr");
+        Expect(skyA.texture != 0 && skyB.texture != 0, "VR5 both sky images load");
+        clear.setSkyCacheSize(3);
+        runner::SceneLighting withSky;
+        const int builds = clear.skyBuilds();
+        for (int round = 0; round < 3; ++round) {
+            for (const runner::EnvironmentTexture* sky : {&skyA, &skyB}) {
+                withSky.sky.image = sky->texture;
+                withSky.sky.imageRevision = sky->revision;
+                clear.setLighting(withSky);
+                target.shoot(clear, draws, &sun, 1, 1, shot);
+            }
+        }
+        Expect(clear.skyBuilds() - builds == 2,
+               "VR5 each sky's cubes are filtered once (" + std::to_string(clear.skyBuilds() - builds) + ")");
+        clear.setLighting(runner::SceneLighting{});
         clear.shutdown();
+        skyTextures.clear();
+        std::filesystem::remove_all(skies);
         cube.destroy();
         Expect(runner::rt_glGetError() == runner::GL_NO_ERROR, "transparent output leaves no GL error");
     }

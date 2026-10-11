@@ -21,6 +21,7 @@
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace runner {
@@ -653,10 +654,38 @@ unsigned MakeLevelFbo(unsigned texture, int level) {
 }  // namespace
 
 bool Renderer::ensureTargets(int width, int height) {
+    ++targetUses_;
     if (gbufferFbo_ != 0 && width == targetWidth_ && height == targetHeight_) {
         return true;
     }
-    destroyTargets();
+    if (targetPool_ > 0) {
+        if (gbufferFbo_ != 0) {
+            parked_.push_back(parkTargets());
+        }
+        for (std::size_t i = 0; i < parked_.size(); ++i) {
+            if (parked_[i].width == width && parked_[i].height == height) {
+                unparkTargets(parked_[i]);
+                parked_.erase(parked_.begin() + static_cast<std::ptrdiff_t>(i));
+                return true;
+            }
+        }
+        // Least recently used first, while the parked sets and the new one are over the pool.
+        std::size_t total = TargetBytes(width, height);
+        for (const TargetSet& set : parked_) {
+            total += TargetBytes(set.width, set.height);
+        }
+        while (!parked_.empty() && total > targetPool_) {
+            const auto oldest = std::min_element(parked_.begin(), parked_.end(),
+                                                 [](const TargetSet& a, const TargetSet& b) { return a.used < b.used; });
+            total -= TargetBytes(oldest->width, oldest->height);
+            unparkTargets(*oldest);
+            parked_.erase(oldest);
+            destroyTargets();
+        }
+    } else {
+        destroyTargets();
+    }
+    ++targetsMade_;
     targetWidth_ = width;
     targetHeight_ = height;
     albedoTexture_ = MakeTarget(RT_GL_SRGB8_ALPHA8, GL_RGBA, GL_UNSIGNED_BYTE, width, height);
@@ -698,6 +727,54 @@ bool Renderer::ensureTargets(int width, int height) {
         return false;
     }
     return true;
+}
+
+Renderer::TargetSet Renderer::parkTargets() {
+    destroyBloomChain();
+    destroyReflectionBuffers();
+    destroyOcclusionBuffers();
+    TargetSet set;
+    set.width = targetWidth_;
+    set.height = targetHeight_;
+    set.gbufferFbo = std::exchange(gbufferFbo_, 0u);
+    set.albedo = std::exchange(albedoTexture_, 0u);
+    set.normal = std::exchange(normalTexture_, 0u);
+    set.material = std::exchange(materialTexture_, 0u);
+    set.emissive = std::exchange(emissiveTexture_, 0u);
+    set.depth = std::exchange(depthTexture_, 0u);
+    set.accumulationFbo = std::exchange(accumulationFbo_, 0u);
+    set.accumulation = std::exchange(accumulationTexture_, 0u);
+    set.transparencyFbo = std::exchange(transparencyFbo_, 0u);
+    set.transparency = std::exchange(transparencyTexture_, 0u);
+    set.mergeFbo = std::exchange(mergeFbo_, 0u);
+    set.merge = std::exchange(mergeTexture_, 0u);
+    set.ldrFbo = std::exchange(ldrFbo_, 0u);
+    set.ldr = std::exchange(ldrTexture_, 0u);
+    set.fxaaValid = std::exchange(fxaaValid_, false);
+    set.used = targetUses_;
+    targetWidth_ = 0;
+    targetHeight_ = 0;
+    return set;
+}
+
+void Renderer::unparkTargets(const TargetSet& set) {
+    targetWidth_ = set.width;
+    targetHeight_ = set.height;
+    gbufferFbo_ = set.gbufferFbo;
+    albedoTexture_ = set.albedo;
+    normalTexture_ = set.normal;
+    materialTexture_ = set.material;
+    emissiveTexture_ = set.emissive;
+    depthTexture_ = set.depth;
+    accumulationFbo_ = set.accumulationFbo;
+    accumulationTexture_ = set.accumulation;
+    transparencyFbo_ = set.transparencyFbo;
+    transparencyTexture_ = set.transparency;
+    mergeFbo_ = set.mergeFbo;
+    mergeTexture_ = set.merge;
+    ldrFbo_ = set.ldrFbo;
+    ldrTexture_ = set.ldr;
+    fxaaValid_ = set.fxaaValid;
 }
 
 void Renderer::destroyTargets() {
@@ -2784,6 +2861,11 @@ void Renderer::shutdown() {
     probeFilled_[1] = false;
     probedDepth_.reset();
     sceneDepth_ = SceneDepth{};
+    for (const TargetSet& set : parked_) {
+        unparkTargets(set);
+        destroyTargets();
+    }
+    parked_.clear();
     destroyTargets();
     targetsRefused_ = false;
     bloomRefusedWidth_ = 0;

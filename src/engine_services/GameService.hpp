@@ -52,4 +52,10 @@ public:
     const char* class_name() const override;
 };
 
+class Animations : public GameService {
+public:
+    using GameService::GameService;
+    const char* class_name() const override;
+};
+
 }  // namespace engine_core

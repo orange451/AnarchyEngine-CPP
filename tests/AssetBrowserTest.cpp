@@ -44,8 +44,8 @@ void TestNavigates() {
     ide::AssetBrowser browser(game);
     Expect(browser.folder() == game.service("Materials"), "starts in the first category");
     Expect(Names(browser.categories()) ==
-               std::vector<std::string>{"Materials", "Prefabs", "Meshes", "Textures", "Audio"},
-           "the five categories, in order");
+               std::vector<std::string>{"Materials", "Prefabs", "Meshes", "Textures", "Audio", "Animations"},
+           "the six categories, in order");
     const InstanceId walls = Make(game, "Folder", "Walls", game.service("Textures"));
     const InstanceId brick = Make(game, "Texture", "Brick", walls);
     Expect(browser.open(game.service("Textures")), "opens a category");

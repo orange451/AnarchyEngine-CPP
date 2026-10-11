@@ -22,7 +22,7 @@ const char* IconFileOverride(const std::string& class_name) {
     if (class_name == "Scripts") {
         return "ScriptService.png";
     }
-    if (class_name == "Assets" || class_name == "Audio") {
+    if (class_name == "Assets" || class_name == "Audio" || class_name == "Animations") {
         return "AssetFolder.png";
     }
     if (class_name == "Materials") {

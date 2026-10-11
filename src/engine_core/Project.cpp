@@ -119,7 +119,7 @@ DataModel& existing_service(DataModel& world) {
     return *service;
 }
 
-static_assert(std::size(kServices) == 11, "one registry entry per service");
+static_assert(std::size(kServices) == 12, "one registry entry per service");
 
 std::vector<ClassEntry>& class_registry() {
     static std::vector<ClassEntry> entries = [] {
@@ -135,6 +135,7 @@ std::vector<ClassEntry>& class_registry() {
         out.push_back({kServices[8].class_name, existing_service<8>});
         out.push_back({kServices[9].class_name, existing_service<9>});
         out.push_back({kServices[10].class_name, existing_service<10>});
+        out.push_back({kServices[11].class_name, existing_service<11>});
         out.push_back({"DataModel", [](DataModel& world) -> DataModel& { return world.create(); }});
         out.push_back({"GameObject", [](DataModel& world) -> DataModel& { return world.create_game_object(); }});
         out.push_back({"Camera", [](DataModel& world) -> DataModel& { return world.create<Camera>(); }});
@@ -175,6 +176,7 @@ std::vector<ClassEntry>& class_registry() {
         out.push_back({"Texture", [](DataModel& world) -> DataModel& { return world.create<Texture>(); }});
         out.push_back({"Mesh", [](DataModel& world) -> DataModel& { return world.create<Mesh>(); }});
         out.push_back({"Sound", [](DataModel& world) -> DataModel& { return world.create<Sound>(); }});
+        out.push_back({"Animation", [](DataModel& world) -> DataModel& { return world.create<Animation>(); }});
         out.push_back({"Material", [](DataModel& world) -> DataModel& { return world.create<Material>(); }});
         out.push_back({"Model", [](DataModel& world) -> DataModel& { return world.create<Model>(); }});
         out.push_back({"Prefab", [](DataModel& world) -> DataModel& { return world.create<Prefab>(); }});

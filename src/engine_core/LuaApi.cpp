@@ -1142,6 +1142,11 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
         "missing or will not read.",
         "boolean", false, {});
     add("Sound", "Loaded", "Read-only. True when this Sound's file decodes, so it can play.", "boolean", false, {});
+    add("Animation", "Length", "Read-only. How long the clip runs, in seconds: its last keyframe's time.", "number",
+        false, {});
+    add("Animation", "Looped", "Read-only. Whether the clip loops, as its file says; a track starts from it.",
+        "boolean", false, {});
+    add("Animation", "Loaded", "Read-only. True when this Animation's file reads as a clip.", "boolean", false, {});
     // The voxel methods take positions and frames in world space unless space
     // is Enum.TransformSpace.Local, and a TerrainMaterial of this Terrain or nil
     // for the default material.

@@ -43,6 +43,7 @@ Game::Game() : DataModel(kClassName) {
     add_service<Meshes>(*this);
     add_service<Textures>(*this);
     add_service<Audio>(*this);
+    add_service<Animations>(*this);
     // Not one of the place's services, so not in kServices: it holds the studio's own tools.
     Core& core = create<Core>();
     set_guid(core.id(), service_guid(kCoreClass));

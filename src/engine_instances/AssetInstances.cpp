@@ -6,7 +6,9 @@
 #include "LuaApi.hpp"
 #include "Project.hpp"
 #include "PropertyBag.hpp"
+#include "Animation.hpp"
 #include "Skeleton.hpp"
+#include "aanim.hpp"
 #include "amesh.hpp"
 
 #include <algorithm>
@@ -508,6 +510,63 @@ double Sound::time_length(const std::filesystem::path& root) const {
     }
     return length_;
 }
+const char* Animation::class_name() const { return "Animation"; }
+
+std::shared_ptr<const Clip> Animation::clip() const {
+    const std::filesystem::path root = resources_root();
+    std::filesystem::path file;
+    if (!root.empty() && !path().empty()) {
+        file = root / std::filesystem::u8path(path());
+    }
+    std::lock_guard<std::mutex> lock(clip_mutex_);
+    const auto now = std::chrono::steady_clock::now();
+    const bool same_file = clip_read_ && clip_file_ == file;
+    if (same_file && (file.empty() || now - clip_checked_ < std::chrono::seconds(1))) {
+        return clip_;
+    }
+    clip_checked_ = now;
+    std::error_code error;
+    std::filesystem::file_time_type stamp{};
+    if (!file.empty()) {
+        stamp = std::filesystem::last_write_time(file, error);
+        if (error) {
+            stamp = {};
+        }
+    }
+    if (same_file && stamp == clip_stamp_) {
+        return clip_;
+    }
+    clip_read_ = true;
+    clip_file_ = file;
+    clip_stamp_ = stamp;
+    clip_.reset();
+    if (file.empty() || error) {
+        return clip_;
+    }
+    const std::uintmax_t size = std::filesystem::file_size(file, error);
+    if (error || size > anarchy::aanim::kMaxFileSize) {
+        return clip_;
+    }
+    std::vector<std::byte> bytes(static_cast<std::size_t>(size));
+    std::ifstream in(file, std::ios::binary);
+    if (!in.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()))) {
+        return clip_;
+    }
+    try {
+        clip_ = make_clip(anarchy::aanim::read(anarchy::aanim::ByteSpan(bytes.data(), bytes.size())));
+    } catch (const std::exception&) {
+        clip_.reset();
+    }
+    return clip_;
+}
+
+void Animation::on_reuse() {
+    FileAsset::on_reuse();
+    std::lock_guard<std::mutex> lock(clip_mutex_);
+    clip_read_ = false;
+    clip_.reset();
+}
+
 const char* Material::class_name() const { return "Material"; }
 const char* Model::class_name() const { return "Model"; }
 const char* Prefab::class_name() const { return "Prefab"; }
@@ -790,6 +849,8 @@ bool read_loaded(DataModel& game, DataModel& object, LuaSlot& out) {
         out.flag = texture->loaded(game.resources_root());
     } else if (const auto* mesh = dynamic_cast<const Mesh*>(&object)) {
         out.flag = mesh->loaded(game.resources_root());
+    } else if (const auto* animation = dynamic_cast<const Animation*>(&object)) {
+        out.flag = animation->loaded();
     } else if (const auto* sound = dynamic_cast<const Sound*>(&object)) {
         out.flag = sound->loaded(game.resources_root());
     } else {
@@ -805,6 +866,28 @@ bool read_time_length(DataModel& game,DataModel& object, LuaSlot& out) {
     }
     out.kind = LuaSlot::Kind::Number;
     out.number = sound->time_length(game.resources_root());
+    return true;
+}
+
+bool read_animation_length(DataModel&, DataModel& object, LuaSlot& out) {
+    const auto* animation = dynamic_cast<const Animation*>(&object);
+    if (animation == nullptr) {
+        return false;
+    }
+    const std::shared_ptr<const Clip> clip = animation->clip();
+    out.kind = LuaSlot::Kind::Number;
+    out.number = clip != nullptr ? clip->length : 0.0;
+    return true;
+}
+
+bool read_animation_looped(DataModel&, DataModel& object, LuaSlot& out) {
+    const auto* animation = dynamic_cast<const Animation*>(&object);
+    if (animation == nullptr) {
+        return false;
+    }
+    const std::shared_ptr<const Clip> clip = animation->clip();
+    out.kind = LuaSlot::Kind::Bool;
+    out.flag = clip != nullptr && clip->looped;
     return true;
 }
 
@@ -947,6 +1030,14 @@ ANARCHY_LUA_REGISTER(register_asset_instances_lua) {
         lua_property("Loaded", "boolean", false, read_loaded, nullptr),
     };
     register_lua_class("Sound", "FileAsset", sound_fields, 3);
+    // Length and Looped are the clip's, read from the file.
+    const LuaField animation_fields[] = {
+        file_fields[0],
+        lua_property("Length", "number", false, read_animation_length, nullptr),
+        lua_property("Looped", "boolean", false, read_animation_looped, nullptr),
+        lua_property("Loaded", "boolean", false, read_loaded, nullptr),
+    };
+    register_lua_class("Animation", "FileAsset", animation_fields, 4);
     register_lua_class("ReferenceAsset", "Instance", nullptr, 0);
     const LuaField material_fields[] = {
         lua_group("Surface"),

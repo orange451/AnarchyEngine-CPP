@@ -236,8 +236,8 @@ void TestEngineTools() {
             }
         }
     }
-    Expect(sawAssets && categories == std::vector<std::string>{"Materials", "Prefabs", "Meshes", "Textures", "Audio"},
-           "get_tree lists Assets and its five categories");
+    Expect(sawAssets && categories == std::vector<std::string>{"Materials", "Prefabs", "Meshes", "Textures", "Audio", "Animations"},
+           "get_tree lists Assets and its six categories");
 
     const JsonValue brick = Call(server, "create_instance",
                                  R"({"class":"Texture","name":"Brick","parent":"Assets.Textures"})");

@@ -18,7 +18,7 @@ struct Category {
 
 constexpr Category kCategories[] = {
     {"Materials", "Material", "Materials"}, {"Prefabs", "Prefab", "Prefabs"}, {"Meshes", "Mesh", "Meshes"},
-    {"Textures", "Texture", "Textures"},    {"Audio", "Sound", "Sounds"},
+    {"Textures", "Texture", "Textures"},    {"Audio", "Sound", "Sounds"},   {"Animations", "Animation", "Animations"},
 };
 
 const Category* category_named(std::string_view service) {

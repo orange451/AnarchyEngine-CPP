@@ -231,6 +231,34 @@ private:
     mutable double length_ = 0;
 };
 
+struct Clip;
+
+class Animation : public FileAsset {
+public:
+    using FileAsset::FileAsset;
+    const char* class_name() const override;
+
+    // The clip in Path's AANIM file under the resources folder, shared and
+    // immutable. Null with no Path or resources folder, no file, or one that
+    // does not read. Read again when Path or the resources folder changes,
+    // and when the file's time on disk does, which is looked at no more than
+    // once a second. Any thread.
+    std::shared_ptr<const Clip> clip() const;
+    // Loaded: whether Path's file reads as a clip.
+    bool loaded() const { return clip() != nullptr; }
+
+protected:
+    void on_reuse() override;
+
+private:
+    mutable std::mutex clip_mutex_;
+    mutable bool clip_read_ = false;
+    mutable std::filesystem::path clip_file_;
+    mutable std::filesystem::file_time_type clip_stamp_{};
+    mutable std::chrono::steady_clock::time_point clip_checked_{};
+    mutable std::shared_ptr<const Clip> clip_;
+};
+
 // One reference property: its name and the class it holds.
 struct ReferenceSpec {
     const char* property;

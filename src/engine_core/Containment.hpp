@@ -22,7 +22,7 @@ struct ServiceSpec {
 inline constexpr ServiceSpec kServices[] = {
     {"Workspace", nullptr}, {"Lighting", nullptr},  {"Storage", nullptr},  {"Scripts", nullptr},
     {"Gui", nullptr},       {"Assets", nullptr},    {"Materials", "Assets"}, {"Prefabs", "Assets"}, {"Meshes", "Assets"},
-    {"Textures", "Assets"}, {"Audio", "Assets"},
+    {"Textures", "Assets"}, {"Audio", "Assets"},    {"Animations", "Assets"},
 };
 
 // The studio's own service, outside the place: never saved or undone, and left

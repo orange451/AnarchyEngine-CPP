@@ -51,6 +51,7 @@ const char* describe_class(const std::string& name) {
         {"Texture", "An image asset."},
         {"Material", "How a surface looks."},
         {"Sound", "An audio asset."},
+        {"Animation", "A clip that moves a skinned object's bones."},
         {"Prefab", "A reusable object template."},
     };
     for (const Row& row : kRows) {

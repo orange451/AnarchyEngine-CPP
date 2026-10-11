@@ -265,3 +265,73 @@ TEST_CASE("AC8 a bone the skeleton lacks is skipped, and a bone nothing moves is
     REQUIRE(near(delta.m[0], 2.f));
     REQUIRE(near(delta.m[13], 2.f));
 }
+
+// The Animation asset: a clip read from its AANIM file, as a Mesh reads its AMESH.
+
+#include "AssetInstances.hpp"
+#include "Containment.hpp"
+#include "Project.hpp"
+#include "LuaApi.hpp"
+
+#include <chrono>
+#include <filesystem>
+#include <fstream>
+#include <thread>
+
+namespace {
+
+void write_clip(const std::filesystem::path& file, const aanim::Data& data) {
+    std::filesystem::create_directories(file.parent_path());
+    const std::vector<std::byte> bytes = aanim::write(data);
+    std::ofstream out(file, std::ios::binary | std::ios::trunc);
+    out.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+}
+
+engine_core::LuaSlot read_field(engine_core::DataModel& game, engine_core::DataModel& object, const char* name) {
+    const engine_core::LuaField* field = engine_core::lua_class_find(object.class_name(), name);
+    REQUIRE(field != nullptr);
+    REQUIRE(field->read != nullptr);
+    engine_core::LuaSlot slot;
+    REQUIRE(field->read(game, object, slot));
+    return slot;
+}
+
+}  // namespace
+
+TEST_CASE("AC9 an Animation reads its clip from its AANIM file, and again when the file changes", "[animation]") {
+    SimRole role;
+    TempDir dir;
+    aanim::Data clip = walk();
+    clip.looped = true;
+    write_clip(dir / "animations" / "walk.aanim", clip);
+    engine_core::Game game;
+    game.set_resources_root(dir.path);
+    REQUIRE(engine_core::project_class_known("Animation"));
+    REQUIRE(engine_core::lua_class_inherits("Animation", "FileAsset"));
+    engine_core::Animation& animation = game.create<engine_core::Animation>();
+    game.set_parent(animation.id(), game.service("Animations"));
+    REQUIRE(game.parent(animation.id()) == game.service("Animations"));
+    REQUIRE(engine_core::asset_home("Animation") == std::string("Animations"));
+    REQUIRE(animation.clip() == nullptr);
+    REQUIRE_FALSE(read_field(game, animation, "Loaded").flag);
+    REQUIRE_FALSE(animation.set_path("animations/walk.aanim"));
+    const auto read = animation.clip();
+    REQUIRE(read != nullptr);
+    REQUIRE(read->length == 2.f);
+    REQUIRE(animation.clip() == read);
+    REQUIRE(read_field(game, animation, "Length").number == 2.0);
+    REQUIRE(read_field(game, animation, "Looped").flag);
+    REQUIRE(read_field(game, animation, "Loaded").flag);
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(1100));
+    clip.keyframes.pop_back();
+    write_clip(dir / "animations" / "walk.aanim", clip);
+    std::filesystem::last_write_time(dir / "animations" / "walk.aanim",
+                                     std::filesystem::file_time_type::clock::now() + std::chrono::seconds(5));
+    REQUIRE(animation.clip()->length == 1.f);
+
+    // A file that is not AANIM is no clip.
+    std::ofstream(dir / "animations" / "junk.aanim") << "junk";
+    REQUIRE_FALSE(animation.set_path("animations/junk.aanim"));
+    REQUIRE(animation.clip() == nullptr);
+}

@@ -111,7 +111,27 @@ void pose_of(const Matrix4& m, b3Vec3& position, b3Quat& rotation) {
 }
 
 // The body's pose as a Matrix4 that keeps the scale of each axis of keep.
+// When rotation is keep's own (within kSameTurn a component), keep's axes
+// are kept bit for bit and only the position is new: a matrix to a
+// quaternion and back is not exact, and scaling the result by keep's axis
+// lengths again and again grew a body's scale each time a place was opened.
 Matrix4 matrix_of(const b3Vec3& position, const b3Quat& rotation, const Matrix4& keep) {
+    constexpr float kSameTurn = 1e-6f;
+    b3Vec3 kept_position{};
+    b3Quat kept{};
+    pose_of(keep, kept_position, kept);
+    // q and -q are one turn.
+    const float dot = kept.v.x * rotation.v.x + kept.v.y * rotation.v.y + kept.v.z * rotation.v.z + kept.s * rotation.s;
+    const float sign = dot < 0.f ? -1.f : 1.f;
+    const auto same = [&](float a, float b) { return std::fabs(a * sign - b) <= kSameTurn; };
+    if (same(kept.v.x, rotation.v.x) && same(kept.v.y, rotation.v.y) && same(kept.v.z, rotation.v.z) &&
+        same(kept.s, rotation.s)) {
+        Matrix4 out = keep;
+        out.m[12] = position.x;
+        out.m[13] = position.y;
+        out.m[14] = position.z;
+        return out;
+    }
     const b3Matrix3 basis = b3MakeMatrixFromQuat(rotation);
     const b3Vec3 columns[3] = {basis.cx, basis.cy, basis.cz};
     Matrix4 out = matrix4_identity();
@@ -120,9 +140,11 @@ Matrix4 matrix_of(const b3Vec3& position, const b3Quat& rotation, const Matrix4&
         if (!(scale > 1e-6f)) {
             scale = 1.f;
         }
-        out.m[column * 4 + 0] = columns[column].x * scale;
-        out.m[column * 4 + 1] = columns[column].y * scale;
-        out.m[column * 4 + 2] = columns[column].z * scale;
+        // Unit first, so the scale is keep's and nothing more.
+        const b3Vec3 axis = b3Normalize(columns[column]);
+        out.m[column * 4 + 0] = axis.x * scale;
+        out.m[column * 4 + 1] = axis.y * scale;
+        out.m[column * 4 + 2] = axis.z * scale;
     }
     out.m[12] = position.x;
     out.m[13] = position.y;
@@ -1818,6 +1840,7 @@ struct PhysicsWorld::Impl {
         }
         update_listened(game, running);
         played = running && (stepping || played);
+        game.set_physics_stepped(played);
     }
 
     void simulate(DataModel& game, double dt) {

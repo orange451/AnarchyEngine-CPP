@@ -14,6 +14,8 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
+#include <iterator>
 #include <string>
 
 namespace {
@@ -86,4 +88,33 @@ TEST_CASE("PG4 an old file's GameObject link on a Brush or a PlayerController is
     REQUIRE(body.load_property("GameObject", link, error));
     REQUIRE(error.empty());
     REQUIRE(body.driven_game_object() == part.id());
+}
+
+TEST_CASE("PG5 a turned body under a scaled GameObject keeps its Transform bit for bit, session after session",
+          "[physics][gameobject]") {
+    // As a barrel in a saved place has it: turned -90 about X, its Transform
+    // carrying a hair of scale, under a GameObject scaled down.
+    PhysicsRig rig;
+    GameObject& barrel = create_part(rig.game);
+    engine_core::Matrix4 placed{};
+    const float barrel_m[16] = {1, 0, 0, 0, 0, 6.123234e-17f, -1, 0, 0, 1, 6.123234e-17f, 0, 980, 37, -683, 1};
+    std::copy(std::begin(barrel_m), std::end(barrel_m), placed.m);
+    barrel.set_transform(placed);
+    REQUIRE_FALSE(barrel.set_scale(0.005));
+    PhysicsObject& body = rig.game.create<PhysicsObject>();
+    engine_core::Matrix4 saved{};
+    const float body_m[16] = {1, 0, 0, 0, 0, -1.1921034e-07f, -1.000009f, 0, 0, 1.000009f, -1.1921034e-07f, 0, 980, 37, -683, 1};
+    std::copy(std::begin(body_m), std::end(body_m), saved.m);
+    REQUIRE_FALSE(body.set_transform(saved));
+    rig.game.set_parent(body.id(), barrel.id());
+    const engine_core::Matrix4 before = body.transform();
+    for (int session = 0; session < 5; ++session) {
+        // Each session a new world makes the body again and follows the GameObject.
+        engine_core::PhysicsWorld world;
+        for (int i = 0; i < 3; ++i) {
+            world.sync(rig.game);
+        }
+        INFO(session);
+        REQUIRE(std::equal(std::begin(before.m), std::end(before.m), std::begin(body.transform().m)));
+    }
 }

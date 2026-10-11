@@ -2122,6 +2122,10 @@ std::uint32_t DataModel::world_generation() const { return state_->world_generat
 
 bool DataModel::simulation_running() const { return state_->simulation_running; }
 
+bool DataModel::physics_stepped() const { return state_->physics_stepped; }
+
+void DataModel::set_physics_stepped(bool stepped) { state_->physics_stepped = stepped; }
+
 ChangeHistoryService& DataModel::history() { return *state_->history; }
 
 const ChangeHistoryService& DataModel::history() const { return *state_->history; }

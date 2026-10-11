@@ -940,3 +940,25 @@ TEST_CASE("AP29 a RigidConstraint connected in play with the root named second m
     REQUIRE(near(x_of(other.transform()), 0.f, 1e-3f));
     REQUIRE(rig.physics.body_key(other.id()) == rig.physics.body_key(root.id()));
 }
+
+TEST_CASE("AP30 in play, a body's Transform write moves its GameObject at once, so a weld made then holds it there",
+          "[assembly][play]") {
+    PhysicsRig rig;
+    rig.floor();
+    PhysicsObject& box = rig.body(at(0.f, 0.5f, 0.f), Vec3{1.f, 1.f, 1.f}, false);
+    GameObject& person = create_part(rig.game);
+    person.set_transform(at(5.f, 0.f, 0.f));
+    PlayerController& feet = rig.controller(at(5.f, 0.f, 0.f), person.id());
+    rig.play();
+    rig.seconds(0.5);
+    feet.set_enabled(false);
+    REQUIRE_FALSE(feet.set_transform(at(0.f, 1.f, 0.f)));
+    // The GameObject it moves says so before any step.
+    REQUIRE(near(x_of(person.transform()), 0.f, 1e-4f));
+    REQUIRE(near(y_of(person.transform()), 1.f, 1e-4f));
+    weld(rig.game, box.id(), feet.id());
+    rig.seconds(1.0);
+    // Held where it was written: one unit above the box's centre.
+    REQUIRE(near(x_of(feet.transform()) - x_of(box.transform()), 0.f, 0.02f));
+    REQUIRE(near(y_of(feet.transform()) - y_of(box.transform()), 0.5f, 0.02f));
+}

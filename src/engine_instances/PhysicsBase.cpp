@@ -2,6 +2,7 @@
 
 #include "Assemblies.hpp"
 #include "Contract.hpp"
+#include "GameObject.hpp"
 #include "LuaApi.hpp"
 #include "PropertyBag.hpp"
 
@@ -86,6 +87,18 @@ std::optional<std::string> PhysicsBase::set_transform(const Matrix4& transform) 
     transform_ = transform;
     dirty_ |= kDirtyPose;
     note_property_change("Transform", matrix_slot(previous), matrix_slot(transform));
+    // In play, once physics has stepped, the body is what moves the GameObject
+    // it drives, which the physics world writes after each step. Written now
+    // too, keeping its scale, so what reads it this frame (a weld made now)
+    // sees the body where it was put. Stopped, and in play until the first
+    // step, the GameObject leads and this follows it.
+    if (simulation_running() && physics_stepped()) {
+        const InstanceId driven = driven_game_object();
+        if (const GameObject* object = driven != 0 ? game_object(driven) : nullptr) {
+            write_simulated_transform(driven,
+                                      Assemblies::with_scale(matrix4_orthonormalize(transform), object->transform()));
+        }
+    }
     assemblies().transform_written(*this, id());
     return std::nullopt;
 }

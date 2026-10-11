@@ -40,6 +40,7 @@ void DataModel::start_simulation() {
     // Stopped MeshEditors' edits reach their files, which play starts from.
     state_->mesh_editors.write_all(*this, true);
     state_->simulation_running = true;
+    state_->physics_stepped = false;
     // Each assembly's body frame and member offsets, before any script runs.
     state_->assemblies.capture_play(*this);
     // Each run starts with Default alone; scripts register the rest.
@@ -61,6 +62,8 @@ void DataModel::stop_simulation() {
         contract_fail("stop_simulation runs on SimulationThread");
     }
     DataModelLock lock(*this, DataModelLock::Write);
+    // The restore below writes authored Transforms: as stopped, they move no GameObject.
+    state_->physics_stepped = false;
     // Session waypoints can name play-only instances. Drop them before restore
     // retires those ids. The edit stack stays; the snapshot matches it.
     if (state_->history) {

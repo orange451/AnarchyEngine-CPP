@@ -208,6 +208,8 @@ struct DataModel::State {
     DataModel* root = nullptr;
     std::uint32_t world_generation = 0;
     bool simulation_running = false;
+    // The physics world has stepped since play started (DataModel::physics_stepped).
+    bool physics_stepped = false;
     bool place_captured = false;
     PlaceSnapshot place;
     // place_slots[index]: a captured instance owns slot index. While the

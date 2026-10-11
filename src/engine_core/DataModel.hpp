@@ -289,6 +289,13 @@ public:
     PhysicsWorld* physics() const;
     std::uint32_t world_generation() const;
     bool simulation_running() const;
+    // Whether the physics world has stepped since play started. Until it has,
+    // a driven body's GameObject decides where the body is (PhysicsWorld);
+    // after, the body does, and a Transform written to it moves its GameObject
+    // at once (PhysicsBase::set_transform). The physics world sets it; start
+    // and stop clear it.
+    bool physics_stepped() const;
+    void set_physics_stepped(bool stepped);
     // Edit undo. Play waypoints live on a second stack that stop drops.
     ChangeHistoryService& history();
     const ChangeHistoryService& history() const;

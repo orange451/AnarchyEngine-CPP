@@ -85,6 +85,7 @@ public:
 class ChangeHistoryService;
 class Assemblies;
 class CollisionGroups;
+class MeshEditors;
 class Engine;
 class GameObject;
 class SpatialObject;
@@ -489,6 +490,8 @@ public:
     // PhysicsService's collision groups (CollisionGroups.hpp): not saved,
     // reset at Play and Stop.
     CollisionGroups& collision_groups() const;
+    // Every live MeshEditor, one per Mesh (MeshEditors.hpp). Not saved.
+    MeshEditors& mesh_editors() const;
     // A GameObject's Transform as the physics world moved it: stored and
     // drawn, as integrate_simulated moves one, with no Changed, no history,
     // and no check. SimulationThread. A dead id or a non-GameObject does nothing.

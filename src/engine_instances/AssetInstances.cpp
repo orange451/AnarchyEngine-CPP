@@ -191,11 +191,7 @@ std::optional<std::string> Mesh::edit_geometry(const std::function<void(anarchy:
         if (data.vertices.size() > anarchy::amesh::kMaxVertices || data.indices.size() / 3 > anarchy::amesh::kMaxTriangles) {
             return std::string("The shapes are more than one mesh can hold");
         }
-        // Unique across every Mesh, so a renderer can tell any two copies apart.
-        static std::atomic<std::uint64_t> next_revision{1};
-        session_.data = std::make_shared<const anarchy::amesh::Data>(std::move(data));
-        session_.revision = next_revision.fetch_add(1);
-        session_generation_ = world_generation();
+        set_live_geometry(std::make_shared<const anarchy::amesh::Data>(std::move(data)));
         return std::nullopt;
     }
 
@@ -235,10 +231,66 @@ std::optional<std::string> Mesh::write_file(const std::filesystem::path& root, c
 }
 
 Mesh::SessionGeometry Mesh::session_geometry() const {
-    if (session_.data == nullptr || session_generation_ != world_generation() || !simulation_running()) {
+    if (session_.data == nullptr || session_generation_ != world_generation() ||
+        session_playing_ != simulation_running()) {
         return SessionGeometry{};
     }
     return session_;
+}
+
+void Mesh::set_live_geometry(std::shared_ptr<const anarchy::amesh::Data> data) {
+    if (!on_gameplay_thread()) {
+        contract_fail("asset setters run on SimulationThread");
+    }
+    // Unique across every Mesh, so a renderer can tell any two copies apart.
+    static std::atomic<std::uint64_t> next_revision{1};
+    session_.data = std::move(data);
+    session_.revision = next_revision.fetch_add(1);
+    session_generation_ = world_generation();
+    session_playing_ = simulation_running();
+}
+
+void Mesh::drop_live_geometry() {
+    if (!on_gameplay_thread()) {
+        contract_fail("asset setters run on SimulationThread");
+    }
+    session_ = SessionGeometry{};
+}
+
+std::optional<std::string> Mesh::read_geometry(anarchy::amesh::Data& out) const {
+    if (const SessionGeometry current = session_geometry(); current.data) {
+        out = *current.data;
+        return std::nullopt;
+    }
+    return read_file(resources_root(), path(), out);
+}
+
+std::optional<std::string> Mesh::prepare_file() {
+    const std::filesystem::path root = resources_root();
+    if (root.empty()) {
+        return std::string("Open or save a project first: a Mesh's shapes are written to its resources folder");
+    }
+    // The GUID keeps two Meshes with one Name from sharing a file.
+    const std::string chosen =
+        !path().empty() ? path() : "meshes/" + sanitize_file_name(name(id())) + "." + guid(id()) + ".amesh";
+    std::error_code error;
+    if (!std::filesystem::exists(root / std::filesystem::u8path(chosen), error)) {
+        if (std::optional<std::string> failed = write_file(root, chosen, anarchy::amesh::Data{})) {
+            return failed;
+        }
+    }
+    if (path() != chosen) {
+        return set_path(chosen);
+    }
+    return std::nullopt;
+}
+
+std::optional<std::string> Mesh::write_geometry(const anarchy::amesh::Data& data) {
+    const std::filesystem::path root = resources_root();
+    if (root.empty() || path().empty()) {
+        return std::string("the Mesh has no file to write");
+    }
+    return write_file(root, path(), data);
 }
 
 std::optional<std::string> Mesh::vertex_positions(std::vector<Vec3>& out, std::vector<std::uint32_t>* triangles) const {
@@ -479,6 +531,7 @@ void Mesh::on_reuse() {
     FileAsset::on_reuse();
     session_ = SessionGeometry{};
     session_generation_ = 0;
+    session_playing_ = false;
     std::lock_guard<std::mutex> lock(bounds_mutex_);
     bounds_measured_ = false;
     bounds_found_ = false;

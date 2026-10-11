@@ -7,6 +7,7 @@
 #include "DataModelLock.hpp"
 #include "Game.hpp"
 #include "GameObject.hpp"
+#include "MeshEditors.hpp"
 #include "Script.hpp"
 #include "ScriptRuntime.hpp"
 #include "TaskScheduler.hpp"
@@ -15,6 +16,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <atomic>
+#include <chrono>
 #include <filesystem>
 #include <random>
 #include <string>
@@ -75,6 +77,9 @@ struct ScriptRig {
         runtime.attach(game, scheduler);
     }
 
+    // The time frames gives MeshEditors::step, which moves dt a frame from 0.
+    engine_core::MeshEditors::Clock::time_point clock{};
+
     void frames(int count, double dt = 1.0 / 60.0) {
         for (int i = 0; i < count; ++i) {
             scheduler.run_phase(engine_core::Phase::Heartbeat, dt);
@@ -82,6 +87,10 @@ struct ScriptRig {
             runtime.heartbeat(dt);
             runtime.step_tools(dt);
             game.events().drain();
+            // After the scripts and tools, as Engine steps it.
+            game.mesh_editors().step(game, clock);
+            clock += std::chrono::duration_cast<engine_core::MeshEditors::Clock::duration>(
+                std::chrono::duration<double>(dt));
         }
     }
 

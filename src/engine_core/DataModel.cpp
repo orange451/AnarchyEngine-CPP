@@ -1052,6 +1052,8 @@ Assemblies& DataModel::assemblies() const { return state_->assemblies; }
 
 CollisionGroups& DataModel::collision_groups() const { return state_->collision_groups; }
 
+MeshEditors& DataModel::mesh_editors() const { return state_->mesh_editors; }
+
 void DataModel::constraints(std::vector<InstanceId>& out) const {
     out.clear();
     ecs_iter_t it = ecs_query_iter(ecs_world(), state_->constraint_query.c_ptr());

@@ -117,15 +117,30 @@ public:
     // Returns why nothing changed.
     std::optional<std::string> edit_geometry(const std::function<void(anarchy::amesh::Data&)>& edit);
 
-    // What this play session's edits made, shared with the renderer. data is
-    // replaced whole by each edit and never changed after, so a frame can hold
-    // it while the next edit runs. revision is unique across every Mesh.
+    // The live copy: what a MeshEditor last committed, shared with the
+    // renderer and drawn instead of the file. data is replaced whole by each
+    // commit and never changed after, so a frame can hold it while the next
+    // one runs. revision is unique across every Mesh. A copy made stopped is
+    // drawn until it is dropped, never while playing; one made playing lapses at Stop.
     struct SessionGeometry {
         std::shared_ptr<const anarchy::amesh::Data> data;
         std::uint64_t revision = 0;
     };
-    // Empty when this session made none: the Mesh draws its file.
+    // Empty when there is none for this world and mode: the Mesh draws its file.
     SessionGeometry session_geometry() const;
+    // Replaces the live copy, for the mode the place is in now.
+    void set_live_geometry(std::shared_ptr<const anarchy::amesh::Data> data);
+    void drop_live_geometry();
+
+    // What a MeshEditor opens: the live copy, else the AMESH file at Path,
+    // else nothing. Refuses a file that is not AMESH or has LODs.
+    std::optional<std::string> read_geometry(anarchy::amesh::Data& out) const;
+    // Stopped: a Mesh with no Path gets meshes/<Name>.<guid>.amesh (an undo
+    // step), and a Path with no file gets an empty AMESH there. Needs an open
+    // project. Returns why it could not.
+    std::optional<std::string> prepare_file();
+    // Writes data to the file at Path. Not an undo step. Returns why it could not.
+    std::optional<std::string> write_geometry(const anarchy::amesh::Data& data);
 
     // Every vertex position of what the Mesh draws now: this session's
     // geometry while playing, else its AMESH file. With triangles, also its
@@ -182,6 +197,8 @@ private:
     SessionGeometry session_;
     // world_generation() when session_ was made. Stop bumps it, and the copy lapses.
     std::uint32_t session_generation_ = 0;
+    // Whether session_ was made playing: it is drawn only in the mode it was made in.
+    bool session_playing_ = false;
 
     // bounds, as last measured, and what from: a session's revision, or else
     // the file and its time on disk. Readers share the DataModel lock, so the

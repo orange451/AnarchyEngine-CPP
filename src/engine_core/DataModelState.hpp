@@ -6,6 +6,7 @@
 #include "DataModel.hpp"
 #include "Assemblies.hpp"
 #include "CollisionGroups.hpp"
+#include "MeshEditors.hpp"
 #include "ChangeHistoryService.hpp"
 #include "DataModelLock.hpp"
 #include "DraggerWorld.hpp"
@@ -129,6 +130,8 @@ struct DataModel::State {
     Assemblies assemblies;
     // PhysicsService's collision groups; DataModel::collision_groups. Not saved.
     CollisionGroups collision_groups;
+    // Every live MeshEditor; DataModel::mesh_editors. Not saved.
+    MeshEditors mesh_editors;
 
     // Guards slots, free lists, invalidation, and resync.
     // SimulationThread may hold Write across a whole step and may re-enter

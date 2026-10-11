@@ -5,6 +5,8 @@ namespace {
 
 // How many pixels each arm of a cross reaches from its pivot.
 constexpr float kCrossPixels = 8.f;
+// How many pixels a joint's axis line reaches each way from its frame.
+constexpr float kAxisPixels = 24.f;
 
 struct Rgb {
     float r;
@@ -36,6 +38,7 @@ void cross(std::vector<float>& out, const Matrix4& pivot, const DraggerView& vie
 
 void constraint_lines(const ConstraintPivots& constraint, const DraggerView& view, std::vector<float>& out) {
     const Rgb color = !constraint.active ? Rgb{0.55f, 0.55f, 0.55f}
+                      : constraint.joint ? Rgb{0.4f, 0.9f, 0.45f}
                       : constraint.no_collide ? Rgb{1.f, 0.35f, 0.35f}
                       : constraint.rigid ? Rgb{1.f, 0.7f, 0.2f}
                                          : Rgb{0.35f, 0.75f, 1.f};
@@ -47,6 +50,15 @@ void constraint_lines(const ConstraintPivots& constraint, const DraggerView& vie
     }
     if (constraint.has2) {
         cross(out, constraint.pivot2, view, color);
+    }
+    if (constraint.axis_count > 0) {
+        const Vec3 at = constraint.axis_origin;
+        const float reach = kAxisPixels * handle_scale(view, at);
+        for (int i = 0; i < constraint.axis_count && i < 2; ++i) {
+            const Vec3 along = constraint.axes[i];
+            line(out, Vec3{at.x - along.x * reach, at.y - along.y * reach, at.z - along.z * reach},
+                 Vec3{at.x + along.x * reach, at.y + along.y * reach, at.z + along.z * reach}, color);
+        }
     }
 }
 

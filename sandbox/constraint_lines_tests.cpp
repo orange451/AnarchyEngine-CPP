@@ -91,3 +91,28 @@ TEST_CASE("VZ4 an active NoCollisionConstraint is drawn red", "[assembly][viz]")
     REQUIRE(lines.size() == kPoint * 2 * 7);
     REQUIRE(colored(lines, 1.f, 0.35f, 0.35f));
 }
+
+TEST_CASE("VZ5 an active joint is green, with a line along each of its axes", "[assembly][viz][joint]") {
+    ConstraintPivots wheel = weld();
+    wheel.joint = true;
+    wheel.axis_count = 2;
+    wheel.axis_origin = engine_core::Vec3{2.f, 0.f, -10.f};
+    wheel.axes[0] = engine_core::Vec3{-1.f, 0.f, 0.f};
+    wheel.axes[1] = engine_core::Vec3{0.f, 1.f, 0.f};
+    std::vector<float> lines;
+    engine_core::constraint_lines(wheel, view(), lines);
+    // The segment, two crosses, and one line per axis.
+    REQUIRE(lines.size() == kPoint * 2 * (1 + 3 + 3 + 2));
+    REQUIRE(colored(lines, 0.4f, 0.9f, 0.45f));
+    // The last line runs along the second axis, through the frame's origin.
+    const std::size_t last = lines.size() - 2 * kPoint;
+    REQUIRE(lines[last] == 2.f);
+    REQUIRE(lines[last + kPoint] == 2.f);
+    REQUIRE(lines[last + 1] < 0.f);
+    REQUIRE(lines[last + kPoint + 1] > 0.f);
+    ConstraintPivots idle = wheel;
+    idle.active = false;
+    lines.clear();
+    engine_core::constraint_lines(idle, view(), lines);
+    REQUIRE(colored(lines, 0.55f, 0.55f, 0.55f));
+}

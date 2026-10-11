@@ -8,6 +8,8 @@
 #include "AssetInstances.hpp"
 #include "Camera.hpp"
 #include "Constraint.hpp"
+#include "JointConstraint.hpp"
+#include "JointFrame.hpp"
 #include "ConvexDecomposition.hpp"
 #include "DataModelLock.hpp"
 #include "Engine.hpp"
@@ -729,10 +731,20 @@ void GameView::readSelectedBodies() {
         assemblies.refresh(*game_);
         engine_core::ConstraintPivots& pivots = constraintPivots_.emplace_back();
         pivots.rigid = constraint->rigid();
-        pivots.no_collide = !constraint->joins();
+        pivots.joint = constraint->joint();
+        pivots.no_collide = !constraint->joins() && !pivots.joint;
         pivots.active = assemblies.active(id);
         pivots.has1 = assemblies.end_pivot(*game_, id, 1, pivots.pivot1);
         pivots.has2 = assemblies.end_pivot(*game_, id, 2, pivots.pivot2);
+        // A joint's axes, at the frame it would take if it started now.
+        if (const auto* joint = dynamic_cast<const engine_core::JointConstraint*>(constraint);
+            joint != nullptr && pivots.has1 && pivots.has2) {
+            engine_core::Matrix4 frame1{};
+            engine_core::Matrix4 frame2{};
+            engine_core::joint_frames(joint->kind(), pivots.pivot1, pivots.pivot2, frame1, frame2);
+            pivots.axis_origin = engine_core::matrix4_position(frame1);
+            pivots.axis_count = engine_core::joint_axes(joint->kind(), frame1, pivots.axes);
+        }
         // Both ends' bodies are outlined, as if they were selected too.
         for (const engine_core::InstanceId end : {constraint->pv_instance1_id(), constraint->pv_instance2_id()}) {
             const engine_core::InstanceId node = end != 0 ? assemblies.node_of(end) : 0;

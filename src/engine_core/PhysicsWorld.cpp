@@ -1116,8 +1116,13 @@ struct PhysicsWorld::Impl {
         // field, in its own local space, over exactly the chunks that do
         // not, so a chunk is tested once either way and a Raycast hits
         // terrain at any distance, the same whether or not colliders are
-        // loaded where it hits (RM1). Keeps hits' nearest-so-far.
-        if (terrains != nullptr) {
+        // loaded where it hits (RM1). Keeps hits' nearest-so-far. Terrain is
+        // in Default: a ray whose group does not collide with it marches
+        // through none, as its collider shapes are filtered out.
+        const bool sees_terrain =
+            filter.collision_group.empty() ||
+            (groups->collides_with(filter.collision_group) & groups->category(CollisionGroups::kDefault)) != 0;
+        if (terrains != nullptr && sees_terrain) {
             for (const TerrainView& view : terrains->views()) {
                 if (!view.can_collide) {
                     continue;   // no shapes at all (RM3): the march sees none either

@@ -178,6 +178,7 @@ Assemblies::Assemblies() {
     candidates_.reserve(slots);
     edges_.reserve(slots);
     rigid_order_.reserve(slots);
+    no_collide_.reserve(slots);
     nodes_.reserve(slots);
     groups_.reserve(slots);
     group_nodes_.reserve(slots);
@@ -536,6 +537,7 @@ void Assemblies::rebuild(const DataModel& game) {
     group_nodes_.clear();
     rigid_.clear();
     bone_.clear();
+    no_collide_.clear();
     contested_.clear();
 
     // Claims: each body is a node, and so is the GameObject it drives, under
@@ -595,6 +597,16 @@ void Assemblies::rebuild(const DataModel& game) {
         const InstanceId end2 = end_of(game, id, constraint->pv_instance2_ref(), 2);
         const InstanceId node1 = resolve_end(game, end1, true);
         const InstanceId node2 = resolve_end(game, end2, true);
+        if (!constraint->joins()) {
+            // A NoCollisionConstraint joins nothing: it only keeps two bodies apart.
+            const bool live = constraint->enabled() && node1 != 0 && node2 != 0 && node1 != node2 &&
+                              body_of(game, node1) != nullptr && body_of(game, node2) != nullptr;
+            active_[id_slot(id)] = live ? 1 : 0;
+            if (live) {
+                no_collide_.emplace_back(std::min(node1, node2), std::max(node1, node2));
+            }
+            continue;
+        }
         if (!constraint->enabled() || node1 == 0 || node2 == 0 || node1 == node2) {
             continue;
         }
@@ -613,6 +625,9 @@ void Assemblies::rebuild(const DataModel& game) {
         }
         edges_.push_back(edge);
     }
+
+    std::sort(no_collide_.begin(), no_collide_.end());
+    no_collide_.erase(std::unique(no_collide_.begin(), no_collide_.end()), no_collide_.end());
 
     // Rigid rule 1: the rigid edges make a forest. In GUID order, one whose
     // ends other rigid edges already join closes a loop, and is inactive.

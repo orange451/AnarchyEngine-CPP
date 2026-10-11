@@ -43,3 +43,6 @@ with a blue wave.
 WeldConstraint.png and RigidConstraint.png are our own, drawn in the Fugue
 style: two grey chain links on a diagonal for a weld, and two links in a line
 held by a blue pin for a rigid joint.
+
+NoCollisionConstraint.png is our own, in the same style: two grey blocks
+overlapping on a diagonal, under a red circle with a slash.

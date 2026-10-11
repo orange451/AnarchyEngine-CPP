@@ -5,6 +5,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <utility>
 #include <vector>
 
 namespace engine_core {
@@ -111,6 +112,10 @@ public:
     // stay apart, each its own assembly, since the bone moves under its
     // GameObject as the pose changes. Not in rigid_edges().
     const std::vector<RigidEdge>& bone_edges() const { return bone_; }
+    // Active NoCollisionConstraints: the two physics nodes (PhysicsBase ids)
+    // each keeps from colliding, lower id first, sorted, no repeats. They join
+    // nothing, so neither is in edges or groups for it.
+    const std::vector<std::pair<InstanceId, InstanceId>>& no_collide_pairs() const { return no_collide_; }
 
     // Suspending (§3): while suspended, every hook returns at once; edits
     // still move the revision. The outermost resume runs one follow pass when
@@ -323,6 +328,7 @@ private:
     std::vector<InstanceId> group_nodes_;
     std::vector<RigidEdge> rigid_;
     std::vector<RigidEdge> bone_;
+    std::vector<std::pair<InstanceId, InstanceId>> no_collide_;
     // orient_rigid's scratch, per place in nodes_: live edges by node, as
     // offsets into adj_; hops from the root over every live edge; hops from
     // the rigid tree's anchor over rigid edges; and the BFS queue.

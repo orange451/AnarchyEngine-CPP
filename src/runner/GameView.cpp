@@ -859,6 +859,7 @@ void GameView::readSelectedBodies() {
         assemblies.refresh(*game_);
         engine_core::ConstraintPivots& pivots = constraintPivots_.emplace_back();
         pivots.rigid = constraint->rigid();
+        pivots.no_collide = !constraint->joins();
         pivots.active = assemblies.active(id);
         pivots.has1 = assemblies.end_pivot(*game_, id, 1, pivots.pivot1);
         pivots.has2 = assemblies.end_pivot(*game_, id, 2, pivots.pivot2);

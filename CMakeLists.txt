@@ -1023,6 +1023,7 @@ add_executable(sandbox
     sandbox/dynamic_sky_tests.cpp
     sandbox/bloom_tests.cpp
     sandbox/physics_tests.cpp
+    sandbox/physics_game_object_tests.cpp
     sandbox/edit_physics_tests.cpp
     sandbox/raycast_tests.cpp
     sandbox/raycast_lua_tests.cpp

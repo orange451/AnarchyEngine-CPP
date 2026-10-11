@@ -12,24 +12,21 @@
 
 namespace engine_core {
 
-// What every rigid body shares: PhysicsObject and PlayerController. While it
-// is in Workspace, at any depth, and the place is playing, the physics world
-// (PhysicsWorld) simulates it; anywhere else it is only data. It is not a
-// GameObject: it has a Transform but draws nothing. When GameObject names
-// one, or else when its parent is a GameObject, the body starts at that
-// GameObject's Transform and moves it; stopped, its Transform follows that
-// GameObject's position and rotation (PhysicsWorld::sync). Of
-// several bodies moving one GameObject, only the first in tree order gets
-// one. Abstract: the Lua class PhysicsBase cannot be made, and
-// IsA("PhysicsBase") is true of both.
+// What every rigid body shares: PhysicsObject, PlayerController, and Brush.
+// While it is in Workspace, at any depth, and the place is playing, the
+// physics world (PhysicsWorld) simulates it; anywhere else it is only data. It
+// is not a GameObject. When it moves a GameObject (driven_game_object), the
+// body starts at that GameObject's Transform and moves it; stopped, its
+// Transform follows that GameObject's position and rotation
+// (PhysicsWorld::sync). Of several bodies moving one GameObject, only the
+// first in tree order gets one. Abstract: the Lua class PhysicsBase cannot be
+// made, and IsA("PhysicsBase") is true of all three.
 //
 // Transform        Matrix4   where the body is. Identity.
 // Velocity         Vector3   world units per second. (0, 0, 0).
 // Anchored         boolean   a static body, which nothing moves. false.
 // Mass             number    50. Below kMinMass, as 0 is, is taken as kMinMass.
 // LinearDamping    number    0, not below 0.
-// GameObject       GameObject?  what the body moves. Nil: the parent, if it
-//                               is a GameObject.
 //
 // Each is a saved registry property, so DataModel saves, loads, undoes, and
 // restores it at Stop. A value that is not finite is refused. Writes made by
@@ -62,13 +59,11 @@ public:
     double mass() const { return mass_; }
     double linear_damping() const { return linear_damping_; }
 
-    LuaSlot game_object() const;
-    // The live target, or 0.
-    InstanceId game_object_id() const;
-    // The GameObject the body moves: GameObject when it names one, else the
-    // parent when that is a GameObject, else 0. The parent link is never
-    // written to GameObject, so a body moved out from under it stops moving it.
-    InstanceId driven_game_object() const;
+    // The GameObject the body moves, or 0: its parent, when that is a
+    // GameObject. A PhysicsObject may name another (its GameObject field); a
+    // Brush moves none. The parent link is never saved, so a body moved out
+    // from under it stops moving it.
+    virtual InstanceId driven_game_object() const;
 
     // SimulationThread. Each returns why it refused the value, changing nothing.
     virtual std::optional<std::string> set_transform(const Matrix4& transform);
@@ -77,7 +72,6 @@ public:
     void set_anchored(bool anchored);
     std::optional<std::string> set_mass(double mass);
     std::optional<std::string> set_linear_damping(double damping);
-    std::optional<std::string> set_game_object(const LuaSlot& value);
 
     // The physics world's side. take_dirty returns what writes changed since
     // the last call and clears it. store_simulated keeps what the body did,
@@ -101,6 +95,8 @@ protected:
     void mark_dirty(std::uint32_t dirty) { dirty_ |= dirty; }
     // A subclass's own default, at construction and reuse only: no Changed, no history.
     void default_anchored(bool anchored) { anchored_ = anchored; }
+    // The parent, when it is a GameObject, else 0.
+    InstanceId parent_game_object() const;
 
 private:
     Matrix4 transform_ = matrix4_identity();
@@ -108,7 +104,6 @@ private:
     bool anchored_ = false;
     double mass_ = kDefaultMass;
     double linear_damping_ = 0.0;
-    InstanceRef game_object_ref_;
     std::uint32_t dirty_ = kDirtyAll;
 };
 

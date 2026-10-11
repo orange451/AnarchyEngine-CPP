@@ -863,11 +863,12 @@ TEST_CASE("P23 PhysicsObject is a PhysicsBase, which is never made itself", "[ph
     REQUIRE(engine_core::lua_class_inherits("PhysicsObject", "PhysicsBase"));
     REQUIRE(engine_core::lua_class_inherits("PhysicsBase", "PVInstance"));
     REQUIRE_FALSE(engine_core::project_class_known("PhysicsBase"));
-    for (const char* shared : {"Transform", "Velocity", "Anchored", "Mass", "LinearDamping", "GameObject"}) {
+    for (const char* shared : {"Transform", "Velocity", "Anchored", "Mass", "LinearDamping"}) {
         INFO(shared);
         REQUIRE(engine_core::lua_class_find("PhysicsBase", shared) != nullptr);
     }
-    for (const char* own : {"AngularVelocity", "AngularDamping", "Friction", "Bounciness", "Shape", "Size", "Mesh"}) {
+    for (const char* own :
+         {"AngularVelocity", "AngularDamping", "Friction", "Bounciness", "Shape", "Size", "Mesh", "GameObject"}) {
         INFO(own);
         REQUIRE(engine_core::lua_class_find("PhysicsBase", own) == nullptr);
         REQUIRE(engine_core::lua_class_find("PhysicsObject", own) != nullptr);

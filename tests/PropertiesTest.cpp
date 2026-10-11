@@ -17,6 +17,7 @@
 #include "LuaApi.hpp"
 #include "ModuleScript.hpp"
 #include "PhysicsObject.hpp"
+#include "PlayerController.hpp"
 #include "Enum.hpp"
 #include "Script.hpp"
 #include "SoundEmitter.hpp"
@@ -1756,6 +1757,11 @@ void TestClassGroups() {
 
     const std::vector<std::string> brush = GroupedRows(rig, rig.add<engine_core::Brush>("Block"));
     Expect(Has(brush, "Physics:Anchored"), "Brush's Anchored, registered again, stays in Physics");
+    Expect(!Has(brush, "Behavior:GameObject"), "a Brush has no GameObject row");
+    const std::vector<std::string> player = GroupedRows(rig, rig.add<engine_core::PlayerController>("Player"));
+    Expect(!Has(player, "Behavior:GameObject"), "a PlayerController has no GameObject row");
+    const std::vector<std::string> body = GroupedRows(rig, rig.add<engine_core::PhysicsObject>("Body"));
+    Expect(Has(body, "Behavior:GameObject"), "a PhysicsObject keeps its GameObject row, in Behavior");
     for (const std::string& row : brush) {
         // PVInstance's read-only AssemblyRoot reads last, under Data, on every PVInstance.
         if (row == "Data:AssemblyRoot") {

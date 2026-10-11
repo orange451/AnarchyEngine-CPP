@@ -65,21 +65,12 @@ bool same_vec(Vec3 a, Vec3 b) { return a.x == b.x && a.y == b.y && a.z == b.z; }
 
 }  // namespace
 
-LuaSlot PhysicsBase::game_object() const { return instance_reference_slot(game_object_ref_, "GameObject"); }
-
-InstanceId PhysicsBase::game_object_id() const {
-    // Resolved directly, not through a LuaSlot, so it copies no GUID.
-    const InstanceId target = game_object_ref_.resolve(*this);
-    return target != 0 && DataModel::game_object(target) != nullptr ? target : 0;
-}
-
-InstanceId PhysicsBase::driven_game_object() const {
-    if (const InstanceId linked = game_object_id(); linked != 0) {
-        return linked;
-    }
+InstanceId PhysicsBase::parent_game_object() const {
     const InstanceId above = parent(id());
     return above != kNoParent && above != 0 && DataModel::game_object(above) != nullptr ? above : 0;
 }
+
+InstanceId PhysicsBase::driven_game_object() const { return parent_game_object(); }
 
 std::optional<std::string> PhysicsBase::set_transform(const Matrix4& transform) {
     require_gameplay_thread(*this);
@@ -167,17 +158,6 @@ std::optional<std::string> PhysicsBase::set_linear_damping(double damping) {
                       kDirtyDamping);
 }
 
-std::optional<std::string> PhysicsBase::set_game_object(const LuaSlot& value) {
-    require_gameplay_thread(*this);
-    // The physics world sees a new target by comparing it with the one its body drives.
-    const bool was_relevant = assemblies().relevant(*this, id());
-    std::optional<std::string> refused = set_instance_reference("GameObject", "GameObject", game_object_ref_, value);
-    if (!refused && (was_relevant || assemblies().relevant(*this, id()))) {
-        assemblies().tree_changed(*this, id());
-    }
-    return refused;
-}
-
 void PhysicsBase::store_simulated(const Matrix4& transform, Vec3 velocity) {
     transform_ = transform;
     velocity_ = velocity;
@@ -189,7 +169,6 @@ void PhysicsBase::on_reuse() {
     anchored_ = false;
     mass_ = kDefaultMass;
     linear_damping_ = 0.0;
-    game_object_ref_.set_guid(std::string());
     dirty_ = kDirtyAll;
     warned_shared = false;
 }
@@ -230,20 +209,6 @@ bool write_anchored(DataModel&, DataModel& object, LuaSlot& in) {
     return true;
 }
 
-bool read_game_object(DataModel&, DataModel& object, LuaSlot& out) {
-    const PhysicsBase* body = base_of(object);
-    if (body == nullptr) {
-        return false;
-    }
-    out = body->game_object();
-    return true;
-}
-
-bool write_game_object(DataModel&, DataModel& object, LuaSlot& in) {
-    PhysicsBase* body = base_of(object);
-    return body != nullptr && refuse(in, body->set_game_object(in));
-}
-
 ANARCHY_LUA_REGISTER(register_physics_base_lua) {
     static const std::string mass = write_json(JsonValue::number(PhysicsBase::kDefaultMass));
     static const std::string identity = [] {
@@ -264,8 +229,6 @@ ANARCHY_LUA_REGISTER(register_physics_base_lua) {
         lua_slider(lua_saved_property("LinearDamping", "number", read_number<PhysicsBase, &PhysicsBase::linear_damping>,
                                       write_number<PhysicsBase, &PhysicsBase::set_linear_damping>, "0"),
                    0.0, 1.0),
-        lua_group("Behavior"),
-        lua_saved_property("GameObject", "GameObject?", read_game_object, write_game_object, "null"),
     };
     // Abstract: no factory registers it.
     register_lua_class("PhysicsBase", "PVInstance", fields, static_cast<int>(std::size(fields)));

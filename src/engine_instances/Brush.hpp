@@ -13,8 +13,8 @@ namespace engine_core {
 
 // One convex solid with a Material and texture alignment on each face, built
 // and edited exactly (docs/superpowers/specs/2026-10-07-brush-core-design.md).
-// A PhysicsBase (which see for Transform, Velocity, Anchored, Mass,
-// LinearDamping, and GameObject) with these too:
+// A PhysicsBase (which see for Transform, Velocity, Anchored, Mass, and
+// LinearDamping) with these too:
 //
 // AngularVelocity  Vector3   as PhysicsObject. (0, 0, 0).
 // Friction         number    as PhysicsObject: 0.6, not below 0.
@@ -40,6 +40,9 @@ public:
     Brush(DataModel::ChildTag tag, DataModel::State& state, InstanceId id);
 
     const char* class_name() const override { return "Brush"; }
+
+    // A Brush is what it draws: it moves no GameObject, not even its parent.
+    InstanceId driven_game_object() const override { return 0; }
 
     Vec3 angular_velocity() const { return angular_velocity_; }
     double friction() const { return friction_; }

@@ -5,8 +5,10 @@
 namespace engine_core {
 
 // A rigid body of any Shape: a PhysicsBase (which see for Transform,
-// Velocity, Anchored, Mass, LinearDamping, and GameObject) with these too.
+// Velocity, Anchored, Mass, and LinearDamping) with these too.
 //
+// GameObject       GameObject?  what the body moves. Nil: the parent, if it
+//                               is a GameObject. Only a PhysicsObject has it.
 // AngularVelocity  Vector3   world space, radians per second. (0, 0, 0).
 // Friction         number    0.6, not below 0.
 // Bounciness       number    restitution: 0, not below 0; the slider runs to 1.
@@ -52,6 +54,11 @@ public:
     LuaSlot mesh() const;
     // The live target, or 0.
     InstanceId mesh_id() const;
+    LuaSlot game_object() const;
+    // The live target, or 0.
+    InstanceId game_object_id() const;
+    // GameObject when it names one, else the parent when that is a GameObject.
+    InstanceId driven_game_object() const override;
 
     // SimulationThread. Each returns why it refused the value, changing nothing.
     std::optional<std::string> set_angular_velocity(Vec3 velocity);
@@ -61,6 +68,7 @@ public:
     std::optional<std::string> set_shape(int shape);
     std::optional<std::string> set_size(Vec3 size);
     std::optional<std::string> set_mesh(const LuaSlot& value);
+    std::optional<std::string> set_game_object(const LuaSlot& value);
 
     // The physics world's side, beside store_simulated: what the body's spin
     // is now, with no Changed, no history, and no dirty mark.
@@ -83,6 +91,7 @@ private:
     Shape shape_ = Shape::Box;
     Vec3 size_{1.f, 1.f, 1.f};
     InstanceRef mesh_ref_;
+    InstanceRef game_object_ref_;
 };
 
 }  // namespace engine_core

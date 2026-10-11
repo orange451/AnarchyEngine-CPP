@@ -703,6 +703,7 @@ add_library(engine_core STATIC
     src/engine_core/ConvexDecomposition.cpp
     src/engine_core/DraggerMath.cpp
     src/engine_core/ConstraintLines.cpp
+    src/engine_core/JointFrame.cpp
     src/engine_core/DraggerWorld.cpp
     src/engine_core/AudioWorld.cpp
     src/engine_core/SoundPreview.cpp
@@ -1018,6 +1019,7 @@ add_executable(sandbox
     sandbox/no_collision_tests.cpp
     sandbox/touch_tests.cpp
     sandbox/constraint_lines_tests.cpp
+    sandbox/joint_frame_tests.cpp
     sandbox/alloc_counter.cpp
     sandbox/copy_remap_tests.cpp
     sandbox/analysis_tests.cpp

@@ -6,6 +6,7 @@
 
 #include "AssetInstances.hpp"
 #include "Camera.hpp"
+#include "Constraint.hpp"
 #include "DataModel.hpp"
 #include "Folder.hpp"
 #include "Brush.hpp"
@@ -1756,6 +1757,10 @@ void TestClassGroups() {
     const std::vector<std::string> brush = GroupedRows(rig, rig.add<engine_core::Brush>("Block"));
     Expect(Has(brush, "Physics:Anchored"), "Brush's Anchored, registered again, stays in Physics");
     for (const std::string& row : brush) {
+        // PVInstance's read-only AssemblyRoot reads last, under Data, on every PVInstance.
+        if (row == "Data:AssemblyRoot") {
+            continue;
+        }
         Expect(row.rfind("Data:", 0) != 0, "Brush has nothing left in Data");
     }
 
@@ -1809,6 +1814,56 @@ void TestGroupsFold() {
     engine_core::set_thread_role(engine_core::ThreadRole::Unknown);
 }
 
+// A constraint's rows: its two ends picked as any reference is, Enabled, and a
+// read-only Active that follows other constraints with no selection change;
+// and a part's read-only AssemblyRoot.
+void TestConstraintRows() {
+    Rig rig;
+    const InstanceId weld = rig.add<engine_core::WeldConstraint>("W");
+    rig.select({weld});
+    const ide::PropertyRow* first = rig.panel.sheet().find("PVInstance1");
+    Expect(first != nullptr && first->kind == ide::PropertyKind::Ref && first->group == "Constraint",
+           "PVInstance1 is a reference row in the Constraint group");
+    Expect(rig.hasRow("PVInstance2") && rig.hasRow("Enabled"), "PVInstance2 and Enabled are there too");
+    const ide::PropertyRow* active = rig.panel.sheet().find("Active");
+    Expect(active != nullptr && !active->writable, "Active is read-only");
+    rig.click(rig.panel.editor("PVInstance1", 0));
+    rig.frame();
+    rig.clickExplorer("A");
+    Expect(dynamic_cast<engine_core::WeldConstraint*>(rig.game.instance(weld))->pv_instance1_id() == rig.a,
+           "a click on A in the explorer picks it");
+
+    // Two RigidConstraints onto B: the lower GUID holds it.
+    const InstanceId first_rigid = rig.add<engine_core::RigidConstraint>("R1");
+    const InstanceId second_rigid = rig.add<engine_core::RigidConstraint>("R2");
+    rig.game.set_guid(first_rigid, "b-rigid");
+    rig.game.set_guid(second_rigid, "a-rigid");
+    auto* r1 = dynamic_cast<engine_core::RigidConstraint*>(rig.game.instance(first_rigid));
+    auto* r2 = dynamic_cast<engine_core::RigidConstraint*>(rig.game.instance(second_rigid));
+    engine_core::LuaSlot slot;
+    slot.kind = engine_core::LuaSlot::Kind::Instance;
+    slot.id = rig.a;
+    r1->set_pv_instance1(slot);
+    r2->set_pv_instance1(slot);
+    slot.id = rig.b;
+    r1->set_pv_instance2(slot);
+    r2->set_enabled(false);
+    r2->set_pv_instance2(slot);
+    rig.select({first_rigid});
+    rig.frame();
+    active = rig.panel.sheet().find("Active");
+    Expect(active != nullptr && active->value.flag, "R1 is Active while R2 is off");
+    r2->set_enabled(true);
+    rig.frame();
+    rig.frame();
+    active = rig.panel.sheet().find("Active");
+    Expect(active != nullptr && !active->value.flag, "turning R2 on reads R1 inactive, with no selection change");
+
+    rig.select({rig.a});
+    const ide::PropertyRow* root = rig.panel.sheet().find("AssemblyRoot");
+    Expect(root != nullptr && !root->writable, "a part shows a read-only AssemblyRoot");
+}
+
 int main() {
     TestGroupMarkersRegister();
     TestSheetGroupOrder();
@@ -1834,6 +1889,7 @@ int main() {
     TestColorPicker();
     TestR6ParentReference();
     TestReferenceRows();
+    TestConstraintRows();
     TestSliderRows();
     TestServiceRowsReadOnly();
     TestInstanceDragIds();

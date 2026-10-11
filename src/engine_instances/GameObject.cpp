@@ -275,8 +275,8 @@ ANARCHY_LUA_REGISTER(register_game_object_lua) {
     // PVInstance has no source file of its own, which would not stay linked.
     // It is abstract: IsA("PVInstance") is true of every class with a
     // Transform. Its one member is AssemblyRoot, read-only.
+    // No group: it reads last, under Data, after each class's own rows.
     const LuaField pv_fields[] = {
-        lua_group("Behavior"),
         lua_property("AssemblyRoot", "PVInstance?", false, read_assembly_root, nullptr),
     };
     register_lua_class("PVInstance", "Instance", pv_fields, static_cast<int>(sizeof(pv_fields) / sizeof(pv_fields[0])));

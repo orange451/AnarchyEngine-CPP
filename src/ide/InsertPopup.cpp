@@ -53,6 +53,8 @@ const char* describe_class(const std::string& name) {
         {"Sound", "An audio asset."},
         {"Animation", "A clip that moves a skinned object's bones."},
         {"Prefab", "A reusable object template."},
+        {"WeldConstraint", "Holds two objects together where they are."},
+        {"RigidConstraint", "Snaps one object's pivot onto another's and holds it there."},
     };
     for (const Row& row : kRows) {
         if (name == row.name) {

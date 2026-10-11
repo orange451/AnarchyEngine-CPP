@@ -1192,16 +1192,21 @@ void testInsertFilter() {
     engine_core::lua_creatable_names(names);
     std::vector<std::string> shown;
     ide::filter_class_names(names, "", shown);
-    // Folders, then scripts and CSS, then the world's objects, each cluster A to Z.
+    // ClassOrder's clusters, each A to Z: the Camera, Terrain, Folders, scripts
+    // and CSS, physics objects, GameObjects, the sky, effects, lights, sound,
+    // what attaches, then the GUI.
     const std::vector<std::string> expected = {
+        "Camera",
+        "Terrain",
         "Folder",
         "CSS", "ModuleScript", "Script",
-        "Camera",
-        "Brush", "GameObject", "Model", "PhysicsObject", "PlayerController", "Terrain",
-        "AmbientOcclusionEffect", "BloomEffect", "DynamicSky", "ScreenSpaceReflections", "Skybox",
+        "Brush", "PhysicsObject", "PlayerController",
+        "GameObject", "Model",
+        "DynamicSky", "Skybox",
+        "AmbientOcclusionEffect", "BloomEffect", "ScreenSpaceReflections",
         "DirectionalLight", "PointLight", "SpotLight",
         "Sound", "SoundEmitter",
-        "Animator", "Attachment", "Bone",
+        "Animator", "Attachment", "Bone", "RigidConstraint", "WeldConstraint",
         "BillboardGui", "ScreenGui",
         "HBox", "ImagePane", "Pane", "VBox",
         "AssetPicker", "Button", "Label", "Slider", "TextField",

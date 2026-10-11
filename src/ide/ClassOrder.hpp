@@ -8,8 +8,9 @@ namespace ide {
 
 // Where a class's cluster sits in the explorer and the Insert list. Lower
 // comes first. The Camera leads, then Terrain, then Folders, then scripts and CSS, then the things
-// in the world: the physics objects, then plain GameObjects. A class
-// not listed comes after every listed one.
+// in the world: the physics objects, then plain GameObjects, the sky, effects,
+// lights, sound, and what attaches things (Attachments, Bones, Animators, and
+// constraints), then the GUI. A class not listed comes after every listed one.
 inline int class_rank(std::string_view class_name) {
     struct Rank {
         std::string_view name;
@@ -40,6 +41,8 @@ inline int class_rank(std::string_view class_name) {
         {"Attachment", 10},
         {"Bone", 10},
         {"Animator", 10},
+        {"WeldConstraint", 10},
+        {"RigidConstraint", 10},
         {"ScreenGui", 11},
         {"BillboardGui", 11},
         {"Pane", 12},

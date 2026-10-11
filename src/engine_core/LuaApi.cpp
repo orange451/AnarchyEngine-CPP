@@ -1057,6 +1057,21 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
         "Z its depth along the look (negative behind the camera), then whether it is in front and inside the view. "
         "Errors until a view shows the camera.",
         "Vector3,boolean", false, {P("point", "Vector3")});
+    add("Constraint", "PVInstance1",
+        "The first end. For a RigidConstraint, the parent, whose pivot the sub is held on.", "PVInstance?", false,
+        {});
+    add("Constraint", "PVInstance2",
+        "The second end. For a RigidConstraint, the sub, which is snapped so its pivot is on PVInstance1's.",
+        "PVInstance?", false, {});
+    add("Constraint", "Enabled", "Off disconnects the constraint without deleting it.", "boolean", false, {});
+    add("Constraint", "Active",
+        "Whether it holds anything now: Enabled, it and both its ends in Workspace, and the ends two different "
+        "objects. Read-only.",
+        "boolean", false, {});
+    add("PVInstance", "AssemblyRoot",
+        "The root of the assembly this is in: what constraints join it to. The root's PhysicsObject when the "
+        "assembly has physics. Read-only; nil outside Workspace.",
+        "PVInstance?", false, {});
     add("WireframeAdornment", "Adornee",
         "The PVInstance whose space the lines are in, so they follow it. nil draws them in world space.",
         "PVInstance?", false, {});

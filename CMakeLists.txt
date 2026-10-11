@@ -665,6 +665,7 @@ add_library(engine_core STATIC
     src/engine_core/CameraBindings.cpp
     src/engine_core/WireframeBindings.cpp
     src/engine_core/Assemblies.cpp
+    src/engine_core/AssemblyFollow.cpp
     src/engine_core/BrushVisuals.cpp
     src/engine_core/terrain/VoxelChunk.cpp
     src/engine_core/terrain/ChunkCache.cpp
@@ -994,6 +995,7 @@ add_executable(sandbox
     sandbox/wireframe_tests.cpp
     sandbox/constraint_tests.cpp
     sandbox/assembly_tests.cpp
+    sandbox/assembly_edit_tests.cpp
     sandbox/analysis_tests.cpp
     sandbox/analysis_world_tests.cpp
     sandbox/analysis_pool_tests.cpp

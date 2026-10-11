@@ -150,6 +150,11 @@ private:
     void changed(DataModel& game);
     // An end of constraint (1 or 2), skipping a GUID known missing until one may have come back.
     InstanceId end_of(const DataModel& game, InstanceId constraint, const InstanceRef& ref, int end);
+    // The editor follow's helpers (AssemblyFollow.cpp).
+    void mark_follow(InstanceId node, std::uint8_t bits);
+    std::uint8_t follow_marks(InstanceId node) const;
+    bool snap(DataModel& game, const RigidEdge& edge, InstanceId camera);
+    void carry(DataModel& game, InstanceId mover, const Matrix4& delta);
     // Play hooks, filled by AssemblyPlay.cpp (Tasks 7 and 8).
     void play_transform_written(DataModel& game, InstanceId id);
     void play_attachment_changed(DataModel& game, InstanceId id);
@@ -208,6 +213,10 @@ private:
     std::vector<InstanceId> dangling_id_;
     std::vector<std::uint8_t> dangling_mask_;
     std::vector<std::uint64_t> dangling_epoch_;
+    // The follow's per-node marks, and its walk under a moved mover.
+    std::vector<std::uint8_t> follow_mark_;
+    std::vector<std::uint32_t> follow_marked_;
+    std::vector<InstanceId> carry_stack_;
 };
 
 // Holds Assemblies suspended for a scope (§3): load, undo and redo of edit

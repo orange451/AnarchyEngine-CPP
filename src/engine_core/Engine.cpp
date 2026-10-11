@@ -2,6 +2,8 @@
 #include "Engine.hpp"
 
 #include "AnimatorStep.hpp"
+#include "Assemblies.hpp"
+#include "ChangeHistoryService.hpp"
 #include "DataModelLock.hpp"
 #include "ScriptAnalysis.hpp"
 #include "ScriptRuntime.hpp"
@@ -340,6 +342,11 @@ void Engine::simulation_loop() {
                                 report_terrain_failures();
                                 terrain_.attach_textures(textures_);
                                 physics_.sync(game_);
+                                // Any RigidConstraint sub a write left off its parent's
+                                // pivot goes back on it; a consistent place writes nothing.
+                                if (game_.assemblies().follow(game_, 0) > 0) {
+                                    game_.history().mark_dirty();
+                                }
                             }
                         },
                         [&] { contract_count_.fetch_add(1); });

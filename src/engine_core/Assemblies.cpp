@@ -130,6 +130,9 @@ Assemblies::Assemblies() {
     dangling_id_.assign(slots, 0);
     dangling_mask_.assign(slots, 0);
     dangling_epoch_.assign(slots, 0);
+    follow_mark_.assign(slots, 0);
+    follow_marked_.reserve(slots);
+    carry_stack_.reserve(slots);
 }
 
 void Assemblies::refresh(const DataModel& game) {
@@ -203,7 +206,16 @@ void Assemblies::transform_written(DataModel& game, InstanceId id) {
     }
     if (game.simulation_running()) {
         play_transform_written(game, id);
-    } else if ((flagged & kRigid) != 0) {
+        return;
+    }
+    // Stopped, a driven PhysicsBase's own Transform moves nothing: its
+    // GameObject decides, and the write is undone at the next sync.
+    if (const auto* body = dynamic_cast<const PhysicsBase*>(game.instance(id))) {
+        if (body->driven_game_object() != 0) {
+            return;
+        }
+    }
+    if ((flagged & kRigid) != 0) {
         follow(game, node_of(id));
     }
 }
@@ -223,9 +235,6 @@ void Assemblies::attachment_changed(DataModel& game, InstanceId id) {
         follow(game, node_of(id));
     }
 }
-
-// Task 4 fills the editor follow.
-int Assemblies::follow(DataModel&, InstanceId) { return 0; }
 
 // Task 7 fills it: a member moved in play moves the whole assembly.
 void Assemblies::play_transform_written(DataModel&, InstanceId) {}

@@ -104,7 +104,8 @@ public:
     InsertButton() {
         setAlignment(jadefx::Pos::Center);
         setCursor(jadefx::Cursor::Pointer);
-        setStyle("color: var(--ide-explorer-button-color);");
+        // Half the 20px chip the tree draws on a 24px row: a circle.
+        setStyle("color: var(--ide-explorer-button-color); border-radius: 10px;");
         if (std::shared_ptr<jadefx::ImageView> icon = icon_graphic("Plus.png")) {
             icon->setStyle("image-color: currentColor;");
             getChildren().add(std::move(icon));

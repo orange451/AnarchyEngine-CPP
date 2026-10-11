@@ -700,7 +700,8 @@ struct PhysicsWorld::Impl {
     };
     std::map<std::pair<std::uint64_t, std::uint64_t>, ShapeTouch> shape_touches;
     std::unordered_map<std::uint64_t, PairTouch> pair_touches;
-    std::unordered_map<std::uint64_t, StepMotion> before_step;
+    // Sorted by body key, kept (not freed) between steps, so a step allocates nothing.
+    std::vector<std::pair<std::uint64_t, StepMotion>> before_step;
     std::vector<std::uint64_t> touch_scratch;
     std::vector<b3ContactData> contact_scratch;
     // Each controller's ground last step, as a shape key: a controller hovers,
@@ -934,12 +935,14 @@ struct PhysicsWorld::Impl {
             if (!b3Body_IsValid(record.body) || b3Body_GetType(record.body) == b3_staticBody) {
                 continue;
             }
-            const std::uint64_t key = b3StoreBodyId(record.body);
-            if (before_step.count(key) == 0) {
-                before_step[key] = StepMotion{b3Body_GetLinearVelocity(record.body), b3Body_GetAngularVelocity(record.body),
-                                          b3Body_GetWorldCenter(record.body)};
-            }
+            // A compound's members share its body: once is enough, and the sort drops the rest.
+            before_step.emplace_back(b3StoreBodyId(record.body),
+                                     StepMotion{b3Body_GetLinearVelocity(record.body),
+                                                b3Body_GetAngularVelocity(record.body),
+                                                b3Body_GetWorldCenter(record.body)});
         }
+        std::sort(before_step.begin(), before_step.end(),
+                  [](const auto& a, const auto& b) { return a.first < b.first; });
     }
 
     // A body's velocity at point: from before the step when saved, else now.
@@ -950,7 +953,10 @@ struct PhysicsWorld::Impl {
         StepMotion motion{b3Body_GetLinearVelocity(body), b3Body_GetAngularVelocity(body),
                           b3Body_GetWorldCenter(body)};
         if (before) {
-            if (const auto found = before_step.find(b3StoreBodyId(body)); found != before_step.end()) {
+            const std::uint64_t key = b3StoreBodyId(body);
+            const auto found = std::lower_bound(before_step.begin(), before_step.end(), key,
+                                                [](const auto& entry, std::uint64_t k) { return entry.first < k; });
+            if (found != before_step.end() && found->first == key) {
                 motion = found->second;
             }
         }

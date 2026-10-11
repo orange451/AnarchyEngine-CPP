@@ -1,6 +1,7 @@
 // Touched and TouchEnded: when two bodies start and stop touching, with a
 // TouchObject (docs/superpowers/specs/2026-10-11-touched-design.md).
 
+#include "alloc_counter.hpp"
 #include "physics_rig.hpp"
 #include "support.hpp"
 
@@ -476,4 +477,30 @@ TEST_CASE("T18 connecting mid-contact fires nothing for it, and its later end is
         ended_platform = ended_platform || (h.ended && h.touch.instance == platform.id());
     }
     REQUIRE(ended_platform);
+}
+
+TEST_CASE("T19 with a listener connected, a step of moving bodies allocates nothing", "[touch][alloc]") {
+#if defined(_ITERATOR_DEBUG_LEVEL) && _ITERATOR_DEBUG_LEVEL != 0
+    SKIP("Debug containers allocate proxies; run in Release");
+#endif
+    PhysicsRig rig;
+    PhysicsObject& floor = rig.floor();
+    // Boxes sliding across the floor: moving bodies, contacts that persist.
+    std::vector<PhysicsObject*> boxes;
+    for (int i = 0; i < 8; ++i) {
+        boxes.push_back(&rig.body(at(-10.f + 2.5f * static_cast<float>(i), 0.5f, 0.f), Vec3{1.f, 1.f, 1.f}, false));
+    }
+    std::vector<Heard> heard;
+    listen(rig.game, floor.id(), heard);
+    heard.reserve(1024);
+    rig.play();
+    run_for(rig, 0.5);
+    for (PhysicsObject* box : boxes) {
+        REQUIRE_FALSE(box->set_velocity(Vec3{0.f, 0.f, 2.f}));
+    }
+    run_for(rig, 0.1);
+    alloc_counter::arm();
+    run_for(rig, 0.5);
+    alloc_counter::disarm();
+    REQUIRE(alloc_counter::count() == 0u);
 }

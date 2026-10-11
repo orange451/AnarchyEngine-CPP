@@ -503,9 +503,12 @@ TEST_CASE("overflow resync keeps Workspace membership", "[dense][member]") {
     game.set_parent(shown.id(), workspace_of(game));
     game.set_parent(stored.id(), game.scene_service("Storage"));
     engine_core::Matrix4 moved = engine_core::matrix4_identity();
+    // One waiting Transform record per instance is all the queue keeps, so
+    // the Color writes between are what fill it.
     for (std::size_t i = 0; i <= engine_core::DataModel::kMaxInvalidations; ++i) {
         moved.m[12] = static_cast<float>(i + 1);  // an equal write would skip its note
         shown.set_transform(moved);
+        shown.set_color(rgb(static_cast<float>(i % 2), 0.f, 0.f));
     }
     REQUIRE(game.invalidations().overflow());
     pump_frame(pump, game);

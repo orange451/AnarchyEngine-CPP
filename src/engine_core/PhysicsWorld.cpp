@@ -23,14 +23,20 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <limits>
 #include <memory>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
 #include <vector>
+
+#if defined(_WIN32)
+#include <malloc.h>
+#endif
 
 namespace engine_core {
 namespace {
@@ -643,7 +649,10 @@ struct PhysicsWorld::Impl {
     // Scratch, kept between steps so a step does not allocate once warm.
     std::vector<InstanceId> eligible;
     std::vector<std::pair<InstanceId, InstanceId>> wanted;
-    std::unordered_map<InstanceId, InstanceId> claims;
+    // Which body moves each claimed GameObject, by the GameObject's slot, and
+    // the GameObjects claimed this sync: reserved, so a sync allocates nothing.
+    std::vector<InstanceId> claim_by_slot;
+    std::vector<InstanceId> claimed;
     std::vector<InstanceId> claimants;
     std::vector<InstanceId> gone;
     std::vector<std::uint32_t> compounds_gone;
@@ -671,7 +680,8 @@ struct PhysicsWorld::Impl {
         members_scratch.reserve(1024);
         eligible.reserve(1024);
         wanted.reserve(1024);
-        claims.reserve(1024);
+        claim_by_slot.assign(DataModel::kMaxInstances, 0);
+        claimed.reserve(DataModel::kMaxInstances);
         claimants.reserve(1024);
         gone.reserve(1024);
     }
@@ -1052,7 +1062,10 @@ struct PhysicsWorld::Impl {
         ++pass;
         game.physics_bodies(eligible);
         wanted.clear();
-        claims.clear();
+        for (const InstanceId target : claimed) {
+            claim_by_slot[id_slot(target)] = 0;
+        }
+        claimed.clear();
         bool shared = false;
         for (InstanceId id : eligible) {
             const auto* object = dynamic_cast<PhysicsBase*>(game.instance(id));
@@ -1061,7 +1074,7 @@ struct PhysicsWorld::Impl {
             }
             const InstanceId target = object->driven_game_object();
             wanted.emplace_back(id, target);
-            if (target != 0 && !claims.emplace(target, id).second) {
+            if (target != 0 && !claim(target, id)) {
                 shared = true;
             }
         }
@@ -1073,7 +1086,7 @@ struct PhysicsWorld::Impl {
         }
         for (const auto& [id, target] : wanted) {
             auto* object = dynamic_cast<PhysicsBase*>(game.instance(id));
-            if (target != 0 && claims[target] != id) {
+            if (target != 0 && claim_by_slot[id_slot(target)] != id) {
                 if (!object->warned_shared) {
                     object->warned_shared = true;
                     say(std::string(object->class_name()) + " " + game.name(id) +
@@ -1328,14 +1341,26 @@ struct PhysicsWorld::Impl {
         terrain_bodies.erase(found);
     }
 
+    // The first body to claim target this sync holds it. False when one did.
+    bool claim(InstanceId target, InstanceId id) {
+        InstanceId& holder = claim_by_slot[id_slot(target)];
+        if (holder != 0) {
+            return false;
+        }
+        holder = id;
+        claimed.push_back(target);
+        return true;
+    }
+
     // Each claimed GameObject goes to the first of its claimants in a
     // depth-first walk of the tree (claim_winner, which Assemblies shares).
     // Only runs when two share one.
     void first_in_tree_order(DataModel& game) {
-        for (auto& [target, winner] : claims) {
+        for (const InstanceId target : claimed) {
+            InstanceId& winner = claim_by_slot[id_slot(target)];
             claimants.clear();
-            for (const auto& [id, claimed] : wanted) {
-                if (claimed == target) {
+            for (const auto& [id, driven] : wanted) {
+                if (driven == target) {
                     claimants.push_back(id);
                 }
             }
@@ -2834,6 +2859,40 @@ std::size_t PhysicsWorld::body_count() const {
     }
     return own + impl_->compounds.size() + impl_->terrain_bodies.size();
 }
+
+namespace {
+
+std::atomic<std::size_t> counted_box3d_allocations{0};
+
+void* counting_box3d_alloc(std::size_t size, std::int32_t alignment) {
+    counted_box3d_allocations.fetch_add(1);
+#if defined(_WIN32)
+    return _aligned_malloc(size, static_cast<std::size_t>(alignment));
+#else
+    void* memory = nullptr;
+    return posix_memalign(&memory, static_cast<std::size_t>(alignment), size) == 0 ? memory : nullptr;
+#endif
+}
+
+void counting_box3d_free(void* memory, std::size_t) {
+#if defined(_WIN32)
+    _aligned_free(memory);
+#else
+    std::free(memory);
+#endif
+}
+
+}  // namespace
+
+void PhysicsWorld::count_box3d_allocations(bool on) {
+    if (on) {
+        b3SetAllocator(counting_box3d_alloc, counting_box3d_free);
+    } else {
+        b3SetAllocator(nullptr, nullptr);
+    }
+}
+
+std::size_t PhysicsWorld::box3d_allocations() { return counted_box3d_allocations.load(); }
 
 std::optional<Vec3> PhysicsWorld::body_center(InstanceId id) const {
     const auto found = impl_->bodies.find(id);

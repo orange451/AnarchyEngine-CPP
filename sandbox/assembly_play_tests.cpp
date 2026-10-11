@@ -1,6 +1,7 @@
 // Assemblies in play: welded physics bodies are one Box3D body, and what has
 // no physics rides along with them.
 
+#include "alloc_counter.hpp"
 #include "physics_rig.hpp"
 #include "support.hpp"
 
@@ -852,3 +853,72 @@ TEST_CASE("AP28 a RigidConstraint whose sub a script destroyed is Active again a
     REQUIRE(rig.game.assemblies().active(r.id()));
     REQUIRE(r.pv_instance2_id() == sub_id);
 }
+
+TEST_CASE("AP26 with assemblies warm, a step allocates nothing", "[assembly][alloc]") {
+#if defined(_ITERATOR_DEBUG_LEVEL) && _ITERATOR_DEBUG_LEVEL != 0
+    SKIP("Debug containers allocate proxies; run in Release");
+#endif
+    PhysicsRig rig;
+    rig.floor();
+    std::vector<PhysicsObject*> pairs;
+    for (int i = 0; i < 20; ++i) {
+        const float x = static_cast<float>(i) * 4.f;
+        PhysicsObject& low = rig.body(at(x, 5.f, 0.f), Vec3{1.f, 1.f, 1.f}, false);
+        PhysicsObject& high = rig.body(at(x, 8.f, 0.f), Vec3{1.f, 1.f, 1.f}, false);
+        weld(rig.game, low.id(), high.id());
+        GameObject& rider = create_part(rig.game);
+        rider.set_transform(at(x + 1.f, 6.f, 0.f));
+        weld(rig.game, low.id(), rider.id());
+        pairs.push_back(&low);
+    }
+    // Bodies that move GameObjects: PhysicsWorld settles who moves each one every sync.
+    for (int i = 0; i < 10; ++i) {
+        GameObject& part = create_part(rig.game);
+        part.set_transform(at(static_cast<float>(i) * 4.f, 3.f, 10.f));
+        PhysicsObject& body = rig.game.create<PhysicsObject>();
+        rig.game.set_parent(body.id(), part.id());
+    }
+    rig.play();
+    // Warm: landed and settled, every contact Box3D will keep already made,
+    // and one round of the writes below already done.
+    rig.engine_steps(720);
+    for (int i = 0; i < 5; ++i) {
+        pairs[static_cast<std::size_t>(i)]->set_transform(at(static_cast<float>(i) * 4.f, 20.f, 0.f));
+        pairs[static_cast<std::size_t>(i)]->set_velocity(Vec3{0.f, 1.f, 0.f});
+        rig.engine_steps(1);
+    }
+    rig.engine_steps(2400);
+    engine_core::PhysicsWorld::count_box3d_allocations(true);
+    const std::size_t box3d_before = engine_core::PhysicsWorld::box3d_allocations();
+    alloc_counter::arm();
+    rig.engine_steps(240);
+    // Box3D's own allocations are counted over plain steps only: moving a
+    // body (SetTransform) grows Box3D's broadphase, welded or not.
+    const std::size_t box3d = engine_core::PhysicsWorld::box3d_allocations() - box3d_before;
+    engine_core::PhysicsWorld::count_box3d_allocations(false);
+    for (int i = 0; i < 5; ++i) {
+        pairs[static_cast<std::size_t>(i)]->set_transform(at(static_cast<float>(i) * 4.f, 20.f, 0.f));
+        pairs[static_cast<std::size_t>(i)]->set_velocity(Vec3{0.f, 1.f, 0.f});
+        rig.engine_steps(1);
+    }
+    alloc_counter::disarm();
+    INFO(alloc_counter::count() << " heap, " << box3d << " Box3D");
+    REQUIRE(alloc_counter::count() == 0);
+    REQUIRE(box3d == 0);
+}
+
+TEST_CASE("AP27 a moved slot queues one redraw, so many riders cannot overflow the queue", "[assembly][alloc]") {
+    PhysicsRig rig;
+    PhysicsObject& box = rig.body(at(0.f, 500.f, 0.f), Vec3{1.f, 1.f, 1.f}, false);
+    for (int i = 0; i < 2100; ++i) {
+        GameObject& rider = create_part(rig.game);
+        rider.set_transform(at(static_cast<float>(i % 50), 501.f, static_cast<float>(i / 50)));
+        weld(rig.game, box.id(), rider.id());
+    }
+    rig.play();
+    rig.steps(1);
+    rig.game.invalidations().clear();
+    rig.steps(32);
+    REQUIRE_FALSE(rig.game.invalidations().overflow());
+}
+

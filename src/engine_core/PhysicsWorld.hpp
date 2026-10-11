@@ -142,6 +142,10 @@ public:
     float body_damping(InstanceId id) const;
     // For tests: where the centre of mass of the body this PhysicsBase is on is.
     std::optional<Vec3> body_center(InstanceId id) const;
+    // For tests: count Box3D's own allocations (it does not use operator new)
+    // from now on, or stop; and how many it has made while counted.
+    static void count_box3d_allocations(bool on);
+    static std::size_t box3d_allocations();
 
     // Where Terrain bodies come from; null for none. SimulationThread, under
     // the write lock. The TerrainWorld must outlive this world or be unset

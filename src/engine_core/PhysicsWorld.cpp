@@ -707,6 +707,11 @@ struct PhysicsWorld::Impl {
     // Each controller's ground last step, as a shape key: a controller hovers,
     // so standing is its touch (stand).
     std::unordered_map<InstanceId, std::uint64_t> standing;
+    // Each controller's sensors under its feet last step, sorted shape keys:
+    // its cylinder hovers, so a thin trigger pad lying on the ground never
+    // meets it (feet). The query's scratch beside it.
+    std::unordered_map<InstanceId, std::vector<std::uint64_t>> feet_sensors;
+    std::vector<std::uint64_t> feet_now;
     double play_seconds = 0.0;
     std::size_t listened = 0;
     // refilter_all's scratch: each group's name and filter bits this pass.
@@ -818,6 +823,7 @@ struct PhysicsWorld::Impl {
         pair_touches.clear();
         before_step.clear();
         standing.clear();
+        feet_sensors.clear();
         no_collide.clear();
         no_collide_keys.clear();
         no_collide_ids.clear();
@@ -882,6 +888,7 @@ struct PhysicsWorld::Impl {
             pair_touches.clear();
             before_step.clear();
             standing.clear();
+            feet_sensors.clear();
             play_seconds = 0.0;
         }
     }
@@ -1209,6 +1216,87 @@ struct PhysicsWorld::Impl {
         }
     }
 
+    static bool feet_hit(b3ShapeId shape, void* context) {
+        auto* found = static_cast<std::pair<b3BodyId, std::vector<std::uint64_t>*>*>(context);
+        if (b3Shape_IsSensor(shape) && !B3_ID_EQUALS(b3Shape_GetBody(shape), found->first)) {
+            found->second->push_back(b3StoreShapeId(shape));
+        }
+        return true;
+    }
+
+    // While anyone listens: each controller's feet, from the ground up its
+    // hover gap, are a trigger pad's visitor, as its cylinder is above that.
+    // New sensors there begin a touch, gone ones end it, keyed as a stand.
+    void feet(DataModel& game) {
+        for (auto& [id, record] : bodies) {
+            if (!record.controller || record.compound != 0 || record.shapes.empty()) {
+                continue;
+            }
+            const auto* controller = dynamic_cast<const PlayerController*>(game.instance(id));
+            feet_now.clear();
+            if (controller != nullptr && listened > 0 && controller->can_collide()) {
+                const float radius = static_cast<float>(controller->radius());
+                const float gap = static_cast<float>(controller->hover_gap());
+                b3Vec3 ring[2 * kProbeSides];
+                for (int side = 0; side < kProbeSides; ++side) {
+                    const float angle = 2.f * kPi * static_cast<float>(side) / static_cast<float>(kProbeSides);
+                    const float x = radius * std::cos(angle);
+                    const float z = radius * std::sin(angle);
+                    ring[side] = b3Vec3{x, 0.f, z};
+                    ring[kProbeSides + side] = b3Vec3{x, gap, z};
+                }
+                b3ShapeProxy proxy;
+                proxy.points = ring;
+                proxy.count = 2 * kProbeSides;
+                proxy.radius = 0.f;
+                b3QueryFilter filter = b3DefaultQueryFilter();
+                filter.categoryBits = CollisionGroups::kRayBit;
+                filter.maskBits = groups->collides_with(controller->collision_group());
+                std::pair<b3BodyId, std::vector<std::uint64_t>*> found{record.body, &feet_now};
+                b3World_OverlapShape(world, b3Body_GetPosition(record.body), &proxy, filter, feet_hit, &found);
+                std::sort(feet_now.begin(), feet_now.end());
+                feet_now.erase(std::unique(feet_now.begin(), feet_now.end()), feet_now.end());
+            }
+            std::vector<std::uint64_t>& was = feet_sensors[id];
+            if (was == feet_now) {
+                continue;
+            }
+            for (const std::uint64_t key : feet_now) {
+                if (std::binary_search(was.begin(), was.end(), key)) {
+                    continue;
+                }
+                const b3ShapeId sensor = b3LoadShapeId(key);
+                const InstanceId zone = instance_of(sensor);
+                bool began = false;
+                PairTouch* pair = begin_keys(stand_key(id), key, id, zone, began);
+                if (pair != nullptr && began) {
+                    overlap_facts(sensor, record.shapes.front(), *pair, true);
+                    fire_pair(game, "Touched", std::min(id, zone), std::max(id, zone), *pair);
+                }
+            }
+            for (const std::uint64_t key : was) {
+                if (!std::binary_search(feet_now.begin(), feet_now.end(), key)) {
+                    end_stand(game, id, key);
+                }
+            }
+            was = feet_now;
+        }
+        // Controllers that are gone: what was under their feet ends.
+        touch_scratch.clear();
+        for (const auto& [id, keys] : feet_sensors) {
+            if (bodies.find(id) == bodies.end()) {
+                touch_scratch.push_back(id);
+            }
+        }
+        for (const std::uint64_t id : touch_scratch) {
+            const auto found = feet_sensors.find(static_cast<InstanceId>(id));
+            for (const std::uint64_t key : found->second) {
+                end_stand(game, found->first, key);
+            }
+            feet_sensors.erase(found);
+        }
+    }
+
     // A controller left the ground with key ground: from the last facts known.
     void end_stand(DataModel& game, InstanceId controller, std::uint64_t ground) {
         const auto touch = shape_touches.find(
@@ -1296,6 +1384,7 @@ struct PhysicsWorld::Impl {
             pair_touches.erase(pair_key(a, b));
         }
         stand(game);
+        feet(game);
         // Pending ends that did not touch again: they end now, from the last facts known.
         touch_scratch.clear();
         for (const auto& [key, pair] : pair_touches) {

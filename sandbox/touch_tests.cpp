@@ -504,3 +504,34 @@ TEST_CASE("T19 with a listener connected, a step of moving bodies allocates noth
     alloc_counter::disarm();
     REQUIRE(alloc_counter::count() == 0u);
 }
+
+TEST_CASE("T20 a PlayerController standing on a thin CanCollide-off pad touches it", "[touch][physics]") {
+    PhysicsRig rig;
+    rig.floor();
+    // A pad lying on the floor, thinner than the controller's hover gap.
+    PhysicsObject& pad = rig.body(at(0.f, 0.05f, 0.f), Vec3{4.f, 0.1f, 4.f}, true);
+    REQUIRE_FALSE(pad.set_can_collide(false));
+    engine_core::PlayerController& player = rig.controller(at(0.f, 0.f, 0.f));
+    std::vector<Heard> heard;
+    listen(rig.game, player.id(), heard);
+    listen(rig.game, pad.id(), heard);
+    rig.play();
+    run_for(rig, 1.0);
+    std::size_t pad_touches = 0;
+    for (const Heard& h : heard) {
+        pad_touches += !h.ended && h.on == player.id() && h.touch.instance == pad.id() ? 1u : 0u;
+    }
+    REQUIRE(pad_touches == 1);
+    // The pad, lying on the floor, touches the floor too: only its touches of the player count here.
+    const auto pad_with_player = [&](bool ended) {
+        std::size_t n = 0;
+        for (const Heard& h : heard) {
+            n += h.ended == ended && h.on == pad.id() && h.touch.instance == player.id() ? 1u : 0u;
+        }
+        return n;
+    };
+    REQUIRE(pad_with_player(false) == 1);
+    REQUIRE_FALSE(player.set_transform(at(8.f, 0.f, 8.f)));
+    run_for(rig, 0.5);
+    REQUIRE(pad_with_player(true) == 1);
+}

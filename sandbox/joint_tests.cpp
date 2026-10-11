@@ -343,3 +343,175 @@ TEST_CASE("JP7 a jointed part a script moves away is pulled back, and stays fini
     REQUIRE(rig.physics.joint_count() == 1);
     REQUIRE(distance(hinged.transform(), placed) < 0.05f);
 }
+
+TEST_CASE("JB1 a Revolute's motor turns it, its limit stops it, and its spring brings it to TargetAngle",
+          "[joint][physics]") {
+    PhysicsRig rig;
+    PhysicsObject& base = rig.body(at(0.f, 5.f, 0.f), Vec3{1.f, 1.f, 1.f}, true);
+    // Its Y is up: it turns about a vertical axis, so gravity does not turn it.
+    PhysicsObject& turner = rig.body(at(3.f, 5.f, 0.f), Vec3{1.f, 1.f, 1.f}, false);
+    auto& hinge = joint<engine_core::RevoluteConstraint>(rig.game, base.id(), turner.id());
+    set(hinge, JointParam::EnableMotor, 1.0);
+    set(hinge, JointParam::MotorSpeed, 90.0);
+    rig.play();
+    rig.seconds(1.0);
+    REQUIRE(near(static_cast<float>(hinge.reading()), 90.f, 5.f));
+    set(hinge, JointParam::EnableLimit, 1.0);
+    set(hinge, JointParam::LowerAngle, -45.0);
+    set(hinge, JointParam::UpperAngle, 120.0);
+    rig.seconds(1.5);
+    REQUIRE(near(static_cast<float>(hinge.reading()), 120.f, 3.f));
+    set(hinge, JointParam::EnableMotor, 0.0);
+    set(hinge, JointParam::EnableSpring, 1.0);
+    set(hinge, JointParam::Hertz, 4.0);
+    set(hinge, JointParam::DampingRatio, 1.0);
+    set(hinge, JointParam::TargetAngle, -30.0);
+    rig.seconds(3.0);
+    REQUIRE(near(static_cast<float>(hinge.reading()), -30.f, 3.f));
+}
+
+TEST_CASE("JB2 a Prismatic's motor slides it, and its limit stops it", "[joint][physics]") {
+    PhysicsRig rig;
+    PhysicsObject& base = rig.body(at(0.f, 5.f, 0.f), Vec3{1.f, 1.f, 1.f}, true);
+    // Its Y lies along -X: it slides across gravity.
+    PhysicsObject& slider = rig.body(turned(at(0.f, 5.f, 3.f), Vec3{0.f, 0.f, 1.f}, 90.0), Vec3{1.f, 1.f, 1.f}, false);
+    auto& slide = joint<engine_core::PrismaticConstraint>(rig.game, base.id(), slider.id());
+    set(slide, JointParam::EnableMotor, 1.0);
+    set(slide, JointParam::MotorSpeed, 1.0);
+    rig.play();
+    rig.seconds(1.0);
+    REQUIRE(near(static_cast<float>(slide.reading()), 1.f, 0.05f));
+    REQUIRE(near(x_of(slider.transform()), -1.f, 0.05f));
+    set(slide, JointParam::EnableLimit, 1.0);
+    set(slide, JointParam::UpperTranslation, 1.5);
+    rig.seconds(1.5);
+    REQUIRE(near(static_cast<float>(slide.reading()), 1.5f, 0.05f));
+}
+
+TEST_CASE("JB3 a Distance holds its length as a rod, sags as a spring, and takes a Length", "[joint][physics]") {
+    PhysicsRig rig;
+    PhysicsObject& base = rig.body(at(0.f, 5.f, 0.f), Vec3{1.f, 1.f, 1.f}, true);
+    PhysicsObject& weight = rig.body(at(0.f, 3.f, 0.f), Vec3{1.f, 1.f, 1.f}, false);
+    auto& rod = joint<engine_core::DistanceConstraint>(rig.game, base.id(), weight.id());
+    rig.play();
+    rig.seconds(1.0);
+    REQUIRE(near(static_cast<float>(rod.reading()), 2.f, 0.01f));
+    set(rod, JointParam::EnableSpring, 1.0);
+    set(rod, JointParam::Hertz, 1.0);
+    set(rod, JointParam::DampingRatio, 1.0);
+    rig.seconds(3.0);
+    // g / (2πf)² ≈ 0.25 below the rest length.
+    REQUIRE(rod.reading() > 2.1);
+    REQUIRE(rod.reading() < 2.4);
+    set(rod, JointParam::EnableSpring, 0.0);
+    set(rod, JointParam::Length, 3.0);
+    rig.seconds(2.0);
+    REQUIRE(near(static_cast<float>(rod.reading()), 3.f, 0.02f));
+}
+
+TEST_CASE("JB4 a Spherical's cone limit holds a swinging weight", "[joint][physics]") {
+    const auto widest_swing = [](bool limited) {
+        PhysicsRig rig;
+        PhysicsObject& base = rig.body(at(0.f, 5.f, 0.f), Vec3{0.5f, 0.5f, 0.5f}, true);
+        PhysicsObject& weight = rig.body(at(0.f, 3.f, 0.f), Vec3{1.f, 1.f, 1.f}, false);
+        // The ball is 2 above the weight, at the base.
+        engine_core::Attachment& top = rig.game.create<engine_core::Attachment>();
+        REQUIRE_FALSE(top.set_offset(at(0.f, 2.f, 0.f)));
+        rig.game.set_parent(top.id(), weight.id());
+        auto& ball = joint<engine_core::SphericalConstraint>(rig.game, base.id(), top.id());
+        if (limited) {
+            set(ball, JointParam::EnableConeLimit, 1.0);
+            set(ball, JointParam::ConeAngle, 20.0);
+        }
+        REQUIRE_FALSE(weight.set_velocity(Vec3{5.f, 0.f, 0.f}));
+        rig.play();
+        float widest = 0.f;
+        for (int i = 0; i < 480; ++i) {
+            rig.steps(1);
+            const Matrix4 at_now = weight.transform();
+            widest = std::max(widest, degrees_between(Vec3{x_of(at_now), y_of(at_now) - 5.f, z_of(at_now)},
+                                                      Vec3{0.f, -1.f, 0.f}));
+        }
+        return widest;
+    };
+    REQUIRE(widest_swing(false) > 45.f);
+    REQUIRE(widest_swing(true) < 22.f);
+}
+
+TEST_CASE("JB5 a Wheel rides its suspension, spins at its motor's speed, and steers", "[joint][physics]") {
+    PhysicsRig rig;
+    PhysicsObject& chassis = rig.body(at(0.f, 3.f, 0.f), Vec3{2.f, 0.5f, 2.f}, true);
+    // A cylinder on its side: its Y, the axle, lies along -X.
+    PhysicsObject& wheel = rig.body(turned(at(1.5f, 3.f, 0.f), Vec3{0.f, 0.f, 1.f}, 90.0), Vec3{1.f, 0.4f, 1.f}, false);
+    REQUIRE_FALSE(wheel.set_shape(static_cast<int>(PhysicsObject::Shape::Cylinder)));
+    auto& axle = joint<engine_core::WheelConstraint>(rig.game, chassis.id(), wheel.id());
+    set(axle, JointParam::SuspensionHertz, 1.0);
+    set(axle, JointParam::SuspensionDampingRatio, 1.0);
+    rig.play();
+    rig.seconds(3.0);
+    // g / (2πf)² ≈ 0.25 below where it was placed, and nowhere else.
+    REQUIRE(near(y_of(wheel.transform()), 2.75f, 0.05f));
+    REQUIRE(near(x_of(wheel.transform()), 1.5f, 0.01f));
+    REQUIRE(near(z_of(wheel.transform()), 0.f, 0.01f));
+    set(axle, JointParam::EnableSpinMotor, 1.0);
+    set(axle, JointParam::SpinMotorSpeed, 180.0);
+    rig.seconds(1.0);
+    REQUIRE(near(static_cast<float>(axle.reading()), 180.f, 5.f));
+    set(axle, JointParam::EnableSpinMotor, 0.0);
+    set(axle, JointParam::EnableSteering, 1.0);
+    set(axle, JointParam::TargetSteeringAngle, 20.0);
+    rig.seconds(2.0);
+    const Vec3 spin = column(wheel.transform(), 1);
+    REQUIRE(near(degrees_between(Vec3{spin.x, 0.f, spin.z}, Vec3{-1.f, 0.f, 0.f}), 20.f, 3.f));
+}
+
+TEST_CASE("JB6 a setting written in play wakes a sleeping body, and Stop puts the settings back",
+          "[joint][physics]") {
+    PhysicsRig rig;
+    PhysicsObject& base = rig.body(at(0.f, 5.f, 0.f), Vec3{1.f, 1.f, 1.f}, true);
+    PhysicsObject& turner = rig.body(at(3.f, 5.f, 0.f), Vec3{1.f, 1.f, 1.f}, false);
+    auto& hinge = joint<engine_core::RevoluteConstraint>(rig.game, base.id(), turner.id());
+    rig.play();
+    rig.seconds(3.0);  // long enough for Box3D to put it to sleep
+    set(hinge, JointParam::EnableMotor, 1.0);
+    set(hinge, JointParam::MotorSpeed, 90.0);
+    rig.seconds(1.0);
+    REQUIRE(near(static_cast<float>(hinge.reading()), 90.f, 5.f));
+    rig.game.stop_simulation();
+    REQUIRE_FALSE(hinge.flag(JointParam::EnableMotor));
+    REQUIRE(hinge.param(JointParam::MotorSpeed) == 0.0);
+}
+
+TEST_CASE("JB7 a base unanchored in play keeps its joint", "[joint][physics]") {
+    PhysicsRig rig;
+    rig.floor();
+    PhysicsObject& base = rig.body(at(0.f, 3.f, 0.f), Vec3{1.f, 1.f, 1.f}, true);
+    PhysicsObject& turner = rig.body(at(2.f, 3.f, 0.f), Vec3{1.f, 1.f, 1.f}, false);
+    auto& hinge = joint<engine_core::RevoluteConstraint>(rig.game, base.id(), turner.id());
+    set(hinge, JointParam::EnableMotor, 1.0);
+    set(hinge, JointParam::MotorSpeed, 45.0);
+    rig.play();
+    rig.seconds(0.5);
+    base.set_anchored(false);
+    rig.seconds(2.0);
+    REQUIRE(rig.physics.joint_count() == 1);
+    REQUIRE(finite(turner.transform()));
+    REQUIRE(near(distance(base.transform(), turner.transform()), 2.f, 0.05f));
+}
+
+TEST_CASE("JB8 a setting written every step changes the joint in place", "[joint][physics]") {
+    PhysicsRig rig;
+    PhysicsObject& base = rig.body(at(0.f, 5.f, 0.f), Vec3{1.f, 1.f, 1.f}, true);
+    PhysicsObject& turner = rig.body(at(3.f, 5.f, 0.f), Vec3{1.f, 1.f, 1.f}, false);
+    auto& hinge = joint<engine_core::RevoluteConstraint>(rig.game, base.id(), turner.id());
+    set(hinge, JointParam::EnableMotor, 1.0);
+    rig.play();
+    rig.steps(1);
+    const std::uint64_t made = rig.physics.joint_key(hinge.id());
+    for (int i = 0; i < 240; ++i) {
+        set(hinge, JointParam::MotorSpeed, 30.0 + 0.25 * i);
+        rig.steps(1);
+    }
+    REQUIRE(rig.physics.joint_key(hinge.id()) == made);
+    REQUIRE(hinge.reading() > 20.0);
+}

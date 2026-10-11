@@ -1564,10 +1564,89 @@ struct PhysicsWorld::Impl {
     }
 
     // Gives Box3D every setting the constraint holds (spec §1), and wakes
-    // both bodies. Task 6 fills in the kinds.
-    void apply_joint(const JointConstraint& constraint, const Joint& joint) {
-        b3Joint_SetCollideConnected(joint.joint, constraint.flag(JointParam::CollideConnected));
-        b3Joint_WakeBodies(joint.joint);
+    // both bodies.
+    void apply_joint(const JointConstraint& c, const Joint& joint) {
+        using P = JointParam;
+        const b3JointId id = joint.joint;
+        const auto f = [&](P p) { return static_cast<float>(c.param(p)); };
+        const auto low = [&](P a, P b) { return std::min(f(a), f(b)); };
+        const auto high = [&](P a, P b) { return std::max(f(a), f(b)); };
+        b3Joint_SetCollideConnected(id, c.flag(P::CollideConnected));
+        switch (joint.kind) {
+            case JointKind::Revolute:
+                b3RevoluteJoint_EnableSpring(id, c.flag(P::EnableSpring));
+                b3RevoluteJoint_SetSpringHertz(id, f(P::Hertz));
+                b3RevoluteJoint_SetSpringDampingRatio(id, f(P::DampingRatio));
+                b3RevoluteJoint_SetTargetAngle(id, radians(c.param(P::TargetAngle)));
+                b3RevoluteJoint_EnableLimit(id, c.flag(P::EnableLimit));
+                b3RevoluteJoint_SetLimits(id, radians(c.param(P::LowerAngle)), radians(c.param(P::UpperAngle)));
+                b3RevoluteJoint_EnableMotor(id, c.flag(P::EnableMotor));
+                b3RevoluteJoint_SetMotorSpeed(id, radians(c.param(P::MotorSpeed)));
+                b3RevoluteJoint_SetMaxMotorTorque(id, f(P::MaxMotorTorque));
+                break;
+            case JointKind::Prismatic:
+                b3PrismaticJoint_EnableSpring(id, c.flag(P::EnableSpring));
+                b3PrismaticJoint_SetSpringHertz(id, f(P::Hertz));
+                b3PrismaticJoint_SetSpringDampingRatio(id, f(P::DampingRatio));
+                b3PrismaticJoint_SetTargetTranslation(id, f(P::TargetTranslation));
+                b3PrismaticJoint_EnableLimit(id, c.flag(P::EnableLimit));
+                b3PrismaticJoint_SetLimits(id, f(P::LowerTranslation), f(P::UpperTranslation));
+                b3PrismaticJoint_EnableMotor(id, c.flag(P::EnableMotor));
+                b3PrismaticJoint_SetMotorSpeed(id, f(P::MotorSpeed));
+                b3PrismaticJoint_SetMaxMotorForce(id, f(P::MaxMotorForce));
+                break;
+            case JointKind::Distance:
+                b3DistanceJoint_SetLength(id, c.param(P::Length) > 0.0 ? f(P::Length) : joint.placed_length);
+                b3DistanceJoint_EnableSpring(id, c.flag(P::EnableSpring));
+                b3DistanceJoint_SetSpringHertz(id, f(P::Hertz));
+                b3DistanceJoint_SetSpringDampingRatio(id, f(P::DampingRatio));
+                b3DistanceJoint_EnableLimit(id, c.flag(P::EnableLimit));
+                b3DistanceJoint_SetLengthRange(id, f(P::MinLength), f(P::MaxLength));
+                b3DistanceJoint_EnableMotor(id, c.flag(P::EnableMotor));
+                b3DistanceJoint_SetMotorSpeed(id, f(P::MotorSpeed));
+                b3DistanceJoint_SetMaxMotorForce(id, f(P::MaxMotorForce));
+                break;
+            case JointKind::Spherical: {
+                const Vec3 velocity = c.motor_velocity();
+                b3SphericalJoint_EnableSpring(id, c.flag(P::EnableSpring));
+                b3SphericalJoint_SetSpringHertz(id, f(P::Hertz));
+                b3SphericalJoint_SetSpringDampingRatio(id, f(P::DampingRatio));
+                b3SphericalJoint_EnableConeLimit(id, c.flag(P::EnableConeLimit));
+                b3SphericalJoint_SetConeLimit(id, radians(c.param(P::ConeAngle)));
+                b3SphericalJoint_EnableTwistLimit(id, c.flag(P::EnableTwistLimit));
+                b3SphericalJoint_SetTwistLimits(id, radians(c.param(P::LowerTwistAngle)),
+                                                radians(c.param(P::UpperTwistAngle)));
+                b3SphericalJoint_EnableMotor(id, c.flag(P::EnableMotor));
+                b3SphericalJoint_SetMotorVelocity(id, b3Vec3{radians(velocity.x), radians(velocity.y),
+                                                             radians(velocity.z)});
+                b3SphericalJoint_SetMaxMotorTorque(id, f(P::MaxMotorTorque));
+                break;
+            }
+            case JointKind::Wheel:
+                b3WheelJoint_EnableSuspension(id, c.flag(P::EnableSuspension));
+                b3WheelJoint_SetSuspensionHertz(id, f(P::SuspensionHertz));
+                b3WheelJoint_SetSuspensionDampingRatio(id, f(P::SuspensionDampingRatio));
+                b3WheelJoint_EnableSuspensionLimit(id, c.flag(P::EnableSuspensionLimit));
+                // Box3D asserts lower <= upper here, so the smaller goes first (spec §4).
+                b3WheelJoint_SetSuspensionLimits(id, low(P::LowerSuspensionLimit, P::UpperSuspensionLimit),
+                                                 high(P::LowerSuspensionLimit, P::UpperSuspensionLimit));
+                b3WheelJoint_EnableSpinMotor(id, c.flag(P::EnableSpinMotor));
+                b3WheelJoint_SetSpinMotorSpeed(id, radians(c.param(P::SpinMotorSpeed)));
+                b3WheelJoint_SetMaxSpinTorque(id, f(P::MaxSpinTorque));
+                b3WheelJoint_EnableSteering(id, c.flag(P::EnableSteering));
+                b3WheelJoint_SetSteeringHertz(id, f(P::SteeringHertz));
+                b3WheelJoint_SetSteeringDampingRatio(id, f(P::SteeringDampingRatio));
+                b3WheelJoint_SetTargetSteeringAngle(id, radians(c.param(P::TargetSteeringAngle)));
+                b3WheelJoint_SetMaxSteeringTorque(id, f(P::MaxSteeringTorque));
+                b3WheelJoint_EnableSteeringLimit(id, c.flag(P::EnableSteeringLimit));
+                b3WheelJoint_SetSteeringLimits(id,
+                                               radians(std::min(c.param(P::LowerSteeringLimit),
+                                                                c.param(P::UpperSteeringLimit))),
+                                               radians(std::max(c.param(P::LowerSteeringLimit),
+                                                                c.param(P::UpperSteeringLimit))));
+                break;
+        }
+        b3Joint_WakeBodies(id);
     }
 
     static void destroy_joint(Joint& joint) {
@@ -1657,6 +1736,33 @@ struct PhysicsWorld::Impl {
         }
     }
 
+    // After a step: each joint's read-only value into its constraint, in the
+    // property's units.
+    void read_joints(DataModel& game) {
+        for (auto& [id, joint] : joints) {
+            auto* constraint = dynamic_cast<JointConstraint*>(game.instance(id));
+            if (constraint == nullptr || !b3Joint_IsValid(joint.joint)) {
+                continue;
+            }
+            switch (joint.kind) {
+                case JointKind::Revolute:
+                    constraint->set_reading(b3RevoluteJoint_GetAngle(joint.joint) * (180.0 / kPi));
+                    break;
+                case JointKind::Prismatic:
+                    constraint->set_reading(b3PrismaticJoint_GetTranslation(joint.joint));
+                    break;
+                case JointKind::Distance:
+                    constraint->set_reading(b3DistanceJoint_GetCurrentLength(joint.joint));
+                    break;
+                case JointKind::Wheel:
+                    constraint->set_reading(b3WheelJoint_GetSpinSpeed(joint.joint) * (180.0 / kPi));
+                    break;
+                case JointKind::Spherical:
+                    break;
+            }
+        }
+    }
+
     void begin(std::uint32_t next_generation) {
         reset();
         b3WorldDef def = b3DefaultWorldDef();
@@ -1725,6 +1831,9 @@ struct PhysicsWorld::Impl {
             b3World_Step(world, static_cast<float>(dt), 1);
         }
         play_seconds += dt;
+        if (!joints.empty()) {
+            read_joints(game);
+        }
         {
             PROFILE_SCOPE("Physics touches", profiler::Group::Physics);
             touches(game);

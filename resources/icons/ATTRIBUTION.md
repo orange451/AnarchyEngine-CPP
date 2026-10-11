@@ -31,3 +31,6 @@ a white hub.
 ModuleScript.png and Script.png are our own, redrawn at 32px from the 16px
 Script scroll; ModuleScript puts a purple package cube
 on it, the way ScriptLocal.png puts a person on it.
+
+Terrain.png is our own, drawn in the Fugue style: two grey peaks with snow
+caps over a green hill.

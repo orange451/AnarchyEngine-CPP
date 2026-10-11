@@ -141,3 +141,24 @@ TEST_CASE("SKEL9 a Prefab poses with its first Model whose Mesh has bones", "[sk
     REQUIRE(engine_core::prefab_skeleton(rig.game, rig.game.guid(rig.prefab({}).id())) == nullptr);
     REQUIRE(engine_core::prefab_skeleton(rig.game, "") == nullptr);
 }
+
+TEST_CASE("SKEL10 an animation layer sits between a bone's rest and its Offset", "[skeleton]") {
+    const auto skeleton = engine_core::make_skeleton(chain());
+    // mid turned a quarter about Z by the animation, then moved 1 along its own X by the Offset.
+    std::vector<Matrix4> animated(3, engine_core::matrix4_identity());
+    animated[1] = spin_z();
+    const engine_core::Pose pose = engine_core::compute_pose(
+        skeleton, {{1, engine_core::matrix4_translation(1.f, 0.f, 0.f), 9}}, &animated);
+    const Matrix4 animated_local = engine_core::matrix4_multiply(skeleton->bones[1].rest_local, spin_z());
+    REQUIRE(near_matrix(pose.locals[1], animated_local));
+    REQUIRE(near_matrix(pose.globals[1],
+                        engine_core::matrix4_multiply(animated_local, engine_core::matrix4_translation(1.f, 0.f, 0.f))));
+    // The Offset's X is the animated X, now up: mid sits at (0, 2, 0).
+    REQUIRE(near_vec(engine_core::matrix4_position(pose.globals[1]), Vec3{0.f, 2.f, 0.f}));
+    // tip follows mid: one unit along mid's turned up, which points down -X.
+    REQUIRE(near_vec(engine_core::matrix4_position(pose.globals[2]), Vec3{-1.f, 2.f, 0.f}));
+    // No layer, or one of the wrong size, is no animation.
+    const std::vector<Matrix4> short_layer(2, spin_z());
+    const engine_core::Pose plain = engine_core::compute_pose(skeleton, {}, &short_layer);
+    REQUIRE(near_matrix(plain.globals[1], skeleton->bones[1].rest));
+}

@@ -83,7 +83,8 @@ std::shared_ptr<const Skeleton> make_skeleton(const std::vector<anarchy::amesh::
     return skeleton;
 }
 
-Pose compute_pose(std::shared_ptr<const Skeleton> skeleton, const std::vector<PoseInput>& inputs) {
+Pose compute_pose(std::shared_ptr<const Skeleton> skeleton, const std::vector<PoseInput>& inputs,
+                  const std::vector<Matrix4>* animated) {
     static std::atomic<std::uint64_t> next_revision{1};
     Pose pose;
     pose.revision = next_revision.fetch_add(1, std::memory_order_relaxed);
@@ -106,8 +107,10 @@ Pose compute_pose(std::shared_ptr<const Skeleton> skeleton, const std::vector<Po
     pose.palette.resize(count * 12);
     for (const std::uint16_t b : pose.skeleton->order) {
         const Skeleton::Bone& bone = bones[b];
-        pose.locals[b] = bone.rest_local;
-        const Matrix4 local = offsets[b] != nullptr ? matrix4_multiply(bone.rest_local, *offsets[b]) : bone.rest_local;
+        pose.locals[b] = animated != nullptr && animated->size() == count
+                             ? matrix4_multiply(bone.rest_local, (*animated)[b])
+                             : bone.rest_local;
+        const Matrix4 local = offsets[b] != nullptr ? matrix4_multiply(pose.locals[b], *offsets[b]) : pose.locals[b];
         pose.globals[b] = bone.parent == kRoot ? local : matrix4_multiply(pose.globals[bone.parent], local);
         const Matrix4 skin = matrix4_multiply(pose.globals[b], bone.inverse_bind);
         float* rows = pose.palette.data() + std::size_t{b} * 12;

@@ -62,8 +62,8 @@ struct PoseInput {
 // A skeleton posed: one entry per bone in each list.
 struct Pose {
     std::shared_ptr<const Skeleton> skeleton;
-    // Each bone's local transform before its Offset: rest_local, until an
-    // animation moves it.
+    // Each bone's local transform before its Offset: rest_local, times the
+    // animation layer's change when there is one.
     std::vector<Matrix4> locals;
     // Model space, with every Offset applied.
     std::vector<Matrix4> globals;
@@ -80,8 +80,12 @@ struct Pose {
     std::uint64_t revision = 0;
 };
 
-// skeleton posed by inputs, each bone's Offset after its local transform. A
-// bone named twice takes the last input; one out of range is ignored.
-Pose compute_pose(std::shared_ptr<const Skeleton> skeleton, const std::vector<PoseInput>& inputs);
+// skeleton posed by inputs, each bone's Offset after its local transform, and,
+// when animated holds one matrix per bone, each bone's animated change from
+// rest between the two: local = rest_local * animated * Offset. A layer of
+// another size is ignored. A bone named twice takes the last input; one out
+// of range is ignored.
+Pose compute_pose(std::shared_ptr<const Skeleton> skeleton, const std::vector<PoseInput>& inputs,
+                  const std::vector<Matrix4>* animated = nullptr);
 
 }  // namespace engine_core

@@ -131,14 +131,17 @@ void* user_data(InstanceId id) { return reinterpret_cast<void*>(static_cast<std:
 
 // Filter bits (docs/superpowers/specs/2026-10-11-collision-groups-design.md
 // §4). A shape's category is its body's group's bit; its mask, every group it
-// collides with, plus the ground and ray query bits. CanCollide false: the
-// ray bit alone, so it touches nothing, whatever its group.
+// collides with, plus the ground and ray query bits. CanCollide false: a
+// sensor (docs/superpowers/specs/2026-10-11-touched-design.md §3), which
+// never collides; its mask says what it senses, and that rays see it.
 b3Filter shape_filter(const CollisionGroups& groups, std::string_view group, bool can_collide) {
     b3Filter filter = b3DefaultFilter();
     filter.categoryBits = groups.category(group);
+    // A CanCollide-off shape is a sensor (it never collides): its mask is what
+    // it senses, by group, and rays, but not the ground probe.
     filter.maskBits = can_collide
                           ? groups.collides_with(group) | CollisionGroups::kGroundBit | CollisionGroups::kRayBit
-                          : CollisionGroups::kRayBit;
+                          : groups.collides_with(group) | CollisionGroups::kRayBit;
     return filter;
 }
 
@@ -2058,7 +2061,7 @@ struct PhysicsWorld::Impl {
             filter.categoryBits = bits.category;
             filter.maskBits = object->can_collide()
                                   ? bits.mask | CollisionGroups::kGroundBit | CollisionGroups::kRayBit
-                                  : CollisionGroups::kRayBit;
+                                  : bits.mask | CollisionGroups::kRayBit;
             for (const b3ShapeId shape : record.shapes) {
                 b3Shape_SetFilter(shape, filter, true);
             }
@@ -2646,6 +2649,9 @@ struct PhysicsWorld::Impl {
         b3ShapeDef def = b3DefaultShapeDef();
         def.filter = filter_of(brush);
         def.enableCustomFiltering = no_collide_ids.count(brush.id()) != 0;
+        // CanCollide off: a sensor (a trigger zone). Every shape can set one off.
+        def.isSensor = !brush.can_collide();
+        def.enableSensorEvents = true;
         def.baseMaterial.friction = static_cast<float>(brush.friction());
         def.baseMaterial.restitution = static_cast<float>(brush.bounciness());
         def.userData = user_data(brush.id());
@@ -2690,6 +2696,9 @@ struct PhysicsWorld::Impl {
         b3ShapeDef def = b3DefaultShapeDef();
         def.filter = filter_of(controller);
         def.enableCustomFiltering = no_collide_ids.count(controller.id()) != 0;
+        // CanCollide off: a sensor (a trigger zone). Every shape can set one off.
+        def.isSensor = !controller.can_collide();
+        def.enableSensorEvents = true;
         def.baseMaterial.friction = 0.f;
         def.baseMaterial.restitution = 0.f;
         def.userData = user_data(controller.id());
@@ -2724,6 +2733,9 @@ struct PhysicsWorld::Impl {
         b3ShapeDef def = b3DefaultShapeDef();
         def.filter = filter_of(object);
         def.enableCustomFiltering = no_collide_ids.count(object.id()) != 0;
+        // CanCollide off: a sensor (a trigger zone). Every shape can set one off.
+        def.isSensor = !object.can_collide();
+        def.enableSensorEvents = true;
         def.baseMaterial.friction = static_cast<float>(object.friction());
         def.baseMaterial.restitution = static_cast<float>(object.bounciness());
         def.userData = user_data(object.id());
@@ -3304,6 +3316,19 @@ std::vector<PhysicsWorld::MeshRayCastHit> PhysicsWorld::ray_cast_terrain_collide
     const auto* terrain_collider = static_cast<const TerrainCollider*>(collider.get());
     return ray_cast_mesh_data(terrain_collider != nullptr ? terrain_collider->mesh : nullptr, ray_origins,
                                ray_directions);
+}
+
+bool PhysicsWorld::shapes_are_sensors(InstanceId id) const {
+    const auto found = impl_->bodies.find(id);
+    if (found == impl_->bodies.end() || found->second.shapes.empty()) {
+        return false;
+    }
+    for (const b3ShapeId shape : found->second.shapes) {
+        if (!b3Shape_IsSensor(shape)) {
+            return false;
+        }
+    }
+    return true;
 }
 
 std::size_t PhysicsWorld::shape_count(InstanceId id) const {

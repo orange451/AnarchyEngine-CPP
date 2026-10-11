@@ -164,6 +164,8 @@ public:
     static std::shared_ptr<void> build_terrain_collider(const terrain::ChunkMesh& mesh);
     // For tests: how many shapes the body of this PhysicsBase or Terrain has, or 0.
     std::size_t shape_count(InstanceId id) const;
+    // For tests: whether the body has shapes and every one is a Box3D sensor.
+    bool shapes_are_sensors(InstanceId id) const;
 
     // For tests: one ray's result from ray_cast_mesh_for_test or
     // ray_cast_terrain_collider_for_test. fraction, triangle, and material

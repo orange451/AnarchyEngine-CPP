@@ -133,7 +133,8 @@ std::optional<std::string> PhysicsBase::set_can_collide(bool can_collide) {
         return std::nullopt;
     }
     can_collide_ = can_collide;
-    dirty_ |= kDirtyFilter;
+    // A shape cannot become a sensor, or stop being one, in place: made again.
+    dirty_ |= kDirtyShape | kDirtyFilter;
     note_property_change("CanCollide", bool_slot(!can_collide), bool_slot(can_collide));
     return std::nullopt;
 }

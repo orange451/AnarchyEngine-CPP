@@ -28,7 +28,9 @@ namespace engine_core {
 // CanCollide       boolean   true. False: the body keeps its shapes and its
 //                            Mass, but they touch nothing: it meets nothing,
 //                            nothing rests on it, and unanchored it falls
-//                            through the ground. Rays still hit it.
+//                            through the ground. Rays still hit it. Its
+//                            shapes are sensors: what overlaps it fires
+//                            Touched and TouchEnded (a trigger zone).
 // CollisionGroup   string    "Default". Which PhysicsService collision group
 //                            it is in; an unregistered name behaves as Default.
 // Mass             number    50. Below kMinMass, as 0 is, is taken as kMinMass.

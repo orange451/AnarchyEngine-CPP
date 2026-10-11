@@ -92,3 +92,22 @@ TEST_CASE("T2 event_listened is true only while Touched or TouchEnded has a conn
     rig.run(R"(_G.c:Disconnect())");
     REQUIRE_FALSE(rig.game.event_listened(box.id(), "Touched"));
 }
+
+TEST_CASE("T3 a CanCollide-off body is a sensor: still hit by rays, still falls, never collides",
+          "[touch][physics]") {
+    PhysicsRig rig;
+    rig.floor();
+    PhysicsObject& zone = rig.body(at(0.f, 5.f, 0.f), Vec3{4.f, 4.f, 4.f}, true);
+    REQUIRE_FALSE(zone.set_can_collide(false));
+    PhysicsObject& ghost = rig.body(at(8.f, 3.f, 0.f), Vec3{1.f, 1.f, 1.f}, false);
+    REQUIRE_FALSE(ghost.set_can_collide(false));
+    rig.physics.sync(rig.game);
+    REQUIRE(rig.physics.shapes_are_sensors(zone.id()));
+    REQUIRE_FALSE(rig.physics.shapes_are_sensors(rig.body(at(0.f, 20.f, 0.f), Vec3{1.f, 1.f, 1.f}, true).id()));
+    const auto hit = rig.physics.raycast(rig.game, Vec3{0.f, 10.f, 0.f}, Vec3{0.f, -20.f, 0.f},
+                                         engine_core::RayFilter{});
+    REQUIRE((hit && hit->instance == zone.id()));
+    rig.play();
+    rig.seconds(2.0);
+    REQUIRE(y_of(ghost.transform()) < -5.f);
+}

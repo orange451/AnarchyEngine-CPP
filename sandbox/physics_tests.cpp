@@ -1866,3 +1866,30 @@ TEST_CASE("P51 a group registered on a freed bit re-filters bodies, with none of
     rig.seconds(1.5);
     REQUIRE(y_of(box.transform()) < -2.f);
 }
+
+TEST_CASE("P52 a Cylinder rolls smoothly: its centre stays level as it rolls on its side", "[physics]") {
+    PhysicsRig rig;
+    rig.floor();
+    // On its side, its axle along X; radius 0.5 resting on the floor.
+    const Matrix4 placed = engine_core::matrix4_multiply(
+        at(0.f, 0.5f, -10.f), engine_core::matrix4_axis_angle(Vec3{0.f, 0.f, 1.f}, 3.14159265358979 / 2.0));
+    PhysicsObject& wheel = rig.body(placed, Vec3{1.f, 0.4f, 1.f}, false);
+    REQUIRE_FALSE(wheel.set_shape(static_cast<int>(PhysicsObject::Shape::Cylinder)));
+    REQUIRE_FALSE(wheel.set_velocity(Vec3{0.f, 0.f, 5.f}));
+    // Rolling without slipping toward +Z turns it about +X at v / r.
+    REQUIRE_FALSE(wheel.set_angular_velocity(Vec3{10.f, 0.f, 0.f}));
+    rig.play();
+    rig.seconds(0.5);
+    float low = 1e9f;
+    float high = -1e9f;
+    for (int i = 0; i < 240; ++i) {
+        rig.steps(1);
+        low = std::min(low, y_of(wheel.transform()));
+        high = std::max(high, y_of(wheel.transform()));
+    }
+    INFO(low << " .. " << high);
+    // One 16-sided hull bounced it 37 mm; layered, it stays within a few
+    // (Box3D's hull contacts, not the facets: a sphere's stays flat).
+    REQUIRE(high - low < 0.008f);
+    REQUIRE(z_of(wheel.transform()) > -6.f);
+}

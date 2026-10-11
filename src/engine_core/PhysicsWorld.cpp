@@ -55,6 +55,11 @@ constexpr float kWeldTolerance = 1e-4f;
 // The sides around a Cylinder or a Cone, as Box3D builds no round hull. A
 // Cylinder of n sides has 6n half-edges, and a hull keeps at most 128.
 constexpr int kRoundSides = 16;
+// A Cylinder PhysicsObject's shape: this many such hulls, each turned a
+// further share of a side about its axis, so the wheel they make together
+// rolls as one of kCylinderLayers * kRoundSides sides (a 0.5 radius lifts
+// under a millimetre a side, where 16 sides lift ten).
+constexpr int kCylinderLayers = 4;
 // A PlayerController's ground probe: a flat ring of points kProbeWidth of
 // Radius across, cast down from kProbeSkin above the cylinder's bottom. A
 // probe that starts inside something is cast again narrower, down to
@@ -828,6 +833,7 @@ struct PhysicsWorld::Impl {
     std::vector<Motion> motions;
     std::vector<InstanceId> members_scratch;
     std::vector<b3Vec3> points;
+    std::vector<b3Vec3> turned_points;
     std::vector<Vec3> mesh_points;
     std::vector<std::uint32_t> triangles;
     std::vector<std::int32_t> indices;
@@ -3819,7 +3825,38 @@ struct PhysicsWorld::Impl {
                 b3DestroyHull(hull);
             }
             break;
-        case PhysicsObject::Shape::Cylinder:
+        case PhysicsObject::Shape::Cylinder: {
+            // Box3D's only round shapes are a sphere and a capsule: layered
+            // hulls (kCylinderLayers), sharing Mass by their summed volume.
+            primitive_points(object.shape(), size, record.center, points);
+            b3HullData* layers[kCylinderLayers] = {};
+            float volume = 0.f;
+            for (int layer = 0; layer < kCylinderLayers; ++layer) {
+                const float angle = 2.f * kPi / static_cast<float>(kRoundSides) * static_cast<float>(layer) /
+                                    static_cast<float>(kCylinderLayers);
+                const float c = std::cos(angle);
+                const float s = std::sin(angle);
+                turned_points.clear();
+                for (const b3Vec3& p : points) {
+                    const float x = p.x - record.center.x;
+                    const float z = p.z - record.center.z;
+                    turned_points.push_back(b3Vec3{record.center.x + x * c - z * s, p.y, record.center.z + x * s + z * c});
+                }
+                layers[layer] = build_hull(turned_points);
+                if (layers[layer] != nullptr) {
+                    volume += b3ComputeHullMass(layers[layer], 1.f).mass;
+                }
+            }
+            record.volume = volume;
+            def.density = density(object, record.volume);
+            for (b3HullData* hull : layers) {
+                if (hull != nullptr) {
+                    add_shape(record, create_hull(record, def, hull));
+                    b3DestroyHull(hull);
+                }
+            }
+            break;
+        }
         case PhysicsObject::Shape::Cone:
         case PhysicsObject::Shape::Wedge:
             primitive_points(object.shape(), size, record.center, points);

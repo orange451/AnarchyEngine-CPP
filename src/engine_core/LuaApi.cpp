@@ -1609,8 +1609,10 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
     add("BrushFace", "With", "A copy with the named fields changed, such as {Material = m, Rotation = 90}.",
         "BrushFace", false, {P("changes", "table")});
 
-    add("Brush", "CanCollide", "When false, nothing collides with this Brush and rays pass through it.", "boolean",
-        false, {});
+    add("PhysicsBase", "CanCollide",
+        "When false, nothing collides with this body: it keeps its Mass, nothing rests on it, and unanchored it "
+        "falls through the ground. Rays still hit it.",
+        "boolean", false, {});
     add("Brush", "Color", "Tints every face, over its Material.", "Color3", false, {});
     add("Brush", "Transparency", "Fades every face, over its Material.", "number", false, {});
     add("Brush", "GetFaces", "Every face, in order.", "{BrushFace}", false, {});

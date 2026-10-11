@@ -25,6 +25,10 @@ namespace engine_core {
 // Transform        Matrix4   where the body is. Identity.
 // Velocity         Vector3   world units per second. (0, 0, 0).
 // Anchored         boolean   a static body, which nothing moves. false.
+// CanCollide       boolean   true. False: the body keeps its shapes and its
+//                            Mass, but they touch nothing: it meets nothing,
+//                            nothing rests on it, and unanchored it falls
+//                            through the ground. Rays still hit it.
 // Mass             number    50. Below kMinMass, as 0 is, is taken as kMinMass.
 // LinearDamping    number    0, not below 0.
 //
@@ -42,7 +46,8 @@ public:
         kDirtyMass = 1u << 4,
         kDirtyType = 1u << 5,
         kDirtyDamping = 1u << 6,
-        kDirtyAll = 0x7fu,
+        kDirtyFilter = 1u << 7,
+        kDirtyAll = 0xffu,
     };
 
     static constexpr double kDefaultMass = 50.0;
@@ -56,6 +61,7 @@ public:
     Matrix4 transform() const override { return transform_; }
     Vec3 velocity() const { return velocity_; }
     bool anchored() const { return anchored_; }
+    bool can_collide() const { return can_collide_; }
     double mass() const { return mass_; }
     double linear_damping() const { return linear_damping_; }
 
@@ -70,6 +76,7 @@ public:
     std::optional<std::string> set_pv_transform(const Matrix4& transform) override { return set_transform(transform); }
     std::optional<std::string> set_velocity(Vec3 velocity);
     void set_anchored(bool anchored);
+    std::optional<std::string> set_can_collide(bool can_collide);
     std::optional<std::string> set_mass(double mass);
     std::optional<std::string> set_linear_damping(double damping);
 
@@ -102,6 +109,7 @@ private:
     Matrix4 transform_ = matrix4_identity();
     Vec3 velocity_{};
     bool anchored_ = false;
+    bool can_collide_ = true;
     double mass_ = kDefaultMass;
     double linear_damping_ = 0.0;
     std::uint32_t dirty_ = kDirtyAll;

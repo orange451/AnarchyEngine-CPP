@@ -1623,3 +1623,51 @@ TEST_CASE("P39 b3RayCastMesh on the SAH and median-split BVHs matches brute-forc
         REQUIRE(misses == kMissRays);
     }
 }
+
+TEST_CASE("P40 every PhysicsBase has CanCollide, saved, true by default", "[physics][cancollide]") {
+    for (const char* name : {"PhysicsBase", "PhysicsObject", "PlayerController", "Brush"}) {
+        INFO(name);
+        REQUIRE(engine_core::lua_class_find(name, "CanCollide") != nullptr);
+    }
+    SimRole role;
+    engine_core::Game game;
+    PhysicsObject& body = game.create<PhysicsObject>();
+    REQUIRE(body.can_collide());
+    engine_core::PropertyBag defaults;
+    body.default_properties(defaults);
+    REQUIRE(engine_core::bag_find(defaults, "CanCollide") != nullptr);
+}
+
+TEST_CASE("P41 a PhysicsObject that cannot collide keeps its body, falls through the floor, and rays hit it",
+          "[physics][cancollide]") {
+    PhysicsRig rig;
+    rig.floor();
+    PhysicsObject& ghost = rig.body(at(0.f, 5.f, 0.f), Vec3{2.f, 2.f, 2.f}, false);
+    REQUIRE_FALSE(ghost.set_can_collide(false));
+    const auto hit =
+        rig.physics.raycast(rig.game, Vec3{0.f, 10.f, 0.f}, Vec3{0.f, -20.f, 0.f}, engine_core::RayFilter{});
+    REQUIRE(hit);
+    REQUIRE(hit->instance == ghost.id());
+    REQUIRE(rig.physics.shape_count(ghost.id()) > 0);
+    rig.play();
+    rig.seconds(2.0);
+    REQUIRE(y_of(ghost.transform()) < -5.f);
+    // Back on, it collides again: an anchored one holds a box up.
+    rig.game.stop_simulation();
+    ghost.set_anchored(true);
+    REQUIRE_FALSE(ghost.set_can_collide(true));
+    PhysicsObject& box = rig.body(at(0.f, 8.f, 0.f), Vec3{1.f, 1.f, 1.f}, false);
+    rig.play();
+    rig.seconds(2.0);
+    REQUIRE(near(y_of(box.transform()), 6.5f, 0.05f));
+}
+
+TEST_CASE("P42 a PlayerController that cannot collide falls through the floor", "[physics][cancollide]") {
+    PhysicsRig rig;
+    rig.floor();
+    engine_core::PlayerController& player = rig.controller(at(0.f, 2.f, 0.f));
+    REQUIRE_FALSE(player.set_can_collide(false));
+    rig.play();
+    rig.seconds(2.0);
+    REQUIRE(y_of(player.transform()) < -5.f);
+}

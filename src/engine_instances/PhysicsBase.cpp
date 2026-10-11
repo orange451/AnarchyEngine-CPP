@@ -127,6 +127,17 @@ void PhysicsBase::set_anchored(bool anchored) {
     }
 }
 
+std::optional<std::string> PhysicsBase::set_can_collide(bool can_collide) {
+    require_gameplay_thread(*this);
+    if (can_collide == can_collide_) {
+        return std::nullopt;
+    }
+    can_collide_ = can_collide;
+    dirty_ |= kDirtyFilter;
+    note_property_change("CanCollide", bool_slot(!can_collide), bool_slot(can_collide));
+    return std::nullopt;
+}
+
 std::optional<std::string> PhysicsBase::set_number(const char* property, double& slot, double value,
                                                    std::uint32_t dirty) {
     require_gameplay_thread(*this);
@@ -167,6 +178,7 @@ void PhysicsBase::on_reuse() {
     transform_ = matrix4_identity();
     velocity_ = {};
     anchored_ = false;
+    can_collide_ = true;
     mass_ = kDefaultMass;
     linear_damping_ = 0.0;
     dirty_ = kDirtyAll;
@@ -209,6 +221,20 @@ bool write_anchored(DataModel&, DataModel& object, LuaSlot& in) {
     return true;
 }
 
+bool read_can_collide(DataModel&, DataModel& object, LuaSlot& out) {
+    const PhysicsBase* body = base_of(object);
+    if (body == nullptr) {
+        return false;
+    }
+    out = bool_slot(body->can_collide());
+    return true;
+}
+
+bool write_can_collide(DataModel&, DataModel& object, LuaSlot& in) {
+    PhysicsBase* body = base_of(object);
+    return body != nullptr && refuse(in, body->set_can_collide(in.flag));
+}
+
 ANARCHY_LUA_REGISTER(register_physics_base_lua) {
     static const std::string mass = write_json(JsonValue::number(PhysicsBase::kDefaultMass));
     static const std::string identity = [] {
@@ -220,6 +246,7 @@ ANARCHY_LUA_REGISTER(register_physics_base_lua) {
         lua_saved_property("Transform", "Matrix4", read_transform, write_transform, identity.c_str()),
         lua_group("Physics"),
         lua_saved_property("Anchored", "boolean", read_anchored, write_anchored, "false"),
+        lua_saved_property("CanCollide", "boolean", read_can_collide, write_can_collide, "true"),
         lua_slider(lua_saved_property("Mass", "number", read_number<PhysicsBase, &PhysicsBase::mass>,
                                       write_number<PhysicsBase, &PhysicsBase::set_mass>, mass.c_str()),
                    0.0, 100.0),

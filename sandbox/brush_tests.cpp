@@ -348,13 +348,51 @@ TEST_CASE("BP1 an anchored Brush holds things up and rays report its face", "[br
     REQUIRE(plane.normal.y > 0.99);
 }
 
-TEST_CASE("BP2 CanCollide false lets rays through", "[brush]") {
+TEST_CASE("BP2 CanCollide false keeps the body and its shapes, and rays still hit it", "[brush]") {
     PhysicsRig rig;
     Brush& brush = rig.game.create<Brush>();
     rig.game.set_parent(brush.id(), workspace_of(rig.game));
-    REQUIRE(rig.physics.raycast(rig.game, Vec3{0.f, 10.f, 0.f}, Vec3{0.f, -20.f, 0.f}, RayFilter{}));
     REQUIRE_FALSE(brush.set_can_collide(false));
-    REQUIRE_FALSE(rig.physics.raycast(rig.game, Vec3{0.f, 10.f, 0.f}, Vec3{0.f, -20.f, 0.f}, RayFilter{}));
+    const auto hit = rig.physics.raycast(rig.game, Vec3{0.f, 10.f, 0.f}, Vec3{0.f, -20.f, 0.f}, RayFilter{});
+    REQUIRE(hit);
+    REQUIRE(hit->instance == brush.id());
+    REQUIRE(hit->face >= 0);
+    REQUIRE(rig.physics.shape_count(brush.id()) > 0);
+    // Unanchored, its Mass is its body's, as when it collides.
+    brush.set_anchored(false);
+    rig.physics.sync(rig.game);
+    REQUIRE(near(static_cast<float>(rig.physics.body_mass(brush.id())), static_cast<float>(PhysicsBase::kDefaultMass),
+                 1e-3f));
+}
+
+TEST_CASE("BP2b an unanchored Brush that cannot collide falls through the floor", "[brush]") {
+    PhysicsRig rig;
+    rig.floor();
+    Brush& brush = rig.game.create<Brush>();
+    REQUIRE_FALSE(brush.set_transform(at(0.f, 5.f, 0.f)));
+    rig.game.set_parent(brush.id(), workspace_of(rig.game));
+    brush.set_anchored(false);
+    REQUIRE_FALSE(brush.set_can_collide(false));
+    rig.play();
+    rig.seconds(2.0);
+    REQUIRE(y_of(brush.transform()) < -5.f);
+}
+
+TEST_CASE("BP2c nothing rests on an anchored Brush that cannot collide, a PlayerController neither", "[brush]") {
+    PhysicsRig rig;
+    rig.floor();
+    Brush& slab = rig.game.create<Brush>();
+    REQUIRE_FALSE(slab.set_faces(brush::make_box({20, 2, 20})));
+    REQUIRE_FALSE(slab.set_transform(at(0.f, 10.f, 0.f)));
+    rig.game.set_parent(slab.id(), workspace_of(rig.game));
+    REQUIRE_FALSE(slab.set_can_collide(false));
+    PhysicsObject& box = rig.body(at(3.f, 13.f, 0.f), Vec3{1.f, 1.f, 1.f}, false);
+    PlayerController& player = rig.controller(at(-3.f, 12.f, 0.f));
+    rig.play();
+    rig.seconds(3.0);
+    // Both fell through it to the floor.
+    REQUIRE(near(y_of(box.transform()), 0.5f, 0.05f));
+    REQUIRE(y_of(player.transform()) < 1.f);
 }
 
 TEST_CASE("BP3 an unanchored Brush falls, and a big one splits into pieces", "[brush]") {

@@ -127,6 +127,39 @@ Matrix4 matrix_of(const b3Vec3& position, const b3Quat& rotation, const Matrix4&
 
 void* user_data(InstanceId id) { return reinterpret_cast<void*>(static_cast<std::uintptr_t>(id)); }
 
+// Filter bits. A solid shape is in kSolidBits and meets every shape. A shape
+// whose body cannot collide (CanCollide false) is in kGhostBits and accepts
+// only kQueryBits, which no shape is in: it touches nothing, not even another
+// ghost, and only a query sees it. Every shape is made with one of the two,
+// since Box3D's default category is every bit, ghosts' included.
+constexpr std::uint64_t kSolidBits = 1u << 0;
+constexpr std::uint64_t kGhostBits = 1u << 1;
+constexpr std::uint64_t kQueryBits = std::uint64_t{1} << 62;
+
+b3Filter shape_filter(bool can_collide) {
+    b3Filter filter = b3DefaultFilter();
+    filter.categoryBits = can_collide ? kSolidBits : kGhostBits;
+    filter.maskBits = can_collide ? B3_DEFAULT_MASK_BITS : kQueryBits;
+    return filter;
+}
+
+// Rays hit every shape, solid or not: a body that cannot collide can still be
+// picked and found.
+b3QueryFilter ray_filter() {
+    b3QueryFilter filter = b3DefaultQueryFilter();
+    filter.categoryBits = kQueryBits;
+    filter.maskBits = B3_DEFAULT_MASK_BITS;
+    return filter;
+}
+
+// A PlayerController's ground is solid: it does not stand on a ghost.
+b3QueryFilter ground_filter() {
+    b3QueryFilter filter = b3DefaultQueryFilter();
+    filter.categoryBits = kQueryBits;
+    filter.maskBits = kSolidBits;
+    return filter;
+}
+
 InstanceId id_of(void* data) { return static_cast<InstanceId>(reinterpret_cast<std::uintptr_t>(data)); }
 
 // How a Mesh's points are placed in the body's space: centered on their
@@ -1070,7 +1103,7 @@ struct PhysicsWorld::Impl {
         RayHits hits;
         hits.game = &game;
         hits.filter = &filter;
-        b3World_CastRay(world, to_b3(origin), to_b3(direction), b3DefaultQueryFilter(), ray_hit, &hits);
+        b3World_CastRay(world, to_b3(origin), to_b3(direction), ray_filter(), ray_hit, &hits);
         // Task 9 (spec "Physics"): Box3D's cast above tested every chunk that
         // has a collider shape; march each Terrain's own voxel distance
         // field, in its own local space, over exactly the chunks that do
@@ -1380,6 +1413,7 @@ struct PhysicsWorld::Impl {
         def.materialCount = kTerrainMaterialCount;
         def.baseMaterial = terrain_surfaces[0];
         def.userData = user_data(terrain);
+        def.filter = shape_filter(true);
         // A static shape otherwise meets only bodies that move: one resting
         // where a chunk was just made again would sink into it first.
         def.invokeContactCreation = true;
@@ -1874,6 +1908,9 @@ struct PhysicsWorld::Impl {
             make_shape(game, object, record);
             return;
         }
+        if ((dirty & PhysicsObject::kDirtyFilter) != 0) {
+            set_filters(object, record);
+        }
         if ((dirty & PhysicsObject::kDirtyMaterial) != 0) {
             double friction = -1.0;
             double bounciness = 0.0;
@@ -1896,6 +1933,15 @@ struct PhysicsWorld::Impl {
                 b3Shape_SetDensity(shape, density(object, record.volume), false);
             }
             b3Body_ApplyMassFromShapes(record.body);
+        }
+    }
+
+    // CanCollide changed: the shapes stay, and only what they touch changes.
+    // Their contacts are made again, so a body turned off lets go at once.
+    static void set_filters(const PhysicsBase& object, const Body& record) {
+        const b3Filter filter = shape_filter(object.can_collide());
+        for (const b3ShapeId shape : record.shapes) {
+            b3Shape_SetFilter(shape, filter, true);
         }
     }
 
@@ -2000,6 +2046,10 @@ struct PhysicsWorld::Impl {
     }
 
     Ground probe(const PlayerController& controller, const Body& record) {
+        // One that cannot collide stands on nothing: it falls through.
+        if (!controller.can_collide()) {
+            return Ground{};
+        }
         const float radius = static_cast<float>(controller.radius());
         const float gap = static_cast<float>(controller.hover_gap());
         const b3Vec3 feet = b3Body_GetPosition(record.body);
@@ -2018,7 +2068,7 @@ struct PhysicsWorld::Impl {
             proxy.radius = 0.f;
             ProbeHits hits;
             hits.self = record.body;
-            b3World_CastShape(world, origin, &proxy, b3Vec3{0.f, -reach, 0.f}, b3DefaultQueryFilter(), probe_hit,
+            b3World_CastShape(world, origin, &proxy, b3Vec3{0.f, -reach, 0.f}, ground_filter(), probe_hit,
                               &hits);
             if (hits.started_inside) {
                 continue;
@@ -2043,7 +2093,7 @@ struct PhysicsWorld::Impl {
                 const float deeper = reach + gap;
                 ProbeHits middle;
                 middle.self = record.body;
-                b3World_CastRay(world, origin, b3Vec3{0.f, -deeper, 0.f}, b3DefaultQueryFilter(), probe_hit, &middle);
+                b3World_CastRay(world, origin, b3Vec3{0.f, -deeper, 0.f}, ground_filter(), probe_hit, &middle);
                 if (middle.hit && !middle.started_inside && middle.normal.y >= steepest(controller)) {
                     ground.walled = true;
                     ground.wall = ground.normal;
@@ -2455,7 +2505,7 @@ struct PhysicsWorld::Impl {
     // A Brush's solid, exactly: one hull, or past Box3D's hull limits, convex
     // pieces that fill it (brush::hull_pieces), never simplified. Each piece
     // shares the Brush's Friction, Bounciness, and one density, so Mass splits
-    // by volume. CanCollide false: no shapes.
+    // by volume. CanCollide false: the same shapes, touching nothing (shape_filter).
     void make_brush_shape(DataModel& game, Brush& brush, Body& record) {
         drop_shape(record);
         record.scale = scale_for(game, record.driven);
@@ -2465,11 +2515,8 @@ struct PhysicsWorld::Impl {
         record.center = center_for(game, record.driven);
         const GameObject* driven = record.driven != 0 ? game.game_object(record.driven) : nullptr;
         record.prefab = driven != nullptr ? driven->prefab_guid() : std::string();
-        if (!brush.can_collide()) {
-            record.volume = 0.f;
-            return;
-        }
         b3ShapeDef def = b3DefaultShapeDef();
+        def.filter = shape_filter(brush.can_collide());
         def.baseMaterial.friction = static_cast<float>(brush.friction());
         def.baseMaterial.restitution = static_cast<float>(brush.bounciness());
         def.userData = user_data(brush.id());
@@ -2512,6 +2559,7 @@ struct PhysicsWorld::Impl {
         primitive_points(PhysicsObject::Shape::Cylinder, Vec3{2.f * radius, tall, 2.f * radius},
                          Vec3{0.f, gap + tall * 0.5f, 0.f}, points);
         b3ShapeDef def = b3DefaultShapeDef();
+        def.filter = shape_filter(controller.can_collide());
         def.baseMaterial.friction = 0.f;
         def.baseMaterial.restitution = 0.f;
         def.userData = user_data(controller.id());
@@ -2544,6 +2592,7 @@ struct PhysicsWorld::Impl {
         record.made_without_pieces = false;
         record.pieces_stamp.clear();
         b3ShapeDef def = b3DefaultShapeDef();
+        def.filter = shape_filter(object.can_collide());
         def.baseMaterial.friction = static_cast<float>(object.friction());
         def.baseMaterial.restitution = static_cast<float>(object.bounciness());
         def.userData = user_data(object.id());
@@ -2778,6 +2827,9 @@ struct PhysicsWorld::Impl {
             // A new shape takes the current Friction, Bounciness, and Mass too.
             make_shape(game, object, record);
         } else {
+            if ((dirty & PhysicsObject::kDirtyFilter) != 0) {
+                set_filters(object, record);
+            }
             if (rigid != nullptr && (dirty & PhysicsObject::kDirtyMaterial) != 0) {
                 for (const b3ShapeId shape : record.shapes) {
                     b3Shape_SetFriction(shape, static_cast<float>(rigid->friction()));

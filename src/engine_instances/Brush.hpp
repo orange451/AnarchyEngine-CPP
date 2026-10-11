@@ -20,7 +20,6 @@ namespace engine_core {
 // Friction         number    as PhysicsObject: 0.6, not below 0.
 // Bounciness       number    as PhysicsObject: 0, not below 0.
 // AngularDamping   number    as PhysicsObject: 0, not below 0.
-// CanCollide       boolean   true. False: no shapes, rays pass through.
 // Color            Color3    white. Tints every face, over its Material.
 // Transparency     number    0. Fades every face, over its Material.
 // Faces            string    hidden; the faces as compact JSON. Scripts read
@@ -48,7 +47,6 @@ public:
     double friction() const { return friction_; }
     double bounciness() const { return bounciness_; }
     double angular_damping() const { return angular_damping_; }
-    bool can_collide() const { return can_collide_; }
     ColorRgb color() const { return color_; }
     double transparency() const { return transparency_; }
 
@@ -67,7 +65,6 @@ public:
     std::optional<std::string> set_friction(double friction);
     std::optional<std::string> set_bounciness(double bounciness);
     std::optional<std::string> set_angular_damping(double damping);
-    std::optional<std::string> set_can_collide(bool can_collide);
     std::optional<std::string> set_color(ColorRgb color);
     std::optional<std::string> set_transparency(double transparency);
     // Builds, then keeps the built faces (redundant ones dropped).
@@ -93,7 +90,6 @@ private:
     double friction_ = kDefaultFriction;
     double bounciness_ = 0.0;
     double angular_damping_ = 0.0;
-    bool can_collide_ = true;
     ColorRgb color_{};
     double transparency_ = 0.0;
 

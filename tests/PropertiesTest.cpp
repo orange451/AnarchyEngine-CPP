@@ -1477,6 +1477,11 @@ void TestAssetReferencePicker() {
     Expect(BodyMesh(rig.game, body) == 0, "None clears the Mesh");
 
     // A reference to a class that is not an asset still picks from the selection.
+    // GameObject is the sheet's last row, below the page: scrolled to first.
+    if (jadefx::ScrollPane* scroll = rig.panel.scroll_pane()) {
+        scroll->setVvalue(scroll->getVmax());
+        rig.frame();
+    }
     rig.click(rig.panel.editor("GameObject", 0));
     rig.frame();
     Expect(rig.panel.picking() && !rig.panel.asset_picking(), "GameObject picks from the selection");

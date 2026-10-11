@@ -6,7 +6,9 @@
 
 #include "Brush.hpp"
 #include "Constraint.hpp"
+#include "AssetInstances.hpp"
 #include "Events.hpp"
+#include "MeshShapes.hpp"
 #include "PhysicsObject.hpp"
 #include "PhysicsWorld.hpp"
 #include "TouchRecord.hpp"
@@ -385,4 +387,29 @@ TEST_CASE("T14 a PlayerController moving onto another body ends one touch and be
     REQUIRE(count(heard, player.id(), true) == 1);
     REQUIRE(count(heard, player.id(), false) == 2);
     REQUIRE(heard.back().touch.instance == right.id());
+}
+
+TEST_CASE("T15 a body lifted off an anchored Custom mesh ends its touch", "[touch][physics]") {
+    PhysicsRig rig;
+    engine_core::Mesh& mesh = rig.game.create<engine_core::Mesh>();
+    PhysicsObject& ground = rig.body(at(0.f, -0.5f, 0.f), Vec3{20.f, 1.f, 20.f}, true);
+    REQUIRE_FALSE(ground.set_shape(static_cast<int>(PhysicsObject::Shape::Custom)));
+    engine_core::LuaSlot slot;
+    slot.kind = engine_core::LuaSlot::Kind::Instance;
+    slot.id = mesh.id();
+    REQUIRE_FALSE(ground.set_mesh(slot));
+    PhysicsObject& box = rig.body(at(0.f, 1.f, 0.f), Vec3{1.f, 1.f, 1.f}, false);
+    std::vector<Heard> heard;
+    listen(rig.game, box.id(), heard);
+    rig.play();
+    // Playing, the Mesh's geometry is the session's own (as P16 does).
+    REQUIRE_FALSE(edit_geometry(rig.game, mesh, [](anarchy::amesh::Data& data) {
+        engine_core::add_box(data, Vec3{20.f, 1.f, 20.f}, Vec3{0.f, 0.f, 0.f});
+    }));
+    run_for(rig, 1.0);
+    REQUIRE(count(heard, box.id(), false) == 1);
+    REQUIRE(heard.back().touch.instance == ground.id());
+    REQUIRE_FALSE(box.set_transform(at(0.f, 20.f, 0.f)));
+    run_for(rig, 0.1);
+    REQUIRE(count(heard, box.id(), true) == 1);
 }

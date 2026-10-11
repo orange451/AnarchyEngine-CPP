@@ -1030,7 +1030,18 @@ struct PhysicsWorld::Impl {
         }
         b3Vec3 point = points > 0 ? b3Vec3{sum.x / points, sum.y / points, sum.z / points}
                                   : b3Body_GetWorldCenter(body_b);
-        if (data == nullptr) {
+        const auto convex = [](b3ShapeId shape) {
+            const b3ShapeType type = b3Shape_GetType(shape);
+            return type == b3_sphereShape || type == b3_capsuleShape || type == b3_hullShape;
+        };
+        if (data == nullptr && !(convex(a) && convex(b))) {
+            // Parting from a mesh (Terrain, an anchored Custom): Box3D's
+            // closest point is for convex shapes only, so the last facts known stand.
+            const bool a_low = instance_of(a) < instance_of(b);
+            const Vec3 last = pair.normal_from_low;
+            point = b3Vec3{pair.point.x, pair.point.y, pair.point.z};
+            normal = a_low ? b3Vec3{last.x, last.y, last.z} : b3Vec3{-last.x, -last.y, -last.z};
+        } else if (data == nullptr) {
             // Parting: the closest points between the two, and the gap's direction.
             const b3Vec3 on_a = b3Shape_GetClosestPoint(a, b3Body_GetWorldCenter(body_b));
             const b3Vec3 on_b = b3Shape_GetClosestPoint(b, on_a);

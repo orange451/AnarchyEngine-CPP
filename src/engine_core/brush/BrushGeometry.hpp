@@ -170,6 +170,14 @@ bool contains_point(const Shape& shape, DVec3 point, double tolerance = 1e-6);
 double volume(const Shape& shape);
 DVec3 centroid(const Shape& shape);
 
+// Moves a built brush so its bounds are centred on the origin, each face's
+// texture staying where it was on the solid. Returns where the new origin was
+// in the old local space; zero when already centred or refused.
+DVec3 recentre(Built& built);
+// Moves a built brush's local origin to c (everything moves by -c), textures
+// staying where they were on the solid.
+void shift(Built& built, DVec3 c);
+
 // Convex pieces small enough for a physics hull: each at most max_vertices
 // vertices and max_faces faces. A shape that fits is one piece; one that does
 // not is cut through its centre across its longest side, and each half again.

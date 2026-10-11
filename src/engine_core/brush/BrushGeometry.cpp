@@ -918,6 +918,55 @@ std::vector<Piece> hull_pieces(const Shape& shape, std::size_t max_vertices, std
     return out;
 }
 
+namespace {
+
+// The face's texture axes as drawn: its own, or the defaults, turned by its rotation.
+void texture_axes(const Face& face, DVec3 n, DVec3& u, DVec3& v) {
+    u = face.u_axis;
+    v = face.v_axis;
+    if (length(u) < 1e-12 || length(v) < 1e-12) default_axes(n, u, v);
+    // Rotation turns both axes about the normal (Rodrigues).
+    if (face.rotation != 0.0) {
+        const double a = face.rotation * kPi / 180.0;
+        const double cs = std::cos(a);
+        const double sn = std::sin(a);
+        auto turn = [&](DVec3 x) { return x * cs + cross(n, x) * sn + n * (dot(n, x) * (1.0 - cs)); };
+        u = turn(u);
+        v = turn(v);
+    }
+}
+
+}  // namespace
+
+DVec3 recentre(Built& built) {
+    const DVec3 c = (built.shape.min + built.shape.max) * 0.5;
+    if (!built.ok() || length(c) < 1e-9) return {};
+    shift(built, c);
+    return c;
+}
+
+void shift(Built& built, DVec3 c) {
+    Shape& shape = built.shape;
+    for (std::size_t i = 0; i < built.faces.size(); ++i) {
+        Face& face = built.faces[i];
+        face.p1 = face.p1 - c;
+        face.p2 = face.p2 - c;
+        face.p3 = face.p3 - c;
+        // u = p . U / scale + offset, so moving p by -c moves the offset by c . U / scale.
+        DVec3 u;
+        DVec3 v;
+        texture_axes(face, shape.planes[i].normal, u, v);
+        const double su = face.scale_u != 0.0 ? face.scale_u : 1.0;
+        const double sv = face.scale_v != 0.0 ? face.scale_v : 1.0;
+        face.offset_u += dot(c, u) / su;
+        face.offset_v += dot(c, v) / sv;
+    }
+    for (DVec3& p : shape.vertices) p = p - c;
+    for (Plane& plane : shape.planes) plane.distance -= dot(plane.normal, c);
+    shape.min = shape.min - c;
+    shape.max = shape.max - c;
+}
+
 Mesh build_mesh(const std::vector<Face>& faces, const Shape& shape) {
     Mesh mesh;
     // Each polygon's range: one per Material, in order of first use.
@@ -955,18 +1004,9 @@ Mesh build_mesh(const std::vector<Face>& faces, const Shape& shape) {
         const Polygon& poly = shape.polygons[pi];
         const Face& face = faces[poly.face];
         const DVec3 n = shape.planes[poly.face].normal;
-        DVec3 u = face.u_axis;
-        DVec3 v = face.v_axis;
-        if (length(u) < 1e-12 || length(v) < 1e-12) default_axes(n, u, v);
-        // Rotation turns both axes about the normal (Rodrigues).
-        if (face.rotation != 0.0) {
-            const double a = face.rotation * kPi / 180.0;
-            const double cs = std::cos(a);
-            const double sn = std::sin(a);
-            auto turn = [&](DVec3 x) { return x * cs + cross(n, x) * sn + n * (dot(n, x) * (1.0 - cs)); };
-            u = turn(u);
-            v = turn(v);
-        }
+        DVec3 u;
+        DVec3 v;
+        texture_axes(face, n, u, v);
         const double su = face.scale_u != 0.0 ? face.scale_u : 1.0;
         const double sv = face.scale_v != 0.0 ? face.scale_v : 1.0;
         const DVec3 tangent = normalize(u);

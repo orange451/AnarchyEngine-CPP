@@ -477,9 +477,11 @@ int brush_split(lua_State* state) {
         if (!halves) {
             luaL_error(state, "the plane does not cut the brush");
         }
-        std::vector<Face> front = halves->second.faces;
-        raise_if(state, brush.apply(std::move(halves->first)));
-        push_faces(state, front);
+        DVec3 moved;
+        raise_if(state, brush.apply(std::move(halves->first), &moved));
+        // The front half in this brush's local space, which recentring moved.
+        brush::shift(halves->second, moved);
+        push_faces(state, halves->second.faces);
         return 1;
     });
 }

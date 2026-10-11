@@ -113,6 +113,59 @@ TEST_CASE("BI4 an edit is one undo step and Stop restores the faces", "[brush]")
     REQUIRE(restored->faces_json() == after);
 }
 
+TEST_CASE("BI6 an edit recentres the origin and nothing moves in the world", "[brush]") {
+    SimRole role;
+    Game game;
+    Brush& brush = add_brush(game);
+    // Turned a quarter about Y and placed at (10, 0, 0): local +X is world -Z.
+    Matrix4 turned = matrix4_translation(10.f, 0.f, 0.f);
+    turned.m[0] = 0.f;
+    turned.m[2] = -1.f;
+    turned.m[8] = 1.f;
+    turned.m[10] = 0.f;
+    REQUIRE_FALSE(brush.set_transform(turned));
+    std::vector<brush::Face> faces = brush.faces();
+    faces[0].offset_u = 0.25;
+    REQUIRE_FALSE(brush.set_faces(faces));
+    const brush::Mesh before = *brush.mesh();
+
+    // Pushing the +X face out 4 would leave the origin 2 off centre.
+    const std::size_t right = *brush::face_at(brush.shape(), {2, 0, 0}, {1, 0, 0});
+    begin_step(game, "Grow");
+    REQUIRE_FALSE(brush.apply(brush::move_face(brush.faces(), right, 4.0)));
+    end_step(game);
+    REQUIRE(brush.shape().min.x == -4.0);
+    REQUIRE(brush.shape().max.x == 4.0);
+    const Vec3 at = matrix4_position(brush.transform());
+    REQUIRE(std::abs(at.x - 10.f) < 1e-5f);
+    REQUIRE(std::abs(at.z + 2.f) < 1e-5f);
+
+    // Every vertex that was there before is still there in the world, with its UV.
+    const brush::Mesh after = *brush.mesh();
+    for (const brush::MeshVertex& old : before.vertices) {
+        if (old.position[0] > 0.f) {
+            continue;  // the moved face's side
+        }
+        bool found = false;
+        for (const brush::MeshVertex& now : after.vertices) {
+            const float wx = now.position[0] + 2.f;  // local back into the old frame
+            if (std::abs(wx - old.position[0]) < 1e-5f && std::abs(now.position[1] - old.position[1]) < 1e-5f &&
+                std::abs(now.position[2] - old.position[2]) < 1e-5f && now.normal[0] == old.normal[0] &&
+                now.normal[1] == old.normal[1] && now.normal[2] == old.normal[2]) {
+                REQUIRE(std::abs(now.uv[0] - old.uv[0]) < 1e-5f);
+                REQUIRE(std::abs(now.uv[1] - old.uv[1]) < 1e-5f);
+                found = true;
+            }
+        }
+        REQUIRE(found);
+    }
+
+    // Undo puts back both the faces and the Transform.
+    game.history().undo();
+    REQUIRE(brush.shape().max.x == 2.0);
+    REQUIRE(std::abs(matrix4_position(brush.transform()).z) < 1e-6f);
+}
+
 TEST_CASE("BI5 a project saves and loads a Brush's faces", "[brush]") {
     SimRole role;
     TempDir dir;
@@ -212,10 +265,11 @@ TEST_CASE("BL3 Lua splits, loop cuts, moves corners, transforms, and hulls a Bru
         b:MakeBox(Vector3.new(4, 4, 4))
         b:MoveVertex(Vector3.new(2, 2, 2), Vector3.new(2, 3, 2))
         print("lifted", #b:GetVertices())
-        print(pcall(function() b:MoveVertex(Vector3.new(-2, 2, 2), Vector3.zero) end))
+        -- Lifting one corner recentred the box half a unit up.
+        print(pcall(function() b:MoveVertex(Vector3.new(-2, 1.5, 2), Vector3.zero) end))
         b:TransformShape(Matrix4.new(Vector3.new(10, 0, 0)))
         lo = b:GetBounds()
-        print("moved", lo.X)
+        print("moved", lo.X, b.Transform.Position.X)
         b:MakeHull({Vector3.zero, Vector3.xAxis, Vector3.yAxis, Vector3.zAxis})
         print("hull", #b:GetFaces())
         print(pcall(function() b:MakeHull({Vector3.zero, Vector3.xAxis, Vector3.yAxis}) end))
@@ -233,7 +287,7 @@ TEST_CASE("BL3 Lua splits, loop cuts, moves corners, transforms, and hulls a Bru
     REQUIRE(has_text(out, "nocut\ttrue"));
     REQUIRE(has_text(out, "lifted\t8"));
     REQUIRE(has_text(out, "concave"));
-    REQUIRE(has_text(out, "moved\t8"));
+    REQUIRE(has_text(out, "moved\t-2\t9.5"));  // the Split above left the origin half a unit back
     REQUIRE(has_text(out, "hull\t4"));
     REQUIRE(has_text(out, "span no volume"));
     REQUIRE(has_text(out, "painted\ttrue"));

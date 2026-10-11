@@ -202,7 +202,30 @@ void Brush::keep(brush::Built built, std::string json) {
     note_property_change("Faces", string_slot(previous), string_slot(faces_json_));
 }
 
-std::optional<std::string> Brush::apply(brush::Built built) {
+std::optional<std::string> Brush::apply(brush::Built built, brush::DVec3* moved) {
+    require_gameplay_thread(*this);
+    if (!built.ok()) {
+        return std::move(built.error);
+    }
+    // The origin stays at the middle of the solid: the faces move to it and the
+    // Transform moves the other way, so nothing moves in the world.
+    const brush::DVec3 c = brush::recentre(built);
+    if (moved != nullptr) {
+        *moved = c;
+    }
+    std::optional<std::string> refused = keep_as_is(std::move(built));
+    if (refused || c == brush::DVec3{}) {
+        return refused;
+    }
+    Matrix4 transform = this->transform();
+    for (int row = 0; row < 3; ++row) {
+        transform.m[12 + row] += static_cast<float>(transform.m[row] * c.x + transform.m[4 + row] * c.y +
+                                                    transform.m[8 + row] * c.z);
+    }
+    return set_transform(transform);
+}
+
+std::optional<std::string> Brush::keep_as_is(brush::Built built) {
     require_gameplay_thread(*this);
     if (!built.ok()) {
         return std::move(built.error);
@@ -229,7 +252,8 @@ std::optional<std::string> Brush::set_faces_json(const std::string& json) {
     if (!faces) {
         return "Faces: " + error;
     }
-    return set_faces(std::move(*faces));
+    // Saved and undone faces are taken where they are, so the Transform beside them stays right.
+    return keep_as_is(brush::build(std::move(*faces)));
 }
 
 std::optional<std::string> Brush::set_angular_velocity(Vec3 velocity) {

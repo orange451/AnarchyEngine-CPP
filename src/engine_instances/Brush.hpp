@@ -69,8 +69,11 @@ public:
     std::optional<std::string> set_transparency(double transparency);
     // Builds, then keeps the built faces (redundant ones dropped).
     std::optional<std::string> set_faces(std::vector<brush::Face> faces);
-    // Keeps a built result; the caller ran brush::build.
-    std::optional<std::string> apply(brush::Built built);
+    // Keeps a built result; the caller ran brush::build. The solid is recentred
+    // on the origin and the Transform moved to match, so nothing moves in the
+    // world; moved, when given, gets the old local position of the new origin.
+    std::optional<std::string> apply(brush::Built built, brush::DVec3* moved = nullptr);
+    // Takes the faces exactly, not recentred: loading and undo.
     std::optional<std::string> set_faces_json(const std::string& json);
 
     void store_angular_velocity(Vec3 velocity) { angular_velocity_ = velocity; }
@@ -80,6 +83,7 @@ protected:
 
 private:
     void reset_faces();
+    std::optional<std::string> keep_as_is(brush::Built built);
     void keep(brush::Built built, std::string json);
 
     Vec3 angular_velocity_{};

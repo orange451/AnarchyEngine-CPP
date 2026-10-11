@@ -157,6 +157,8 @@ TEST_CASE("AC3 a looped track wraps, an unlooped one clamps, either way along", 
     REQUIRE(near(track.time, 2.f));
     REQUIRE(near(stepper.out[0].position.x, 4.f));
 
+    // An unlooped track at its end stops itself: play it again for the next case.
+    engine_core::track_play(track, 0.f, 1.f, 1.f);
     track.looped = true;
     track.speed = -1.f;
     track.time = 0.25f;
@@ -168,6 +170,7 @@ TEST_CASE("AC3 a looped track wraps, an unlooped one clamps, either way along", 
     REQUIRE(near(track.time, 0.f));
 
     // A time written far past the end comes back into it.
+    engine_core::track_play(track, 0.f, 1.f, 1.f);
     track.looped = true;
     track.speed = 1.f;
     track.time = 5.f;
@@ -334,4 +337,37 @@ TEST_CASE("AC9 an Animation reads its clip from its AANIM file, and again when t
     std::ofstream(dir / "animations" / "junk.aanim") << "junk";
     REQUIRE_FALSE(animation.set_path("animations/junk.aanim"));
     REQUIRE(animation.clip() == nullptr);
+}
+
+TEST_CASE("AC10 an unlooped track that reaches its end holds there, fades out, and says it stopped", "[animation]") {
+    Stepper stepper;
+    stepper.tracks.push_back(track_of(walk()));
+    TrackState& track = stepper.tracks[0];
+    engine_core::track_play(track, 0.f, 1.f, 1.f);
+    track.time = 1.9f;
+    int stopped = 0;
+    stepper.step(0.2f);
+    stopped += stepper.count(TrackEvent::Kind::Stopped);
+    // At its end, holding its last pose, as the default fade begins.
+    REQUIRE(near(track.time, 2.f));
+    REQUIRE(near(stepper.out[0].position.x, 4.f));
+    REQUIRE(track.playing);
+    stepper.step(0.1f);
+    stopped += stepper.count(TrackEvent::Kind::Stopped);
+    REQUIRE(track.playing);
+    REQUIRE(near(track.weight_current, 0.5f));
+    for (int i = 0; i < 3; ++i) {
+        stepper.step(0.1f);
+        stopped += stepper.count(TrackEvent::Kind::Stopped);
+    }
+    REQUIRE_FALSE(track.playing);
+    REQUIRE(stopped == 1);
+    // Played again, it starts over from its end only if told to: the time stays where it ended.
+    REQUIRE(near(track.time, 2.f));
+    // Backward, its end is its start.
+    engine_core::track_play(track, 0.f, -1.f, 1.f);
+    track.time = 0.1f;
+    stepper.step(0.2f);
+    REQUIRE(near(track.time, 0.f));
+    REQUIRE(near(track.weight_target, 0.f));
 }

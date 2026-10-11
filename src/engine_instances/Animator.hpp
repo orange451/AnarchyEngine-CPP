@@ -92,6 +92,7 @@ private:
     // step's scratch, kept so a step allocates only while it grows.
     std::vector<BonePose> poses_;
     std::vector<bool> touched_;
+    AnimationScratch scratch_;
     std::vector<TrackEvent> events_;
 
     mutable std::mutex animated_mutex_;

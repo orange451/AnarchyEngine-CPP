@@ -259,3 +259,22 @@ TEST_CASE("ANI7 scripts load tracks, play them, hear their keyframes and their s
     }
     rig.game.stop_simulation();
 }
+
+TEST_CASE("ANI8 an Animator with nothing playing leaves its GameObject's pose alone", "[animator]") {
+    AnimRig anim;
+    const auto before = anim.arm->pose();
+    anim.animator->step(0.1);
+    anim.animator->step(0.1);
+    REQUIRE(anim.animator->animated() == nullptr);
+    REQUIRE(anim.arm->pose() == before);
+    // A stopped track adds nothing either.
+    const std::uint32_t id = anim.play();
+    anim.animator->step(0.5);
+    REQUIRE(anim.animator->animated() != nullptr);
+    engine_core::track_stop(*anim.animator->track(id), 0.f);
+    anim.animator->step(0.1);
+    REQUIRE(anim.animator->animated() == nullptr);
+    const auto rested = anim.arm->pose();
+    anim.animator->step(0.1);
+    REQUIRE(anim.arm->pose() == rested);
+}

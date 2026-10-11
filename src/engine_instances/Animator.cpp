@@ -7,6 +7,7 @@
 #include "LuaApi.hpp"
 #include "Skinning.hpp"
 
+#include <algorithm>
 #include <atomic>
 #include <iterator>
 
@@ -121,10 +122,12 @@ void Animator::step(double dt) {
         slots_[i].matched = signature;
     }
     events_.clear();
-    step_animations(tracks_, static_cast<float>(dt), bones, poses_, touched_, events_);
+    step_animations(tracks_, static_cast<float>(dt), bones, poses_, touched_, events_, &scratch_);
 
     std::shared_ptr<const AnimatedPose> made;
-    if (skeleton != nullptr) {
+    // Nothing moved: no layer at all, so the GameObject keeps the pose it has.
+    const bool moved = std::find(touched_.begin(), touched_.end(), true) != touched_.end();
+    if (skeleton != nullptr && moved) {
         auto pose = std::make_shared<AnimatedPose>();
         pose->revision = next_revision();
         pose->skeleton = signature;

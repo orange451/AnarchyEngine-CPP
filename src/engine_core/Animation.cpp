@@ -10,6 +10,8 @@ namespace {
 namespace aanim = anarchy::aanim;
 
 constexpr float kPi = 3.14159265358979f;
+// How long an unlooped track takes to fade out at its end: Play's and Stop's default.
+constexpr float kEndFade = 0.2f;
 
 float lerp(float a, float b, float t) { return a + (b - a) * t; }
 
@@ -284,6 +286,15 @@ std::shared_ptr<const Clip> make_clip(const aanim::Data& data) {
 void track_play(TrackState& track, float fade, float speed, float weight) {
     if (!track.playing) {
         track.weight_current = 0.f;
+        // An unlooped track that ran to its end plays again from its start.
+        if (track.clip != nullptr && !track.looped) {
+            if (speed >= 0.f && track.time >= track.clip->length) {
+                track.time = 0.f;
+            } else if (speed < 0.f && track.time <= 0.f) {
+                track.time = track.clip->length;
+            }
+            track.key_lo = -1;
+        }
     }
     track.playing = true;
     track.stop_on_fade = false;
@@ -311,15 +322,18 @@ void track_adjust_weight(TrackState& track, float weight, float fade) { set_weig
 void track_adjust_speed(TrackState& track, float speed, float fade) { set_speed(track, speed, fade); }
 
 void step_animations(std::vector<TrackState>& tracks, float dt, std::size_t bone_count, std::vector<BonePose>& out,
-                     std::vector<bool>& touched, std::vector<TrackEvent>& events) {
+                     std::vector<bool>& touched, std::vector<TrackEvent>& events, AnimationScratch* scratch) {
     out.assign(bone_count, BonePose{});
     touched.assign(bone_count, false);
-    // Each bone's contributions, folded as they come: the running pose, its
-    // weight so far, and the heaviest one seen, which the fold starts from.
-    struct Gather {
-        std::vector<std::pair<BonePose, float>> parts;
-    };
-    std::vector<Gather> gathered(bone_count);
+    // Each bone's contributions, folded after every track has given its own.
+    AnimationScratch local;
+    std::vector<std::vector<std::pair<BonePose, float>>>& gathered = (scratch != nullptr ? *scratch : local).parts;
+    if (gathered.size() < bone_count) {
+        gathered.resize(bone_count);
+    }
+    for (std::size_t bone = 0; bone < bone_count; ++bone) {
+        gathered[bone].clear();
+    }
 
     for (TrackState& track : tracks) {
         advance_transitions(track, dt);
@@ -339,6 +353,12 @@ void step_animations(std::vector<TrackState>& tracks, float dt, std::size_t bone
             continue;
         }
         const bool at_end = wrap_time(track, clip.length, wrapped);
+        // An unlooped track at its end, in the way it plays, holds there and fades out.
+        const bool finished = !track.looped && ((track.speed > 0.f && track.time >= clip.length) ||
+                                                (track.speed < 0.f && track.time <= 0.f));
+        if (finished && !track.stop_on_fade) {
+            track_stop(track, kEndFade);
+        }
         if (clip.keyframes.empty()) {
             continue;
         }
@@ -386,12 +406,12 @@ void step_animations(std::vector<TrackState>& tracks, float dt, std::size_t bone
             if (weight <= 0.f) {
                 continue;
             }
-            gathered[static_cast<std::size_t>(bone)].parts.emplace_back(blend(a.pose, b.pose, eased), weight);
+            gathered[static_cast<std::size_t>(bone)].emplace_back(blend(a.pose, b.pose, eased), weight);
         }
     }
 
     for (std::size_t bone = 0; bone < bone_count; ++bone) {
-        auto& parts = gathered[bone].parts;
+        auto& parts = gathered[bone];
         if (parts.empty()) {
             continue;
         }

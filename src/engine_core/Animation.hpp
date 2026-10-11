@@ -108,9 +108,17 @@ void track_stop(TrackState& track, float fade);
 void track_adjust_weight(TrackState& track, float weight, float fade);
 void track_adjust_speed(TrackState& track, float speed, float fade);
 
+// What a step gathers per bone, kept between steps by its caller so a step
+// allocates only while a rig or a blend grows.
+struct AnimationScratch {
+    std::vector<std::vector<std::pair<BonePose, float>>> parts;
+};
+
 // Steps tracks by dt and writes one change from rest per skeleton bone into
 // out (bone_count of them; rest for bones no track moves), with touched
-// saying which a track moved, and events what was heard, in order.
+// saying which a track moved, and events what was heard, in order. An
+// unlooped track that reaches its end (its start, played backward) holds
+// there and stops with the default fade, Stopped coming when the fade does.
 //
 // A bone's contributions are each track's weight times its pose's weight.
 // Their weighted average is the bone's pose when they add to 1 or more; when
@@ -118,6 +126,7 @@ void track_adjust_speed(TrackState& track, float speed, float fade);
 // fades in from rest, a crossfade never sags, and a pose of weight 0 leaves
 // its bone to the other tracks.
 void step_animations(std::vector<TrackState>& tracks, float dt, std::size_t bone_count, std::vector<BonePose>& out,
-                     std::vector<bool>& touched, std::vector<TrackEvent>& events);
+                     std::vector<bool>& touched, std::vector<TrackEvent>& events,
+                     AnimationScratch* scratch = nullptr);
 
 }  // namespace engine_core

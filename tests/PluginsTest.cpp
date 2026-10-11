@@ -183,12 +183,34 @@ int RunPluginsTests() {
             Expect(std::abs((icon->getAbsoluteX() + icon->getWidth() / 2) - (go->getAbsoluteX() + go->getWidth() / 2)) < 2,
                    "the icon sits in the middle of the card");
         }
-        Expect(std::abs(ribbon->pluginsRow()->getHeight() - 72) < 2, "the plugins row is 72 points tall");
+        if (go != nullptr && !go->getElementsByClassName("ide-ribbon-card-icon").empty()) {
+            Expect(std::abs(go->getElementsByClassName("ide-ribbon-card-icon")[0]->getHeight() - 24) < 1,
+                   "a card's icon is 24 points");
+        }
+        Expect(std::abs(ribbon->pluginsRow()->getHeight() - 64) < 2, "the plugins row is 64 points tall");
+        // The toolbar's name under its buttons, in the middle of the group.
+        std::vector<jadefx::Node*> captions = ribbon->pluginsRow()->getElementsByClassName("ide-ribbon-group-name");
+        Expect(captions.size() == 1, "a group shows its toolbar's name");
+        if (go != nullptr && captions.size() == 1) {
+            auto* caption = dynamic_cast<jadefx::Label*>(captions[0]);
+            Expect(caption != nullptr && caption->getText() == "Bar", "the name is the toolbar's");
+            jadefx::Node* group = go->getParent() != nullptr ? go->getParent()->getParent() : nullptr;
+            Expect(group != nullptr && HasClass(group, "ide-ribbon-group"), "the card is in a group");
+            Expect(captions[0]->getAbsoluteY() >= go->getAbsoluteY() + go->getHeight() - 1, "the name is under the cards");
+            if (group != nullptr) {
+                Expect(std::abs((captions[0]->getAbsoluteX() + captions[0]->getWidth() / 2) -
+                                (group->getAbsoluteX() + group->getWidth() / 2)) < 2,
+                       "in the middle of the group");
+            }
+            Expect(captions[0]->getAbsoluteY() + captions[0]->getHeight() <=
+                       ribbon->pluginsRow()->getAbsoluteY() + ribbon->pluginsRow()->getHeight() + 1,
+                   "inside the row");
+        }
         if (go != nullptr) {
             const double above = go->getAbsoluteY() - ribbon->pluginsRow()->getAbsoluteY();
             const double below = ribbon->pluginsRow()->getAbsoluteY() + ribbon->pluginsRow()->getHeight() -
                                  (go->getAbsoluteY() + go->getHeight());
-            Expect(above <= 8 && below <= 8, "with little room above and below a card");
+            Expect(above <= 8 && below <= 22, "with little room above a card, and its group's name below");
         }
         Expect(ribbon->pluginsRow()->getElementsByClassName("ide-ribbon-empty").empty(), "the hint goes");
         if (go != nullptr) {

@@ -16,7 +16,7 @@ public:
         : action_(std::move(action)) {
         getClassList().add("ide-ribbon-card");
         setAlignment(jadefx::Pos::Center);
-        setSpacing(4);
+        setSpacing(2);
         setCursor(jadefx::Cursor::Pointer);
         auto slot = jadefx::make<jadefx::StackPane>();
         slot->getClassList().add("ide-ribbon-card-icon");
@@ -43,8 +43,8 @@ public:
     }
 
 private:
-    // Points: the icon is drawn at twice the 16 of a list row, as the 2x Fugue icons are made.
-    static constexpr double kCardIcon = 32;
+    // Points: half again the 16 of a list row. The 32px icons are drawn down to it.
+    static constexpr double kCardIcon = 24;
     std::function<void()> action_;
 };
 
@@ -178,10 +178,13 @@ jadefx::Node* PluginRibbon::buttonNode(std::uint32_t id) const {
 }
 
 std::shared_ptr<jadefx::Node> PluginRibbon::makeGroup(const engine_core::PluginToolbarState& toolbar) {
-    auto group = jadefx::make<jadefx::HBox>();
+    // The cards in a row, the toolbar's name in the middle under them.
+    auto group = jadefx::make<jadefx::VBox>();
     group->getClassList().add("ide-ribbon-group");
-    group->setSpacing(2);
-    group->setAlignment(jadefx::Pos::CenterLeft);
+    group->setAlignment(jadefx::Pos::TopCenter);
+    auto cards = jadefx::make<jadefx::HBox>();
+    cards->setSpacing(2);
+    cards->setAlignment(jadefx::Pos::CenterLeft);
     for (const engine_core::PluginButtonState& state : toolbar.buttons) {
         std::string icon;
         if (state.icon.rfind(kIconPrefix, 0) == 0) {
@@ -202,19 +205,30 @@ std::shared_ptr<jadefx::Node> PluginRibbon::makeGroup(const engine_core::PluginT
             jadefx::Tooltip::install(button.get(), jadefx::make<jadefx::Tooltip>(state.tooltip));
         }
         buttons_[id] = button.get();
-        group->getChildren().add(std::move(button));
+        cards->getChildren().add(std::move(button));
     }
+    group->getChildren().add(std::move(cards));
+    auto name = jadefx::make<jadefx::Label>(toolbar.name);
+    name->getClassList().add("ide-ribbon-group-name");
+    name->setMouseTransparent(true);
+    group->getChildren().add(std::move(name));
     return group;
 }
 
 namespace {
 
+// A gap between groups, a line down its middle.
 std::shared_ptr<jadefx::Node> MakeSeparator() {
-    auto separator = jadefx::make<jadefx::Pane>();
-    separator->getClassList().add("ide-ribbon-separator");
-    separator->setMouseTransparent(true);
-    separator->setPrefSize(9, 20);
-    return separator;
+    auto gap = jadefx::make<jadefx::StackPane>();
+    gap->setAlignment(jadefx::Pos::Center);
+    gap->setMouseTransparent(true);
+    gap->setMinSize(21, 48);
+    gap->setPrefSize(21, 48);
+    auto line = jadefx::make<jadefx::Pane>();
+    line->getClassList().add("ide-ribbon-separator");
+    line->setPrefSize(1, 48);
+    gap->getChildren().add(std::move(line));
+    return gap;
 }
 
 }  // namespace

@@ -64,8 +64,8 @@ namespace layout_detail {
 // strip below is 24, matching the Java toolbar.
 constexpr double kMenuHeight = kNativeMenuBar ? 0 : 28;
 constexpr double kRibbonHeight = 32;
-// The rows of tool cards under the ribbon's tab bar: a card's height and a little.
-constexpr double kToolRowHeight = 72;
+// The rows of tool cards under the ribbon's tab bar: a card, its group's name under it, and a little.
+constexpr double kToolRowHeight = 64;
 constexpr double kStatusHeight = 24;
 constexpr double kSideWidth = 240;
 constexpr double kConsoleHeight = 150;
@@ -229,17 +229,18 @@ scene {
 }
 .ide-ribbon-separator {
     width: 1px;
-    height: 20px;
-    background-color: var(--ide-ribbon-border-color);
+    height: 48px;
+    background-color: var(--ide-muted-text-color);
+    opacity: 0.5;
 }
 .ide-ribbon-empty {
     padding: 0 6px;
     color: var(--ide-muted-text-color);
 }
 .ide-ribbon-card {
-    padding: 4px 10px;
-    min-width: 64px;
-    border-radius: 8px;
+    padding: 2px 6px;
+    min-width: 48px;
+    border-radius: 6px;
     transition: background-color 0.12s, opacity 0.12s;
 }
 .ide-ribbon-card:hover {
@@ -256,7 +257,11 @@ scene {
     opacity: 0.4;
 }
 .ide-ribbon-card-name {
-    font-size: 12px;
+    font-size: 11px;
+}
+.ide-ribbon-group-name {
+    font-size: 10px;
+    color: var(--ide-muted-text-color);
 }
 .ide-viewport {
     background-color: var(--ide-viewport-color);

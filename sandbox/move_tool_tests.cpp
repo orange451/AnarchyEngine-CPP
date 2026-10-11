@@ -642,6 +642,9 @@ TEST_CASE("MT19 dragging a RigidConstraint sub held by its own Attachment leaves
     MoveRig move;
     const InstanceId a = move.part_at("A", 0, 0, -10);
     const InstanceId b = move.part_at("B", 4, 0, -10);
+    // Plain GameObjects: the lower GUID is root, and A must stay.
+    move.rig.game.set_guid(a, "0000-a");
+    move.rig.game.set_guid(b, "ffff-b");
     engine_core::Attachment& grip = move.rig.game.create<engine_core::Attachment>();
     move.rig.game.set_parent(grip.id(), b);
     REQUIRE_FALSE(grip.set_offset(engine_core::matrix4_translation(0.f, 1.f, 0.f)));
@@ -678,6 +681,9 @@ TEST_CASE("MT20 after a snapped-back drag the handles sit on the selection again
     MoveRig move;
     const InstanceId a = move.part_at("A", 0, 0, -10);
     const InstanceId b = move.part_at("B", 4, 0, -10);
+    // Plain GameObjects: the lower GUID is root, and A must stay.
+    move.rig.game.set_guid(a, "0000-a");
+    move.rig.game.set_guid(b, "ffff-b");
     engine_core::RigidConstraint& rigid = move.rig.game.create<engine_core::RigidConstraint>();
     move.rig.game.set_parent(rigid.id(), move.rig.game.scene_service("Workspace"));
     engine_core::LuaSlot slot;

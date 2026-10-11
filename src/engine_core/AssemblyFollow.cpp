@@ -1,5 +1,6 @@
 // The editor's RigidConstraint follow (spec §4): while stopped, each active
-// RigidConstraint's sub is placed so its pivot sits on its parent's.
+// RigidConstraint's sub (the end away from the root) is placed so its pivot
+// sits on its parent's.
 
 #include "Assemblies.hpp"
 
@@ -109,14 +110,17 @@ bool Assemblies::snap(DataModel& game, const RigidEdge& edge, InstanceId camera)
     }
     Matrix4 parent_pivot;
     Matrix4 sub_pivot;
-    if (!end_pivot(game, edge.constraint, 1, parent_pivot) || !end_pivot(game, edge.constraint, 2, sub_pivot)) {
+    const int sub_end = 3 - edge.parent_end;
+    if (!end_pivot(game, edge.constraint, edge.parent_end, parent_pivot) ||
+        !end_pivot(game, edge.constraint, sub_end, sub_pivot)) {
         return false;
     }
     const Matrix4 frame = node_frame(game, edge.sub_node);
     Matrix4 target;
     const auto* constraint = dynamic_cast<const Constraint*>(game.instance(edge.constraint));
-    const auto* grip = constraint != nullptr ? dynamic_cast<const Attachment*>(game.instance(constraint->pv_instance2_id()))
-                                             : nullptr;
+    const InstanceId grip_id =
+        constraint == nullptr ? 0 : sub_end == 1 ? constraint->pv_instance1_id() : constraint->pv_instance2_id();
+    const auto* grip = dynamic_cast<const Attachment*>(game.instance(grip_id));
     if (grip != nullptr && grip->offset_space() == TransformSpace::World) {
         // A World-space Attachment follows only its holder's position.
         target = frame;

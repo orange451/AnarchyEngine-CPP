@@ -138,7 +138,8 @@ Matrix4 Assemblies::body_pose(const DataModel& game, const PlayAssembly& assembl
 void Assemblies::snap_in_play(DataModel& game, const RigidEdge& edge) {
     Matrix4 parent_pivot;
     Matrix4 sub_pivot;
-    if (!end_pivot(game, edge.constraint, 1, parent_pivot) || !end_pivot(game, edge.constraint, 2, sub_pivot)) {
+    if (!end_pivot(game, edge.constraint, edge.parent_end, parent_pivot) ||
+        !end_pivot(game, edge.constraint, 3 - edge.parent_end, sub_pivot)) {
         return;
     }
     const Matrix4 delta = matrix4_multiply(parent_pivot, matrix4_inverse(sub_pivot));
@@ -428,7 +429,8 @@ void Assemblies::play_attachment_changed(DataModel& game, InstanceId id) {
         }
         Matrix4 parent_pivot;
         Matrix4 sub_pivot;
-        if (!end_pivot(game, edge.constraint, 1, parent_pivot) || !end_pivot(game, edge.constraint, 2, sub_pivot)) {
+        if (!end_pivot(game, edge.constraint, edge.parent_end, parent_pivot) ||
+            !end_pivot(game, edge.constraint, 3 - edge.parent_end, sub_pivot)) {
             continue;
         }
         // The sub's side: what the sub reaches through live edges but this one.

@@ -46,7 +46,12 @@ std::optional<std::string> PhysicsObject::set_size(Vec3 size) {
     if (finite(size)) {
         size = {std::max(size.x, kMinSize), std::max(size.y, kMinSize), std::max(size.z, kMinSize)};
     }
-    return set_vec("Size", size_, size, kDirtyShape);
+    std::optional<std::string> refused = set_vec("Size", size_, size, kDirtyShape);
+    // Size ranks roots of equal Mass.
+    if (!refused && assemblies().relevant(*this, id())) {
+        assemblies().bump();
+    }
+    return refused;
 }
 
 std::optional<std::string> PhysicsObject::set_friction(double friction) {
@@ -85,6 +90,9 @@ std::optional<std::string> PhysicsObject::set_shape(int shape) {
         size_ = {1.f, 1.f, 1.f};
         note_property_change("Size", vec3_slot(previous_size), vec3_slot(size_));
     }
+    if (assemblies().relevant(*this, id())) {
+        assemblies().bump();
+    }
     return std::nullopt;
 }
 
@@ -94,6 +102,9 @@ std::optional<std::string> PhysicsObject::set_mesh(const LuaSlot& value) {
     if (!error) {
         mark_dirty(kDirtyShape);
         warned_hull = false;
+        if (assemblies().relevant(*this, id())) {
+            assemblies().bump();
+        }
     }
     return error;
 }

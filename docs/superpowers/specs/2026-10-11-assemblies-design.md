@@ -31,10 +31,10 @@ Engine distances are units.
 | When assemblies exist | Always, in edit mode and in play. Only physics compounding is play-only; edit mode keeps one body per PhysicsBase, as now. |
 | Pivot | A PVInstance's frame: position and rotation, scale removed. There is no separate Pivot property. A physics node's frame comes from its GameObject (§2). |
 | Can an Attachment be the root | Never. An Attachment or Bone is not a member; it stands for the object it is attached to. |
-| Root order | Anchored, then PlayerController, then has physics, then higher Mass, then lower GUID. |
+| Root order | Anchored, then PlayerController, then has physics, then higher Mass, then the larger body, then lower GUID. |
 | Unique id for the tie-break | The GUID (byte-wise compare): a physics node's PhysicsBase's, a plain node's own. Stable across save, load, Stop, undo, and cut. Script-made objects get random GUIDs, so two equal-mass script-made parts may pick different roots on different runs. |
 | Two anchored members | One assembly with one anchored root. Roblox splits them; we do not. |
-| RigidConstraint direction | PVInstance1 is the parent, PVInstance2 the sub. The sub moves. |
+| RigidConstraint direction | Set by the root, not by which end is PVInstance1: the root never moves. The end on the root's side is the parent, the other the sub, and the sub moves. (Changed 2026-10-11 at the user's request; it was PVInstance1 the parent.) |
 | RigidConstraint in the editor | Live: the sub always sits on the parent's pivot. It snaps in the same call as the edit that moved it, so one undo reverts both. |
 | WeldConstraint in the editor | Does nothing. Objects move freely; the offset is captured when the weld becomes active in play. |
 | A member's Transform written during play | The whole assembly moves at once, keeping every offset. |
@@ -54,8 +54,8 @@ with a cached query for constraints in Workspace, as `physics_bodies()` has.
 
 | Property | Type | Saved | Default | Meaning |
 | --- | --- | --- | --- | --- |
-| `PVInstance1` | `PVInstance?` | yes, by GUID | nil | First end. For a RigidConstraint, the parent. |
-| `PVInstance2` | `PVInstance?` | yes, by GUID | nil | Second end. For a RigidConstraint, the sub. |
+| `PVInstance1` | `PVInstance?` | yes, by GUID | nil | One end. Order does not matter (§3 direction rule). |
+| `PVInstance2` | `PVInstance?` | yes, by GUID | nil | The other end. |
 | `Enabled` | boolean | yes | true | Off disconnects the constraint without deleting it. |
 | `Active` | boolean | no, read-only | | Whether it is holding anything now (§2). Fires no Changed. |
 
@@ -144,14 +144,18 @@ A constraint is **Active** when all hold:
 
 Rigid rules, applied in order:
 
-1. **Forest.** A node may be the sub of only one RigidConstraint, and rigid
-   constraints may not form a loop. RigidConstraints are taken in GUID order;
-   one whose sub already has a rigid parent, or whose parent depends on its own
-   sub, is inactive. The surviving rigid edges form a forest, and **follow
-   order** lists each parent's edges before its subs' edges, ties in GUID order.
+1. **Forest.** Rigid constraints may not form a loop. RigidConstraints are
+   taken in GUID order; one whose two ends other rigid constraints already
+   join is inactive. The surviving rigid edges form a forest of trees.
 2. **Play only: already joined.** All active WeldConstraints are joined first.
-   Then each rigid edge, in follow order, is inactive if its two nodes are
+   Then each rigid edge, in GUID order, is inactive if its two nodes are
    already in one assembly by then. Otherwise it joins them.
+3. **Direction: the root never moves.** Once assemblies and roots are known,
+   every node gets its hop count from its root over all active edges. In each
+   rigid tree, the node with the fewest hops (the root order breaks a tie) is
+   its anchor and stays; every edge of the tree points away from it. The end
+   nearer the anchor is the edge's parent, the other its sub. **Follow order**
+   lists each parent's edges before its subs' edges, ties in GUID order.
 
 An assembly is a connected group of nodes under active constraints. A node no
 active constraint touches is an assembly of one, and behaves exactly as today.
@@ -166,7 +170,13 @@ Members are compared in this order; the first difference decides:
    carrying it.
 3. **A physics node** wins over a plain node.
 4. **Higher Mass** wins (`PhysicsBase::mass()`). A plain node has no Mass.
-5. **Lower GUID** wins, as a byte-wise string compare (GUIDs are not all hex):
+5. **The larger body** wins: the volume of the box around its solid (a Brush's
+   faces, a PhysicsObject's Size, or a Hull's or a Custom's Mesh bounds), times
+   its GameObject's Scale cubed. Mass is a total that defaults to the same on
+   every body, so this is what usually decides between two bodies. A change to
+   Size, Shape, Mesh, a Brush's faces, or a linked GameObject's Scale moves the
+   assembly revision.
+6. **Lower GUID** wins, as a byte-wise string compare (GUIDs are not all hex):
    the PhysicsBase's for a physics node, the instance's own for a plain node.
 
 The root depends only on members' properties and GUIDs, never on the order
@@ -269,7 +279,8 @@ and the visualization). WeldConstraints move nothing.
 
 For an active RigidConstraint:
 
-- `F_parent` is PVInstance1's pivot and `F_sub` is PVInstance2's pivot (§2).
+- `F_parent` is the parent end's pivot and `F_sub` the sub end's (§2), the
+  ends as the direction rule sets them.
 - `L = frame(sub node)⁻¹ × F_sub` is the sub's pivot in its node's frame.
 - **Target.** The sub node's frame must become `F_parent × L⁻¹`. Its mover is
   written to that frame, keeping the mover's own scale.
@@ -311,7 +322,7 @@ A pass started at N handles:
 
 Writes made by a pass start no pass. Since it all happens in the call that made
 the edit, it lands in that edit's recording. Drag the car and the wheel follows,
-and one undo reverts both. Setting `PVInstance2` in Properties snaps the sub in
+and one undo reverts both. Setting an end in Properties snaps the sub in
 the same undo step.
 
 Each stopped tick also runs one pass over every edge, after `physics_.sync`.
@@ -543,10 +554,10 @@ Members return to their authored poses. `world_generation` moves, and
   copies that still point at each other. References to anything outside the
   set stay as they were. This covers `PVInstance1`, `PVInstance2`,
   `PhysicsBase.GameObject`, and `WireframeAdornment.Adornee`.
-- **A RigidConstraint copied without its sub.** If its parent end was remapped
-  but its sub end (`PVInstance2`) stays outside the set, the sub end is
-  cleared. Otherwise the original sub would gain a second rigid parent, and a
-  random GUID would decide which one holds it.
+- **A RigidConstraint copied with one end only.** If one end was remapped and
+  the other, named, stays outside the set, that outside end is cleared.
+  Otherwise the copy would join the original, and the root rules would snap
+  one of the two onto the other.
 - **Bulk.** The whole action runs under one suspend scope. There is one rebuild
   and one follow pass at its end, inside its recording.
 

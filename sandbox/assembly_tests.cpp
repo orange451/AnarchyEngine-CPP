@@ -5,12 +5,14 @@
 
 #include "Assemblies.hpp"
 #include "Attachment.hpp"
+#include "Brush.hpp"
 #include "Constraint.hpp"
 #include "Folder.hpp"
 #include "GameObject.hpp"
 #include "PhysicsObject.hpp"
 #include "PlayerController.hpp"
 #include "Terrain.hpp"
+#include "brush/BrushGeometry.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -25,6 +27,7 @@ using engine_core::GameObject;
 using engine_core::InstanceId;
 using engine_core::PhysicsObject;
 using engine_core::RigidConstraint;
+using engine_core::Vec3;
 using engine_core::WeldConstraint;
 
 engine_core::LuaSlot instance_slot(InstanceId id) {
@@ -281,43 +284,59 @@ TEST_CASE("AS10 a Terrain end is inactive", "[assembly][graph]") {
     REQUIRE(root(game, terrain.id()) == 0);
 }
 
-TEST_CASE("AS11 a sub has one rigid parent, rigid loops break, and follow order puts parents first",
+TEST_CASE("AS11 rigid edges form a tree: one that closes a loop is inactive, and follow order puts parents first",
           "[assembly][graph]") {
     SimRole role;
     engine_core::Game game;
-    Part a = add_part(game);
+    Part a = add_part(game, 100.0);
     Part b = add_part(game);
     Part c = add_part(game);
     Part d = add_part(game);
-    RigidConstraint& onto_c_first = rigid(game, a.object->id(), c.object->id());
-    game.set_guid(onto_c_first.id(), "r1");
-    RigidConstraint& onto_c_second = rigid(game, b.object->id(), c.object->id());
-    game.set_guid(onto_c_second.id(), "r2");
-    REQUIRE(active(game, onto_c_first));
-    REQUIRE_FALSE(active(game, onto_c_second));
-
-    RigidConstraint& d_onto_b = rigid(game, d.object->id(), b.object->id());
-    game.set_guid(d_onto_b.id(), "r3");
-    RigidConstraint& b_onto_d = rigid(game, b.object->id(), d.object->id());
-    game.set_guid(b_onto_d.id(), "r4");
-    REQUIRE(active(game, d_onto_b));
-    REQUIRE_FALSE(active(game, b_onto_d));
+    // Two edges onto c make a tree, not a loop: both are active.
+    RigidConstraint& a_c = rigid(game, a.object->id(), c.object->id());
+    game.set_guid(a_c.id(), "r1");
+    RigidConstraint& b_c = rigid(game, b.object->id(), c.object->id());
+    game.set_guid(b_c.id(), "r2");
+    REQUIRE(active(game, a_c));
+    REQUIRE(active(game, b_c));
+    // A second edge between b and d closes a loop: the higher GUID is inactive.
+    RigidConstraint& d_b = rigid(game, d.object->id(), b.object->id());
+    game.set_guid(d_b.id(), "r3");
+    RigidConstraint& b_d = rigid(game, b.object->id(), d.object->id());
+    game.set_guid(b_d.id(), "r4");
+    REQUIRE(active(game, d_b));
+    REQUIRE_FALSE(active(game, b_d));
+    // Away from the root a: a to c, c to b, b to d, in that order.
+    const auto& edges = fresh(game).rigid_edges();
+    REQUIRE(edges.size() == 3);
+    REQUIRE(edges[0].constraint == a_c.id());
+    REQUIRE(edges[0].parent_node == a.body->id());
+    REQUIRE(edges[0].sub_node == c.body->id());
+    REQUIRE(edges[0].parent_end == 1);
+    REQUIRE(edges[1].constraint == b_c.id());
+    REQUIRE(edges[1].parent_node == c.body->id());
+    REQUIRE(edges[1].sub_node == b.body->id());
+    REQUIRE(edges[1].parent_end == 2);
+    REQUIRE(edges[2].constraint == d_b.id());
+    REQUIRE(edges[2].parent_node == b.body->id());
+    REQUIRE(edges[2].sub_node == d.body->id());
+    REQUIRE(edges[2].parent_end == 2);
 
     // A chain whose parent edge has the higher GUID still follows parent first.
     engine_core::Game chain_game;
-    Part x = add_part(chain_game);
+    Part x = add_part(chain_game, 100.0);
     Part y = add_part(chain_game);
     Part z = add_part(chain_game);
     RigidConstraint& yz = rigid(chain_game, y.object->id(), z.object->id());
     chain_game.set_guid(yz.id(), "a-sub-edge");
     RigidConstraint& xy = rigid(chain_game, x.object->id(), y.object->id());
     chain_game.set_guid(xy.id(), "z-parent-edge");
-    const auto& edges = fresh(chain_game).rigid_edges();
-    REQUIRE(edges.size() == 2);
-    REQUIRE(edges[0].constraint == xy.id());
-    REQUIRE(edges[1].constraint == yz.id());
-    REQUIRE(edges[0].sub_node == y.body->id());
-    REQUIRE(edges[1].parent_node == y.body->id());
+    const auto& chain = fresh(chain_game).rigid_edges();
+    REQUIRE(chain.size() == 2);
+    REQUIRE(chain[0].constraint == xy.id());
+    REQUIRE(chain[1].constraint == yz.id());
+    REQUIRE(chain[0].sub_node == y.body->id());
+    REQUIRE(chain[1].parent_node == y.body->id());
 }
 
 TEST_CASE("AS12 a constraint whose two ends are one node is inactive", "[assembly][graph]") {
@@ -528,4 +547,126 @@ TEST_CASE("AS21 undoing the delete of a rigid sub makes its constraint active ag
     REQUIRE_FALSE(active(game, r));
     game.history().undo();
     REQUIRE(active(game, r));
+}
+
+TEST_CASE("AS22 with equal Mass the larger body is root, over a lower GUID", "[assembly][graph]") {
+    four_ways([](engine_core::Game& game, bool swap_order, bool swap_direction) {
+        Part first = add_part(game);
+        Part second = add_part(game);
+        Part& small = swap_order ? second : first;
+        Part& large = swap_order ? first : second;
+        // The GUIDs alone would make the small one root.
+        game.set_guid(small.body->id(), "aaaa-body");
+        game.set_guid(large.body->id(), "bbbb-body");
+        REQUIRE_FALSE(large.body->set_size(Vec3{4.f, 2.f, 4.f}));
+        if (swap_direction) {
+            weld(game, large.object->id(), small.object->id());
+        } else {
+            weld(game, small.object->id(), large.object->id());
+        }
+        REQUIRE(root(game, small.object->id()) == large.body->id());
+    });
+}
+
+TEST_CASE("AS23 with equal Mass the larger Brush is root", "[assembly][graph]") {
+    four_ways([](engine_core::Game& game, bool swap_order, bool swap_direction) {
+        engine_core::Brush& first = game.create<engine_core::Brush>();
+        game.set_parent(first.id(), workspace_of(game));
+        engine_core::Brush& second = game.create<engine_core::Brush>();
+        game.set_parent(second.id(), workspace_of(game));
+        engine_core::Brush& small = swap_order ? second : first;
+        engine_core::Brush& large = swap_order ? first : second;
+        game.set_guid(small.id(), "aaaa-brush");
+        game.set_guid(large.id(), "bbbb-brush");
+        REQUIRE_FALSE(large.set_faces(engine_core::brush::make_box({8.0, 8.0, 8.0})));
+        if (swap_direction) {
+            rigid(game, large.id(), small.id());
+        } else {
+            rigid(game, small.id(), large.id());
+        }
+        REQUIRE(root(game, small.id()) == large.id());
+    });
+}
+
+TEST_CASE("AS24 a GameObject's Scale counts toward its body's size", "[assembly][graph]") {
+    four_ways([](engine_core::Game& game, bool swap_order, bool swap_direction) {
+        Part first = add_part(game);
+        Part second = add_part(game);
+        Part& small = swap_order ? second : first;
+        Part& large = swap_order ? first : second;
+        game.set_guid(small.body->id(), "aaaa-body");
+        game.set_guid(large.body->id(), "bbbb-body");
+        REQUIRE_FALSE(large.object->set_scale(3.0));
+        if (swap_direction) {
+            weld(game, large.object->id(), small.object->id());
+        } else {
+            weld(game, small.object->id(), large.object->id());
+        }
+        REQUIRE(root(game, small.object->id()) == large.body->id());
+    });
+}
+
+TEST_CASE("AS25 a linked body's size moves the assembly revision, and an unlinked one's does not",
+          "[assembly][revision]") {
+    SimRole role;
+    engine_core::Game game;
+    Part a = add_part(game);
+    Part b = add_part(game);
+    Part loose = add_part(game);
+    weld(game, a.object->id(), b.object->id());
+    engine_core::Brush& brush = game.create<engine_core::Brush>();
+    game.set_parent(brush.id(), workspace_of(game));
+    weld(game, a.object->id(), brush.id());
+    Assemblies& graph = fresh(game);
+    auto moves = [&](auto&& change) {
+        fresh(game);
+        const std::uint64_t before = graph.revision();
+        change();
+        return graph.revision() != before;
+    };
+    REQUIRE(moves([&] { REQUIRE_FALSE(b.body->set_size(Vec3{2.f, 2.f, 2.f})); }));
+    REQUIRE(moves([&] { REQUIRE_FALSE(b.body->set_shape(static_cast<int>(PhysicsObject::Shape::Sphere))); }));
+    REQUIRE(moves([&] { REQUIRE_FALSE(b.object->set_scale(2.0)); }));
+    REQUIRE(moves([&] { REQUIRE_FALSE(brush.set_faces(engine_core::brush::make_box({6.0, 6.0, 6.0}))); }));
+    REQUIRE_FALSE(moves([&] { REQUIRE_FALSE(loose.body->set_size(Vec3{3.f, 3.f, 3.f})); }));
+    REQUIRE_FALSE(moves([&] { REQUIRE_FALSE(loose.object->set_scale(2.0)); }));
+}
+
+TEST_CASE("AS26 a RigidConstraint points away from the root, whichever end names it", "[assembly][graph]") {
+    four_ways([](engine_core::Game& game, bool swap_order, bool swap_direction) {
+        Part light;
+        Part heavy;
+        if (swap_order) {
+            heavy = add_part(game, 30.0);
+            light = add_part(game, 10.0);
+        } else {
+            light = add_part(game, 10.0);
+            heavy = add_part(game, 30.0);
+        }
+        if (swap_direction) {
+            rigid(game, heavy.object->id(), light.object->id());
+        } else {
+            rigid(game, light.object->id(), heavy.object->id());
+        }
+        const auto& edges = fresh(game).rigid_edges();
+        REQUIRE(edges.size() == 1);
+        REQUIRE(edges[0].parent_node == heavy.body->id());
+        REQUIRE(edges[0].sub_node == light.body->id());
+        REQUIRE(edges[0].parent_end == (swap_direction ? 1 : 2));
+    });
+}
+
+TEST_CASE("AS27 a rigid edge on a welded member points away from the root's side", "[assembly][graph]") {
+    SimRole role;
+    engine_core::Game game;
+    Part root_part = add_part(game, 100.0);
+    Part member = add_part(game);
+    Part far = add_part(game, 90.0);
+    weld(game, root_part.object->id(), member.object->id());
+    rigid(game, far.object->id(), member.object->id());
+    const auto& edges = fresh(game).rigid_edges();
+    REQUIRE(edges.size() == 1);
+    REQUIRE(edges[0].parent_node == member.body->id());
+    REQUIRE(edges[0].sub_node == far.body->id());
+    REQUIRE(edges[0].parent_end == 2);
 }

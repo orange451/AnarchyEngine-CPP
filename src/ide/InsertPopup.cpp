@@ -54,7 +54,7 @@ const char* describe_class(const std::string& name) {
         {"Animation", "A clip that moves a skinned object's bones."},
         {"Prefab", "A reusable object template."},
         {"WeldConstraint", "Holds two objects together where they are."},
-        {"RigidConstraint", "Snaps one object's pivot onto another's and holds it there."},
+        {"RigidConstraint", "Snaps one object's pivot onto another's and holds it there. The root stays put."},
     };
     for (const Row& row : kRows) {
         if (name == row.name) {

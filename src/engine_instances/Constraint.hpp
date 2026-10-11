@@ -13,9 +13,11 @@ namespace engine_core {
 // WeldConstraint and RigidConstraint can. It has no Transform of its own and
 // acts only while it and both its ends are in Workspace.
 //
-// PVInstance1  PVInstance?  nil. Saved, by GUID. For a RigidConstraint, the parent.
-// PVInstance2  PVInstance?  nil. Saved, by GUID. For a RigidConstraint, the sub,
-//                           whose pivot is held on the parent's.
+// PVInstance1  PVInstance?  nil. Saved, by GUID. One end.
+// PVInstance2  PVInstance?  nil. Saved, by GUID. The other end. Which is which
+//                           does not matter: for a RigidConstraint, the end on
+//                           its assembly root's side is the parent, and the
+//                           other end, the sub, is held on its pivot.
 // Enabled      boolean      true. Saved. Off disconnects it without deleting it.
 // Active       boolean      read-only, not saved: whether it holds anything now.
 //
@@ -64,8 +66,8 @@ public:
     bool rigid() const override { return false; }
 };
 
-// Holds PVInstance2's pivot on PVInstance1's: live in the editor, and as a
-// weld with no offset in play.
+// Holds the sub end's pivot on the parent end's (the end on the root's side):
+// live in the editor, and as a weld with no offset in play.
 class RigidConstraint final : public Constraint {
 public:
     RigidConstraint(DataModel::ChildTag tag, DataModel::State& state, InstanceId id) : Constraint(tag, state, id) {}

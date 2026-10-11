@@ -94,6 +94,13 @@ Part add_part(DataModel& game, Matrix4 where) {
     return part;
 }
 
+// Makes part its assembly's root: Anchored, and heavier than anything else
+// here, so a RigidConstraint points away from it whichever end names it.
+void make_root(Part& part) {
+    part.body->set_anchored(true);
+    REQUIRE_FALSE(part.body->set_mass(1e6));
+}
+
 RigidConstraint& rigid(DataModel& game, InstanceId parent, InstanceId sub) {
     RigidConstraint& constraint = game.create<RigidConstraint>();
     game.set_parent(constraint.id(), workspace_of(game));
@@ -124,6 +131,7 @@ TEST_CASE("AE1 connecting a RigidConstraint snaps the sub, and one undo puts it 
     SimRole role;
     engine_core::Game game;
     Part a = add_part(game, turned({0, 1, 0}, 30.0, at(0.f, 5.f, 0.f)));
+    make_root(a);
     Part b = add_part(game, at(10.f, 0.f, 0.f));
     RigidConstraint& r = game.create<RigidConstraint>();
     game.set_parent(r.id(), workspace_of(game));
@@ -144,6 +152,7 @@ TEST_CASE("AE2 moving the parent moves the sub in the same undo step, whichever 
         SimRole role;
         engine_core::Game game;
         Part a = add_part(game, at(0.f, 5.f, 0.f));
+        make_root(a);
         Part b = add_part(game, at(3.f, 0.f, 0.f));
         if (halves == 0) {
             rigid(game, a.object->id(), b.object->id());
@@ -166,6 +175,7 @@ TEST_CASE("AE3 a sub moved on its own snaps straight back", "[assembly][follow]"
     SimRole role;
     engine_core::Game game;
     Part a = add_part(game, at(0.f, 5.f, 0.f));
+    make_root(a);
     Part b = add_part(game, at(3.f, 0.f, 0.f));
     rigid(game, a.object->id(), b.object->id());
     b.object->set_transform(at(20.f, 20.f, 20.f));
@@ -177,6 +187,7 @@ TEST_CASE("AE4 an Attachment parent end puts the sub at its frame, and moving th
     SimRole role;
     engine_core::Game game;
     Part a = add_part(game, turned({0, 0, 1}, 90.0, at(0.f, 5.f, 0.f)));
+    make_root(a);
     Attachment& point = add_attachment(game, a.object->id(), at(0.f, 2.f, 0.f));
     Part b = add_part(game, at(3.f, 0.f, 0.f));
     rigid(game, point.id(), b.object->id());
@@ -190,6 +201,7 @@ TEST_CASE("AE5 a World-space Attachment sub is matched by position only", "[asse
     SimRole role;
     engine_core::Game game;
     Part a = add_part(game, turned({0, 1, 0}, 90.0, at(0.f, 5.f, 0.f)));
+    make_root(a);
     Part b = add_part(game, at(3.f, 0.f, 0.f));
     Attachment& grip = add_attachment(game, b.object->id(), at(1.f, 0.f, 0.f));
     REQUIRE_FALSE(grip.set_offset_space(static_cast<int>(engine_core::TransformSpace::World)));
@@ -205,6 +217,7 @@ TEST_CASE("AE6 a PlayerController sub under a tilted pivot settles upright in on
     SimRole role;
     engine_core::Game game;
     Part a = add_part(game, turned({1, 0, 0}, 30.0, at(0.f, 5.f, 0.f)));
+    make_root(a);
     engine_core::PlayerController& player = game.create<engine_core::PlayerController>();
     game.set_parent(player.id(), workspace_of(game));
     rigid(game, a.object->id(), player.id());
@@ -217,6 +230,7 @@ TEST_CASE("AE7 a chain follows in order in one call", "[assembly][follow]") {
     SimRole role;
     engine_core::Game game;
     Part a = add_part(game, at(0.f, 0.f, 0.f));
+    make_root(a);
     Part b = add_part(game, at(5.f, 0.f, 0.f));
     Attachment& on_b = add_attachment(game, b.object->id(), at(0.f, 0.f, 4.f));
     Part c = add_part(game, at(9.f, 0.f, 0.f));
@@ -231,6 +245,7 @@ TEST_CASE("AE8 what is under a sub comes along, except what rides its parent alr
     SimRole role;
     engine_core::Game game;
     Part a = add_part(game, at(0.f, 5.f, 0.f));
+    make_root(a);
     Part b = add_part(game, at(3.f, 0.f, 0.f));
     GameObject& wheel_cap = game.create_game_object();
     wheel_cap.set_transform(at(3.f, 1.f, 0.f));
@@ -259,6 +274,7 @@ TEST_CASE("AE10 the view camera moves freely as a sub and moves nothing as a par
     SimRole role;
     engine_core::Game game;
     Part a = add_part(game, at(0.f, 5.f, 0.f));
+    make_root(a);
     engine_core::Camera& camera = game.create<engine_core::Camera>();
     game.set_parent(camera.id(), workspace_of(game));
     auto* workspace = dynamic_cast<engine_core::Workspace*>(game.instance(workspace_of(game)));
@@ -277,6 +293,7 @@ TEST_CASE("AE10 the view camera moves freely as a sub and moves nothing as a par
 TEST_CASE("AE11 writing a driven PhysicsObject's own Transform moves no sub", "[assembly][follow]") {
     physics_rig::PhysicsRig rig;
     Part a = add_part(rig.game, at(0.f, 5.f, 0.f));
+    make_root(a);
     Part b = add_part(rig.game, at(3.f, 0.f, 0.f));
     rigid(rig.game, a.object->id(), b.object->id());
     rig.sync_steps(1);
@@ -291,6 +308,7 @@ TEST_CASE("AE12 a consistent place writes nothing on the stopped pass", "[assemb
     SimRole role;
     engine_core::Game game;
     Part a = add_part(game, at(0.f, 5.f, 0.f));
+    make_root(a);
     Part b = add_part(game, at(3.f, 0.f, 0.f));
     rigid(game, a.object->id(), b.object->id());
     game.history().reset_waypoints();
@@ -302,6 +320,7 @@ TEST_CASE("AE13 a suspended scope snaps nothing, and the next pass does", "[asse
     SimRole role;
     engine_core::Game game;
     Part a = add_part(game, at(0.f, 5.f, 0.f));
+    make_root(a);
     Part b = add_part(game, at(3.f, 0.f, 0.f));
     rigid(game, a.object->id(), b.object->id());
     {
@@ -321,6 +340,7 @@ TEST_CASE("AE14 a saved snapped pair loads snapped", "[assembly][follow]") {
         engine_core::Project project = engine_core::Project::create(dir.path);
         DataModel& game = project.datamodel();
         Part a = add_part(game, turned({0, 1, 0}, 20.0, at(0.f, 5.f, 0.f)));
+        make_root(a);
         game.set_name(a.object->id(), "A");
         Part b = add_part(game, at(3.f, 0.f, 0.f));
         game.set_name(b.object->id(), "B");
@@ -336,6 +356,7 @@ TEST_CASE("AE15 undo and redo of a parent move add no steps of their own", "[ass
     SimRole role;
     engine_core::Game game;
     Part a = add_part(game, at(0.f, 5.f, 0.f));
+    make_root(a);
     Part b = add_part(game, at(3.f, 0.f, 0.f));
     rigid(game, a.object->id(), b.object->id());
     game.history().reset_waypoints();
@@ -355,6 +376,7 @@ TEST_CASE("AE16 undoing a deleted constraint or sub brings the snap back", "[ass
     SimRole role;
     engine_core::Game game;
     Part a = add_part(game, at(0.f, 5.f, 0.f));
+    make_root(a);
     Part b = add_part(game, at(3.f, 0.f, 0.f));
     RigidConstraint& r = rigid(game, a.object->id(), b.object->id());
     const InstanceId constraint = r.id();
@@ -391,6 +413,7 @@ TEST_CASE("AE17 a 100-link chain follows its head in one call and undoes in one 
     for (int i = 0; i < 100; ++i) {
         chain.push_back(add_part(game, at(static_cast<float>(i), 0.f, 0.f)));
     }
+    make_root(chain[0]);
     for (int i = 0; i + 1 < 100; ++i) {
         rigid(game, chain[i].object->id(), chain[i + 1].object->id());
     }
@@ -410,6 +433,7 @@ TEST_CASE("AE18 pivots ignore scale, and the sub keeps its own", "[assembly][fol
     SimRole role;
     engine_core::Game game;
     Part a = add_part(game, scaled(turned({0, 1, 0}, 30.0, at(0.f, 5.f, 0.f)), 2.f, 1.f, 3.f));
+    make_root(a);
     Part b = add_part(game, scaled(at(3.f, 0.f, 0.f), 0.5f, 0.5f, 0.5f));
     rigid(game, a.object->id(), b.object->id());
     for (int column = 0; column < 3; ++column) {
@@ -422,6 +446,7 @@ TEST_CASE("AE19 a Brush sub that recentres is snapped again in the same call", "
     SimRole role;
     engine_core::Game game;
     Part a = add_part(game, at(0.f, 5.f, 0.f));
+    make_root(a);
     engine_core::Brush& brush = game.create<engine_core::Brush>();
     game.set_parent(brush.id(), workspace_of(game));
     rigid(game, a.object->id(), brush.id());
@@ -434,6 +459,7 @@ TEST_CASE("AE20 a carried child that is itself a sub snaps back onto its own par
     SimRole role;
     engine_core::Game game;
     Part a = add_part(game, at(0.f, 5.f, 0.f));
+    make_root(a);
     Part b = add_part(game, at(3.f, 0.f, 0.f));
     Part c = add_part(game, at(-4.f, 0.f, 0.f));
     GameObject& d = game.create_game_object();
@@ -445,4 +471,65 @@ TEST_CASE("AE20 a carried child that is itself a sub snaps back onto its own par
     a.object->set_transform(at(10.f, 10.f, 10.f));
     REQUIRE(same_pose(b.object->transform(), at(10.f, 10.f, 10.f)));
     REQUIRE(same_pose(d.transform(), at(-4.f, 0.f, 0.f)));
+}
+
+TEST_CASE("AE21 the root never moves, whichever end of a RigidConstraint names it", "[assembly][follow]") {
+    for (int direction = 0; direction < 2; ++direction) {
+        SimRole role;
+        engine_core::Game game;
+        const Matrix4 home = turned({0, 1, 0}, 30.0, at(0.f, 5.f, 0.f));
+        Part root = add_part(game, home);
+        make_root(root);
+        Part other = add_part(game, at(10.f, 0.f, 0.f));
+        if (direction == 0) {
+            rigid(game, other.object->id(), root.object->id());
+        } else {
+            rigid(game, root.object->id(), other.object->id());
+        }
+        REQUIRE(same_pose(root.object->transform(), home));
+        REQUIRE(same_pose(other.object->transform(), home));
+        // Moving the root carries the other end; the other end moved alone snaps back.
+        root.object->set_transform(at(4.f, 4.f, 4.f));
+        REQUIRE(same_pose(other.object->transform(), at(4.f, 4.f, 4.f)));
+        other.object->set_transform(at(-9.f, 0.f, 0.f));
+        REQUIRE(same_pose(other.object->transform(), at(4.f, 4.f, 4.f)));
+        REQUIRE(same_pose(root.object->transform(), at(4.f, 4.f, 4.f)));
+    }
+}
+
+TEST_CASE("AE22 an Attachment named first on the far part snaps that part onto the root", "[assembly][follow]") {
+    SimRole role;
+    engine_core::Game game;
+    Part root = add_part(game, at(0.f, 5.f, 0.f));
+    make_root(root);
+    Part other = add_part(game, at(10.f, 0.f, 0.f));
+    Attachment& grip = add_attachment(game, other.object->id(), at(0.f, 1.f, 0.f));
+    rigid(game, grip.id(), root.object->id());
+    REQUIRE(same_pose(root.object->transform(), at(0.f, 5.f, 0.f)));
+    REQUIRE(same_pose(other.object->transform(), at(0.f, 4.f, 0.f)));
+}
+
+TEST_CASE("AE23 of two Brushes of equal Mass, the larger stays and the smaller snaps onto it",
+          "[assembly][follow]") {
+    for (int direction = 0; direction < 2; ++direction) {
+        SimRole role;
+        engine_core::Game game;
+        engine_core::Brush& large = game.create<engine_core::Brush>();
+        game.set_parent(large.id(), workspace_of(game));
+        REQUIRE_FALSE(large.set_faces(engine_core::brush::make_box({8.0, 8.0, 8.0})));
+        REQUIRE_FALSE(large.set_transform(at(0.f, 5.f, 0.f)));
+        engine_core::Brush& small = game.create<engine_core::Brush>();
+        game.set_parent(small.id(), workspace_of(game));
+        REQUIRE_FALSE(small.set_transform(at(10.f, 0.f, 0.f)));
+        // The GUIDs alone would make the small one root.
+        game.set_guid(small.id(), "aaaa-brush");
+        game.set_guid(large.id(), "bbbb-brush");
+        if (direction == 0) {
+            rigid(game, small.id(), large.id());
+        } else {
+            rigid(game, large.id(), small.id());
+        }
+        REQUIRE(same_pose(large.transform(), at(0.f, 5.f, 0.f)));
+        REQUIRE(same_pose(small.transform(), at(0.f, 5.f, 0.f)));
+    }
 }

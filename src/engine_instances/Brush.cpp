@@ -199,6 +199,10 @@ void Brush::keep(brush::Built built, std::string json) {
     if (reshaped) {
         shape_revision_ = revision_;
         mark_dirty(kDirtyShape | kDirtyMass);
+        // Its size ranks roots of equal Mass.
+        if (assemblies().relevant(*this, id())) {
+            assemblies().bump();
+        }
     }
     note_property_change("Faces", string_slot(previous), string_slot(faces_json_));
 }

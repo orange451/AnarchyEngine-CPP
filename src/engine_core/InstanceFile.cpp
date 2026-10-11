@@ -199,13 +199,18 @@ void remap_references(DataModel& world, const CopyMap& map) {
         if (object == nullptr) {
             continue;
         }
-        // A RigidConstraint's ends as copied, before any is remapped.
-        bool parent_inside = false;
-        bool sub_outside = false;
-        if (const auto* rigid = dynamic_cast<const RigidConstraint*>(object)) {
-            parent_inside = map.count(rigid->pv_instance1_ref().guid()) != 0;
-            const std::string& sub = rigid->pv_instance2_ref().guid();
-            sub_outside = !sub.empty() && map.count(sub) == 0;
+        // A RigidConstraint's ends as copied, before any is remapped: whether
+        // each is inside the copied set, and named at all.
+        bool inside1 = false;
+        bool inside2 = false;
+        bool named1 = false;
+        bool named2 = false;
+        const auto* rigid = dynamic_cast<const RigidConstraint*>(object);
+        if (rigid != nullptr) {
+            inside1 = map.count(rigid->pv_instance1_ref().guid()) != 0;
+            inside2 = map.count(rigid->pv_instance2_ref().guid()) != 0;
+            named1 = !rigid->pv_instance1_ref().guid().empty();
+            named2 = !rigid->pv_instance2_ref().guid().empty();
         }
         for (const LuaField& field : lua_saved_fields(object->class_name())) {
             if (field.read == nullptr || field.write == nullptr || reference_class(field.type_name).empty()) {
@@ -224,8 +229,12 @@ void remap_references(DataModel& world, const CopyMap& map) {
             next.id = found->second;
             field.write(world, *object, next);
         }
-        if (parent_inside && sub_outside) {
+        // Copied with one end and not the other: the end left outside is
+        // cleared, or the copy would snap the original (or be snapped onto it).
+        if (inside1 && named2 && !inside2) {
             dynamic_cast<RigidConstraint*>(object)->set_pv_instance2(LuaSlot{});
+        } else if (inside2 && named1 && !inside1) {
+            dynamic_cast<RigidConstraint*>(object)->set_pv_instance1(LuaSlot{});
         }
     }
 }

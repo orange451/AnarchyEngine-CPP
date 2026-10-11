@@ -1058,10 +1058,12 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
         "Errors until a view shows the camera.",
         "Vector3,boolean", false, {P("point", "Vector3")});
     add("Constraint", "PVInstance1",
-        "The first end. For a RigidConstraint, the parent, whose pivot the sub is held on.", "PVInstance?", false,
-        {});
+        "One end. Which end is which does not matter: the end on the assembly root's side stays, and a "
+        "RigidConstraint snaps the other so its pivot is on this one's, or this one's onto the other's.",
+        "PVInstance?", false, {});
     add("Constraint", "PVInstance2",
-        "The second end. For a RigidConstraint, the sub, which is snapped so its pivot is on PVInstance1's.",
+        "The other end. Which end is which does not matter: the root never moves, and a RigidConstraint snaps "
+        "the end away from it.",
         "PVInstance?", false, {});
     add("Constraint", "Enabled", "Off disconnects the constraint without deleting it.", "boolean", false, {});
     add("Constraint", "Active",

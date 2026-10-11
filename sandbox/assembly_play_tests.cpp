@@ -922,3 +922,21 @@ TEST_CASE("AP27 a moved slot queues one redraw, so many riders cannot overflow t
     REQUIRE_FALSE(rig.game.invalidations().overflow());
 }
 
+
+TEST_CASE("AP29 a RigidConstraint connected in play with the root named second moves only the other side",
+          "[assembly][play-change]") {
+    PhysicsRig rig;
+    PhysicsObject& root = rig.body(at(0.f, 50.f, 0.f), Vec3{1.f, 1.f, 1.f}, true);
+    PhysicsObject& other = rig.body(at(10.f, 50.f, 0.f), Vec3{1.f, 1.f, 1.f}, false);
+    RigidConstraint& r = rig.game.create<RigidConstraint>();
+    rig.game.set_parent(r.id(), workspace_of(rig.game));
+    REQUIRE_FALSE(r.set_pv_instance1(instance_slot(other.id())));
+    rig.play();
+    rig.steps(5);
+    REQUIRE_FALSE(r.set_pv_instance2(instance_slot(root.id())));
+    rig.steps(1);
+    REQUIRE(near(x_of(root.transform()), 0.f, 1e-3f));
+    REQUIRE(near(y_of(root.transform()), 50.f, 1e-3f));
+    REQUIRE(near(x_of(other.transform()), 0.f, 1e-3f));
+    REQUIRE(rig.physics.body_key(other.id()) == rig.physics.body_key(root.id()));
+}

@@ -1,12 +1,15 @@
 #include "Assemblies.hpp"
 
+#include "AssetInstances.hpp"
 #include "Attachment.hpp"
+#include "Brush.hpp"
 #include "Constraint.hpp"
 #include "DataModel.hpp"
 #include "InstanceRef.hpp"
 #include "LuaApi.hpp"
 #include "GameObject.hpp"
 #include "PhysicsBase.hpp"
+#include "PhysicsObject.hpp"
 #include "PlayerController.hpp"
 #include "SpatialObject.hpp"
 
@@ -21,6 +24,37 @@ namespace {
 constexpr int kMaxWalk = 64;
 
 bool has_parent(InstanceId id, InstanceId above) { return above != DataModel::kNoParent && above != id; }
+
+// How big a body is, to rank roots of equal Mass: the box around its solid (a
+// Brush's faces, a PhysicsObject's Size, or a Hull's or a Custom's Mesh),
+// times its GameObject's Scale on each axis. 0 for a PlayerController.
+double body_volume(const DataModel& game, const PhysicsBase& body) {
+    Vec3 extent{};
+    if (const auto* brush = dynamic_cast<const Brush*>(&body)) {
+        const brush::Shape& shape = brush->shape();
+        extent = Vec3{static_cast<float>(shape.max.x - shape.min.x), static_cast<float>(shape.max.y - shape.min.y),
+                      static_cast<float>(shape.max.z - shape.min.z)};
+    } else if (const auto* object = dynamic_cast<const PhysicsObject*>(&body)) {
+        extent = object->size();
+        const PhysicsObject::Shape shape = object->shape();
+        if (shape == PhysicsObject::Shape::Hull || shape == PhysicsObject::Shape::Custom) {
+            Vec3 low{};
+            Vec3 high{};
+            const auto* mesh = dynamic_cast<const Mesh*>(game.instance(object->mesh_id()));
+            if (mesh != nullptr && mesh->bounds(low, high)) {
+                extent = Vec3{high.x - low.x, high.y - low.y, high.z - low.z};
+            }
+        }
+    } else {
+        return 0.0;
+    }
+    double volume = static_cast<double>(extent.x) * extent.y * extent.z;
+    const InstanceId driven = body.driven_game_object();
+    if (const GameObject* object = driven != 0 ? game.game_object(driven) : nullptr) {
+        volume *= object->scale() * object->scale() * object->scale();
+    }
+    return volume;
+}
 
 int depth_of(const DataModel& game, InstanceId id) {
     int depth = 0;
@@ -112,7 +146,9 @@ Assemblies::Assemblies() {
     active_.assign(slots, 0);
     claimant_.assign(slots, 0);
     uf_.assign(slots, 0);
-    rigid_parent_.assign(slots, 0);
+    rigid_uf_.assign(slots, 0);
+    anchor_.assign(slots, 0);
+    node_pos_.assign(slots, -1);
     rigid_node_.assign(slots, 0);
     scratch_index_.assign(slots, -1);
     touched_.reserve(slots);
@@ -126,6 +162,12 @@ Assemblies::Assemblies() {
     groups_.reserve(slots);
     group_nodes_.reserve(slots);
     rigid_.reserve(slots);
+    adj_start_.reserve(slots + 1);
+    adj_cursor_.reserve(slots);
+    adj_.reserve(2 * slots);
+    hops_.reserve(slots);
+    rigid_hops_.reserve(slots);
+    queue_.reserve(slots);
     live_scratch_.reserve(slots);
     dangling_id_.assign(slots, 0);
     dangling_mask_.assign(slots, 0);
@@ -297,7 +339,8 @@ void Assemblies::touch(InstanceId id) {
     active_[slot] = 0;
     claimant_[slot] = 0;
     uf_[slot] = slot;
-    rigid_parent_[slot] = 0;
+    rigid_uf_[slot] = slot;
+    anchor_[slot] = 0;
     rigid_node_[slot] = 0;
     scratch_index_[slot] = -1;
 }
@@ -313,6 +356,14 @@ std::uint32_t Assemblies::find(std::uint32_t slot) {
     while (uf_[slot] != slot) {
         uf_[slot] = uf_[uf_[slot]];
         slot = uf_[slot];
+    }
+    return slot;
+}
+
+std::uint32_t Assemblies::rigid_find(std::uint32_t slot) {
+    while (rigid_uf_[slot] != slot) {
+        rigid_uf_[slot] = rigid_uf_[rigid_uf_[slot]];
+        slot = rigid_uf_[slot];
     }
     return slot;
 }
@@ -413,7 +464,7 @@ InstanceId Assemblies::resolve_live(const DataModel& game, InstanceId end) const
 }
 
 // Whether a ranks above b as root: anchored, then a PlayerController, then a
-// physics node, then higher Mass, then the lower GUID.
+// physics node, then higher Mass, then the larger body, then the lower GUID.
 bool Assemblies::root_before(const DataModel& game, InstanceId a, InstanceId b) const {
     const PhysicsBase* pa = body_of(game, a);
     const PhysicsBase* pb = body_of(game, b);
@@ -432,6 +483,13 @@ bool Assemblies::root_before(const DataModel& game, InstanceId a, InstanceId b) 
     }
     if (pa != nullptr && pa->mass() != pb->mass()) {
         return pa->mass() > pb->mass();
+    }
+    if (pa != nullptr) {
+        const double va = body_volume(game, *pa);
+        const double vb = body_volume(game, *pb);
+        if (va != vb) {
+            return va > vb;
+        }
     }
     return game.guid_view(a) < game.guid_view(b);
 }
@@ -516,49 +574,20 @@ void Assemblies::rebuild(const DataModel& game) {
         edges_.push_back(edge);
     }
 
-    // Rigid rule 1: each sub has one rigid parent, and no loops; GUID order decides.
+    // Rigid rule 1: the rigid edges make a forest. In GUID order, one whose
+    // ends other rigid edges already join closes a loop, and is inactive.
     std::sort(rigid_order_.begin(), rigid_order_.end(), [&](std::uint32_t a, std::uint32_t b) {
         return game.guid_view(edges_[a].constraint) < game.guid_view(edges_[b].constraint);
     });
     for (const std::uint32_t index : rigid_order_) {
         Edge& edge = edges_[index];
-        const std::uint32_t sub = id_slot(edge.node2);
-        if (rigid_parent_[sub] != 0) {
+        const std::uint32_t a = rigid_find(id_slot(edge.node1));
+        const std::uint32_t b = rigid_find(id_slot(edge.node2));
+        if (a == b) {
             edge.live = false;
             continue;
         }
-        bool loop = false;
-        int guard = 0;
-        for (InstanceId at = edge.node1; at != 0 && guard <= static_cast<int>(DataModel::kMaxInstances); at = rigid_parent_[id_slot(at)]) {
-            ++guard;
-            if (at == edge.node2) {
-                loop = true;
-                break;
-            }
-        }
-        if (loop) {
-            edge.live = false;
-            continue;
-        }
-        rigid_parent_[sub] = edge.node1;
-    }
-    // Follow order: by how deep each sub sits in the rigid forest, then by GUID.
-    rigid_order_.erase(std::remove_if(rigid_order_.begin(), rigid_order_.end(),
-                                      [&](std::uint32_t index) { return !edges_[index].live; }),
-                       rigid_order_.end());
-    for (const std::uint32_t index : rigid_order_) {
-        int depth = 0;
-        for (InstanceId at = edges_[index].node2; rigid_parent_[id_slot(at)] != 0;
-             at = rigid_parent_[id_slot(at)]) {
-            ++depth;
-        }
-        scratch_index_[id_slot(edges_[index].constraint)] = depth;
-    }
-    std::stable_sort(rigid_order_.begin(), rigid_order_.end(), [&](std::uint32_t a, std::uint32_t b) {
-        return scratch_index_[id_slot(edges_[a].constraint)] < scratch_index_[id_slot(edges_[b].constraint)];
-    });
-    for (const std::uint32_t index : rigid_order_) {
-        scratch_index_[id_slot(edges_[index].constraint)] = -1;
+        rigid_uf_[b] = a;
     }
 
     // Join: welds first; in play a rigid edge whose ends welds already join changes nothing.
@@ -570,19 +599,20 @@ void Assemblies::rebuild(const DataModel& game) {
     }
     for (const std::uint32_t index : rigid_order_) {
         Edge& edge = edges_[index];
+        if (!edge.live) {
+            continue;
+        }
         if (running && find(id_slot(edge.node1)) == find(id_slot(edge.node2))) {
             edge.live = false;
             continue;
         }
         unite(id_slot(edge.node1), id_slot(edge.node2));
-        RigidEdge out;
-        out.constraint = edge.constraint;
-        out.parent_node = edge.node1;
-        out.sub_node = edge.node2;
-        rigid_.push_back(out);
         rigid_node_[id_slot(edge.node1)] = 1;
         rigid_node_[id_slot(edge.node2)] = 1;
     }
+    rigid_order_.erase(std::remove_if(rigid_order_.begin(), rigid_order_.end(),
+                                      [&](std::uint32_t index) { return !edges_[index].live; }),
+                       rigid_order_.end());
     for (const Edge& edge : edges_) {
         active_[id_slot(edge.constraint)] = edge.live ? 1 : 0;
     }
@@ -631,6 +661,7 @@ void Assemblies::rebuild(const DataModel& game) {
             }
         }
     }
+    orient_rigid(game);
 
     // Flags for every instance that belongs to a node.
     const std::size_t count = touched_.size();
@@ -651,6 +682,99 @@ void Assemblies::rebuild(const DataModel& game) {
         if (rigid_node_[node_slot] != 0) {
             flags_[slot] |= kRigid;
         }
+    }
+}
+
+// Rigid rule 2: the root never moves. Hops from each root over every live
+// edge say how near each node is to it; in each rigid tree, the nearest node
+// (root_before on a tie) is its anchor, which stays, and each edge points away
+// from it, whichever end names which. Follow order: parents first, by hops
+// from the anchor, then by GUID.
+void Assemblies::orient_rigid(const DataModel& game) {
+    if (rigid_order_.empty()) {
+        return;
+    }
+    const std::size_t count = nodes_.size();
+    for (std::size_t i = 0; i < count; ++i) {
+        node_pos_[id_slot(nodes_[i])] = static_cast<std::int32_t>(i);
+    }
+    const auto pos = [&](InstanceId node) { return static_cast<std::uint32_t>(node_pos_[id_slot(node)]); };
+    adj_start_.assign(count + 1, 0);
+    for (const Edge& edge : edges_) {
+        if (edge.live) {
+            ++adj_start_[pos(edge.node1) + 1];
+            ++adj_start_[pos(edge.node2) + 1];
+        }
+    }
+    for (std::size_t i = 0; i < count; ++i) {
+        adj_start_[i + 1] += adj_start_[i];
+    }
+    adj_cursor_.assign(adj_start_.begin(), adj_start_.end() - 1);
+    adj_.resize(adj_start_[count]);
+    for (std::uint32_t index = 0; index < edges_.size(); ++index) {
+        const Edge& edge = edges_[index];
+        if (edge.live) {
+            adj_[adj_cursor_[pos(edge.node1)]++] = index;
+            adj_[adj_cursor_[pos(edge.node2)]++] = index;
+        }
+    }
+    const auto spread = [&](std::vector<std::int32_t>& hops, bool rigid_only) {
+        for (std::size_t at = 0; at < queue_.size(); ++at) {
+            const std::uint32_t from = queue_[at];
+            for (std::uint32_t k = adj_start_[from]; k < adj_start_[from + 1]; ++k) {
+                const Edge& edge = edges_[adj_[k]];
+                if (rigid_only && !edge.rigid) {
+                    continue;
+                }
+                const std::uint32_t to = pos(nodes_[from] == edge.node1 ? edge.node2 : edge.node1);
+                if (hops[to] < 0) {
+                    hops[to] = hops[from] + 1;
+                    queue_.push_back(to);
+                }
+            }
+        }
+    };
+    hops_.assign(count, -1);
+    queue_.clear();
+    for (const Group& group : groups_) {
+        hops_[pos(group.root)] = 0;
+        queue_.push_back(pos(group.root));
+    }
+    spread(hops_, false);
+    for (const std::uint32_t index : rigid_order_) {
+        for (const InstanceId node : {edges_[index].node1, edges_[index].node2}) {
+            InstanceId& anchor = anchor_[rigid_find(id_slot(node))];
+            if (anchor == 0 || hops_[pos(node)] < hops_[pos(anchor)] ||
+                (hops_[pos(node)] == hops_[pos(anchor)] && root_before(game, node, anchor))) {
+                anchor = node;
+            }
+        }
+    }
+    rigid_hops_.assign(count, -1);
+    queue_.clear();
+    for (const std::uint32_t index : rigid_order_) {
+        for (const InstanceId node : {edges_[index].node1, edges_[index].node2}) {
+            if (anchor_[rigid_find(id_slot(node))] == node && rigid_hops_[pos(node)] < 0) {
+                rigid_hops_[pos(node)] = 0;
+                queue_.push_back(pos(node));
+            }
+        }
+    }
+    spread(rigid_hops_, true);
+    // rigid_order_ is in GUID order; a stable sort by depth keeps it within one.
+    const auto depth = [&](std::uint32_t index) {
+        return std::max(rigid_hops_[pos(edges_[index].node1)], rigid_hops_[pos(edges_[index].node2)]);
+    };
+    std::stable_sort(rigid_order_.begin(), rigid_order_.end(),
+                     [&](std::uint32_t a, std::uint32_t b) { return depth(a) < depth(b); });
+    for (const std::uint32_t index : rigid_order_) {
+        const Edge& edge = edges_[index];
+        RigidEdge out;
+        out.constraint = edge.constraint;
+        out.parent_end = rigid_hops_[pos(edge.node1)] < rigid_hops_[pos(edge.node2)] ? 1 : 2;
+        out.parent_node = out.parent_end == 1 ? edge.node1 : edge.node2;
+        out.sub_node = out.parent_end == 1 ? edge.node2 : edge.node1;
+        rigid_.push_back(out);
     }
 }
 

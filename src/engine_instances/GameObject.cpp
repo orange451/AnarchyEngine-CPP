@@ -97,6 +97,10 @@ std::optional<std::string> GameObject::set_scale(double value) {
     scale_ = value;
     note_property_change("Scale", number_slot(previous), number_slot(value));
     note_visual(VisualField::Scale);
+    // Its body's size, which ranks roots of equal Mass, goes with it.
+    if (assemblies().relevant(*this, id())) {
+        assemblies().bump();
+    }
     return std::nullopt;
 }
 

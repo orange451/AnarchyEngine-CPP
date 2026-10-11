@@ -24,6 +24,7 @@ using engine_core::CopyMap;
 using engine_core::DataModel;
 using engine_core::GameObject;
 using engine_core::InstanceId;
+using engine_core::PhysicsObject;
 using engine_core::RigidConstraint;
 using engine_core::WeldConstraint;
 
@@ -194,6 +195,10 @@ TEST_CASE("CR6 a pasted RigidConstraint pair follows only its own copy, and undo
     engine_core::Game game;
     GameObject& a = named_part(game, "A", workspace_of(game));
     a.set_transform(engine_core::matrix4_translation(0.f, 5.f, 0.f));
+    // An anchored body makes A, and each copy of it, the root.
+    PhysicsObject& body = game.create<PhysicsObject>();
+    body.set_anchored(true);
+    game.set_parent(body.id(), a.id());
     GameObject& b = named_part(game, "B", workspace_of(game));
     join<RigidConstraint>(game, a.id(), b.id(), workspace_of(game));
     REQUIRE(b.transform().m[13] == 5.f);
@@ -243,4 +248,18 @@ TEST_CASE("CR7 a weld pasted onto two targets names each target's own copies", "
         REQUIRE(weld->pv_instance2_id() == made[1]);
         REQUIRE(game.parent(weld->pv_instance1_id()) == target);
     }
+}
+
+TEST_CASE("CR8 a RigidConstraint copied with only its second end loses its first", "[assembly][remap]") {
+    SimRole role;
+    engine_core::Game game;
+    GameObject& a = named_part(game, "A", workspace_of(game));
+    GameObject& b = named_part(game, "B", workspace_of(game));
+    join<RigidConstraint>(game, b.id(), a.id(), a.id());
+    const std::vector<InstanceId> made = duplicate(game, {a.id()});
+    auto* copy = as<RigidConstraint>(game, game.first_child(made[0]));
+    REQUIRE(copy != nullptr);
+    REQUIRE(copy->pv_instance2_id() == made[0]);
+    REQUIRE(copy->pv_instance1_id() == 0);
+    REQUIRE(copy->pv_instance1_ref().guid().empty());
 }

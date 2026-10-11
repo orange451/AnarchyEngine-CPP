@@ -53,6 +53,8 @@ public:
         InstanceId constraint = 0;
         InstanceId parent_node = 0;
         InstanceId sub_node = 0;
+        // Which end (1 or 2) names the parent: the end on the root's side.
+        int parent_end = 1;
     };
 
     Assemblies();
@@ -238,6 +240,11 @@ private:
     InstanceId claimant_live(const DataModel& game, InstanceId game_object) const;
     std::uint32_t find(std::uint32_t slot);
     void unite(std::uint32_t a, std::uint32_t b);
+    // Union-find over rigid edges alone, which breaks rigid loops.
+    std::uint32_t rigid_find(std::uint32_t slot);
+    // Rigid rule 2: points each rigid edge away from its assembly's root, and
+    // fills rigid_ in follow order. Needs groups_ and nodes_.
+    void orient_rigid(const DataModel& game);
     bool root_before(const DataModel& game, InstanceId a, InstanceId b) const;
     Matrix4 holder_transform(const DataModel& game, InstanceId holder) const;
     Matrix4 attachment_frame(const DataModel& game, InstanceId attachment, int depth) const;
@@ -256,7 +263,11 @@ private:
     std::vector<std::uint8_t> active_;
     std::vector<InstanceId> claimant_;
     std::vector<std::uint32_t> uf_;
-    std::vector<InstanceId> rigid_parent_;
+    std::vector<std::uint32_t> rigid_uf_;
+    // Per slot: a rigid tree's anchor, kept at the tree's union-find root, and
+    // a node's place in nodes_.
+    std::vector<InstanceId> anchor_;
+    std::vector<std::int32_t> node_pos_;
     std::vector<std::uint8_t> rigid_node_;
     std::vector<std::int32_t> scratch_index_;
     std::vector<std::uint32_t> touched_;
@@ -271,6 +282,15 @@ private:
     std::vector<Group> groups_;
     std::vector<InstanceId> group_nodes_;
     std::vector<RigidEdge> rigid_;
+    // orient_rigid's scratch, per place in nodes_: live edges by node, as
+    // offsets into adj_; hops from the root over every live edge; hops from
+    // the rigid tree's anchor over rigid edges; and the BFS queue.
+    std::vector<std::uint32_t> adj_start_;
+    std::vector<std::uint32_t> adj_cursor_;
+    std::vector<std::uint32_t> adj_;
+    std::vector<std::int32_t> hops_;
+    std::vector<std::int32_t> rigid_hops_;
+    std::vector<std::uint32_t> queue_;
     mutable std::vector<InstanceId> live_scratch_;
 
     int suspended_ = 0;

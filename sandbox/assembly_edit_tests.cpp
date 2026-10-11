@@ -352,6 +352,32 @@ TEST_CASE("AE14 a saved snapped pair loads snapped", "[assembly][follow]") {
     REQUIRE(game.assemblies().follow(game, 0) == 0);
 }
 
+TEST_CASE("AE14b a pair saved apart from its joint reads back unchanged from disk, after a save too",
+          "[assembly][follow][project]") {
+    SimRole role;
+    TempDir dir;
+    {
+        // As a hand Bone posed by its mesh holds a gun where its file says:
+        // the place the joint would snap to differs from the saved pose.
+        engine_core::Project project = engine_core::Project::create(dir.path);
+        DataModel& game = project.datamodel();
+        engine_core::AssemblySuspend suspend(game);
+        Part a = add_part(game, at(0.f, 5.f, 0.f));
+        make_root(a);
+        game.set_name(a.object->id(), "A");
+        Part b = add_part(game, at(3.f, 0.f, 0.f));
+        game.set_name(b.object->id(), "B");
+        rigid(game, a.object->id(), b.object->id());
+        project.save();
+    }
+    engine_core::Game game;
+    engine_core::Project loaded = engine_core::Project::load(dir.path, game);
+    REQUIRE(loaded.apply_disk().loaded.empty());
+    loaded.save();
+    REQUIRE(loaded.apply_disk().loaded.empty());
+    REQUIRE(loaded.apply_disk().loaded.empty());
+}
+
 TEST_CASE("AE15 undo and redo of a parent move add no steps of their own", "[assembly][follow]") {
     SimRole role;
     engine_core::Game game;

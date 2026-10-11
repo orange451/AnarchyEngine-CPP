@@ -955,6 +955,10 @@ void clear_world(DataModel& world) {
 
 // Creates the plan in world. Returns the runtime id of each plan node.
 std::vector<InstanceId> build(DataModel& world, const std::vector<PlanNode>& plan) {
+    // Each instance as its file has it: a joint made here snaps nothing. In a
+    // scratch place a Bone has no mesh to pose it, so what a joint holds to it
+    // would move, and read as changed on disk.
+    AssemblySuspend suspend(world);
     std::vector<InstanceId> ids(plan.size(), 0);
     const PlanNode& top = plan[0];
     world.set_guid(0, top.guid);

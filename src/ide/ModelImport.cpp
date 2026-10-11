@@ -133,12 +133,22 @@ void GatherGlobals(const aiNode* node, const aiMatrix4x4& parent, std::map<const
 // say.
 SkeletonTable BuildSkeleton(const aiScene& scene, const std::map<const aiNode*, aiMatrix4x4>& globals) {
     SkeletonTable table;
-    // Every node an aiBone names.
+    // Every node an aiBone names, and every node a clip moves: Assimp makes an
+    // aiBone only for a joint some vertex weighs, so a joint that only carries
+    // rigid meshes (an FBX2GLTF rig's legs and head) is known by its channels.
     std::set<std::string> bone_names;
     for (unsigned m = 0; m < scene.mNumMeshes; ++m) {
         const aiMesh* mesh = scene.mMeshes[m];
         for (unsigned b = 0; mesh != nullptr && b < mesh->mNumBones; ++b) {
             bone_names.insert(mesh->mBones[b]->mName.C_Str());
+        }
+    }
+    if (!bone_names.empty()) {
+        for (unsigned a = 0; a < scene.mNumAnimations; ++a) {
+            const aiAnimation* animation = scene.mAnimations[a];
+            for (unsigned c = 0; animation != nullptr && c < animation->mNumChannels; ++c) {
+                bone_names.insert(animation->mChannels[c]->mNodeName.C_Str());
+            }
         }
     }
     std::vector<const aiNode*> named;

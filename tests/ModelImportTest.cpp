@@ -545,6 +545,59 @@ int RunModelImportTests(ide::IdeLayout& layout, jadefx::Scene& scene) {
         expect(data.bones.size() == 1 && Near(data.bones[0].t[2], 0), "its joint rests where the scene has it");
     }
 
+    // A node no vertex weighs is still a bone when a clip moves it and a mesh
+    // rides on it: here the skin names only Root and Arm (Assimp drops a joint
+    // no vertex weighs, as an FBX2GLTF rig's legs and head), while Leg carries a
+    // rigid triangle and the clip turns Leg.
+    {
+        const fs::path source = folder / "Unweighted";
+        const fs::path resources = folder / "UnweightedResources";
+        GltfBuilder gltf;
+        const int skinned = gltf.floats({0, 0, 0, 1, 0, 0, 0, 1, 0}, "VEC3", 3, "\"min\":[0,0,0],\"max\":[1,1,0]");
+        const int rigid = gltf.floats({0, 0, 7, 1, 0, 7, 0, 1, 7}, "VEC3", 3, "\"min\":[0,0,7],\"max\":[1,1,7]");
+        const int joints = gltf.bytes({1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0}, "VEC4", 4);
+        const int weights = gltf.floats({1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0}, "VEC4", 4);
+        const int indices = gltf.shorts({0, 1, 2});
+        const int binds = gltf.floats({1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1,
+                                       1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1},
+                                      "MAT4", 16);
+        const int times = gltf.floats({0.f, 1.f}, "SCALAR", 1, "\"min\":[0],\"max\":[1]");
+        const float s = 0.70710678f;
+        const int turn = gltf.floats({0, 0, 0, 1, 0, 0, s, s}, "VEC4", 4);
+        gltf.write(source, "Unweighted",
+                   std::string(R"("scenes":[{"nodes":[0,4]}],
+  "nodes":[{"name":"Root","children":[1,2]},{"name":"Arm"},{"name":"Leg","children":[3]},
+           {"name":"LegMesh","mesh":1},{"name":"Body","mesh":0,"skin":0}],
+  "skins":[{"joints":[0,1],"inverseBindMatrices":)") +
+                       std::to_string(binds) + "}],\"meshes\":[{\"primitives\":[{\"attributes\":{\"POSITION\":" +
+                       std::to_string(skinned) + ",\"JOINTS_0\":" + std::to_string(joints) + ",\"WEIGHTS_0\":" +
+                       std::to_string(weights) + "},\"indices\":" + std::to_string(indices) +
+                       "}]},{\"primitives\":[{\"attributes\":{\"POSITION\":" + std::to_string(rigid) +
+                       "},\"indices\":" + std::to_string(indices) +
+                       "}]}],\"animations\":[{\"name\":\"Kick\",\"samplers\":[{\"input\":" + std::to_string(times) +
+                       ",\"output\":" + std::to_string(turn) +
+                       "}],\"channels\":[{\"sampler\":0,\"target\":{\"node\":2,\"path\":\"rotation\"}}]}]");
+        std::string error;
+        const std::optional<ide::ImportedModel> model =
+            ide::import_model_file(resources, ide::utf8_path(source / "Unweighted.gltf"), error);
+        anarchy::amesh::Data data;
+        expect(model.has_value() && !model->meshes.empty() &&
+                   ReadMesh(resources / ide::path_from_utf8(model->meshes[0].path), data),
+               "a rig with a joint no vertex weighs imports");
+        int leg = -1;
+        for (std::size_t b = 0; b < data.bones.size(); ++b) {
+            leg = data.bones[b].name == "Leg" ? static_cast<int>(b) : leg;
+        }
+        expect(leg >= 0, "a joint a clip moves is a bone though no vertex weighs it");
+        bool riding = false;
+        for (const anarchy::amesh::Vertex& vertex : data.vertices) {
+            if (Near(vertex.p[2], 7)) {
+                riding = leg >= 0 && vertex.bone[0] == leg && Near(vertex.weight[0], 1);
+            }
+        }
+        expect(riding, "a rigid mesh under such a joint follows that joint");
+    }
+
     // An OBJ with three materials, one drawn by two objects, dropped on the studio.
     const fs::path root = folder / "ModelPlace";
     const fs::path outside = folder / "Downloads" / "crate";

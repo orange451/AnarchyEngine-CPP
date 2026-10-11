@@ -24,6 +24,7 @@
 
 #include <algorithm>
 #include <iterator>
+#include <map>
 #include <array>
 #include <atomic>
 #include <cmath>
@@ -581,6 +582,9 @@ struct PhysicsWorld::Impl {
         float volume = 1.f;
         // A PlayerController's: an upright cylinder, never recentered or scaled.
         bool controller = false;
+        // A Touched or TouchEnded of this body has a connection: its shapes
+        // ask Box3D for contact events.
+        bool listened = false;
         // A controller a write sped upward, as a jump does: it is leaving the
         // ground until it stops rising.
         bool launched = false;
@@ -655,6 +659,40 @@ struct PhysicsWorld::Impl {
     std::unordered_set<InstanceId> no_collide_ids;
     std::vector<std::pair<InstanceId, InstanceId>> no_collide_diff;
     std::vector<InstanceId> no_collide_changed;
+    // Touching (docs/superpowers/specs/2026-10-11-touched-design.md): each
+    // touching shape pair (b3StoreShapeId, lower first) with the two
+    // instances; per instance pair (pair_key) how many shape pairs touch and
+    // the last facts known, oriented from the lower id; the seconds since
+    // Play; how many bodies are listened to; and, while any is, each body's
+    // motion from before the step (b3StoreBodyId).
+    struct ShapeTouch {
+        InstanceId a = 0;
+        InstanceId b = 0;
+    };
+    struct PairTouch {
+        int count = 0;
+        // Its count reached 0 because PhysicsWorld removed shapes: it ends at
+        // the end of the step unless it touches again first.
+        bool pending_end = false;
+        bool sensor = false;
+        Vec3 point{};
+        Vec3 normal_from_low{};
+        Vec3 velocity_high_from_low{};
+        // A trigger overlap's Point, per side: the other body's position.
+        Vec3 position_low{};
+        Vec3 position_high{};
+    };
+    struct StepMotion {
+        b3Vec3 linear{};
+        b3Vec3 angular{};
+        b3Vec3 center{};
+    };
+    std::map<std::pair<std::uint64_t, std::uint64_t>, ShapeTouch> shape_touches;
+    std::unordered_map<std::uint64_t, PairTouch> pair_touches;
+    std::unordered_map<std::uint64_t, StepMotion> before_step;
+    std::vector<std::uint64_t> touch_scratch;
+    double play_seconds = 0.0;
+    std::size_t listened = 0;
     // refilter_all's scratch: each group's name and filter bits this pass.
     struct GroupBits {
         const std::string* name;
@@ -760,6 +798,9 @@ struct PhysicsWorld::Impl {
         // Terrain colliders go only now that no shape points into them.
         terrain_bodies.clear();
         // A new world has no shapes: the pairs are applied again as they are made.
+        shape_touches.clear();
+        pair_touches.clear();
+        before_step.clear();
         no_collide.clear();
         no_collide_keys.clear();
         no_collide_ids.clear();
@@ -785,6 +826,325 @@ struct PhysicsWorld::Impl {
     // shapes made again, since Box3D asks the filter only of a new proxy
     // pair, so two bodies already touching let go at once, and two kept
     // apart meet again.
+    // ---- Touched and TouchEnded ------------------------------------------
+
+    static std::uint64_t shape_key(b3ShapeId shape) { return b3StoreShapeId(shape); }
+    static InstanceId instance_of(b3ShapeId shape) {
+        return static_cast<InstanceId>(reinterpret_cast<std::uintptr_t>(b3Shape_GetUserData(shape)));
+    }
+    static Vec3 vec_of(b3Vec3 v) { return Vec3{v.x, v.y, v.z}; }
+    static b3Vec3 cross(b3Vec3 a, b3Vec3 b) {
+        return b3Vec3{a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x};
+    }
+
+    // Who listens, and their shapes' contact events to match. Stopped:
+    // nobody, and every touch is forgotten without an event.
+    void update_listened(DataModel& game, bool running) {
+        listened = 0;
+        for (auto& [id, record] : bodies) {
+            const bool now =
+                running && (game.event_listened(id, "Touched") || game.event_listened(id, "TouchEnded"));
+            if (now != record.listened) {
+                record.listened = now;
+                for (const b3ShapeId shape : record.shapes) {
+                    if (b3Shape_IsValid(shape)) {
+                        b3Shape_EnableContactEvents(shape, now);
+                    }
+                }
+            }
+            listened += now ? 1u : 0u;
+        }
+        if (!running) {
+            shape_touches.clear();
+            pair_touches.clear();
+            before_step.clear();
+            play_seconds = 0.0;
+        }
+    }
+
+    // While anyone listens: every moving body's velocities, before the step
+    // resolves its collisions (RelativeVelocity).
+    void save_motion() {
+        before_step.clear();
+        if (listened == 0) {
+            return;
+        }
+        for (const auto& [id, record] : bodies) {
+            if (!b3Body_IsValid(record.body) || b3Body_GetType(record.body) == b3_staticBody) {
+                continue;
+            }
+            const std::uint64_t key = b3StoreBodyId(record.body);
+            if (before_step.count(key) == 0) {
+                before_step[key] = StepMotion{b3Body_GetLinearVelocity(record.body), b3Body_GetAngularVelocity(record.body),
+                                          b3Body_GetWorldCenter(record.body)};
+            }
+        }
+    }
+
+    // A body's velocity at point: from before the step when saved, else now.
+    b3Vec3 point_velocity(b3BodyId body, b3Vec3 point, bool before) const {
+        if (!b3Body_IsValid(body) || b3Body_GetType(body) == b3_staticBody) {
+            return b3Vec3{0.f, 0.f, 0.f};
+        }
+        StepMotion motion{b3Body_GetLinearVelocity(body), b3Body_GetAngularVelocity(body),
+                          b3Body_GetWorldCenter(body)};
+        if (before) {
+            if (const auto found = before_step.find(b3StoreBodyId(body)); found != before_step.end()) {
+                motion = found->second;
+            }
+        }
+        const b3Vec3 arm{point.x - motion.center.x, point.y - motion.center.y, point.z - motion.center.z};
+        const b3Vec3 spin = cross(motion.angular, arm);
+        return b3Vec3{motion.linear.x + spin.x, motion.linear.y + spin.y, motion.linear.z + spin.z};
+    }
+
+    // The shapes go: their touching pairs are let go. A pair left touching
+    // nothing waits for the end of the step: made again in place, it
+    // touches again and nothing fires.
+    void forget_shapes(const Body& record) {
+        if (shape_touches.empty() || record.shapes.empty()) {
+            return;
+        }
+        for (const b3ShapeId shape : record.shapes) {
+            const std::uint64_t key = shape_key(shape);
+            for (auto it = shape_touches.begin(); it != shape_touches.end();) {
+                if (it->first.first != key && it->first.second != key) {
+                    ++it;
+                    continue;
+                }
+                const auto pair = pair_touches.find(pair_key(it->second.a, it->second.b));
+                if (pair != pair_touches.end() && --pair->second.count <= 0) {
+                    pair->second.count = 0;
+                    pair->second.pending_end = true;
+                }
+                it = shape_touches.erase(it);
+            }
+        }
+    }
+
+    // A shape pair began touching: true when its instance pair did too.
+    PairTouch* begin_pair(b3ShapeId a, b3ShapeId b, bool& began) {
+        began = false;
+        const InstanceId ia = instance_of(a);
+        const InstanceId ib = instance_of(b);
+        if (ia == 0 || ib == 0 || ia == ib) {
+            return nullptr;
+        }
+        const std::uint64_t ka = shape_key(a);
+        const std::uint64_t kb = shape_key(b);
+        const auto key = std::make_pair(std::min(ka, kb), std::max(ka, kb));
+        if (shape_touches.count(key) != 0) {
+            return nullptr;
+        }
+        shape_touches[key] = ShapeTouch{ia, ib};
+        PairTouch& pair = pair_touches[pair_key(ia, ib)];
+        if (pair.count++ == 0) {
+            // Back from a pending end: it never stopped touching.
+            began = !pair.pending_end;
+            pair.pending_end = false;
+        }
+        return &pair;
+    }
+
+    // A shape pair stopped touching: true when its instance pair did too.
+    PairTouch* end_pair(b3ShapeId a, b3ShapeId b, bool& ended) {
+        ended = false;
+        const std::uint64_t ka = shape_key(a);
+        const std::uint64_t kb = shape_key(b);
+        const auto found = shape_touches.find(std::make_pair(std::min(ka, kb), std::max(ka, kb)));
+        if (found == shape_touches.end()) {
+            return nullptr;
+        }
+        const std::uint64_t key = pair_key(found->second.a, found->second.b);
+        shape_touches.erase(found);
+        const auto pair = pair_touches.find(key);
+        if (pair == pair_touches.end()) {
+            return nullptr;
+        }
+        if (--pair->second.count <= 0) {
+            pair->second.count = 0;
+            ended = true;
+        }
+        return &pair->second;
+    }
+
+    // Fires name on each listened side of the pair (low, high).
+    void fire_pair(DataModel& game, const char* name, InstanceId low, InstanceId high, const PairTouch& pair) {
+        for (const InstanceId side : {low, high}) {
+            const InstanceId other = side == low ? high : low;
+            if (game.instance(side) == nullptr || !game.in_workspace(side) || !game.event_listened(side, name)) {
+                continue;
+            }
+            const float sign = side == low ? 1.f : -1.f;
+            LuaSlot slot;
+            slot.kind = LuaSlot::Kind::TouchObject;
+            slot.touch.time = play_seconds;
+            slot.touch.instance = other;
+            slot.touch.point = pair.sensor ? (side == low ? pair.position_high : pair.position_low) : pair.point;
+            slot.touch.normal = Vec3{pair.normal_from_low.x * sign, pair.normal_from_low.y * sign,
+                                     pair.normal_from_low.z * sign};
+            slot.touch.relative_velocity =
+                Vec3{pair.velocity_high_from_low.x * sign, pair.velocity_high_from_low.y * sign,
+                     pair.velocity_high_from_low.z * sign};
+            game.fire_event(side, name, EventArgs{slot});
+        }
+    }
+
+    // The facts of a contact between shapes a and b, oriented from the lower
+    // instance id: Point (manifold points averaged), Normal, RelativeVelocity.
+    void contact_facts(b3ShapeId a, b3ShapeId b, const b3ContactData* data, PairTouch& pair, bool before) const {
+        const b3BodyId body_a = b3Shape_GetBody(a);
+        const b3BodyId body_b = b3Shape_GetBody(b);
+        b3Vec3 sum{0.f, 0.f, 0.f};
+        int points = 0;
+        b3Vec3 normal{0.f, 0.f, 0.f};
+        if (data != nullptr) {
+            const b3Vec3 center = b3Body_GetWorldCenter(body_a);
+            for (int m = 0; m < data->manifoldCount; ++m) {
+                const b3Manifold& manifold = data->manifolds[m];
+                if (manifold.pointCount > 0 && points == 0) {
+                    normal = manifold.normal;
+                }
+                for (int i = 0; i < manifold.pointCount; ++i) {
+                    sum.x += center.x + manifold.points[i].anchorA.x;
+                    sum.y += center.y + manifold.points[i].anchorA.y;
+                    sum.z += center.z + manifold.points[i].anchorA.z;
+                    ++points;
+                }
+            }
+        }
+        b3Vec3 point = points > 0 ? b3Vec3{sum.x / points, sum.y / points, sum.z / points}
+                                  : b3Body_GetWorldCenter(body_b);
+        if (data == nullptr) {
+            // Parting: the closest points between the two, and the gap's direction.
+            const b3Vec3 on_a = b3Shape_GetClosestPoint(a, b3Body_GetWorldCenter(body_b));
+            const b3Vec3 on_b = b3Shape_GetClosestPoint(b, on_a);
+            point = b3Vec3{(on_a.x + on_b.x) * 0.5f, (on_a.y + on_b.y) * 0.5f, (on_a.z + on_b.z) * 0.5f};
+            const b3Vec3 gap{on_b.x - on_a.x, on_b.y - on_a.y, on_b.z - on_a.z};
+            const float length = std::sqrt(gap.x * gap.x + gap.y * gap.y + gap.z * gap.z);
+            if (length > 1e-5f) {
+                normal = b3Vec3{gap.x / length, gap.y / length, gap.z / length};
+            } else {
+                const bool a_low = instance_of(a) < instance_of(b);
+                const Vec3 last = pair.normal_from_low;
+                normal = a_low ? b3Vec3{last.x, last.y, last.z} : b3Vec3{-last.x, -last.y, -last.z};
+            }
+        }
+        const b3Vec3 va = point_velocity(body_a, point, before);
+        const b3Vec3 vb = point_velocity(body_b, point, before);
+        const bool a_low = instance_of(a) < instance_of(b);
+        const float sign = a_low ? 1.f : -1.f;
+        pair.sensor = false;
+        pair.point = vec_of(point);
+        pair.normal_from_low = Vec3{normal.x * sign, normal.y * sign, normal.z * sign};
+        pair.velocity_high_from_low =
+            Vec3{(vb.x - va.x) * sign, (vb.y - va.y) * sign, (vb.z - va.z) * sign};
+    }
+
+    // A trigger overlap's facts: each side's Point is the other's position;
+    // no Normal; RelativeVelocity at the visitor's position.
+    void overlap_facts(b3ShapeId sensor, b3ShapeId visitor, PairTouch& pair, bool before) const {
+        const b3BodyId zone = b3Shape_GetBody(sensor);
+        const b3BodyId mover = b3Shape_GetBody(visitor);
+        const b3Vec3 at = b3Body_GetPosition(mover);
+        const b3Vec3 vz = point_velocity(zone, at, before);
+        const b3Vec3 vm = point_velocity(mover, at, before);
+        const bool zone_low = instance_of(sensor) < instance_of(visitor);
+        const float sign = zone_low ? 1.f : -1.f;
+        pair.sensor = true;
+        pair.normal_from_low = Vec3{};
+        pair.velocity_high_from_low = Vec3{(vm.x - vz.x) * sign, (vm.y - vz.y) * sign, (vm.z - vz.z) * sign};
+        const Vec3 zone_at = vec_of(b3Body_GetPosition(zone));
+        const Vec3 mover_at = vec_of(at);
+        pair.position_low = zone_low ? zone_at : mover_at;
+        pair.position_high = zone_low ? mover_at : zone_at;
+    }
+
+    // After a step: Box3D's contact and sensor events into Touched and
+    // TouchEnded, then the pending ends that did not touch again.
+    void touches(DataModel& game) {
+        const b3ContactEvents contacts = b3World_GetContactEvents(world);
+        for (int i = 0; i < contacts.beginCount; ++i) {
+            const b3ContactBeginTouchEvent& event = contacts.beginEvents[i];
+            if (!b3Shape_IsValid(event.shapeIdA) || !b3Shape_IsValid(event.shapeIdB)) {
+                continue;
+            }
+            bool began = false;
+            PairTouch* pair = begin_pair(event.shapeIdA, event.shapeIdB, began);
+            if (pair == nullptr || !began) {
+                continue;
+            }
+            const bool valid = b3Contact_IsValid(event.contactId);
+            const b3ContactData data = valid ? b3Contact_GetData(event.contactId) : b3ContactData{};
+            contact_facts(event.shapeIdA, event.shapeIdB, valid ? &data : nullptr, *pair, true);
+            const InstanceId a = instance_of(event.shapeIdA);
+            const InstanceId b = instance_of(event.shapeIdB);
+            fire_pair(game, "Touched", std::min(a, b), std::max(a, b), *pair);
+        }
+        const b3SensorEvents sensors = b3World_GetSensorEvents(world);
+        for (int i = 0; i < sensors.beginCount; ++i) {
+            const b3SensorBeginTouchEvent& event = sensors.beginEvents[i];
+            if (!b3Shape_IsValid(event.sensorShapeId) || !b3Shape_IsValid(event.visitorShapeId)) {
+                continue;
+            }
+            bool began = false;
+            PairTouch* pair = begin_pair(event.sensorShapeId, event.visitorShapeId, began);
+            if (pair == nullptr || !began) {
+                continue;
+            }
+            overlap_facts(event.sensorShapeId, event.visitorShapeId, *pair, true);
+            const InstanceId a = instance_of(event.sensorShapeId);
+            const InstanceId b = instance_of(event.visitorShapeId);
+            fire_pair(game, "Touched", std::min(a, b), std::max(a, b), *pair);
+        }
+        for (int i = 0; i < contacts.endCount; ++i) {
+            const b3ContactEndTouchEvent& event = contacts.endEvents[i];
+            if (!b3Shape_IsValid(event.shapeIdA) || !b3Shape_IsValid(event.shapeIdB)) {
+                continue;  // shapes PhysicsWorld removed: forget_shapes settled them
+            }
+            bool ended = false;
+            PairTouch* pair = end_pair(event.shapeIdA, event.shapeIdB, ended);
+            if (pair == nullptr || !ended) {
+                continue;
+            }
+            contact_facts(event.shapeIdA, event.shapeIdB, nullptr, *pair, false);
+            const InstanceId a = instance_of(event.shapeIdA);
+            const InstanceId b = instance_of(event.shapeIdB);
+            fire_pair(game, "TouchEnded", std::min(a, b), std::max(a, b), *pair);
+            pair_touches.erase(pair_key(a, b));
+        }
+        for (int i = 0; i < sensors.endCount; ++i) {
+            const b3SensorEndTouchEvent& event = sensors.endEvents[i];
+            if (!b3Shape_IsValid(event.sensorShapeId) || !b3Shape_IsValid(event.visitorShapeId)) {
+                continue;
+            }
+            bool ended = false;
+            PairTouch* pair = end_pair(event.sensorShapeId, event.visitorShapeId, ended);
+            if (pair == nullptr || !ended) {
+                continue;
+            }
+            overlap_facts(event.sensorShapeId, event.visitorShapeId, *pair, false);
+            const InstanceId a = instance_of(event.sensorShapeId);
+            const InstanceId b = instance_of(event.visitorShapeId);
+            fire_pair(game, "TouchEnded", std::min(a, b), std::max(a, b), *pair);
+            pair_touches.erase(pair_key(a, b));
+        }
+        // Pending ends that did not touch again: they end now, from the last facts known.
+        touch_scratch.clear();
+        for (const auto& [key, pair] : pair_touches) {
+            if (pair.pending_end && pair.count == 0) {
+                touch_scratch.push_back(key);
+            }
+        }
+        for (const std::uint64_t key : touch_scratch) {
+            const auto found = pair_touches.find(key);
+            const InstanceId low = static_cast<InstanceId>(key >> 32);
+            const InstanceId high = static_cast<InstanceId>(key & 0xffffffffu);
+            fire_pair(game, "TouchEnded", low, high, found->second);
+            pair_touches.erase(found);
+        }
+    }
+
     void update_no_collide(DataModel& game) {
         const std::vector<std::pair<InstanceId, InstanceId>>& pairs = game.assemblies().no_collide_pairs();
         if (pairs == no_collide) {
@@ -861,6 +1221,7 @@ struct PhysicsWorld::Impl {
             PROFILE_SCOPE("Terrain collider shapes", profiler::Group::Physics);
             reconcile_terrain();
         }
+        update_listened(game, running);
         played = running && (stepping || played);
     }
 
@@ -873,9 +1234,15 @@ struct PhysicsWorld::Impl {
             control(game, dt);
             drive_held(game, dt);
         }
+        save_motion();
         {
             PROFILE_SCOPE("Box3D step", profiler::Group::Physics);
             b3World_Step(world, static_cast<float>(dt), 1);
+        }
+        play_seconds += dt;
+        {
+            PROFILE_SCOPE("Physics touches", profiler::Group::Physics);
+            touches(game);
         }
         unclimb(game);
         {
@@ -1890,6 +2257,11 @@ struct PhysicsWorld::Impl {
         if (found == compounds.end()) {
             return;
         }
+        for (auto& [id, record] : bodies) {
+            if (record.compound == stamp) {
+                forget_shapes(record);
+            }
+        }
         // The body takes every member's shapes with it; only then do the
         // meshes they point into go.
         if (b3Body_IsValid(found->second.body)) {
@@ -2652,6 +3024,7 @@ struct PhysicsWorld::Impl {
         // CanCollide off: a sensor (a trigger zone). Every shape can set one off.
         def.isSensor = !brush.can_collide();
         def.enableSensorEvents = true;
+        def.enableContactEvents = record.listened;
         def.baseMaterial.friction = static_cast<float>(brush.friction());
         def.baseMaterial.restitution = static_cast<float>(brush.bounciness());
         def.userData = user_data(brush.id());
@@ -2699,6 +3072,7 @@ struct PhysicsWorld::Impl {
         // CanCollide off: a sensor (a trigger zone). Every shape can set one off.
         def.isSensor = !controller.can_collide();
         def.enableSensorEvents = true;
+        def.enableContactEvents = record.listened;
         def.baseMaterial.friction = 0.f;
         def.baseMaterial.restitution = 0.f;
         def.userData = user_data(controller.id());
@@ -2736,6 +3110,7 @@ struct PhysicsWorld::Impl {
         // CanCollide off: a sensor (a trigger zone). Every shape can set one off.
         def.isSensor = !object.can_collide();
         def.enableSensorEvents = true;
+        def.enableContactEvents = record.listened;
         def.baseMaterial.friction = static_cast<float>(object.friction());
         def.baseMaterial.restitution = static_cast<float>(object.bounciness());
         def.userData = user_data(object.id());
@@ -2936,7 +3311,8 @@ struct PhysicsWorld::Impl {
     }
 
     // Destroys the record's shapes, and the mesh one held, if any.
-    static void drop_shape(Body& record) {
+    void drop_shape(Body& record) {
+        forget_shapes(record);
         for (const b3ShapeId shape : record.shapes) {
             if (b3Shape_IsValid(shape)) {
                 b3DestroyShape(shape, false);
@@ -3325,6 +3701,19 @@ bool PhysicsWorld::shapes_are_sensors(InstanceId id) const {
     }
     for (const b3ShapeId shape : found->second.shapes) {
         if (!b3Shape_IsSensor(shape)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool PhysicsWorld::contact_events_enabled(InstanceId id) const {
+    const auto found = impl_->bodies.find(id);
+    if (found == impl_->bodies.end() || found->second.shapes.empty()) {
+        return false;
+    }
+    for (const b3ShapeId shape : found->second.shapes) {
+        if (!b3Shape_AreContactEventsEnabled(shape)) {
             return false;
         }
     }

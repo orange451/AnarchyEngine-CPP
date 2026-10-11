@@ -4,13 +4,18 @@
 #include "physics_rig.hpp"
 #include "support.hpp"
 
+#include "Brush.hpp"
+#include "Constraint.hpp"
+#include "Events.hpp"
 #include "PhysicsObject.hpp"
 #include "PhysicsWorld.hpp"
 #include "TouchRecord.hpp"
+#include "brush/BrushGeometry.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -110,4 +115,221 @@ TEST_CASE("T3 a CanCollide-off body is a sensor: still hit by rays, still falls,
     rig.play();
     rig.seconds(2.0);
     REQUIRE(y_of(ghost.transform()) < -5.f);
+}
+
+namespace {
+
+struct Heard {
+    engine_core::InstanceId on = 0;
+    bool ended = false;
+    engine_core::TouchRecord touch;
+};
+
+// Connects both signals of id; what fires lands in out.
+void listen(engine_core::DataModel& game, engine_core::InstanceId id, std::vector<Heard>& out) {
+    for (const char* name : {"Touched", "TouchEnded"}) {
+        const bool ended = std::string(name) == "TouchEnded";
+        game.event_signal(id, name).connect([&game, &out, id, ended](engine_core::InstanceId, engine_core::Field) {
+            const engine_core::EventArgs* args = game.events().current_args();
+            REQUIRE(args != nullptr);
+            REQUIRE(args->size() == 1);
+            out.push_back(Heard{id, ended, (*args)[0].touch});
+        });
+    }
+}
+
+// Steps as the engine does: physics, then the events it queued.
+void run_for(PhysicsRig& rig, double seconds) {
+    const int count = static_cast<int>(seconds / kStep + 0.5);
+    for (int i = 0; i < count; ++i) {
+        rig.physics.step(rig.game, kStep);
+        rig.game.events().drain();
+    }
+}
+
+std::size_t count(const std::vector<Heard>& heard, engine_core::InstanceId on, bool ended) {
+    std::size_t n = 0;
+    for (const Heard& h : heard) {
+        n += h.on == on && h.ended == ended ? 1 : 0;
+    }
+    return n;
+}
+
+}  // namespace
+
+TEST_CASE("T4 a box landing on a floor fires Touched once on each listener, with a TouchObject",
+          "[touch][physics]") {
+    PhysicsRig rig;
+    PhysicsObject& floor = rig.floor();
+    PhysicsObject& box = rig.body(at(0.f, 3.f, 0.f), Vec3{1.f, 1.f, 1.f}, false);
+    std::vector<Heard> heard;
+    listen(rig.game, box.id(), heard);
+    listen(rig.game, floor.id(), heard);
+    rig.play();
+    run_for(rig, 3.0);
+    REQUIRE(count(heard, box.id(), false) == 1);
+    REQUIRE(count(heard, floor.id(), false) == 1);
+    REQUIRE(count(heard, box.id(), true) == 0);
+    for (const Heard& h : heard) {
+        const bool on_box = h.on == box.id();
+        REQUIRE(h.touch.instance == (on_box ? floor.id() : box.id()));
+        REQUIRE(near(h.touch.point.y, 0.f, 0.1f));
+        REQUIRE(near(h.touch.normal.y, on_box ? -1.f : 1.f, 1e-3f));
+        // The other's velocity relative to this one: the box was falling at about 7 units/s.
+        REQUIRE((on_box ? h.touch.relative_velocity.y > 5.f : h.touch.relative_velocity.y < -5.f));
+        REQUIRE(h.touch.time > 0.5);
+    }
+}
+
+TEST_CASE("T5 lifting it off fires TouchEnded once on each listener", "[touch][physics]") {
+    PhysicsRig rig;
+    PhysicsObject& floor = rig.floor();
+    PhysicsObject& box = rig.body(at(0.f, 1.f, 0.f), Vec3{1.f, 1.f, 1.f}, false);
+    std::vector<Heard> heard;
+    listen(rig.game, box.id(), heard);
+    listen(rig.game, floor.id(), heard);
+    rig.play();
+    run_for(rig, 1.0);
+    REQUIRE_FALSE(box.set_transform(at(0.f, 20.f, 0.f)));
+    run_for(rig, 0.1);
+    REQUIRE(count(heard, box.id(), true) == 1);
+    REQUIRE(count(heard, floor.id(), true) == 1);
+    for (const Heard& h : heard) {
+        if (h.ended) {
+            REQUIRE(h.touch.instance == (h.on == box.id() ? floor.id() : box.id()));
+        }
+    }
+}
+
+TEST_CASE("T6 a Brush in several pieces fires one Touched", "[touch][physics]") {
+    PhysicsRig rig;
+    rig.floor();
+    engine_core::Brush& ball = rig.game.create<engine_core::Brush>();
+    REQUIRE_FALSE(ball.set_faces(engine_core::brush::make_sphere({2, 2, 2}, 3)));
+    REQUIRE_FALSE(ball.set_transform(at(0.f, 3.f, 0.f)));
+    rig.game.set_parent(ball.id(), workspace_of(rig.game));
+    ball.set_anchored(false);
+    std::vector<Heard> heard;
+    listen(rig.game, ball.id(), heard);
+    rig.play();
+    run_for(rig, 3.0);
+    REQUIRE(rig.physics.shape_count(ball.id()) > 1);
+    REQUIRE(count(heard, ball.id(), false) == 1);
+}
+
+TEST_CASE("T7 a welded pair fires on the member that hit", "[touch][physics]") {
+    PhysicsRig rig;
+    PhysicsObject& floor = rig.floor();
+    PhysicsObject& low = rig.body(at(0.f, 2.f, 0.f), Vec3{1.f, 1.f, 1.f}, false);
+    PhysicsObject& high = rig.body(at(0.f, 3.f, 0.f), Vec3{1.f, 1.f, 1.f}, false);
+    engine_core::WeldConstraint& weld = rig.game.create<engine_core::WeldConstraint>();
+    engine_core::LuaSlot slot;
+    slot.kind = engine_core::LuaSlot::Kind::Instance;
+    slot.id = low.id();
+    REQUIRE_FALSE(weld.set_pv_instance1(slot));
+    slot.id = high.id();
+    REQUIRE_FALSE(weld.set_pv_instance2(slot));
+    rig.game.set_parent(weld.id(), workspace_of(rig.game));
+    std::vector<Heard> heard;
+    listen(rig.game, low.id(), heard);
+    listen(rig.game, high.id(), heard);
+    listen(rig.game, floor.id(), heard);
+    rig.play();
+    run_for(rig, 3.0);
+    REQUIRE(count(heard, low.id(), false) == 1);
+    REQUIRE(count(heard, high.id(), false) == 0);
+    for (const Heard& h : heard) {
+        if (h.on == floor.id()) {
+            REQUIRE(h.touch.instance == low.id());
+        }
+    }
+}
+
+TEST_CASE("T8 a trigger zone fires as a box falls through it, on both", "[touch][physics]") {
+    PhysicsRig rig;
+    rig.floor();
+    PhysicsObject& zone = rig.body(at(0.f, 5.f, 0.f), Vec3{4.f, 2.f, 4.f}, true);
+    REQUIRE_FALSE(zone.set_can_collide(false));
+    PhysicsObject& box = rig.body(at(0.f, 9.f, 0.f), Vec3{1.f, 1.f, 1.f}, false);
+    std::vector<Heard> heard;
+    listen(rig.game, zone.id(), heard);
+    listen(rig.game, box.id(), heard);
+    rig.play();
+    run_for(rig, 3.0);
+    REQUIRE(near(y_of(box.transform()), 0.5f, 0.05f));
+    REQUIRE(count(heard, zone.id(), false) == 1);
+    REQUIRE(count(heard, zone.id(), true) == 1);
+    REQUIRE(count(heard, box.id(), false) == 2);  // the zone, then the floor
+    REQUIRE(count(heard, box.id(), true) == 1);
+    for (const Heard& h : heard) {
+        if (h.on == zone.id()) {
+            REQUIRE(h.touch.instance == box.id());
+            REQUIRE(h.touch.normal.x == 0.f);
+            REQUIRE(h.touch.normal.y == 0.f);
+        }
+    }
+}
+
+TEST_CASE("T9 collision groups and a NoCollisionConstraint keep a pair from touching", "[touch][physics]") {
+    PhysicsRig rig;
+    PhysicsObject& floor = rig.floor();
+    PhysicsObject& block = rig.body(at(0.f, 0.5f, 0.f), Vec3{1.f, 1.f, 1.f}, true);
+    PhysicsObject& box = rig.body(at(0.f, 3.f, 0.f), Vec3{1.f, 1.f, 1.f}, false);
+    engine_core::NoCollisionConstraint& apart = rig.game.create<engine_core::NoCollisionConstraint>();
+    engine_core::LuaSlot slot;
+    slot.kind = engine_core::LuaSlot::Kind::Instance;
+    slot.id = block.id();
+    REQUIRE_FALSE(apart.set_pv_instance1(slot));
+    slot.id = box.id();
+    REQUIRE_FALSE(apart.set_pv_instance2(slot));
+    rig.game.set_parent(apart.id(), workspace_of(rig.game));
+    std::vector<Heard> heard;
+    listen(rig.game, box.id(), heard);
+    rig.play();
+    run_for(rig, 3.0);
+    REQUIRE(count(heard, box.id(), false) == 1);
+    REQUIRE(heard[0].touch.instance == floor.id());
+}
+
+TEST_CASE("T10 a body nobody listens to asks for no contact events; connecting turns them on",
+          "[touch][physics]") {
+    PhysicsRig rig;
+    rig.floor();
+    PhysicsObject& box = rig.body(at(0.f, 3.f, 0.f), Vec3{1.f, 1.f, 1.f}, false);
+    rig.play();
+    run_for(rig, 0.1);
+    REQUIRE_FALSE(rig.physics.contact_events_enabled(box.id()));
+    std::vector<Heard> heard;
+    listen(rig.game, box.id(), heard);
+    run_for(rig, 0.1);
+    REQUIRE(rig.physics.contact_events_enabled(box.id()));
+}
+
+TEST_CASE("T11 a body destroyed while touching ends the touch once for the other", "[touch][physics]") {
+    PhysicsRig rig;
+    PhysicsObject& floor = rig.floor();
+    PhysicsObject& box = rig.body(at(0.f, 1.f, 0.f), Vec3{1.f, 1.f, 1.f}, false);
+    std::vector<Heard> heard;
+    listen(rig.game, floor.id(), heard);
+    rig.play();
+    run_for(rig, 1.0);
+    REQUIRE(count(heard, floor.id(), false) == 1);
+    rig.game.destroy(box.id());
+    run_for(rig, 0.2);
+    REQUIRE(count(heard, floor.id(), true) == 1);
+}
+
+TEST_CASE("T12 a shape remade while touching fires nothing more", "[touch][physics]") {
+    PhysicsRig rig;
+    rig.floor();
+    PhysicsObject& box = rig.body(at(0.f, 1.f, 0.f), Vec3{1.f, 1.f, 1.f}, false);
+    std::vector<Heard> heard;
+    listen(rig.game, box.id(), heard);
+    rig.play();
+    run_for(rig, 1.0);
+    REQUIRE(count(heard, box.id(), false) == 1);
+    REQUIRE_FALSE(box.set_size(Vec3{1.f, 1.2f, 1.f}));
+    run_for(rig, 0.5);
+    REQUIRE(count(heard, box.id(), false) == 1);
+    REQUIRE(count(heard, box.id(), true) == 0);
 }

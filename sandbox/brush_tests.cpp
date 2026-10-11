@@ -166,6 +166,38 @@ TEST_CASE("BI6 an edit recentres the origin and nothing moves in the world", "[b
     REQUIRE(std::abs(matrix4_position(brush.transform()).z) < 1e-6f);
 }
 
+TEST_CASE("BI7 an off-centre brush from an old save stays put through a drag's repeated edits", "[brush]") {
+    ScriptRig rig;
+    Brush& brush = add_brush(rig.game);
+    rig.game.set_name(brush.id(), "Old");
+    // As an old save loads it: faces 5 units off its origin, taken as they are.
+    std::vector<brush::Face> faces = brush::make_box({4, 4, 4});
+    for (brush::Face& face : faces) {
+        face.p1.x += 5.0;
+        face.p2.x += 5.0;
+        face.p3.x += 5.0;
+    }
+    REQUIRE_FALSE(brush.set_faces_json(brush::faces_to_json(faces)));
+    REQUIRE(brush.shape().min.x == 3.0);
+    // BrushTool's edit_held, once a frame: back to the drag's start, then the edit.
+    rig.runtime.run_chunk(R"(
+        local b = workspace.Old
+        local transform, faces = b.Transform, b:GetFaces()
+        local top = b:GetFaceAt(Vector3.new(5, 2, 0), Vector3.yAxis)
+        for frame = 1, 5 do
+            b.Transform = transform
+            b:SetFaces(faces)
+            b:MoveFace(top, frame)
+        end
+        local lo, hi = b:GetBounds()
+        local m = b.Transform
+        print("drag", m.Position.X, m.Position.Y, (m * lo).X, (m * hi).Y)
+    )");
+    rig.frames(1);
+    const auto out = rig.runtime.drain_output();
+    REQUIRE(has_text(out, "drag\t5\t2.5\t3\t7"));
+}
+
 TEST_CASE("BI5 a project saves and loads a Brush's faces", "[brush]") {
     SimRole role;
     TempDir dir;

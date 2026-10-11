@@ -55,8 +55,16 @@ type Mods = { shift: boolean, ctrl: boolean, alt: boolean }
 -- What a ray hit; brush is the Brush when it was one.
 type Hit = { instance: Instance, brush: Brush?, face: number?, position: Vector3, normal: Vector3 }
 type Press = { x: number, y: number, ray: Ray, mods: Mods, hit: Hit? }
--- A selected brush at a drag's start; good is the last shape an edit made.
-type Held = { brush: Brush, transform: Matrix4, faces: { BrushFace }, good: { BrushFace }, face: number? }
+-- A selected brush at a drag's start; good and goodTransform are the last shape an edit
+-- made (edits recentre the origin, moving the Transform).
+type Held = {
+	brush: Brush,
+	transform: Matrix4,
+	faces: { BrushFace },
+	good: { BrushFace },
+	goodTransform: Matrix4,
+	face: number?,
+}
 type Corner = { brush: Brush, world: Vector3 }
 
 -- Tool state -----------------------------------------------------------------
@@ -325,21 +333,26 @@ local function capture_held()
 	held = {}
 	for _, brush in selected_brushes() do
 		local faces = brush:GetFaces()
-		table.insert(held, { brush = brush, transform = brush.Transform, faces = faces, good = faces, face = nil })
+		local m = brush.Transform
+		table.insert(held, { brush = brush, transform = m, faces = faces, good = faces, goodTransform = m, face = nil })
 	end
 end
 
 -- Puts item's brush back to the faces it had at the drag's start, then edits
 -- it; a refused edit leaves the last shape that worked. True when it worked.
 local function edit_held(item: Held, fn: (Brush) -> ()): boolean
+	-- Faces and Transform go back together: an edit recentres the faces and moves the Transform.
 	local ok = pcall(function()
+		item.brush.Transform = item.transform
 		item.brush:SetFaces(item.faces)
 		fn(item.brush)
 	end)
 	if ok then
 		item.good = item.brush:GetFaces()
+		item.goodTransform = item.brush.Transform
 	else
 		pcall(function()
+			item.brush.Transform = item.goodTransform
 			item.brush:SetFaces(item.good)
 		end)
 	end
@@ -529,15 +542,18 @@ local function redraw()
 		solid:AddLine(m * from, m * to, FACE)
 		-- The new face: the back half's polygon on the cut plane.
 		local ok = pcall(function()
+			scratch.Transform = m
 			scratch:SetFaces(brush:GetFaces())
 			scratch:Split(n, p)
 		end)
 		if ok then
-			local face = scratch:GetFaceAt(p, n)
+			-- The split recentred scratch, so its own Transform places it.
+			local sm = scratch.Transform
+			local face = scratch:GetFaceAt(sm:PointToObjectSpace(m * p), n)
 			if face ~= nil then
 				local ring: { Vector3 } = {}
 				for _, q in scratch:GetFaceVertices(face) do
-					table.insert(ring, m * q)
+					table.insert(ring, sm * q)
 				end
 				solid:AddPath(ring, true, CLIP)
 			end
@@ -594,11 +610,12 @@ local function redraw()
 				local la, lb, lc = m:PointToObjectSpace(a), m:PointToObjectSpace(b), m:PointToObjectSpace(c)
 				local function half(face: BrushFace, color: Color3)
 					local ok = pcall(function()
+						scratch.Transform = m
 						scratch:SetFaces(brush:GetFaces())
 						scratch:Clip(face)
 					end)
 					if ok then
-						brush_lines(solid, scratch, color, m)
+						brush_lines(solid, scratch, color)
 					end
 				end
 				local okBack, back = pcall(BrushFace.new, la, lb, lc)
@@ -887,8 +904,9 @@ local function extrude()
 			local ok, copy = pcall(function()
 				local b = Instance.new("Brush")
 				b.Name = brush.Name
-				b:MakeHull(points)
+				-- Transform first: the hull recentres from it.
 				b.Transform = Matrix4.new(origin)
+				b:MakeHull(points)
 				b:SetMaterial(faceMaterial)
 				b.Parent = brush.Parent
 				return b

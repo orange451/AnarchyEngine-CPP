@@ -696,7 +696,7 @@ endforeach()
 find_package(Threads REQUIRED)
 target_link_libraries(engine_core PUBLIC Threads::Threads profiler engine_datatypes engine_instances engine_services)
 target_link_libraries(engine_datatypes PUBLIC engine_core)
-target_link_libraries(engine_instances PUBLIC engine_core amesh)
+target_link_libraries(engine_instances PUBLIC engine_core amesh aanim)
 target_link_libraries(engine_services PUBLIC engine_core)
 # flecs stays private: only engine_core and GameObject include Ecs.hpp.
 target_link_libraries(engine_core PRIVATE flecs)
@@ -757,6 +757,11 @@ target_link_libraries(AnarchyPlayer PRIVATE studio)
 # AMESH, the baked mesh format. Reading, writing, and validation need no
 # window or GL; GpuMesh (amesh_gl.cpp) builds into studio, beside the GL loader.
 add_library(amesh STATIC src/amesh/amesh.cpp)
+
+# AANIM, the keyframe clip format: reading, writing, and validation, no GL.
+add_library(aanim STATIC src/aanim/aanim.cpp)
+target_include_directories(aanim PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src/aanim")
+target_link_libraries(aanim PUBLIC amesh)
 target_include_directories(amesh PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src/amesh")
 
 add_executable(shell-tests
@@ -1050,6 +1055,7 @@ add_executable(sandbox
     sandbox/texture_streaming_tests.cpp
     sandbox/skeleton_tests.cpp
     sandbox/bone_tests.cpp
+    sandbox/aanim_tests.cpp
 )
 target_link_libraries(sandbox PRIVATE studio_core Catch2::Catch2WithMain)
 # The dense views tests check flecs state the engine keeps private.
@@ -1070,7 +1076,7 @@ function(anarchy_warnings target)
 endfunction()
 foreach(target IN ITEMS studio_core studio AnarchyStudio AnarchyPlayer engine-tests shell-tests properties-tests console-tests
                         studio-tests mcp-tests explorer-tests assets-tests prefab-editor-tests terrain-editor-tests assets-demo billboard-demo prefab-demo terminal-tests terminal-probe anarchy-mcp
-                        sandbox amesh amesh-tests amesh-gl-check scene-render-check gpu-timer-check grid-check profiler-demo profiler profiler-tests ${ENGINE_PACKAGES})
+                        sandbox amesh aanim amesh-tests amesh-gl-check scene-render-check gpu-timer-check grid-check profiler-demo profiler profiler-tests ${ENGINE_PACKAGES})
     anarchy_warnings(${target})
 endforeach()
 

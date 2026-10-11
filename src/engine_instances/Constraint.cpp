@@ -48,6 +48,7 @@ std::optional<std::string> Constraint::set_pv_instance1(const LuaSlot& value) {
     std::optional<std::string> refused = set_instance_reference("PVInstance1", "PVInstance", ref1_, value);
     if (!refused) {
         assemblies().constraint_changed(*this, id());
+        link_changed();
     }
     return refused;
 }
@@ -57,6 +58,7 @@ std::optional<std::string> Constraint::set_pv_instance2(const LuaSlot& value) {
     std::optional<std::string> refused = set_instance_reference("PVInstance2", "PVInstance", ref2_, value);
     if (!refused) {
         assemblies().constraint_changed(*this, id());
+        link_changed();
     }
     return refused;
 }
@@ -69,6 +71,7 @@ std::optional<std::string> Constraint::set_enabled(bool enabled) {
     enabled_ = enabled;
     note_property_change("Enabled", bool_slot(!enabled), bool_slot(enabled));
     assemblies().constraint_changed(*this, id());
+    link_changed();
     return std::nullopt;
 }
 

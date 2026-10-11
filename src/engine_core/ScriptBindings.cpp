@@ -31,6 +31,7 @@
 #include "Dragger.hpp"
 #include "WireframeAdornment.hpp"
 #include "Constraint.hpp"
+#include "JointConstraint.hpp"
 #include "SoundEmitter.hpp"
 #include "Brush.hpp"
 #include "Terrain.hpp"
@@ -209,6 +210,11 @@ DataModel& create_wireframe(DataModel& world) { return world.create<WireframeAdo
 DataModel& create_weld_constraint(DataModel& world) { return world.create<WeldConstraint>(); }
 DataModel& create_rigid_constraint(DataModel& world) { return world.create<RigidConstraint>(); }
 DataModel& create_no_collision_constraint(DataModel& world) { return world.create<NoCollisionConstraint>(); }
+DataModel& create_revolute_constraint(DataModel& world) { return world.create<RevoluteConstraint>(); }
+DataModel& create_prismatic_constraint(DataModel& world) { return world.create<PrismaticConstraint>(); }
+DataModel& create_distance_constraint(DataModel& world) { return world.create<DistanceConstraint>(); }
+DataModel& create_spherical_constraint(DataModel& world) { return world.create<SphericalConstraint>(); }
+DataModel& create_wheel_constraint(DataModel& world) { return world.create<WheelConstraint>(); }
 DataModel& create_skybox(DataModel& world) { return world.create<Skybox>(); }
 DataModel& create_dynamic_sky(DataModel& world) { return world.create<DynamicSky>(); }
 DataModel& create_bloom_effect(DataModel& world) { return world.create<BloomEffect>(); }
@@ -262,6 +268,11 @@ ANARCHY_LUA_REGISTER(register_creatable_instances) {
     register_lua_creatable("WeldConstraint", create_weld_constraint);
     register_lua_creatable("RigidConstraint", create_rigid_constraint);
     register_lua_creatable("NoCollisionConstraint", create_no_collision_constraint);
+    register_lua_creatable("RevoluteConstraint", create_revolute_constraint);
+    register_lua_creatable("PrismaticConstraint", create_prismatic_constraint);
+    register_lua_creatable("DistanceConstraint", create_distance_constraint);
+    register_lua_creatable("SphericalConstraint", create_spherical_constraint);
+    register_lua_creatable("WheelConstraint", create_wheel_constraint);
     register_lua_creatable("Skybox", create_skybox);
     register_lua_creatable("DynamicSky", create_dynamic_sky);
     register_lua_creatable("BloomEffect", create_bloom_effect);

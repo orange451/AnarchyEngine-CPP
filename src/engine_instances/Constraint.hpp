@@ -10,7 +10,8 @@ namespace engine_core {
 
 // Relates two PVInstances: WeldConstraint and RigidConstraint join them into
 // one assembly (Assemblies), so they move as one rigid thing;
-// NoCollisionConstraint keeps them from colliding with each other. Abstract:
+// NoCollisionConstraint keeps them from colliding with each other; a
+// JointConstraint (JointConstraint.hpp) links two assemblies with a moving joint. Abstract:
 // the Lua class Constraint cannot be made; the three can. It has no Transform of its own and
 // acts only while it and both its ends are in Workspace.
 //
@@ -34,6 +35,9 @@ public:
     // Whether it joins its ends into one assembly: false for a
     // NoCollisionConstraint, which only keeps them apart.
     virtual bool joins() const { return true; }
+    // A JointConstraint: it joins nothing, and links two assemblies with a
+    // Box3D joint in play.
+    virtual bool joint() const { return false; }
 
     LuaSlot pv_instance1() const;
     LuaSlot pv_instance2() const;
@@ -52,6 +56,9 @@ public:
 
 protected:
     void on_reuse() override;
+    // An end or Enabled changed (the setters below, after they took the
+    // value). A JointConstraint takes its frame again from where things are.
+    virtual void link_changed() {}
 
 private:
     InstanceId end_id(const InstanceRef& ref) const;

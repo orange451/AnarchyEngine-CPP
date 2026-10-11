@@ -609,6 +609,7 @@ add_library(engine_instances STATIC
     src/engine_instances/Dragger.cpp
     src/engine_instances/WireframeAdornment.cpp
     src/engine_instances/Constraint.cpp
+    src/engine_instances/JointConstraint.cpp
     src/engine_instances/Brush.cpp
     src/engine_instances/Terrain.cpp
     src/engine_instances/TerrainMaterial.cpp
@@ -1020,6 +1021,7 @@ add_executable(sandbox
     sandbox/touch_tests.cpp
     sandbox/constraint_lines_tests.cpp
     sandbox/joint_frame_tests.cpp
+    sandbox/joint_constraint_tests.cpp
     sandbox/alloc_counter.cpp
     sandbox/copy_remap_tests.cpp
     sandbox/analysis_tests.cpp

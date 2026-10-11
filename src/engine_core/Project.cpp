@@ -5,6 +5,7 @@
 #include "Assemblies.hpp"
 #include "Attachment.hpp"
 #include "Constraint.hpp"
+#include "JointConstraint.hpp"
 #include "Animator.hpp"
 #include "Bone.hpp"
 #include "BloomEffect.hpp"
@@ -163,6 +164,16 @@ std::vector<ClassEntry>& class_registry() {
             {"RigidConstraint", [](DataModel& world) -> DataModel& { return world.create<RigidConstraint>(); }});
         out.push_back({"NoCollisionConstraint",
                        [](DataModel& world) -> DataModel& { return world.create<NoCollisionConstraint>(); }});
+        out.push_back({"RevoluteConstraint",
+                       [](DataModel& world) -> DataModel& { return world.create<RevoluteConstraint>(); }});
+        out.push_back({"PrismaticConstraint",
+                       [](DataModel& world) -> DataModel& { return world.create<PrismaticConstraint>(); }});
+        out.push_back({"DistanceConstraint",
+                       [](DataModel& world) -> DataModel& { return world.create<DistanceConstraint>(); }});
+        out.push_back({"SphericalConstraint",
+                       [](DataModel& world) -> DataModel& { return world.create<SphericalConstraint>(); }});
+        out.push_back({"WheelConstraint",
+                       [](DataModel& world) -> DataModel& { return world.create<WheelConstraint>(); }});
         out.push_back({"Bone", [](DataModel& world) -> DataModel& { return world.create<Bone>(); }});
         out.push_back({"Animator", [](DataModel& world) -> DataModel& { return world.create<Animator>(); }});
         out.push_back({"Skybox", [](DataModel& world) -> DataModel& { return world.create<Skybox>(); }});

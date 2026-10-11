@@ -453,3 +453,27 @@ TEST_CASE("T17 remaking the anchored body a box rests on keeps the touch", "[tou
     REQUIRE(count(heard, box.id(), false) == 1);
     REQUIRE(count(heard, box.id(), true) == 0);
 }
+
+TEST_CASE("T18 connecting mid-contact fires nothing for it, and its later end is still heard",
+          "[touch][physics]") {
+    PhysicsRig rig;
+    rig.floor();
+    // A small anchored platform the box rests on, 2 units above the floor.
+    PhysicsObject& platform = rig.body(at(0.f, 1.5f, 0.f), Vec3{2.f, 1.f, 2.f}, true);
+    PhysicsObject& box = rig.body(at(0.f, 2.5f, 0.f), Vec3{1.f, 1.f, 1.f}, false);
+    rig.play();
+    run_for(rig, 1.0);
+    // The contact was made with nobody listening.
+    std::vector<Heard> heard;
+    listen(rig.game, box.id(), heard);
+    run_for(rig, 0.2);
+    REQUIRE(count(heard, box.id(), false) == 0);
+    // Slid off the platform's edge, the box stops touching it.
+    REQUIRE_FALSE(box.set_velocity(Vec3{6.f, 0.f, 0.f}));
+    run_for(rig, 1.5);
+    bool ended_platform = false;
+    for (const Heard& h : heard) {
+        ended_platform = ended_platform || (h.ended && h.touch.instance == platform.id());
+    }
+    REQUIRE(ended_platform);
+}

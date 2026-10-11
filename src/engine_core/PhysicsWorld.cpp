@@ -702,6 +702,7 @@ struct PhysicsWorld::Impl {
     std::unordered_map<std::uint64_t, PairTouch> pair_touches;
     std::unordered_map<std::uint64_t, StepMotion> before_step;
     std::vector<std::uint64_t> touch_scratch;
+    std::vector<b3ContactData> contact_scratch;
     // Each controller's ground last step, as a shape key: a controller hovers,
     // so standing is its touch (stand).
     std::unordered_map<InstanceId, std::uint64_t> standing;
@@ -869,6 +870,9 @@ struct PhysicsWorld::Impl {
                         b3Shape_EnableContactEvents(shape, now);
                     }
                 }
+                if (now) {
+                    hear_from_now(game, id, record);
+                }
             }
             listened += now ? 1u : 0u;
         }
@@ -879,6 +883,44 @@ struct PhysicsWorld::Impl {
             standing.clear();
             play_seconds = 0.0;
         }
+    }
+
+    // A body newly listened to: Box3D fixes whether a contact reports when
+    // the contact is made, so contacts it already has would never say they
+    // end. Those touching now are counted, silently (connecting mid-contact
+    // fires nothing), and its shapes are made again, so every contact is made
+    // anew with events: the counted pairs wait as pending ends and resume.
+    void hear_from_now(DataModel& game, InstanceId id, Body& record) {
+        auto* object = dynamic_cast<PhysicsBase*>(game.instance(id));
+        if (object == nullptr || record.shapes.empty()) {
+            return;
+        }
+        for (const b3ShapeId shape : record.shapes) {
+            if (!b3Shape_IsValid(shape)) {
+                continue;
+            }
+            contact_scratch.resize(static_cast<std::size_t>(std::max(b3Shape_GetContactCapacity(shape), 0)));
+            const int count = contact_scratch.empty()
+                                  ? 0
+                                  : b3Shape_GetContactData(shape, contact_scratch.data(),
+                                                           static_cast<int>(contact_scratch.size()));
+            for (int i = 0; i < count; ++i) {
+                const b3ContactData& data = contact_scratch[static_cast<std::size_t>(i)];
+                bool touching = false;
+                for (int m = 0; m < data.manifoldCount; ++m) {
+                    touching = touching || data.manifolds[m].pointCount > 0;
+                }
+                if (!touching || !b3Shape_IsValid(data.shapeIdA) || !b3Shape_IsValid(data.shapeIdB)) {
+                    continue;
+                }
+                bool began = false;
+                PairTouch* pair = begin_pair(data.shapeIdA, data.shapeIdB, began, contact_key(data.contactId));
+                if (pair != nullptr && began) {
+                    contact_facts(data.shapeIdA, data.shapeIdB, &data, *pair, false);
+                }
+            }
+        }
+        make_shape(game, *object, record);
     }
 
     // While anyone listens: every moving body's velocities, before the step

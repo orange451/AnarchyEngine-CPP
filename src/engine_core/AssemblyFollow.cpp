@@ -14,6 +14,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <initializer_list>
 
 namespace engine_core {
 namespace {
@@ -155,7 +156,7 @@ int Assemblies::follow(DataModel& game, InstanceId start) {
         return 0;
     }
     refresh(game);
-    if (rigid_.empty()) {
+    if (rigid_.empty() && bone_.empty()) {
         return 0;
     }
     struct Busy {
@@ -174,13 +175,17 @@ int Assemblies::follow(DataModel& game, InstanceId start) {
     int written = 0;
     for (int pass = 0; pass < kMaxPasses; ++pass) {
         bool wrote = false;
-        for (const RigidEdge& edge : rigid_) {
-            const bool due = (start == 0 && pass == 0) || (follow_marks(edge.parent_node) & kMoved) != 0 ||
-                             (follow_marks(edge.sub_node) & kDisplaced) != 0;
-            if (due && snap(game, edge, camera)) {
-                ++written;
-                wrote = true;
-                mark_follow(edge.sub_node, kMoved);
+        // Bone edges after the rest: a hand is where its GameObject is, and
+        // what it holds may be a parent further on, for the next pass.
+        for (const std::vector<RigidEdge>* edges : {&rigid_, &bone_}) {
+            for (const RigidEdge& edge : *edges) {
+                const bool due = (start == 0 && pass == 0) || (follow_marks(edge.parent_node) & kMoved) != 0 ||
+                                 (follow_marks(edge.sub_node) & kDisplaced) != 0;
+                if (due && snap(game, edge, camera)) {
+                    ++written;
+                    wrote = true;
+                    mark_follow(edge.sub_node, kMoved);
+                }
             }
         }
         if (!wrote) {

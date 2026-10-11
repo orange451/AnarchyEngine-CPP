@@ -4,9 +4,12 @@
 
 #include "skinning_support.hpp"
 
+#include "Assemblies.hpp"
 #include "Bone.hpp"
 #include "ChangeHistoryService.hpp"
+#include "Constraint.hpp"
 #include "LuaApi.hpp"
+#include "PhysicsObject.hpp"
 #include "Skeleton.hpp"
 
 using namespace skinning_test;
@@ -208,4 +211,54 @@ TEST_CASE("BONE9 a Prefab's Models whose Mesh has another skeleton draw unposed"
     REQUIRE(drawn_prefab.meshes.size() == 2);
     REQUIRE_FALSE(drawn_prefab.meshes[0].skinned);
     REQUIRE(drawn_prefab.meshes[1].skinned);
+}
+
+TEST_CASE("BONE10 a RigidConstraint to a Bone holds its sub on the posed bone, and follows the pose", "[bone][assembly]") {
+    Rig rig;
+    engine_core::GameObject& object = rig.arm_object();
+    object.set_transform(engine_core::matrix4_translation(3.f, 0.f, 0.f));
+    REQUIRE_FALSE(object.set_scale(2.0));
+    // Anchored, so the arm is its assembly's root and the held part the sub.
+    engine_core::PhysicsObject& body = rig.game.create<engine_core::PhysicsObject>();
+    rig.game.set_parent(body.id(), object.id());
+    body.set_anchored(true);
+    engine_core::Bone& root = add_bone(rig.game, object.id(), "Root");
+    engine_core::Bone& hand = add_bone(rig.game, object.id(), "Hand");
+    engine_core::GameObject& held = create_part(rig.game);
+    engine_core::RigidConstraint& grip = rig.game.create<engine_core::RigidConstraint>();
+    rig.game.set_parent(grip.id(), workspace_of(rig.game));
+    REQUIRE_FALSE(grip.set_pv_instance1(id_slot(hand.id())));
+    REQUIRE_FALSE(grip.set_pv_instance2(id_slot(held.id())));
+    // The hand rests 2 up the arm, doubled by its Scale: the pivot has no scale.
+    REQUIRE(near_vec(origin(held.transform()), Vec3{3.f, 4.f, 0.f}));
+    REQUIRE(near_matrix(held.transform(), engine_core::matrix4_orthonormalize(hand.transform())));
+    // Turning the bone above it moves the hand, and the held part with it.
+    REQUIRE_FALSE(root.set_offset(spin_z()));
+    REQUIRE(near_vec(origin(held.transform()), Vec3{-1.f, 0.f, 0.f}));
+    REQUIRE(near_matrix(held.transform(), engine_core::matrix4_orthonormalize(hand.transform())));
+}
+
+TEST_CASE("BONE11 a hand holds what it holds however heavy, and the two stay apart", "[bone][assembly]") {
+    Rig rig;
+    engine_core::GameObject& object = rig.arm_object();
+    object.set_transform(engine_core::matrix4_translation(3.f, 0.f, 0.f));
+    engine_core::Bone& hand = add_bone(rig.game, object.id(), "Hand");
+    // Anchored and heavy: as two Parts, it would be the root and the arm would move.
+    engine_core::GameObject& held = create_part(rig.game);
+    held.set_transform(engine_core::matrix4_translation(0.f, 9.f, 0.f));
+    engine_core::PhysicsObject& body = rig.game.create<engine_core::PhysicsObject>();
+    rig.game.set_parent(body.id(), held.id());
+    body.set_anchored(true);
+    REQUIRE_FALSE(body.set_mass(1e6));
+    engine_core::RigidConstraint& grip = rig.game.create<engine_core::RigidConstraint>();
+    rig.game.set_parent(grip.id(), workspace_of(rig.game));
+    REQUIRE_FALSE(grip.set_pv_instance1(id_slot(held.id())));
+    REQUIRE_FALSE(grip.set_pv_instance2(id_slot(hand.id())));
+    REQUIRE(near_vec(origin(object.transform()), Vec3{3.f, 0.f, 0.f}));
+    REQUIRE(near_vec(origin(held.transform()), Vec3{3.f, 2.f, 0.f}));
+    engine_core::Assemblies& assemblies = rig.game.assemblies();
+    assemblies.refresh(rig.game);
+    REQUIRE(assemblies.active(grip.id()));
+    REQUIRE(assemblies.root_of(rig.game, held.id()) == body.id());
+    REQUIRE(assemblies.root_of(rig.game, object.id()) == object.id());
 }

@@ -2,6 +2,7 @@
 
 #include "AssetInstances.hpp"
 #include "Attachment.hpp"
+#include "Bone.hpp"
 #include "Brush.hpp"
 #include "Constraint.hpp"
 #include "DataModel.hpp"
@@ -109,6 +110,13 @@ const PhysicsBase* body_of(const DataModel& game, InstanceId id) {
     return dynamic_cast<const PhysicsBase*>(game.instance(id));
 }
 
+// A Bone that poses a bone of the GameObject it is under: its frame moves
+// with the pose, not only with its Offset.
+const Bone* posing_bone(const DataModel& game, InstanceId id) {
+    const auto* bone = dynamic_cast<const Bone*>(game.instance(id));
+    return bone != nullptr && bone->bone_index() >= 0 ? bone : nullptr;
+}
+
 bool is_attachment(const DataModel& game, InstanceId id) {
     return dynamic_cast<const Attachment*>(game.instance(id)) != nullptr;
 }
@@ -162,6 +170,7 @@ Assemblies::Assemblies() {
     groups_.reserve(slots);
     group_nodes_.reserve(slots);
     rigid_.reserve(slots);
+    bone_.reserve(slots);
     adj_start_.reserve(slots + 1);
     adj_cursor_.reserve(slots);
     adj_.reserve(2 * slots);
@@ -503,6 +512,7 @@ void Assemblies::rebuild(const DataModel& game) {
     groups_.clear();
     group_nodes_.clear();
     rigid_.clear();
+    bone_.clear();
     contested_.clear();
 
     // Claims: each body is a node, and so is the GameObject it drives, under
@@ -558,8 +568,10 @@ void Assemblies::rebuild(const DataModel& game) {
             continue;
         }
         touch(id);
-        const InstanceId node1 = resolve_end(game, end_of(game, id, constraint->pv_instance1_ref(), 1), true);
-        const InstanceId node2 = resolve_end(game, end_of(game, id, constraint->pv_instance2_ref(), 2), true);
+        const InstanceId end1 = end_of(game, id, constraint->pv_instance1_ref(), 1);
+        const InstanceId end2 = end_of(game, id, constraint->pv_instance2_ref(), 2);
+        const InstanceId node1 = resolve_end(game, end1, true);
+        const InstanceId node2 = resolve_end(game, end2, true);
         if (!constraint->enabled() || node1 == 0 || node2 == 0 || node1 == node2) {
             continue;
         }
@@ -569,7 +581,12 @@ void Assemblies::rebuild(const DataModel& game) {
         edge.node2 = node2;
         edge.rigid = constraint->rigid();
         if (edge.rigid) {
-            rigid_order_.push_back(static_cast<std::uint32_t>(edges_.size()));
+            // A held thing follows the hand, wherever the pose takes it: it is
+            // not joined to the GameObject, so it is in no rigid tree.
+            edge.bone_end = posing_bone(game, end1) != nullptr ? 1 : posing_bone(game, end2) != nullptr ? 2 : 0;
+            if (edge.bone_end == 0) {
+                rigid_order_.push_back(static_cast<std::uint32_t>(edges_.size()));
+            }
         }
         edges_.push_back(edge);
     }
@@ -619,7 +636,7 @@ void Assemblies::rebuild(const DataModel& game) {
 
     // Groups: one per connected set of nodes that a live edge touches.
     for (const Edge& edge : edges_) {
-        if (!edge.live) {
+        if (!edge.live || edge.bone_end != 0) {
             continue;
         }
         for (const InstanceId node : {edge.node1, edge.node2}) {
@@ -663,6 +680,36 @@ void Assemblies::rebuild(const DataModel& game) {
     }
     orient_rigid(game);
 
+    // Bone edges: the Bone's side is the parent. Every Bone under the holder
+    // poses the hand too (one higher up the arm, say), so each is linked: a
+    // change to its Offset moves what the hand holds.
+    for (const Edge& edge : edges_) {
+        if (!edge.live || edge.bone_end == 0) {
+            continue;
+        }
+        const auto* constraint = dynamic_cast<const Constraint*>(game.instance(edge.constraint));
+        const InstanceId bone = edge.bone_end == 1 ? constraint->pv_instance1_id() : constraint->pv_instance2_id();
+        RigidEdge out;
+        out.constraint = edge.constraint;
+        out.parent_end = edge.bone_end;
+        out.parent_node = edge.bone_end == 1 ? edge.node1 : edge.node2;
+        out.sub_node = edge.bone_end == 1 ? edge.node2 : edge.node1;
+        bone_.push_back(out);
+        rigid_node_[id_slot(edge.node1)] = 1;
+        rigid_node_[id_slot(edge.node2)] = 1;
+        const InstanceId holder = game.parent(bone);
+        for (InstanceId child = game.first_child(holder); child != 0; child = game.next_sibling(child)) {
+            if (dynamic_cast<const Bone*>(game.instance(child)) == nullptr) {
+                continue;
+            }
+            touch(child);
+            if (node_[id_slot(child)] == 0) {
+                node_[id_slot(child)] = out.parent_node;
+            }
+            flags_[id_slot(child)] |= kLinked;
+        }
+    }
+
     // Flags for every instance that belongs to a node.
     const std::size_t count = touched_.size();
     for (std::size_t i = 0; i < count; ++i) {
@@ -701,7 +748,7 @@ void Assemblies::orient_rigid(const DataModel& game) {
     const auto pos = [&](InstanceId node) { return static_cast<std::uint32_t>(node_pos_[id_slot(node)]); };
     adj_start_.assign(count + 1, 0);
     for (const Edge& edge : edges_) {
-        if (edge.live) {
+        if (edge.live && edge.bone_end == 0) {
             ++adj_start_[pos(edge.node1) + 1];
             ++adj_start_[pos(edge.node2) + 1];
         }
@@ -713,7 +760,7 @@ void Assemblies::orient_rigid(const DataModel& game) {
     adj_.resize(adj_start_[count]);
     for (std::uint32_t index = 0; index < edges_.size(); ++index) {
         const Edge& edge = edges_[index];
-        if (edge.live) {
+        if (edge.live && edge.bone_end == 0) {
             adj_[adj_cursor_[pos(edge.node1)]++] = index;
             adj_[adj_cursor_[pos(edge.node2)]++] = index;
         }
@@ -844,6 +891,10 @@ Matrix4 Assemblies::attachment_frame(const DataModel& game, InstanceId attachmen
     const auto* point = dynamic_cast<const Attachment*>(game.instance(attachment));
     if (point == nullptr) {
         return matrix4_identity();
+    }
+    // A Bone is where its posed bone is, which its Offset alone does not say.
+    if (const Bone* bone = posing_bone(game, attachment)) {
+        return bone->transform();
     }
     const InstanceId above = game.parent(attachment);
     const Matrix4 base = depth < kMaxWalk && is_attachment(game, above) ? attachment_frame(game, above, depth + 1)

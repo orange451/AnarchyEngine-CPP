@@ -103,6 +103,11 @@ public:
     int group_of(InstanceId node) const;
     // Active RigidConstraints in follow order: a parent's edge before its subs' edges.
     const std::vector<RigidEdge>& rigid_edges() const { return rigid_; }
+    // Active RigidConstraints with a Bone end that poses a bone: a hand that
+    // holds something. The Bone's end is always the parent, and the two sides
+    // stay apart, each its own assembly, since the bone moves under its
+    // GameObject as the pose changes. Not in rigid_edges().
+    const std::vector<RigidEdge>& bone_edges() const { return bone_; }
 
     // Suspending (§3): while suspended, every hook returns at once; edits
     // still move the revision. The outermost resume runs one follow pass when
@@ -216,6 +221,8 @@ private:
         InstanceId node2 = 0;
         bool rigid = false;
         bool live = true;
+        // A rigid edge's end (1 or 2) that is a Bone posing a bone, else 0.
+        int bone_end = 0;
     };
 
     void rebuild(const DataModel& game);
@@ -282,6 +289,7 @@ private:
     std::vector<Group> groups_;
     std::vector<InstanceId> group_nodes_;
     std::vector<RigidEdge> rigid_;
+    std::vector<RigidEdge> bone_;
     // orient_rigid's scratch, per place in nodes_: live edges by node, as
     // offsets into adj_; hops from the root over every live edge; hops from
     // the rigid tree's anchor over rigid edges; and the BFS queue.

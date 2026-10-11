@@ -3037,7 +3037,7 @@ struct PhysicsWorld::Impl {
         }
         if ((dirty & PhysicsObject::kDirtyMass) != 0) {
             for (const b3ShapeId shape : record.shapes) {
-                b3Shape_SetDensity(shape, density(object, record.volume), false);
+                b3Shape_SetDensity(shape, shape_density(object, record), false);
             }
             b3Body_ApplyMassFromShapes(record.body);
         }
@@ -3739,7 +3739,7 @@ struct PhysicsWorld::Impl {
         def.updateBodyMass = false;
         if (b3HullData* hull = build_hull(points)) {
             record.volume = b3ComputeHullMass(hull, 1.f).mass;
-            def.density = density(controller, record.volume);
+            def.density = shape_density(controller, record);
             add_shape(record, create_hull(record, def, hull));
             b3DestroyHull(hull);
         }
@@ -3747,7 +3747,7 @@ struct PhysicsWorld::Impl {
             const b3BoxHull box =
                 b3MakeOffsetBoxHull(radius, tall * 0.5f, radius, b3Vec3{0.f, gap + tall * 0.5f, 0.f});
             record.volume = 4.f * radius * radius * tall;
-            def.density = density(controller, record.volume);
+            def.density = shape_density(controller, record);
             add_shape(record, create_hull(record, def, &box.base));
         }
         b3Body_ApplyMassFromShapes(record.body);
@@ -3881,6 +3881,17 @@ struct PhysicsWorld::Impl {
 
     static float density(const PhysicsBase& object, float volume) {
         return static_cast<float>(object.mass()) / std::max(volume, 1e-9f);
+    }
+
+    // A shape's density on its body: density(), but a disabled PlayerController
+    // welded into an assembly it does not root weighs nothing there, so a
+    // driver does not change the car. Alone, or the root, it keeps its Mass:
+    // a dynamic body with none does not fall.
+    static float shape_density(const PhysicsBase& object, const Body& record) {
+        const bool rider = record.compound != 0 && record.compound_root != object.id() &&
+                           dynamic_cast<const PlayerController*>(&object) != nullptr &&
+                           enabled_controller(&object) == nullptr;
+        return rider ? 0.f : density(object, record.volume);
     }
 
     // The Mesh's points into points, at their own size times scale
@@ -4054,7 +4065,7 @@ struct PhysicsWorld::Impl {
             }
             if ((dirty & PhysicsObject::kDirtyMass) != 0) {
                 for (const b3ShapeId shape : record.shapes) {
-                    b3Shape_SetDensity(shape, density(object, record.volume), false);
+                    b3Shape_SetDensity(shape, shape_density(object, record), false);
                 }
                 b3Body_ApplyMassFromShapes(record.body);
             }

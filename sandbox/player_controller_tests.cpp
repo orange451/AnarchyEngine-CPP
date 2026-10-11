@@ -1082,3 +1082,29 @@ TEST_CASE("C30 enabled again after tumbling, it stands up and walks", "[player]"
     rig.seconds(0.25);
     REQUIRE(x_of(c.transform()) > x0 + 0.2f);
 }
+
+TEST_CASE("C31 a disabled controller welded to a body adds no mass, nor wins its root by Mass; alone it keeps its own",
+          "[player]") {
+    PhysicsRig rig;
+    rig.floor();
+    PhysicsObject& chassis = rig.body(at(0.f, 1.f, 0.f), Vec3{2.f, 0.5f, 4.f}, false);
+    REQUIRE_FALSE(chassis.set_mass(50.0));
+    PlayerController& driver = rig.controller(at(0.f, 1.25f, 0.f));
+    REQUIRE_FALSE(driver.set_mass(100.0));
+    driver.set_enabled(false);
+    auto& seat = link<engine_core::WeldConstraint>(rig.game, chassis.id(), driver.id());
+    // Heavier, it still does not root the car.
+    REQUIRE(rig.game.assemblies().root_of(rig.game, driver.id()) == chassis.id());
+    PlayerController& alone = rig.controller(at(5.f, 1.f, 0.f));
+    REQUIRE_FALSE(alone.set_mass(100.0));
+    alone.set_enabled(false);
+    rig.play();
+    rig.steps(2);
+    REQUIRE(near(rig.physics.body_mass(chassis.id()), 50.f, 0.5f));
+    REQUIRE(near(rig.physics.body_mass(alone.id()), 100.f, 0.5f));
+    // Welded off again, it weighs what it did.
+    rig.game.destroy(seat.id());
+    rig.steps(2);
+    REQUIRE(near(rig.physics.body_mass(driver.id()), 100.f, 0.5f));
+    REQUIRE(near(rig.physics.body_mass(chassis.id()), 50.f, 0.5f));
+}

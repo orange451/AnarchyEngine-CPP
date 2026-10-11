@@ -32,8 +32,10 @@ namespace engine_core {
 //                      it turns every way and tumbles, keeps a Transform's
 //                      full rotation, neither hovers nor walks, ranks as any
 //                      body for its assembly's root, and lets joints hold at
-//                      its assembly (a driver welded into a car). On again,
-//                      it stands up where it is.
+//                      its assembly (a driver welded into a car). Welded
+//                      into an assembly it does not root, it weighs nothing
+//                      there, and ranks as massless for the root; alone it
+//                      keeps its Mass. On again, it stands up where it is.
 // OnGround    boolean  read only: on ground no steeper than MaxSlope.
 // IsSliding   boolean  read only: on ground steeper than MaxSlope.
 //

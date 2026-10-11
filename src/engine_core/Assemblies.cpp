@@ -543,8 +543,14 @@ bool Assemblies::root_before(const DataModel& game, InstanceId a, InstanceId b) 
     if ((pa != nullptr) != (pb != nullptr)) {
         return pa != nullptr;
     }
-    if (pa != nullptr && pa->mass() != pb->mass()) {
-        return pa->mass() > pb->mass();
+    // A disabled PlayerController rides with no mass (PhysicsWorld): none here either.
+    const auto ranked_mass = [](const PhysicsBase* body) {
+        return dynamic_cast<const PlayerController*>(body) != nullptr && enabled_controller(body) == nullptr
+                   ? 0.0
+                   : body->mass();
+    };
+    if (pa != nullptr && ranked_mass(pa) != ranked_mass(pb)) {
+        return ranked_mass(pa) > ranked_mass(pb);
     }
     if (pa != nullptr) {
         const double va = body_volume(game, *pa);

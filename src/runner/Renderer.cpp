@@ -241,6 +241,7 @@ bool Renderer::buildProgram(Program& program, const char* name, const char* vert
     program.inverseProjection = at("uInverseProjection");
     program.inverseView = at("uInverseView");
     program.texel = at("uTexel");
+    program.keepAlpha = at("uKeepAlpha");
     program.ambient = at("uAmbient");
     program.skyRadiance = at("uSkyRadiance");
     program.skyEnabled = at("uSkyEnabled");
@@ -1108,7 +1109,11 @@ bool Renderer::draw(double x, double y, double width, double height, double scen
     glViewport(pane.x, pane.y, pane.width, pane.height);
     glDisable(GL_BLEND);
     glDisable(GL_DEPTH_TEST);
-    glClearColor(clear_[0], clear_[1], clear_[2], 1.0f);
+    if (transparentOutput_) {
+        glClearColor(0.f, 0.f, 0.f, 0.f);
+    } else {
+        glClearColor(clear_[0], clear_[1], clear_[2], 1.0f);
+    }
     // The floor grid's bands mark the pane's depth as they draw. Cleared here, with
     // the color, rather than just before the grid: a clear between draws to the
     // pane would make the GPU write the pane out and read it back in between.
@@ -1258,9 +1263,14 @@ bool Renderer::draw(double x, double y, double width, double height, double scen
             glViewport(pane.x, pane.y, pane.width, pane.height);
         };
         // Blended over the clear: where nothing was drawn the pane shows through.
-        const auto blendOverClear = [] {
+        // A transparent pane keeps the coverage in alpha as well.
+        const auto blendOverClear = [this] {
             glEnable(GL_BLEND);
-            glBlendFuncSeparate(RT_GL_ONE, RT_GL_ONE_MINUS_SRC_ALPHA, RT_GL_ZERO, RT_GL_ONE);
+            if (transparentOutput_) {
+                glBlendFuncSeparate(RT_GL_ONE, RT_GL_ONE_MINUS_SRC_ALPHA, RT_GL_ONE, RT_GL_ONE_MINUS_SRC_ALPHA);
+            } else {
+                glBlendFuncSeparate(RT_GL_ONE, RT_GL_ONE_MINUS_SRC_ALPHA, RT_GL_ZERO, RT_GL_ONE);
+            }
         };
         bool onPane = false;
         if (lighting_.antialiasing == SceneAntialiasing::FXAA) {
@@ -1270,7 +1280,11 @@ bool Renderer::draw(double x, double y, double width, double height, double scen
             glDisable(GL_SCISSOR_TEST);
             glViewport(0, 0, targetWidth_, targetHeight_);
             glDisable(GL_BLEND);
-            glClearColor(clear_[0], clear_[1], clear_[2], 1.0f);
+            if (transparentOutput_) {
+                glClearColor(0.f, 0.f, 0.f, 0.f);
+            } else {
+                glClearColor(clear_[0], clear_[1], clear_[2], 1.0f);
+            }
             glClear(GL_COLOR_BUFFER_BIT);
             blendOverClear();
             if (toneMapPass(bloomLevels)) {
@@ -2661,6 +2675,7 @@ bool Renderer::fxaaPass() {
     glUseProgram(fxaa_.id);
     BindTexture(kUnitScene, ldrTexture_);
     glUniform2f(fxaa_.texel, 1.f / static_cast<float>(targetWidth_), 1.f / static_cast<float>(targetHeight_));
+    glUniform1f(fxaa_.keepAlpha, transparentOutput_ ? 1.f : 0.f);
     glBindVertexArray(emptyVao_);
     if (!fxaaValid_) {
         if (!CanDraw(fxaa_.id)) {

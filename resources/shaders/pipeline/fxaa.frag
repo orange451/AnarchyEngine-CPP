@@ -10,6 +10,10 @@ out vec4 fragColor;
 uniform sampler2D uScene;
 // One texel of uScene.
 uniform vec2 uTexel;
+// 1 for a transparent pane: alpha is filtered with the color, and edges are
+// found as the image would look over mid grey, so a dark silhouette on nothing
+// is smoothed too.
+uniform float uKeepAlpha;
 
 const float kSubpix = 0.75;
 const float kEdgeThreshold = 0.166;
@@ -21,8 +25,15 @@ float luma(vec3 color) {
     return dot(color, vec3(0.299, 0.587, 0.114));
 }
 
+// The luma an edge is found by: of the color, or, keeping alpha, of the
+// premultiplied color over mid grey, so coverage edges count.
+float lumaOf(vec4 color) {
+    vec3 seen = uKeepAlpha > 0.5 ? color.rgb + vec3(0.5) * (1.0 - color.a) : color.rgb;
+    return luma(seen);
+}
+
 float lumaAt(vec2 uv) {
-    return luma(textureLod(uScene, uv, 0.0).rgb);
+    return lumaOf(textureLod(uScene, uv, 0.0));
 }
 
 float lumaOff(vec2 uv, float x, float y) {
@@ -31,8 +42,8 @@ float lumaOff(vec2 uv, float x, float y) {
 
 void main() {
     vec2 posM = vUv;
-    vec3 rgbM = textureLod(uScene, posM, 0.0).rgb;
-    float lumaM = luma(rgbM);
+    vec4 rgbaM = textureLod(uScene, posM, 0.0);
+    float lumaM = lumaOf(rgbaM);
     float lumaS = lumaOff(posM, 0.0, 1.0);
     float lumaE = lumaOff(posM, 1.0, 0.0);
     float lumaN = lumaOff(posM, 0.0, -1.0);
@@ -41,7 +52,7 @@ void main() {
     float rangeMin = min(min(lumaN, lumaW), min(lumaE, min(lumaS, lumaM)));
     float range = rangeMax - rangeMin;
     if (range < max(kEdgeThresholdMin, rangeMax * kEdgeThreshold)) {
-        fragColor = vec4(rgbM, 1.0);
+        fragColor = vec4(rgbaM.rgb, uKeepAlpha > 0.5 ? rgbaM.a : 1.0);
         return;
     }
 
@@ -143,5 +154,6 @@ void main() {
     } else {
         posM.y += pixelOffsetSubpix * lengthSign;
     }
-    fragColor = vec4(textureLod(uScene, posM, 0.0).rgb, 1.0);
+    vec4 blended = textureLod(uScene, posM, 0.0);
+    fragColor = vec4(blended.rgb, uKeepAlpha > 0.5 ? blended.a : 1.0);
 }

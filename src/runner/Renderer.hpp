@@ -455,6 +455,11 @@ public:
     // What draw clears the pane to, 0 to 1 per channel. The Scene View passes
     // its theme color, so the clear matches the pane around it.
     void setClearColor(float r, float g, float b);
+    // With on, draw clears to transparent and leaves premultiplied coverage in
+    // alpha: 0 where nothing was drawn, 1 under an opaque surface or a sky,
+    // and between at silhouettes and see-through surfaces. For a pane composited
+    // over a UI. Off, as the Scene View draws, the pane is opaque.
+    void setTransparentOutput(bool on) { transparentOutput_ = on; }
     // The depth this frame's surfaces left, and the framebuffer rectangle it
     // covers, for UI drawn inside the pane to hide behind (as the grid does).
     // texture is 0 when the last draw drew no meshes or sky, or failed.
@@ -482,6 +487,7 @@ private:
         int inverseProjection = -1;
         int inverseView = -1;
         int texel = -1;
+        int keepAlpha = -1;
         int ambient = -1;
         int skyRadiance = -1;
         // Skybox (image_lighting.glsl, sky.frag, merge.frag).
@@ -915,6 +921,7 @@ private:
 
     GpuTimer gpu_;
     float clear_[3] = {30.f / 255.f, 30.f / 255.f, 30.f / 255.f};
+    bool transparentOutput_ = false;
     // The inverse of the camera's world, column-major.
     engine_core::Matrix4 view_ = DefaultView();
     float fovYDegrees_ = kCameraFovYDegrees;

@@ -4911,6 +4911,50 @@ int main(int argc, char** argv) {
         Expect(runner::rt_glGetError() == runner::GL_NO_ERROR, "the terrain checks leave no GL error");
     }
 
+    {
+        // VR1-VR3: transparent output. A white cube at the origin seen from
+        // (0, 0, 6) into a 64 by 64 target: alpha 0 in the corners, 255 at the
+        // middle, and FXAA leaves edge pixels partly covered.
+        GpuMesh cube;
+        cube.upload(Cube());
+        runner::Renderer clear;
+        Expect(clear.initialize(), "VR the renderer builds for transparent output");
+        clear.setTransparentOutput(true);
+        clear.setCamera(engine_core::matrix4_translation(0.f, 0.f, 6.f), 40.f);
+        OffscreenTarget target(64, 64);
+        const std::vector<runner::MeshDraw> draws = {runner::MeshDraw{&cube, engine_core::matrix4_identity()}};
+        runner::LightDraw sun;
+        sun.kind = runner::LightDraw::Kind::Directional;
+        sun.direction[0] = -0.4f;
+        sun.direction[1] = -0.6f;
+        sun.direction[2] = -0.7f;
+        sun.intensity = 2.f;
+        runner::ViewPixels pixels;
+        Expect(target.complete() && target.shoot(clear, draws, sun, pixels), "VR1 a transparent shot draws");
+        if (pixels.rgba.size() == 64 * 64 * 4) {
+            const auto alpha = [&pixels](int x, int y) {
+                return static_cast<int>(pixels.rgba[(static_cast<std::size_t>(y) * 64 + x) * 4 + 3]);
+            };
+            Expect(alpha(0, 0) == 0 && alpha(63, 63) == 0,
+                   "VR1 nothing drawn is alpha 0 (" + std::to_string(alpha(0, 0)) + ")");
+            Expect(alpha(32, 32) == 255, "VR2 the cube is opaque (" + std::to_string(alpha(32, 32)) + ")");
+            int between = 0;
+            for (int x = 0; x < 64; ++x) {
+                const int a = alpha(x, 32);
+                between += a > 0 && a < 255 ? 1 : 0;
+            }
+            Expect(between > 0, "VR3 FXAA leaves the cube's silhouette partly covered");
+        }
+        // The same renderer with transparent output off clears opaque again.
+        clear.setTransparentOutput(false);
+        runner::ViewPixels opaque;
+        target.shoot(clear, draws, sun, opaque);
+        Expect(opaque.rgba.size() == 64 * 64 * 4 && opaque.rgba[3] == 255, "VR1 off, the corner is opaque");
+        clear.shutdown();
+        cube.destroy();
+        Expect(runner::rt_glGetError() == runner::GL_NO_ERROR, "transparent output leaves no GL error");
+    }
+
     // A Material's preview: a ball in its Color, lit from the upper left and
     // clear around it, drawn off screen, leaving the window's framebuffer as it was.
     {

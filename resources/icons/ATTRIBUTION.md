@@ -27,3 +27,6 @@ handles (X red, Y green, Z blue) around a white hub.
 Rotate.png is our own, drawn in the Fugue style: the Rotate tool's rings
 (X red, Y green) inside a blue ring that turns, arrowhead at its end, around
 a white hub.
+
+ModuleScript.png is our own: Script.png's scroll with a purple package cube
+on it, the way ScriptLocal.png puts a person on it.

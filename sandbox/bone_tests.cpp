@@ -359,3 +359,33 @@ TEST_CASE("BONE13 a hand brings a welded gun whole when enabled, and keeps it wh
     REQUIRE(near_matrix(grip.transform(), engine_core::matrix4_orthonormalize(hand.transform())));
     REQUIRE(near_matrix(barrel.transform(), barrel_before));
 }
+
+TEST_CASE("BONE14 an Attachment inside a hand's Bone holds as the hand does: apart, and following the pose",
+          "[bone][assembly]") {
+    Rig rig;
+    engine_core::GameObject& object = rig.arm_object();
+    object.set_transform(engine_core::matrix4_translation(3.f, 0.f, 0.f));
+    engine_core::Bone& root = add_bone(rig.game, object.id(), "Root");
+    engine_core::Bone& hand = add_bone(rig.game, object.id(), "Hand");
+    engine_core::Attachment& palm = rig.game.create<engine_core::Attachment>();
+    REQUIRE_FALSE(palm.set_offset(engine_core::matrix4_translation(0.f, 0.5f, 0.f)));
+    rig.game.set_parent(palm.id(), hand.id());
+    engine_core::GameObject& held = create_part(rig.game);
+    engine_core::RigidConstraint& grip = rig.game.create<engine_core::RigidConstraint>();
+    rig.game.set_parent(grip.id(), workspace_of(rig.game));
+    REQUIRE_FALSE(grip.set_pv_instance1(id_slot(held.id())));
+    REQUIRE_FALSE(grip.set_pv_instance2(id_slot(palm.id())));
+    const auto palm_frame = [&] {
+        return engine_core::matrix4_orthonormalize(
+            engine_core::matrix4_multiply(hand.transform(), engine_core::matrix4_translation(0.f, 0.5f, 0.f)));
+    };
+    REQUIRE(near_matrix(held.transform(), palm_frame()));
+    // The two stay apart, as with the hand itself.
+    engine_core::Assemblies& assemblies = rig.game.assemblies();
+    assemblies.refresh(rig.game);
+    REQUIRE(assemblies.bone_edges().size() == 1);
+    REQUIRE(assemblies.root_of(rig.game, held.id()) != assemblies.root_of(rig.game, object.id()));
+    // Turning the bone above the hand moves the palm, and what it holds.
+    REQUIRE_FALSE(root.set_offset(spin_z()));
+    REQUIRE(near_matrix(held.transform(), palm_frame()));
+}

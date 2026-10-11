@@ -121,6 +121,18 @@ bool is_attachment(const DataModel& game, InstanceId id) {
     return dynamic_cast<const Attachment*>(game.instance(id)) != nullptr;
 }
 
+// The posing Bone an end moves with: the end itself, or the first one up its
+// chain of Attachments (an Attachment put inside a hand's Bone). Else null.
+const Bone* holding_bone(const DataModel& game, InstanceId id) {
+    for (int depth = 0; depth < kMaxWalk && is_attachment(game, id); ++depth) {
+        if (const Bone* bone = posing_bone(game, id)) {
+            return bone;
+        }
+        id = game.parent(id);
+    }
+    return nullptr;
+}
+
 }  // namespace
 
 Matrix4 Assemblies::with_scale(const Matrix4& frame, const Matrix4& scale_from) {
@@ -594,7 +606,7 @@ void Assemblies::rebuild(const DataModel& game) {
         if (edge.rigid) {
             // A held thing follows the hand, wherever the pose takes it: it is
             // not joined to the GameObject, so it is in no rigid tree.
-            edge.bone_end = posing_bone(game, end1) != nullptr ? 1 : posing_bone(game, end2) != nullptr ? 2 : 0;
+            edge.bone_end = holding_bone(game, end1) != nullptr ? 1 : holding_bone(game, end2) != nullptr ? 2 : 0;
             if (edge.bone_end == 0) {
                 rigid_order_.push_back(static_cast<std::uint32_t>(edges_.size()));
             }
@@ -699,7 +711,9 @@ void Assemblies::rebuild(const DataModel& game) {
             continue;
         }
         const auto* constraint = dynamic_cast<const Constraint*>(game.instance(edge.constraint));
-        const InstanceId bone = edge.bone_end == 1 ? constraint->pv_instance1_id() : constraint->pv_instance2_id();
+        const InstanceId end = edge.bone_end == 1 ? constraint->pv_instance1_id() : constraint->pv_instance2_id();
+        const Bone* posed = holding_bone(game, end);
+        const InstanceId bone = posed != nullptr ? posed->id() : end;
         RigidEdge out;
         out.constraint = edge.constraint;
         out.parent_end = edge.bone_end;

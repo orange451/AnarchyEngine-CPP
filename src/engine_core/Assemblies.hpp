@@ -105,8 +105,9 @@ public:
     int group_of(InstanceId node) const;
     // Active RigidConstraints in follow order: a parent's edge before its subs' edges.
     const std::vector<RigidEdge>& rigid_edges() const { return rigid_; }
-    // Active RigidConstraints with a Bone end that poses a bone: a hand that
-    // holds something. The Bone's end is always the parent, and the two sides
+    // Active RigidConstraints with a Bone end that poses a bone, or an
+    // Attachment inside one: a hand that holds something. The Bone's end is
+    // always the parent, and the two sides
     // stay apart, each its own assembly, since the bone moves under its
     // GameObject as the pose changes. Not in rigid_edges().
     const std::vector<RigidEdge>& bone_edges() const { return bone_; }

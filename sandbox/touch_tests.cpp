@@ -333,3 +333,56 @@ TEST_CASE("T12 a shape remade while touching fires nothing more", "[touch][physi
     REQUIRE(count(heard, box.id(), false) == 1);
     REQUIRE(count(heard, box.id(), true) == 0);
 }
+
+TEST_CASE("T13 a PlayerController standing on the floor touches it, once, until it leaves it",
+          "[touch][physics]") {
+    PhysicsRig rig;
+    PhysicsObject& floor = rig.floor();
+    engine_core::PlayerController& player = rig.controller(at(0.f, 0.f, 0.f));
+    std::vector<Heard> heard;
+    listen(rig.game, player.id(), heard);
+    listen(rig.game, floor.id(), heard);
+    rig.play();
+    run_for(rig, 1.0);
+    REQUIRE(count(heard, player.id(), false) == 1);
+    REQUIRE(count(heard, floor.id(), false) == 1);
+    for (const Heard& h : heard) {
+        if (h.on == player.id()) {
+            REQUIRE(h.touch.instance == floor.id());
+            REQUIRE(near(h.touch.normal.y, -1.f, 1e-3f));
+            REQUIRE(near(h.touch.point.y, 0.f, 0.05f));
+        } else {
+            REQUIRE(h.touch.instance == player.id());
+            REQUIRE(near(h.touch.normal.y, 1.f, 1e-3f));
+        }
+    }
+    // Standing on, and walking across, it fires nothing more.
+    REQUIRE_FALSE(player.set_transform(at(3.f, 0.f, 0.f)));
+    run_for(rig, 0.5);
+    REQUIRE(count(heard, player.id(), false) == 1);
+    REQUIRE(count(heard, player.id(), true) == 0);
+    // Lifted off, it stops touching.
+    REQUIRE_FALSE(player.set_transform(at(0.f, 20.f, 0.f)));
+    run_for(rig, 0.1);
+    REQUIRE(count(heard, player.id(), true) == 1);
+    REQUIRE(count(heard, floor.id(), true) == 1);
+}
+
+TEST_CASE("T14 a PlayerController moving onto another body ends one touch and begins the next",
+          "[touch][physics]") {
+    PhysicsRig rig;
+    PhysicsObject& left = rig.body(at(-5.f, -0.5f, 0.f), Vec3{10.f, 1.f, 10.f}, true);
+    PhysicsObject& right = rig.body(at(5.f, -0.5f, 0.f), Vec3{10.f, 1.f, 10.f}, true);
+    engine_core::PlayerController& player = rig.controller(at(-5.f, 0.f, 0.f));
+    std::vector<Heard> heard;
+    listen(rig.game, player.id(), heard);
+    rig.play();
+    run_for(rig, 0.5);
+    REQUIRE(count(heard, player.id(), false) == 1);
+    REQUIRE(heard.back().touch.instance == left.id());
+    REQUIRE_FALSE(player.set_transform(at(5.f, 0.f, 0.f)));
+    run_for(rig, 0.5);
+    REQUIRE(count(heard, player.id(), true) == 1);
+    REQUIRE(count(heard, player.id(), false) == 2);
+    REQUIRE(heard.back().touch.instance == right.id());
+}

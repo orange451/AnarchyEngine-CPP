@@ -585,6 +585,13 @@ struct PhysicsWorld::Impl {
         // A Touched or TouchEnded of this body has a connection: its shapes
         // ask Box3D for contact events.
         bool listened = false;
+        // A controller: the shape it stands on this step (null for none), and
+        // where, which way the ground faces, and the ground's velocity there
+        // relative to it. Touched treats standing as touching.
+        b3ShapeId stands_on = b3_nullShapeId;
+        b3Vec3 stand_point{};
+        b3Vec3 stand_normal{};
+        b3Vec3 stand_velocity{};
         // A controller a write sped upward, as a jump does: it is leaving the
         // ground until it stops rising.
         bool launched = false;
@@ -691,6 +698,9 @@ struct PhysicsWorld::Impl {
     std::unordered_map<std::uint64_t, PairTouch> pair_touches;
     std::unordered_map<std::uint64_t, StepMotion> before_step;
     std::vector<std::uint64_t> touch_scratch;
+    // Each controller's ground last step, as a shape key: a controller hovers,
+    // so standing is its touch (stand).
+    std::unordered_map<InstanceId, std::uint64_t> standing;
     double play_seconds = 0.0;
     std::size_t listened = 0;
     // refilter_all's scratch: each group's name and filter bits this pass.
@@ -801,6 +811,7 @@ struct PhysicsWorld::Impl {
         shape_touches.clear();
         pair_touches.clear();
         before_step.clear();
+        standing.clear();
         no_collide.clear();
         no_collide_keys.clear();
         no_collide_ids.clear();
@@ -858,6 +869,7 @@ struct PhysicsWorld::Impl {
             shape_touches.clear();
             pair_touches.clear();
             before_step.clear();
+            standing.clear();
             play_seconds = 0.0;
         }
     }
@@ -924,14 +936,15 @@ struct PhysicsWorld::Impl {
 
     // A shape pair began touching: true when its instance pair did too.
     PairTouch* begin_pair(b3ShapeId a, b3ShapeId b, bool& began) {
+        return begin_keys(shape_key(a), shape_key(b), instance_of(a), instance_of(b), began);
+    }
+
+    // The same, by key: a shape's, or a stand's (stand_key).
+    PairTouch* begin_keys(std::uint64_t ka, std::uint64_t kb, InstanceId ia, InstanceId ib, bool& began) {
         began = false;
-        const InstanceId ia = instance_of(a);
-        const InstanceId ib = instance_of(b);
         if (ia == 0 || ib == 0 || ia == ib) {
             return nullptr;
         }
-        const std::uint64_t ka = shape_key(a);
-        const std::uint64_t kb = shape_key(b);
         const auto key = std::make_pair(std::min(ka, kb), std::max(ka, kb));
         if (shape_touches.count(key) != 0) {
             return nullptr;
@@ -948,9 +961,11 @@ struct PhysicsWorld::Impl {
 
     // A shape pair stopped touching: true when its instance pair did too.
     PairTouch* end_pair(b3ShapeId a, b3ShapeId b, bool& ended) {
+        return end_keys(shape_key(a), shape_key(b), ended);
+    }
+
+    PairTouch* end_keys(std::uint64_t ka, std::uint64_t kb, bool& ended) {
         ended = false;
-        const std::uint64_t ka = shape_key(a);
-        const std::uint64_t kb = shape_key(b);
         const auto found = shape_touches.find(std::make_pair(std::min(ka, kb), std::max(ka, kb)));
         if (found == shape_touches.end()) {
             return nullptr;
@@ -1060,6 +1075,80 @@ struct PhysicsWorld::Impl {
         pair.position_high = zone_low ? mover_at : zone_at;
     }
 
+    // A stand's key, for a controller: its instance id, whose upper 32 bits
+    // are zero, which no shape's key has (b3StoreShapeId puts index1, from 1,
+    // there).
+    static std::uint64_t stand_key(InstanceId controller) { return controller; }
+
+    // A controller hovers over its ground, so what it stands on is its touch:
+    // a new ground begins one, leaving it ends one, as contacts do, counted
+    // with any real contact between the two.
+    void stand(DataModel& game) {
+        for (auto& [id, record] : bodies) {
+            if (!record.controller) {
+                continue;
+            }
+            const std::uint64_t now = b3Shape_IsValid(record.stands_on) ? shape_key(record.stands_on) : 0;
+            const auto found = standing.find(id);
+            const std::uint64_t was = found != standing.end() ? found->second : 0;
+            if (now == was) {
+                continue;
+            }
+            if (was != 0) {
+                end_stand(game, id, was);
+            }
+            if (now != 0) {
+                const InstanceId ground = instance_of(record.stands_on);
+                bool began = false;
+                PairTouch* pair = begin_keys(stand_key(id), now, id, ground, began);
+                if (pair != nullptr && began) {
+                    // Oriented from the lower id: the controller looks down at its ground.
+                    const bool controller_low = id < ground;
+                    const float sign = controller_low ? 1.f : -1.f;
+                    const b3Vec3 down{-record.stand_normal.x, -record.stand_normal.y, -record.stand_normal.z};
+                    pair->sensor = false;
+                    pair->point = vec_of(record.stand_point);
+                    pair->normal_from_low = Vec3{down.x * sign, down.y * sign, down.z * sign};
+                    pair->velocity_high_from_low = Vec3{record.stand_velocity.x * sign, record.stand_velocity.y * sign,
+                                                        record.stand_velocity.z * sign};
+                    fire_pair(game, "Touched", std::min(id, ground), std::max(id, ground), *pair);
+                }
+                standing[id] = now;
+            } else {
+                standing.erase(id);
+            }
+        }
+        // Controllers that are gone: their stands end.
+        touch_scratch.clear();
+        for (const auto& [id, key] : standing) {
+            if (bodies.find(id) == bodies.end()) {
+                touch_scratch.push_back(id);
+            }
+        }
+        for (const std::uint64_t id : touch_scratch) {
+            const auto found = standing.find(static_cast<InstanceId>(id));
+            end_stand(game, found->first, found->second);
+            standing.erase(found);
+        }
+    }
+
+    // A controller left the ground with key ground: from the last facts known.
+    void end_stand(DataModel& game, InstanceId controller, std::uint64_t ground) {
+        const auto touch = shape_touches.find(
+            std::make_pair(std::min(stand_key(controller), ground), std::max(stand_key(controller), ground)));
+        if (touch == shape_touches.end()) {
+            return;  // forget_shapes let it go already
+        }
+        const InstanceId a = touch->second.a;
+        const InstanceId b = touch->second.b;
+        bool ended = false;
+        PairTouch* pair = end_keys(stand_key(controller), ground, ended);
+        if (pair != nullptr && ended) {
+            fire_pair(game, "TouchEnded", std::min(a, b), std::max(a, b), *pair);
+            pair_touches.erase(pair_key(a, b));
+        }
+    }
+
     // After a step: Box3D's contact and sensor events into Touched and
     // TouchEnded, then the pending ends that did not touch again.
     void touches(DataModel& game) {
@@ -1129,6 +1218,7 @@ struct PhysicsWorld::Impl {
             fire_pair(game, "TouchEnded", std::min(a, b), std::max(a, b), *pair);
             pair_touches.erase(pair_key(a, b));
         }
+        stand(game);
         // Pending ends that did not touch again: they end now, from the last facts known.
         touch_scratch.clear();
         for (const auto& [key, pair] : pair_touches) {
@@ -2523,6 +2613,8 @@ struct PhysicsWorld::Impl {
         b3Vec3 normal{0.f, 1.f, 0.f};
         b3Vec3 point{};
         b3BodyId body = b3_nullBodyId;
+        // The shape it stands on (Touched: a controller hovers, never touching it).
+        b3ShapeId shape = b3_nullShapeId;
         // The ground's own velocity at point.
         b3Vec3 velocity{};
         // Ground too steep under the ring's edge, beside what it stands on:
@@ -2586,6 +2678,7 @@ struct PhysicsWorld::Impl {
             ground.normal = face_normal(hits.shape, hits.point, hits.normal, origin.y);
             ground.point = hits.point;
             ground.body = b3Shape_GetBody(hits.shape);
+            ground.shape = hits.shape;
             ground.velocity = b3Body_GetWorldPointVelocity(ground.body, hits.point);
             if (ground.normal.y < steepest(controller)) {
                 // The ring's edge is on ground too steep, as at the foot of a
@@ -2605,6 +2698,7 @@ struct PhysicsWorld::Impl {
                     ground.normal = middle.normal;
                     ground.point = middle.point;
                     ground.body = b3Shape_GetBody(middle.shape);
+                    ground.shape = middle.shape;
                     ground.velocity = b3Body_GetWorldPointVelocity(ground.body, middle.point);
                 }
             }
@@ -2697,6 +2791,15 @@ struct PhysicsWorld::Impl {
             const bool on_ground = touching && !steep;
             const bool was_grounded = record.grounded;
             record.grounded = touching;
+            if (touching && b3Shape_IsValid(ground.shape)) {
+                const b3Vec3 moving = b3Body_GetLinearVelocity(record.body);
+                record.stands_on = ground.shape;
+                record.stand_point = ground.point;
+                record.stand_normal = ground.normal;
+                record.stand_velocity = b3Sub(ground.velocity, moving);
+            } else {
+                record.stands_on = b3_nullShapeId;
+            }
             controller->store_ground(on_ground, touching && steep);
             if (!touching) {
                 hold_off_steep(*controller, record, ground, gap, velocity);

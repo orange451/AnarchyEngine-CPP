@@ -28,5 +28,6 @@ Rotate.png is our own, drawn in the Fugue style: the Rotate tool's rings
 (X red, Y green) inside a blue ring that turns, arrowhead at its end, around
 a white hub.
 
-ModuleScript.png is our own: Script.png's scroll with a purple package cube
+ModuleScript.png and Script.png are our own, redrawn at 32px from the 16px
+Script scroll; ModuleScript puts a purple package cube
 on it, the way ScriptLocal.png puts a person on it.

@@ -4,6 +4,7 @@
 // the small helpers they share. Nothing else includes this.
 
 #include "DataModel.hpp"
+#include "Assemblies.hpp"
 #include "ChangeHistoryService.hpp"
 #include "DataModelLock.hpp"
 #include "DraggerWorld.hpp"
@@ -123,6 +124,8 @@ struct DataModel::State {
     flecs::query<> wireframe_query;
     // Constraints in Workspace: Instance (in), with ConstraintTag and InWorkspace.
     flecs::query<> constraint_query;
+    // Which PVInstances move together; DataModel::assemblies.
+    Assemblies assemblies;
 
     // Guards slots, free lists, invalidation, and resync.
     // SimulationThread may hold Write across a whole step and may re-enter

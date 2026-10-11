@@ -1,4 +1,6 @@
 #include "PropertiesPanel.hpp"
+
+#include "Assemblies.hpp"
 #include "AssetPicker.hpp"
 #include "ChangeFlag.hpp"
 #include "IdeIcons.hpp"
@@ -604,6 +606,8 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
     std::vector<InstanceId> watched;
     std::uint64_t seen_selection = ~std::uint64_t{0};
     std::uint64_t seen_tree = ~std::uint64_t{0};
+    // Active and AssemblyRoot fire no Changed: a moved assembly revision reads them again.
+    std::uint64_t seen_assemblies = ~std::uint64_t{0};
     std::string status;
     std::vector<std::shared_ptr<PendingEdit>> pending;
 
@@ -900,7 +904,8 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
 
     void read() {
         const std::uint64_t tree = world->tree_revision();
-        const bool moved = selection->revision() != seen_selection || tree != seen_tree;
+        const std::uint64_t assemblies = world->assemblies().revision();
+        const bool moved = selection->revision() != seen_selection || tree != seen_tree || assemblies != seen_assemblies;
         std::uint64_t revision = 0;
         const std::vector<InstanceId> ids = selection->get(revision);
         // Watched before the read, so a write that lands during it is heard.
@@ -926,6 +931,7 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
         }
         seen_selection = revision;
         seen_tree = tree;
+        seen_assemblies = assemblies;
         set_preview(std::move(next_preview));
         if (next == sheet && !force) {
             return;

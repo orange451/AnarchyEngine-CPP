@@ -2,6 +2,7 @@
 
 #include "AmbientOcclusionEffect.hpp"
 #include "AssetInstances.hpp"
+#include "Assemblies.hpp"
 #include "Attachment.hpp"
 #include "Constraint.hpp"
 #include "Animator.hpp"
@@ -1132,9 +1133,13 @@ public:
             world_.stop_simulation();
         }
         world_.history().set_enabled(false);
+        world_.assemblies().suspend();
     }
 
-    ~Rebuild() { world_.history().set_enabled(was_); }
+    ~Rebuild() {
+        world_.assemblies().resume(world_);
+        world_.history().set_enabled(was_);
+    }
 
     void finish() {
         // The old place's Terrain voxels are no longer named by any place bytes.
@@ -2444,6 +2449,8 @@ void Project::settle(const Comparison& compared, const SaveConflict& conflict) {
 }
 
 void Project::apply_changes(const Comparison& compared, std::vector<std::string>& loaded) {
+    // Disk edits come in one instance at a time; the stopped tick's follow pass settles them.
+    AssemblySuspend suspend(*game_);
     using Type = Comparison::Action::Type;
     using Action = Comparison::Action;
     DataModel& world = *game_;

@@ -1,0 +1,733 @@
+#include "Assemblies.hpp"
+
+#include "Attachment.hpp"
+#include "Constraint.hpp"
+#include "DataModel.hpp"
+#include "InstanceRef.hpp"
+#include "LuaApi.hpp"
+#include "GameObject.hpp"
+#include "PhysicsBase.hpp"
+#include "PlayerController.hpp"
+#include "SpatialObject.hpp"
+
+#include <algorithm>
+#include <cmath>
+#include <initializer_list>
+
+namespace engine_core {
+namespace {
+
+// Deep enough for any real nesting of Attachments; a deeper chain is not an end.
+constexpr int kMaxWalk = 64;
+
+bool has_parent(InstanceId id, InstanceId above) { return above != DataModel::kNoParent && above != id; }
+
+int depth_of(const DataModel& game, InstanceId id) {
+    int depth = 0;
+    InstanceId at = id;
+    while (at != 0) {
+        const InstanceId above = game.parent(at);
+        if (!has_parent(at, above)) {
+            break;
+        }
+        at = above;
+        ++depth;
+    }
+    return depth;
+}
+
+InstanceId climb(const DataModel& game, InstanceId id, int steps) {
+    for (int i = 0; i < steps; ++i) {
+        id = game.parent(id);
+    }
+    return id;
+}
+
+// Whether a comes before b in a depth-first walk of the tree.
+bool tree_before(const DataModel& game, InstanceId a, InstanceId b) {
+    if (a == b) {
+        return false;
+    }
+    const int da = depth_of(game, a);
+    const int db = depth_of(game, b);
+    InstanceId x = da > db ? climb(game, a, da - db) : a;
+    InstanceId y = db > da ? climb(game, b, db - da) : b;
+    if (x == y) {
+        // One holds the other, and the holder comes first.
+        return da < db;
+    }
+    while (game.parent(x) != game.parent(y)) {
+        x = game.parent(x);
+        y = game.parent(y);
+    }
+    for (InstanceId child = game.first_child(game.parent(x)); child != 0; child = game.next_sibling(child)) {
+        if (child == x) {
+            return true;
+        }
+        if (child == y) {
+            return false;
+        }
+    }
+    return x < y;
+}
+
+const PhysicsBase* body_of(const DataModel& game, InstanceId id) {
+    return dynamic_cast<const PhysicsBase*>(game.instance(id));
+}
+
+bool is_attachment(const DataModel& game, InstanceId id) {
+    return dynamic_cast<const Attachment*>(game.instance(id)) != nullptr;
+}
+
+Matrix4 scaled_columns(const Matrix4& frame, const Matrix4& scale_from) {
+    Matrix4 out = frame;
+    for (int column = 0; column < 3; ++column) {
+        const float* axis = scale_from.m + column * 4;
+        const float length = std::sqrt(axis[0] * axis[0] + axis[1] * axis[1] + axis[2] * axis[2]);
+        for (int row = 0; row < 3; ++row) {
+            out.m[column * 4 + row] *= length;
+        }
+    }
+    return out;
+}
+
+}  // namespace
+
+InstanceId claim_winner(const DataModel& game, const InstanceId* candidates, std::size_t count) {
+    InstanceId best = 0;
+    for (std::size_t i = 0; i < count; ++i) {
+        if (best == 0 || tree_before(game, candidates[i], best)) {
+            best = candidates[i];
+        }
+    }
+    return best;
+}
+
+Assemblies::Assemblies() {
+    const std::size_t slots = DataModel::kMaxInstances;
+    seen_.assign(slots, 0);
+    node_.assign(slots, 0);
+    group_.assign(slots, -1);
+    flags_.assign(slots, 0);
+    active_.assign(slots, 0);
+    claimant_.assign(slots, 0);
+    uf_.assign(slots, 0);
+    rigid_parent_.assign(slots, 0);
+    rigid_node_.assign(slots, 0);
+    scratch_index_.assign(slots, -1);
+    touched_.reserve(slots);
+    bodies_.reserve(slots);
+    constraints_.reserve(slots);
+    contested_.reserve(slots);
+    candidates_.reserve(slots);
+    edges_.reserve(slots);
+    rigid_order_.reserve(slots);
+    nodes_.reserve(slots);
+    groups_.reserve(slots);
+    group_nodes_.reserve(slots);
+    rigid_.reserve(slots);
+    live_scratch_.reserve(slots);
+    dangling_id_.assign(slots, 0);
+    dangling_mask_.assign(slots, 0);
+    dangling_epoch_.assign(slots, 0);
+}
+
+void Assemblies::refresh(const DataModel& game) {
+    const std::uint64_t revision_now = revision();
+    const std::uint32_t generation = game.world_generation();
+    const bool running = game.simulation_running();
+    if (built_ && built_revision_ == revision_now && built_generation_ == generation && built_running_ == running) {
+        return;
+    }
+    rebuild(game);
+    built_ = true;
+    built_revision_ = revision_now;
+    built_generation_ = generation;
+    built_running_ = running;
+}
+
+void Assemblies::resume(DataModel& game) {
+    if (suspended_ > 0 && --suspended_ == 0 && follow_on_resume_) {
+        follow_on_resume_ = false;
+        if (!game.simulation_running()) {
+            refresh(game);
+            follow(game, 0);
+        }
+    }
+}
+
+bool Assemblies::relevant(const DataModel& game, InstanceId id) const {
+    if ((flags(id) & kLinked) != 0) {
+        return true;
+    }
+    const DataModel* object = game.instance(id);
+    if (object == nullptr) {
+        return false;
+    }
+    if (object->constraint()) {
+        return true;
+    }
+    if (const auto* body = dynamic_cast<const PhysicsBase*>(object)) {
+        const InstanceId driven = body->driven_game_object();
+        return driven != 0 && (flags(driven) & kLinked) != 0;
+    }
+    return false;
+}
+
+void Assemblies::changed(DataModel& game) {
+    bump();
+    if (suspended_ > 0 || busy_ > 0 || game.simulation_running()) {
+        return;
+    }
+    refresh(game);
+    follow(game, 0);
+}
+
+void Assemblies::constraint_changed(DataModel& game, InstanceId) { changed(game); }
+
+void Assemblies::tree_changed(DataModel& game, InstanceId) { changed(game); }
+
+void Assemblies::guids_may_have_returned() {
+    ++guid_epoch_;
+    bump();
+}
+
+void Assemblies::transform_written(DataModel& game, InstanceId id) {
+    if (suspended_ > 0 || busy_ > 0) {
+        return;
+    }
+    refresh(game);
+    const std::uint8_t flagged = flags(id);
+    if ((flagged & kLinked) == 0) {
+        return;
+    }
+    if (game.simulation_running()) {
+        play_transform_written(game, id);
+    } else if ((flagged & kRigid) != 0) {
+        follow(game, node_of(id));
+    }
+}
+
+void Assemblies::attachment_changed(DataModel& game, InstanceId id) {
+    if (suspended_ > 0 || busy_ > 0) {
+        return;
+    }
+    refresh(game);
+    const std::uint8_t flagged = flags(id);
+    if ((flagged & kLinked) == 0) {
+        return;
+    }
+    if (game.simulation_running()) {
+        play_attachment_changed(game, id);
+    } else if ((flagged & kRigid) != 0) {
+        follow(game, node_of(id));
+    }
+}
+
+// Task 4 fills the editor follow.
+int Assemblies::follow(DataModel&, InstanceId) { return 0; }
+
+// Task 7 fills it: a member moved in play moves the whole assembly.
+void Assemblies::play_transform_written(DataModel&, InstanceId) {}
+
+// Task 8 fills it: an end Attachment moved in play re-snaps its edge.
+void Assemblies::play_attachment_changed(DataModel&, InstanceId) {}
+
+InstanceId Assemblies::end_of(const DataModel& game, InstanceId constraint, const InstanceRef& ref, int end) {
+    if (ref.guid().empty()) {
+        return 0;
+    }
+    const std::uint32_t slot = id_slot(constraint);
+    const std::uint8_t bit = end == 1 ? 1u : 2u;
+    if (dangling_id_[slot] != constraint) {
+        dangling_id_[slot] = constraint;
+        dangling_mask_[slot] = 0;
+    }
+    if ((dangling_mask_[slot] & bit) != 0 && dangling_epoch_[slot] == guid_epoch_) {
+        return 0;
+    }
+    const InstanceId target = ref.resolve(game);
+    if (target == 0) {
+        ++find_guid_calls_;
+        dangling_mask_[slot] = static_cast<std::uint8_t>(dangling_mask_[slot] | bit);
+        dangling_epoch_[slot] = guid_epoch_;
+        return 0;
+    }
+    dangling_mask_[slot] = static_cast<std::uint8_t>(dangling_mask_[slot] & ~bit);
+    const DataModel* object = game.instance(target);
+    return object != nullptr && lua_class_inherits(object->class_name(), "PVInstance") ? target : 0;
+}
+
+AssemblySuspend::AssemblySuspend(DataModel& game) : game_(game) { game_.assemblies().suspend(); }
+
+AssemblySuspend::~AssemblySuspend() { game_.assemblies().resume(game_); }
+
+bool Assemblies::seen(InstanceId id) const {
+    const std::uint32_t slot = id_slot(id);
+    return id != 0 && slot < seen_.size() && seen_[slot] == id;
+}
+
+void Assemblies::touch(InstanceId id) {
+    const std::uint32_t slot = id_slot(id);
+    if (id == 0 || slot >= seen_.size() || seen_[slot] == id) {
+        return;
+    }
+    if (seen_[slot] == 0) {
+        touched_.push_back(slot);
+    }
+    seen_[slot] = id;
+    node_[slot] = 0;
+    group_[slot] = -1;
+    flags_[slot] = 0;
+    active_[slot] = 0;
+    claimant_[slot] = 0;
+    uf_[slot] = slot;
+    rigid_parent_[slot] = 0;
+    rigid_node_[slot] = 0;
+    scratch_index_[slot] = -1;
+}
+
+void Assemblies::clear_touched() {
+    for (const std::uint32_t slot : touched_) {
+        seen_[slot] = 0;
+    }
+    touched_.clear();
+}
+
+std::uint32_t Assemblies::find(std::uint32_t slot) {
+    while (uf_[slot] != slot) {
+        uf_[slot] = uf_[uf_[slot]];
+        slot = uf_[slot];
+    }
+    return slot;
+}
+
+void Assemblies::unite(std::uint32_t a, std::uint32_t b) {
+    const std::uint32_t ra = find(a);
+    const std::uint32_t rb = find(b);
+    if (ra != rb) {
+        uf_[rb] = ra;
+    }
+}
+
+InstanceId Assemblies::resolve_end(const DataModel& game, InstanceId end, bool mark) {
+    if (end == 0) {
+        return 0;
+    }
+    if (mark) {
+        // An end is linked even when it does not resolve, so moving it into
+        // Workspace, or under a holder, moves the revision.
+        touch(end);
+        flags_[id_slot(end)] |= kLinked;
+    }
+    if (!game.in_workspace(end)) {
+        return 0;
+    }
+    InstanceId holder = end;
+    int walked = 0;
+    while (is_attachment(game, holder)) {
+        const InstanceId above = game.parent(holder);
+        if (!has_parent(holder, above) || ++walked > kMaxWalk) {
+            return 0;
+        }
+        holder = above;
+    }
+    const DataModel* object = game.instance(holder);
+    InstanceId node = 0;
+    if (dynamic_cast<const PhysicsBase*>(object) != nullptr || dynamic_cast<const GameObject*>(object) != nullptr) {
+        node = seen(holder) && node_[id_slot(holder)] != 0 ? node_[id_slot(holder)] : holder;
+    } else if (dynamic_cast<const SpatialObject*>(object) != nullptr) {
+        node = holder;
+    } else {
+        return 0;
+    }
+    if (mark) {
+        touch(holder);
+        if (node_[id_slot(holder)] == 0) {
+            node_[id_slot(holder)] = node;
+        }
+        flags_[id_slot(holder)] |= kLinked;
+        for (InstanceId at = end; at != holder; at = game.parent(at)) {
+            touch(at);
+            node_[id_slot(at)] = node;
+            flags_[id_slot(at)] |= kLinked;
+        }
+    }
+    return node;
+}
+
+InstanceId Assemblies::claimant_live(const DataModel& game, InstanceId game_object) const {
+    game.physics_bodies(live_scratch_);
+    std::size_t drivers = 0;
+    for (const InstanceId id : live_scratch_) {
+        const PhysicsBase* body = body_of(game, id);
+        if (body != nullptr && body->driven_game_object() == game_object) {
+            live_scratch_[drivers++] = id;
+        }
+    }
+    return claim_winner(game, live_scratch_.data(), drivers);
+}
+
+InstanceId Assemblies::resolve_live(const DataModel& game, InstanceId end) const {
+    if (end == 0 || !game.in_workspace(end)) {
+        return 0;
+    }
+    InstanceId holder = end;
+    int walked = 0;
+    while (is_attachment(game, holder)) {
+        const InstanceId above = game.parent(holder);
+        if (!has_parent(holder, above) || ++walked > kMaxWalk) {
+            return 0;
+        }
+        holder = above;
+    }
+    if (seen(holder) && node_[id_slot(holder)] != 0) {
+        return node_[id_slot(holder)];
+    }
+    const DataModel* object = game.instance(holder);
+    if (const auto* body = dynamic_cast<const PhysicsBase*>(object)) {
+        const InstanceId target = body->driven_game_object();
+        const InstanceId winner = target != 0 ? claimant_live(game, target) : 0;
+        return winner != 0 ? winner : holder;
+    }
+    if (dynamic_cast<const GameObject*>(object) != nullptr) {
+        const InstanceId winner = claimant_live(game, holder);
+        return winner != 0 ? winner : holder;
+    }
+    return dynamic_cast<const SpatialObject*>(object) != nullptr ? holder : 0;
+}
+
+// Whether a ranks above b as root: anchored, then a PlayerController, then a
+// physics node, then higher Mass, then the lower GUID.
+bool Assemblies::root_before(const DataModel& game, InstanceId a, InstanceId b) const {
+    const PhysicsBase* pa = body_of(game, a);
+    const PhysicsBase* pb = body_of(game, b);
+    const bool anchored_a = pa != nullptr && pa->anchored();
+    const bool anchored_b = pb != nullptr && pb->anchored();
+    if (anchored_a != anchored_b) {
+        return anchored_a;
+    }
+    const bool controller_a = dynamic_cast<const PlayerController*>(pa) != nullptr;
+    const bool controller_b = dynamic_cast<const PlayerController*>(pb) != nullptr;
+    if (controller_a != controller_b) {
+        return controller_a;
+    }
+    if ((pa != nullptr) != (pb != nullptr)) {
+        return pa != nullptr;
+    }
+    if (pa != nullptr && pa->mass() != pb->mass()) {
+        return pa->mass() > pb->mass();
+    }
+    return game.guid_view(a) < game.guid_view(b);
+}
+
+void Assemblies::rebuild(const DataModel& game) {
+    clear_touched();
+    edges_.clear();
+    rigid_order_.clear();
+    nodes_.clear();
+    groups_.clear();
+    group_nodes_.clear();
+    rigid_.clear();
+    contested_.clear();
+
+    // Claims: each body is a node, and so is the GameObject it drives, under
+    // the body that wins it.
+    game.physics_bodies(bodies_);
+    for (const InstanceId id : bodies_) {
+        const PhysicsBase* body = body_of(game, id);
+        if (body == nullptr) {
+            continue;
+        }
+        touch(id);
+        const InstanceId target = body->driven_game_object();
+        if (target == 0) {
+            continue;
+        }
+        const std::uint32_t slot = id_slot(target);
+        if (!seen(target)) {
+            touch(target);
+            claimant_[slot] = id;
+        } else if (claimant_[slot] != id && (flags_[slot] & kLinked) == 0) {
+            flags_[slot] |= kLinked;
+            contested_.push_back(target);
+        }
+    }
+    for (const InstanceId target : contested_) {
+        candidates_.clear();
+        for (const InstanceId id : bodies_) {
+            const PhysicsBase* body = body_of(game, id);
+            if (body != nullptr && body->driven_game_object() == target) {
+                candidates_.push_back(id);
+            }
+        }
+        claimant_[id_slot(target)] = claim_winner(game, candidates_.data(), candidates_.size());
+    }
+    for (const InstanceId id : bodies_) {
+        const PhysicsBase* body = body_of(game, id);
+        if (body == nullptr) {
+            continue;
+        }
+        const InstanceId target = body->driven_game_object();
+        const InstanceId owner = target != 0 ? claimant_[id_slot(target)] : id;
+        node_[id_slot(id)] = owner;
+        if (target != 0) {
+            node_[id_slot(target)] = owner;
+        }
+    }
+
+    // Edges: every enabled constraint in Workspace whose ends are two nodes.
+    game.constraints(constraints_);
+    for (const InstanceId id : constraints_) {
+        const auto* constraint = dynamic_cast<const Constraint*>(game.instance(id));
+        if (constraint == nullptr) {
+            continue;
+        }
+        touch(id);
+        const InstanceId node1 = resolve_end(game, end_of(game, id, constraint->pv_instance1_ref(), 1), true);
+        const InstanceId node2 = resolve_end(game, end_of(game, id, constraint->pv_instance2_ref(), 2), true);
+        if (!constraint->enabled() || node1 == 0 || node2 == 0 || node1 == node2) {
+            continue;
+        }
+        Edge edge;
+        edge.constraint = id;
+        edge.node1 = node1;
+        edge.node2 = node2;
+        edge.rigid = constraint->rigid();
+        if (edge.rigid) {
+            rigid_order_.push_back(static_cast<std::uint32_t>(edges_.size()));
+        }
+        edges_.push_back(edge);
+    }
+
+    // Rigid rule 1: each sub has one rigid parent, and no loops; GUID order decides.
+    std::sort(rigid_order_.begin(), rigid_order_.end(), [&](std::uint32_t a, std::uint32_t b) {
+        return game.guid_view(edges_[a].constraint) < game.guid_view(edges_[b].constraint);
+    });
+    for (const std::uint32_t index : rigid_order_) {
+        Edge& edge = edges_[index];
+        const std::uint32_t sub = id_slot(edge.node2);
+        if (rigid_parent_[sub] != 0) {
+            edge.live = false;
+            continue;
+        }
+        bool loop = false;
+        int guard = 0;
+        for (InstanceId at = edge.node1; at != 0 && guard <= static_cast<int>(DataModel::kMaxInstances); at = rigid_parent_[id_slot(at)]) {
+            ++guard;
+            if (at == edge.node2) {
+                loop = true;
+                break;
+            }
+        }
+        if (loop) {
+            edge.live = false;
+            continue;
+        }
+        rigid_parent_[sub] = edge.node1;
+    }
+    // Follow order: by how deep each sub sits in the rigid forest, then by GUID.
+    rigid_order_.erase(std::remove_if(rigid_order_.begin(), rigid_order_.end(),
+                                      [&](std::uint32_t index) { return !edges_[index].live; }),
+                       rigid_order_.end());
+    for (const std::uint32_t index : rigid_order_) {
+        int depth = 0;
+        for (InstanceId at = edges_[index].node2; rigid_parent_[id_slot(at)] != 0;
+             at = rigid_parent_[id_slot(at)]) {
+            ++depth;
+        }
+        scratch_index_[id_slot(edges_[index].constraint)] = depth;
+    }
+    std::stable_sort(rigid_order_.begin(), rigid_order_.end(), [&](std::uint32_t a, std::uint32_t b) {
+        return scratch_index_[id_slot(edges_[a].constraint)] < scratch_index_[id_slot(edges_[b].constraint)];
+    });
+    for (const std::uint32_t index : rigid_order_) {
+        scratch_index_[id_slot(edges_[index].constraint)] = -1;
+    }
+
+    // Join: welds first; in play a rigid edge whose ends welds already join changes nothing.
+    const bool running = game.simulation_running();
+    for (const Edge& edge : edges_) {
+        if (!edge.rigid && edge.live) {
+            unite(id_slot(edge.node1), id_slot(edge.node2));
+        }
+    }
+    for (const std::uint32_t index : rigid_order_) {
+        Edge& edge = edges_[index];
+        if (running && find(id_slot(edge.node1)) == find(id_slot(edge.node2))) {
+            edge.live = false;
+            continue;
+        }
+        unite(id_slot(edge.node1), id_slot(edge.node2));
+        RigidEdge out;
+        out.constraint = edge.constraint;
+        out.parent_node = edge.node1;
+        out.sub_node = edge.node2;
+        rigid_.push_back(out);
+        rigid_node_[id_slot(edge.node1)] = 1;
+        rigid_node_[id_slot(edge.node2)] = 1;
+    }
+    for (const Edge& edge : edges_) {
+        active_[id_slot(edge.constraint)] = edge.live ? 1 : 0;
+    }
+
+    // Groups: one per connected set of nodes that a live edge touches.
+    for (const Edge& edge : edges_) {
+        if (!edge.live) {
+            continue;
+        }
+        for (const InstanceId node : {edge.node1, edge.node2}) {
+            if (group_[id_slot(node)] == -1) {
+                group_[id_slot(node)] = -2;
+                nodes_.push_back(node);
+            }
+        }
+    }
+    for (const InstanceId node : nodes_) {
+        const std::uint32_t root_slot = find(id_slot(node));
+        if (scratch_index_[root_slot] < 0) {
+            scratch_index_[root_slot] = static_cast<std::int32_t>(groups_.size());
+            groups_.push_back(Group{});
+        }
+        const std::int32_t group = scratch_index_[root_slot];
+        group_[id_slot(node)] = group;
+        ++groups_[group].count;
+    }
+    std::uint32_t first = 0;
+    for (Group& group : groups_) {
+        group.first = first;
+        first += group.count;
+        group.count = 0;
+    }
+    group_nodes_.resize(nodes_.size());
+    for (const InstanceId node : nodes_) {
+        Group& group = groups_[group_[id_slot(node)]];
+        group_nodes_[group.first + group.count++] = node;
+    }
+    for (Group& group : groups_) {
+        for (std::uint32_t i = group.first; i < group.first + group.count; ++i) {
+            const InstanceId node = group_nodes_[i];
+            const PhysicsBase* body = body_of(game, node);
+            group.has_physics = group.has_physics || body != nullptr;
+            group.anchored = group.anchored || (body != nullptr && body->anchored());
+            if (group.root == 0 || root_before(game, node, group.root)) {
+                group.root = node;
+            }
+        }
+    }
+
+    // Flags for every instance that belongs to a node.
+    const std::size_t count = touched_.size();
+    for (std::size_t i = 0; i < count; ++i) {
+        const std::uint32_t slot = touched_[i];
+        const InstanceId node = node_[slot];
+        if (node == 0) {
+            continue;
+        }
+        const std::uint32_t node_slot = id_slot(node);
+        const std::int32_t group = group_[node_slot];
+        if (group >= 0) {
+            group_[slot] = group;
+            if (!is_attachment(game, seen_[slot])) {
+                flags_[slot] |= kMember | kLinked;
+            }
+        }
+        if (rigid_node_[node_slot] != 0) {
+            flags_[slot] |= kRigid;
+        }
+    }
+}
+
+std::uint8_t Assemblies::flags(InstanceId id) const { return seen(id) ? flags_[id_slot(id)] : 0; }
+
+InstanceId Assemblies::node_of(InstanceId id) const { return seen(id) ? node_[id_slot(id)] : 0; }
+
+bool Assemblies::active(InstanceId constraint) const {
+    return seen(constraint) && active_[id_slot(constraint)] != 0;
+}
+
+InstanceId Assemblies::claimant_of(InstanceId game_object) const {
+    return seen(game_object) ? claimant_[id_slot(game_object)] : 0;
+}
+
+int Assemblies::group_of(InstanceId node) const { return seen(node) ? group_[id_slot(node)] : -1; }
+
+InstanceId Assemblies::root_of(const DataModel& game, InstanceId id) const {
+    if (id == 0 || !game.in_workspace(id)) {
+        return 0;
+    }
+    if (seen(id) && node_[id_slot(id)] != 0) {
+        const std::int32_t group = group_[id_slot(id)];
+        return group >= 0 ? groups_[group].root : node_[id_slot(id)];
+    }
+    return resolve_live(game, id);
+}
+
+Matrix4 Assemblies::node_frame(const DataModel& game, InstanceId node) const {
+    const DataModel* object = game.instance(node);
+    if (const auto* body = dynamic_cast<const PhysicsBase*>(object)) {
+        const bool controller = dynamic_cast<const PlayerController*>(body) != nullptr;
+        if (const GameObject* driven = game.game_object(body->driven_game_object())) {
+            return controller ? upright_transform(driven->transform()) : matrix4_orthonormalize(driven->transform());
+        }
+        return controller ? upright_transform(body->transform()) : matrix4_orthonormalize(body->transform());
+    }
+    if (const auto* placed = dynamic_cast<const PVInstance*>(object)) {
+        return matrix4_orthonormalize(placed->transform());
+    }
+    return matrix4_identity();
+}
+
+InstanceId Assemblies::mover_of(const DataModel& game, InstanceId node) const {
+    if (const PhysicsBase* body = body_of(game, node)) {
+        const InstanceId driven = body->driven_game_object();
+        return driven != 0 ? driven : node;
+    }
+    return node;
+}
+
+// What an Attachment directly under holder measures its Offset from: the
+// holder's Transform, except that a PhysicsBase's comes from its node's frame
+// with its own scale, since its own Transform lags its GameObject while stopped.
+Matrix4 Assemblies::holder_transform(const DataModel& game, InstanceId holder) const {
+    const DataModel* object = game.instance(holder);
+    if (const auto* body = dynamic_cast<const PhysicsBase*>(object)) {
+        return scaled_columns(node_frame(game, holder), body->transform());
+    }
+    if (const auto* placed = dynamic_cast<const PVInstance*>(object)) {
+        return placed->transform();
+    }
+    return matrix4_identity();
+}
+
+Matrix4 Assemblies::attachment_frame(const DataModel& game, InstanceId attachment, int depth) const {
+    const auto* point = dynamic_cast<const Attachment*>(game.instance(attachment));
+    if (point == nullptr) {
+        return matrix4_identity();
+    }
+    const InstanceId above = game.parent(attachment);
+    const Matrix4 base = depth < kMaxWalk && is_attachment(game, above) ? attachment_frame(game, above, depth + 1)
+                                                                         : holder_transform(game, above);
+    if (point->offset_space() == TransformSpace::World) {
+        const Vec3 position = matrix4_position(base);
+        return matrix4_multiply(matrix4_translation(position.x, position.y, position.z), point->offset());
+    }
+    return matrix4_multiply(base, point->offset());
+}
+
+bool Assemblies::end_pivot(const DataModel& game, InstanceId constraint, int end, Matrix4& pivot) const {
+    const auto* object = dynamic_cast<const Constraint*>(game.instance(constraint));
+    if (object == nullptr) {
+        return false;
+    }
+    const InstanceId named = end == 1 ? object->pv_instance1_id() : object->pv_instance2_id();
+    const InstanceId node = resolve_live(game, named);
+    if (node == 0) {
+        return false;
+    }
+    pivot = is_attachment(game, named) ? matrix4_orthonormalize(attachment_frame(game, named, 0))
+                                       : node_frame(game, node);
+    return true;
+}
+
+}  // namespace engine_core

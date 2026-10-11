@@ -677,6 +677,9 @@ void DataModel::destroy(InstanceId id) {
     // The parent's folder may become a leaf and its child order changes.
     mark_authored_dirty(part->parent);
     note_tree_changed();
+    if (state_->assemblies.relevant(*this, id)) {
+        state_->assemblies.bump();
+    }
     // Its children leave the tree without set_parent, so scripts under them stop here.
     const std::vector<InstanceId> orphans = state_->script_host != nullptr ? get_children(id) : std::vector<InstanceId>{};
     detach_links(id, *part);
@@ -753,6 +756,7 @@ void DataModel::apply_transform(InstanceId id, const Matrix4& transform, bool fo
     const WriteOrigin origin = current_origin();
     note(id, VisualField::Transform, origin);
     emit_change(id, Field::Transform, origin);
+    state_->assemblies.transform_written(*this, id);
 }
 
 
@@ -904,6 +908,9 @@ void DataModel::apply_scope(InstanceId id, bool in_game_now, bool in_workspace_n
         }
         if (had_workspace != workspace) {
             set_tag(world, part->entity, ids.in_workspace, workspace);
+            if (state_->assemblies.relevant(*this, cur)) {
+                state_->assemblies.bump();
+            }
         }
         if (had_core != under_core) {
             set_tag(world, part->entity, ids.in_core, under_core);
@@ -1036,6 +1043,8 @@ void DataModel::wireframes(std::vector<InstanceId>& out) const {
         }
     }
 }
+
+Assemblies& DataModel::assemblies() const { return state_->assemblies; }
 
 void DataModel::constraints(std::vector<InstanceId>& out) const {
     out.clear();
@@ -1585,6 +1594,9 @@ void DataModel::set_parent(InstanceId id, InstanceId new_parent) {
     }
     const int old_index = part->parent == kNoParent ? -1 : sibling_index_of(id);
     const InstanceId old = part->parent;
+    Assemblies& assemblies = state_->assemblies;
+    const std::uint64_t assembly_revision = assemblies.revision();
+    const bool assembly_relevant = assemblies.relevant(*this, id);
     unlink_parent(id, *part);
     if (new_parent != kNoParent) {
         link_child(new_parent, id);
@@ -1616,6 +1628,9 @@ void DataModel::set_parent(InstanceId id, InstanceId new_parent) {
                 analysis->invalidate(id);
             }
         }
+    }
+    if (assembly_relevant || assemblies.relevant(*this, id) || assemblies.revision() != assembly_revision) {
+        assemblies.tree_changed(*this, id);
     }
 }
 
@@ -2055,6 +2070,11 @@ std::string DataModel::guid(InstanceId id) const {
     return object != nullptr ? object->guid_ : std::string();
 }
 
+std::string_view DataModel::guid_view(InstanceId id) const {
+    const DataModel* object = id == 0 ? state_->root : instance(id);
+    return object != nullptr ? std::string_view(object->guid_) : std::string_view();
+}
+
 bool DataModel::has_guid(InstanceId id, std::string_view guid) const {
     const DataModel* object = id == 0 ? state_->root : instance(id);
     return object != nullptr && object->guid_ == guid;
@@ -2073,6 +2093,7 @@ void DataModel::set_guid(InstanceId id, std::string guid) {
     }
     object->guid_ = std::move(guid);
     note_unrecorded_edit(id);
+    state_->assemblies.guids_may_have_returned();
 }
 
 std::optional<InstanceId> DataModel::find_guid(std::string_view guid) const {

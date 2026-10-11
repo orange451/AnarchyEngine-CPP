@@ -1,5 +1,6 @@
 #include "PhysicsWorld.hpp"
 
+#include "Assemblies.hpp"
 #include "AssetInstances.hpp"
 #include "Brush.hpp"
 #include "ConvexDecomposition.hpp"
@@ -622,6 +623,7 @@ struct PhysicsWorld::Impl {
     std::vector<InstanceId> eligible;
     std::vector<std::pair<InstanceId, InstanceId>> wanted;
     std::unordered_map<InstanceId, InstanceId> claims;
+    std::vector<InstanceId> claimants;
     std::vector<InstanceId> gone;
     std::vector<b3Vec3> points;
     std::vector<Vec3> mesh_points;
@@ -634,6 +636,7 @@ struct PhysicsWorld::Impl {
         eligible.reserve(1024);
         wanted.reserve(1024);
         claims.reserve(1024);
+        claimants.reserve(1024);
         gone.reserve(1024);
     }
 
@@ -1281,21 +1284,19 @@ struct PhysicsWorld::Impl {
     }
 
     // Each claimed GameObject goes to the first of its claimants in a
-    // depth-first walk of Workspace. Only runs when two share one.
+    // depth-first walk of the tree (claim_winner, which Assemblies shares).
+    // Only runs when two share one.
     void first_in_tree_order(DataModel& game) {
-        claims.clear();
-        std::vector<InstanceId> stack = game.get_children(game.scene_service("Workspace"));
-        std::reverse(stack.begin(), stack.end());
-        while (!stack.empty()) {
-            const InstanceId id = stack.back();
-            stack.pop_back();
-            if (const auto* object = dynamic_cast<const PhysicsBase*>(game.instance(id))) {
-                if (const InstanceId target = object->driven_game_object(); target != 0) {
-                    claims.emplace(target, id);
+        for (auto& [target, winner] : claims) {
+            claimants.clear();
+            for (const auto& [id, claimed] : wanted) {
+                if (claimed == target) {
+                    claimants.push_back(id);
                 }
             }
-            std::vector<InstanceId> children = game.get_children(id);
-            stack.insert(stack.end(), children.rbegin(), children.rend());
+            if (claimants.size() > 1) {
+                winner = claim_winner(game, claimants.data(), claimants.size());
+            }
         }
     }
 

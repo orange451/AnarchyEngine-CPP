@@ -1,5 +1,6 @@
 #include "Attachment.hpp"
 
+#include "Assemblies.hpp"
 #include "Containment.hpp"
 #include "Contract.hpp"
 #include "Enum.hpp"
@@ -80,6 +81,7 @@ std::optional<std::string> Attachment::set_offset(const Matrix4& offset) {
     offset_ = offset;
     note_property_change("Offset", matrix_slot(previous), matrix_slot(offset));
     emit_property("Transform");
+    assemblies().attachment_changed(*this, id());
     return std::nullopt;
 }
 
@@ -110,6 +112,7 @@ std::optional<std::string> Attachment::set_offset_space(int space) {
     offset_space_ = next;
     note_property_change("OffsetSpace", space_slot(previous), space_slot(next));
     emit_property("Transform");
+    assemblies().attachment_changed(*this, id());
     return std::nullopt;
 }
 

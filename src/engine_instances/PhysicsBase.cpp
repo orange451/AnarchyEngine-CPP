@@ -1,5 +1,6 @@
 #include "PhysicsBase.hpp"
 
+#include "Assemblies.hpp"
 #include "Contract.hpp"
 #include "LuaApi.hpp"
 #include "PropertyBag.hpp"
@@ -67,8 +68,9 @@ bool same_vec(Vec3 a, Vec3 b) { return a.x == b.x && a.y == b.y && a.z == b.z; }
 LuaSlot PhysicsBase::game_object() const { return instance_reference_slot(game_object_ref_, "GameObject"); }
 
 InstanceId PhysicsBase::game_object_id() const {
-    const LuaSlot slot = game_object();
-    return slot.kind == LuaSlot::Kind::Instance ? slot.id : 0;
+    // Resolved directly, not through a LuaSlot, so it copies no GUID.
+    const InstanceId target = game_object_ref_.resolve(*this);
+    return target != 0 && DataModel::game_object(target) != nullptr ? target : 0;
 }
 
 InstanceId PhysicsBase::driven_game_object() const {
@@ -93,6 +95,7 @@ std::optional<std::string> PhysicsBase::set_transform(const Matrix4& transform) 
     transform_ = transform;
     dirty_ |= kDirtyPose;
     note_property_change("Transform", matrix_slot(previous), matrix_slot(transform));
+    assemblies().transform_written(*this, id());
     return std::nullopt;
 }
 
@@ -123,6 +126,9 @@ void PhysicsBase::set_anchored(bool anchored) {
     anchored_ = anchored;
     dirty_ |= kDirtyType;
     note_property_change("Anchored", bool_slot(!anchored), bool_slot(anchored));
+    if (assemblies().relevant(*this, id())) {
+        assemblies().bump();
+    }
 }
 
 std::optional<std::string> PhysicsBase::set_number(const char* property, double& slot, double value,
@@ -142,7 +148,13 @@ std::optional<std::string> PhysicsBase::set_number(const char* property, double&
 }
 
 std::optional<std::string> PhysicsBase::set_mass(double mass) {
-    return set_number("Mass", mass_, std::isfinite(mass) ? std::max(mass, kMinMass) : mass, kDirtyMass);
+    std::optional<std::string> refused =
+        set_number("Mass", mass_, std::isfinite(mass) ? std::max(mass, kMinMass) : mass, kDirtyMass);
+    // Mass ranks roots.
+    if (!refused && assemblies().relevant(*this, id())) {
+        assemblies().bump();
+    }
+    return refused;
 }
 
 std::optional<std::string> PhysicsBase::set_linear_damping(double damping) {
@@ -153,7 +165,12 @@ std::optional<std::string> PhysicsBase::set_linear_damping(double damping) {
 std::optional<std::string> PhysicsBase::set_game_object(const LuaSlot& value) {
     require_gameplay_thread(*this);
     // The physics world sees a new target by comparing it with the one its body drives.
-    return set_instance_reference("GameObject", "GameObject", game_object_ref_, value);
+    const bool was_relevant = assemblies().relevant(*this, id());
+    std::optional<std::string> refused = set_instance_reference("GameObject", "GameObject", game_object_ref_, value);
+    if (!refused && (was_relevant || assemblies().relevant(*this, id()))) {
+        assemblies().tree_changed(*this, id());
+    }
+    return refused;
 }
 
 void PhysicsBase::store_simulated(const Matrix4& transform, Vec3 velocity) {

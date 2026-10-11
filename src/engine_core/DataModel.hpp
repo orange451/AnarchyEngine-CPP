@@ -83,6 +83,7 @@ public:
 };
 
 class ChangeHistoryService;
+class Assemblies;
 class Engine;
 class GameObject;
 class SpatialObject;
@@ -309,6 +310,8 @@ public:
     // Stable authored identity, written to disk and used by references.
     // create assigns one. Empty when id is dead. Id 0 is the root.
     std::string guid(InstanceId id) const;
+    // guid(id) without the copy: valid until that instance's GUID changes or it dies.
+    std::string_view guid_view(InstanceId id) const;
     // id is live, or the root, and its GUID is guid. Unlike guid(), copies nothing.
     bool has_guid(InstanceId id, std::string_view guid) const;
     // Project load only. The loader checks that GUIDs are unique; this does
@@ -479,6 +482,9 @@ public:
     // The Constraints in Workspace (constraint()), in no set order, into out,
     // which is cleared first.
     void constraints(std::vector<InstanceId>& out) const;
+    // Which PVInstances move together (Assemblies): one cache per world,
+    // refreshed by whoever reads it. Under the lock.
+    Assemblies& assemblies() const;
     // A GameObject's Transform as the physics world moved it: stored and
     // drawn, as integrate_simulated moves one, with no Changed, no history,
     // and no check. SimulationThread. A dead id or a non-GameObject does nothing.

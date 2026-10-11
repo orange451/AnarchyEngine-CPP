@@ -1,6 +1,7 @@
 #include "GameObject.hpp"
 
 #include "Animator.hpp"
+#include "Assemblies.hpp"
 #include "Bone.hpp"
 #include "Containment.hpp"
 #include "LuaApi.hpp"
@@ -229,6 +230,18 @@ bool write_transparency(DataModel&, DataModel& object, LuaSlot& in) {
     return true;
 }
 
+// The root of the assembly the instance is in (Assemblies), or nil.
+bool read_assembly_root(DataModel&, DataModel& object, LuaSlot& out) {
+    Assemblies& assemblies = object.assemblies();
+    assemblies.refresh(object);
+    out = LuaSlot{};
+    if (const InstanceId root = assemblies.root_of(object, object.id()); root != 0) {
+        out.kind = LuaSlot::Kind::Instance;
+        out.id = root;
+    }
+    return true;
+}
+
 bool read_scale(DataModel&, DataModel& object, LuaSlot& out) {
     auto* body = dynamic_cast<GameObject*>(&object);
     if (body == nullptr) {
@@ -260,9 +273,13 @@ ANARCHY_LUA_REGISTER(register_game_object_lua) {
     static const std::string transparency = write_json(JsonValue::number(GameObject::kDefaultTransparency));
     static const std::string scale = write_json(JsonValue::number(GameObject::kDefaultScale));
     // PVInstance has no source file of its own, which would not stay linked.
-    // It is abstract, and adds no members: IsA("PVInstance") is true of every
-    // class with a Transform.
-    register_lua_class("PVInstance", "Instance", nullptr, 0);
+    // It is abstract: IsA("PVInstance") is true of every class with a
+    // Transform. Its one member is AssemblyRoot, read-only.
+    const LuaField pv_fields[] = {
+        lua_group("Behavior"),
+        lua_property("AssemblyRoot", "PVInstance?", false, read_assembly_root, nullptr),
+    };
+    register_lua_class("PVInstance", "Instance", pv_fields, static_cast<int>(sizeof(pv_fields) / sizeof(pv_fields[0])));
     const LuaField fields[] = {
         lua_group("Behavior"),
         lua_saved_property("Prefab", "Prefab?", read_prefab, write_prefab, "null"),

@@ -1,5 +1,6 @@
 #include "Constraint.hpp"
 
+#include "Assemblies.hpp"
 #include "Containment.hpp"
 #include "Contract.hpp"
 #include "LuaApi.hpp"
@@ -44,12 +45,20 @@ InstanceId Constraint::pv_instance2_id() const { return end_id(ref2_); }
 
 std::optional<std::string> Constraint::set_pv_instance1(const LuaSlot& value) {
     require_thread(*this);
-    return set_instance_reference("PVInstance1", "PVInstance", ref1_, value);
+    std::optional<std::string> refused = set_instance_reference("PVInstance1", "PVInstance", ref1_, value);
+    if (!refused) {
+        assemblies().constraint_changed(*this, id());
+    }
+    return refused;
 }
 
 std::optional<std::string> Constraint::set_pv_instance2(const LuaSlot& value) {
     require_thread(*this);
-    return set_instance_reference("PVInstance2", "PVInstance", ref2_, value);
+    std::optional<std::string> refused = set_instance_reference("PVInstance2", "PVInstance", ref2_, value);
+    if (!refused) {
+        assemblies().constraint_changed(*this, id());
+    }
+    return refused;
 }
 
 std::optional<std::string> Constraint::set_enabled(bool enabled) {
@@ -59,6 +68,7 @@ std::optional<std::string> Constraint::set_enabled(bool enabled) {
     }
     enabled_ = enabled;
     note_property_change("Enabled", bool_slot(!enabled), bool_slot(enabled));
+    assemblies().constraint_changed(*this, id());
     return std::nullopt;
 }
 
@@ -122,12 +132,23 @@ bool write_enabled(DataModel&, DataModel& object, LuaSlot& in) {
     return constraint != nullptr && refuse(in, constraint->set_enabled(in.flag));
 }
 
+bool read_active(DataModel&, DataModel& object, LuaSlot& out) {
+    if (constraint_of(object) == nullptr) {
+        return false;
+    }
+    Assemblies& assemblies = object.assemblies();
+    assemblies.refresh(object);
+    out = bool_slot(assemblies.active(object.id()));
+    return true;
+}
+
 ANARCHY_LUA_REGISTER(register_constraint_lua) {
     const LuaField fields[] = {
         lua_group("Constraint"),
         lua_saved_property("PVInstance1", "PVInstance?", read_pv_instance1, write_pv_instance1, "null"),
         lua_saved_property("PVInstance2", "PVInstance?", read_pv_instance2, write_pv_instance2, "null"),
         lua_saved_property("Enabled", "boolean", read_enabled, write_enabled, "true"),
+        lua_property("Active", "boolean", false, read_active, nullptr),
     };
     // Abstract: no factory registers it.
     register_lua_class("Constraint", "Instance", fields, static_cast<int>(std::size(fields)));

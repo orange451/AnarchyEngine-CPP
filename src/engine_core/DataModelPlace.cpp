@@ -273,6 +273,10 @@ void DataModel::restore_place_unlocked() {
     if (!state_->place_captured) {
         contract_fail("stop_simulation without a place snapshot");
     }
+    // The restore runs the checked setters while simulation_running is still
+    // true: no assembly hook may move members half way through it.
+    AssemblySuspend suspend(*this);
+    state_->assemblies.guids_may_have_returned();
     const PlaceSnapshot& place = state_->place;
     std::unordered_set<InstanceId> ids;
     ids.reserve(place.instances.size());

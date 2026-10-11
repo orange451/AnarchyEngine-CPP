@@ -1,5 +1,7 @@
 #include "ChangeHistoryService.hpp"
 
+#include "Assemblies.hpp"
+
 #include "DataModel.hpp"
 #include "PropertyReflection.hpp"
 
@@ -236,6 +238,13 @@ void ChangeHistoryService::apply_waypoint(Waypoint& waypoint, bool inverse) {
         explicit Guard(int& depth) : depth(depth) { ++depth; }
         ~Guard() { --depth; }
     } guard(applying_);
+    // Undo and redo write back a place that was consistent when recorded, so
+    // the editor's assembly hooks stay out of it. In play they run, so an
+    // undone move still carries its assembly.
+    std::optional<AssemblySuspend> suspend;
+    if (!game_->simulation_running()) {
+        suspend.emplace(*game_);
+    }
     if (inverse) {
         for (std::size_t index = waypoint.mutations.size(); index > 0; --index) {
             const Mutation& mutation = waypoint.mutations[index - 1];

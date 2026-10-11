@@ -254,6 +254,7 @@ IdeExplorer::IdeExplorer(engine_core::DataModel& root, std::string name, Explore
     insert_button_ = jadefx::make<InsertButton>();
     insert_button_->setOnMouseClicked([this](const jadefx::MouseEvent&) { open_insert(); });
     tree_->setHoverAccessory(insert_button_);
+    tree_->setHoverAccessoryAfterLabel(true);
     filter_field_ = jadefx::make<FilterField>([this] { leave_filter(); });
     auto header = jadefx::make<jadefx::VBox>();
     header->getClassList().add("explorer-header");

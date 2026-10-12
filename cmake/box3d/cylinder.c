@@ -512,6 +512,25 @@ static void b3GetCylinderFeature( b3CylinderFeature* feature, const b3CylinderFr
 	feature->ids[1] = 1;
 	feature->count = 2;
 	feature->cap = false;
+
+	// Box3D solves a manifold's points one after another, so the first is
+	// favoured a little. On a spinning cylinder that lopsided push is a steady
+	// torque about its rolling direction, and the spin turns it into yaw: it
+	// steers off its line (Box3D's own capsule does the same). Which end comes
+	// first swaps every 1/128 of a turn, so the bias cancels as it rolls. The
+	// ids stay with their ends, so warm starting is not disturbed.
+	b3Vec3 e1 = b3Normalize( b3Perp( frame->axis ) );
+	b3Vec3 e2 = b3Cross( frame->axis, e1 );
+	float spin = atan2f( b3Dot( radial, e2 ), b3Dot( radial, e1 ) );
+	int bin = (int)floorf( spin * ( 64.0f / B3_PI ) );
+	if ( ( bin & 1 ) != 0 )
+	{
+		b3Vec3 first = feature->points[0];
+		feature->points[0] = feature->points[1];
+		feature->points[1] = first;
+		feature->ids[0] = 1;
+		feature->ids[1] = 0;
+	}
 }
 
 // The cylinder's feature facing towardOther (the cylinder's own frame), as clip

@@ -1107,6 +1107,7 @@ add_executable(sandbox
     sandbox/archivable_tests.cpp
     sandbox/cylinder_shape_tests.cpp
     sandbox/cylinder_world_tests.cpp
+    sandbox/cylinder_car_tests.cpp
     sandbox/dragger_tests.cpp
     sandbox/move_tool_tests.cpp
     sandbox/terrain_tool_tests.cpp

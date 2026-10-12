@@ -195,6 +195,12 @@ surface it is:
 - **Cap:** the cap (1 or 2) and the rim sample (0 to 15), fixed in the
   cylinder's frame. A resting cylinder's points keep their IDs.
 - **The other shape's half:** its face or edge index, as in the hull pairs.
+- **Order:** Box3D solves a manifold's points one after another, favouring the
+  first a little. On a spinning cylinder that is a steady torque about its
+  rolling direction, which its spin turns into yaw: a free wheel crept 3.7 cm
+  in 20 units, and the H1Z1 car turned 29°. Box3D's own capsule does the same.
+  So the side line's two ends swap order every 1/128 of a turn, and the bias
+  cancels as it rolls. The ids stay with their ends.
 
 ### 3.5 Against a triangle
 

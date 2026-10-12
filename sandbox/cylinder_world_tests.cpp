@@ -7,6 +7,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstring>
 #include <vector>
@@ -242,11 +243,17 @@ struct Roll {
 
 // Rolled from x = -10 toward x = 10 at 4 units a second, measured from half a
 // second after the push: the one-time settle from resting into rolling is not
-// rolling.
-Roll roll_across(bool capsule) {
+// rolling. flipped: lying the other way round, its ends swapped, so a bias in
+// the order its two contact points are solved would show the other way.
+Roll roll_across(bool flipped) {
     World world;
     world.floor();
-    const b3BodyId wheel = rolling_wheel(world, -10.f, 4.f, 0.5f, 0.25f, capsule);
+    const b3BodyId wheel = world.cylinder(b3_dynamicBody, v3(-10.f, 0.5f, 0.f),
+                                          b3MakeQuatFromAxisAngle(v3(1.f, 0.f, 0.f), (flipped ? -0.5f : 0.5f) * kPi), 0.5f,
+                                          0.25f);
+    world.seconds(0.25f);
+    b3Body_SetLinearVelocity(wheel, v3(4.f, 0.f, 0.f));
+    b3Body_SetAngularVelocity(wheel, v3(0.f, 0.f, -8.f));
     Roll out{0.f, 0.f, 0.f, 0.f};
     float low = 1e9f;
     float high = -1e9f;
@@ -267,18 +274,17 @@ Roll roll_across(bool capsule) {
 
 }  // namespace
 
-TEST_CASE("CY17 a cylinder rolls 20 units with its centre level and upright, as straight as Box3D's capsule",
+TEST_CASE("CY17 a cylinder rolls 20 units with its centre level, straight, and upright, either way round",
           "[cylinder]") {
-    const Roll cylinder = roll_across(false);
-    const Roll capsule = roll_across(true);
-    INFO("cylinder rise " << cylinder.rise << " drift " << cylinder.drift << " tilt " << cylinder.tilt);
-    INFO("capsule drift " << capsule.drift);
-    REQUIRE(cylinder.reached >= 10.f);
-    REQUIRE(cylinder.rise < 1e-4f);
-    REQUIRE(cylinder.tilt < 1.75e-4f);  // sin 0.01 degrees
-    // A two-point rolling contact creeps along its axis in Box3D's central
-    // friction; Box3D's own capsule does. No more than twice that.
-    REQUIRE(cylinder.drift <= 2.f * capsule.drift);
+    for (const bool flipped : {false, true}) {
+        const Roll roll = roll_across(flipped);
+        INFO((flipped ? "flipped" : "upright") << " rise " << roll.rise << " drift " << roll.drift << " tilt "
+                                               << roll.tilt);
+        REQUIRE(roll.reached >= 10.f);
+        REQUIRE(roll.rise < 1e-4f);
+        REQUIRE(roll.drift < 1e-3f);
+        REQUIRE(roll.tilt < 1.75e-4f);  // sin 0.01 degrees
+    }
 }
 
 TEST_CASE("CY18 a cylinder on its side rolls down a 5 degree slope, and lies still on the flat", "[cylinder]") {
@@ -498,4 +504,64 @@ TEST_CASE("CY28 drums stacked three high and a pyramid of three logs hold for 10
     REQUIRE(topBefore - position_of(top).y < 0.01f);
     REQUIRE(std::fabs(position_of(left).x - 4.5f) < 0.05f);
     REQUIRE(std::fabs(position_of(right).x - 5.5f) < 0.05f);
+}
+
+namespace {
+
+// 200 cylinders, radius 0.3 and 0.6 tall, dropped into a walled bin; the
+// fastest of three runs' time for 600 steps. layered: each as the engine's
+// old four turned 16-sided hulls instead of one true cylinder.
+double bin_seconds(bool layered) {
+    double best = 1e9;
+    for (int run = 0; run < 3; ++run) {
+        World world;
+        world.floor();
+        world.box(v3(-4.5f, 2.f, 0.f), v3(0.5f, 2.f, 5.f));
+        world.box(v3(4.5f, 2.f, 0.f), v3(0.5f, 2.f, 5.f));
+        world.box(v3(0.f, 2.f, -4.5f), v3(5.f, 2.f, 0.5f));
+        world.box(v3(0.f, 2.f, 4.5f), v3(5.f, 2.f, 0.5f));
+        b3HullData* layers[4] = {};
+        if (layered) {
+            for (int layer = 0; layer < 4; ++layer) {
+                b3HullData* upright = b3CreateCylinder(0.6f, 0.3f, -0.3f, 16);
+                const b3Transform turn{v3(0.f, 0.f, 0.f),
+                                       b3MakeQuatFromAxisAngle(v3(0.f, 1.f, 0.f), 2.f * kPi / 16.f * layer / 4.f)};
+                layers[layer] = b3CloneAndTransformHull(upright, turn, v3(1.f, 1.f, 1.f));
+                b3DestroyHull(upright);
+            }
+        }
+        for (int i = 0; i < 200; ++i) {
+            const b3Vec3 at = v3(-3.f + 0.75f * static_cast<float>(i % 8), 1.f + 0.8f * static_cast<float>(i / 64),
+                                 -3.f + 0.75f * static_cast<float>((i / 8) % 8));
+            const b3Quat q = b3MakeQuatFromAxisAngle(b3Normalize(v3(1.f, 0.3f * (i % 3), 0.5f)), 0.4f * static_cast<float>(i));
+            if (layered) {
+                const b3BodyId b = world.body(b3_dynamicBody, at, q);
+                b3ShapeDef def = b3DefaultShapeDef();
+                for (b3HullData* hull : layers) {
+                    b3CreateHullShape(b, &def, hull);
+                }
+            } else {
+                world.cylinder(b3_dynamicBody, at, q, 0.3f, 0.3f);
+            }
+        }
+        const auto start = std::chrono::steady_clock::now();
+        world.step(600);
+        const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+        best = std::min(best, seconds);
+        for (b3HullData* hull : layers) {
+            if (hull != nullptr) {
+                b3DestroyHull(hull);
+            }
+        }
+    }
+    return best;
+}
+
+}  // namespace
+
+TEST_CASE("CY29 200 tumbling cylinders cost no more than the layered hulls they replace", "[cylinder][.speed]") {
+    const double layered = bin_seconds(true);
+    const double cylinders = bin_seconds(false);
+    INFO("layered " << layered << " s, cylinders " << cylinders << " s");
+    CHECK(cylinders <= layered);
 }

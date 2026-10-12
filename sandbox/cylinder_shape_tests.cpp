@@ -370,3 +370,54 @@ TEST_CASE("CY27 a drum on a drum, cap on cap: four points, normal up", "[cylinde
     }
     b3DestroyHull(standIn);
 }
+
+TEST_CASE("CY32 cap on cap, off centre or of different sizes, the points surround the support either way round",
+          "[cylinder]") {
+    b3LocalManifoldPoint points[4];
+    b3LocalManifold m{};
+    m.points = points;
+    b3SATCache cache{};
+    auto collide = [&](const b3Cylinder& a, const b3Cylinder& b, b3Vec3 offset) {
+        b3HullData* hullA = b3MakeCylinderHull(&a);
+        b3HullData* hullB = b3MakeCylinderHull(&b);
+        b3CollideCylinders(&m, 4, &a, hullA, &b, hullB, b3Transform{offset, b3Quat_identity}, &cache);
+        b3DestroyHull(hullA);
+        b3DestroyHull(hullB);
+    };
+    auto span_x = [&](float& lo, float& hi) {
+        lo = 1e9f;
+        hi = -1e9f;
+        for (int i = 0; i < m.pointCount; ++i) {
+            lo = std::min(lo, m.points[i].point.x);
+            hi = std::max(hi, m.points[i].point.x);
+        }
+    };
+    float lo = 0.f;
+    float hi = 0.f;
+    // A drum 0.1 off centre on another: its points reach both sides of its centre.
+    const b3Cylinder drum = upright(0.5f, 1.f);
+    collide(drum, drum, v3(0.1f, 1.995f, 0.f));
+    REQUIRE(m.pointCount >= 3);
+    span_x(lo, hi);
+    REQUIRE(lo < 0.f);
+    REQUIRE(hi > 0.2f);
+    // A wide disc on a narrow post, the disc as B and then as A: the post's cap
+    // carries it, points all round it.
+    const b3Cylinder post = upright(0.3f, 1.f);
+    const b3Cylinder disc = upright(1.f, 0.1f);
+    collide(post, disc, v3(0.f, 1.095f, 0.f));
+    REQUIRE(m.pointCount >= 3);
+    REQUIRE(near(m.normal.y, 1.f, 1e-5f));
+    span_x(lo, hi);
+    REQUIRE(lo < -0.2f);
+    REQUIRE(hi > 0.2f);
+    collide(disc, post, v3(0.f, -1.095f, 0.f));
+    REQUIRE(m.pointCount >= 3);
+    REQUIRE(near(m.normal.y, -1.f, 1e-5f));
+    span_x(lo, hi);
+    REQUIRE(lo < -0.2f);
+    REQUIRE(hi > 0.2f);
+    for (int i = 0; i < m.pointCount; ++i) {
+        REQUIRE(near(m.points[i].separation, -0.005f, 1e-5f));
+    }
+}

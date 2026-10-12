@@ -946,6 +946,28 @@ void b3CollideTriangleAndCylinder( b3LocalManifold* manifold, int capacity, cons
 	manifold->feature = b3TriangleFeatureAt( v1, v2, v3, output.pointA );
 }
 
+// The planes through a cylinder's cap rim, as a polygon of
+// B3_CYLINDER_CAP_POINTS sides, each facing out from the cap's middle.
+static int b3GetCylinderCapSidePlanes( b3Plane* planes, const b3CylinderFrame* frame, b3Vec3 capCenter, b3Vec3 capNormal )
+{
+	b3Vec3 e1 = b3Normalize( b3Perp( frame->axis ) );
+	b3Vec3 e2 = b3Cross( frame->axis, e1 );
+	for ( int i = 0; i < B3_CYLINDER_CAP_POINTS; ++i )
+	{
+		float a0 = 2.0f * B3_PI * (float)i / (float)B3_CYLINDER_CAP_POINTS;
+		float a1 = 2.0f * B3_PI * (float)( i + 1 ) / (float)B3_CYLINDER_CAP_POINTS;
+		b3Vec3 p0 = b3MulAdd( capCenter, frame->radius, b3Add( b3MulSV( cosf( a0 ), e1 ), b3MulSV( sinf( a0 ), e2 ) ) );
+		b3Vec3 p1 = b3MulAdd( capCenter, frame->radius, b3Add( b3MulSV( cosf( a1 ), e1 ), b3MulSV( sinf( a1 ), e2 ) ) );
+		b3Vec3 out = b3Normalize( b3Cross( b3Sub( p1, p0 ), capNormal ) );
+		if ( b3Dot( out, b3Sub( p0, capCenter ) ) < 0.0f )
+		{
+			out = b3Neg( out );
+		}
+		planes[i] = b3MakePlaneFromNormalAndPoint( out, p0 );
+	}
+	return B3_CYLINDER_CAP_POINTS;
+}
+
 void b3CollideCylinders( b3LocalManifold* manifold, int capacity, const b3Cylinder* cylinderA, const b3HullData* standInA,
 						 const b3Cylinder* cylinderB, const b3HullData* standInB, b3Transform transformBtoA,
 						 b3SATCache* cache )
@@ -1047,14 +1069,16 @@ void b3CollideCylinders( b3LocalManifold* manifold, int capacity, const b3Cylind
 		}
 		else
 		{
-			for ( int i = 0; i < count; ++i )
+			// Cap on cap: A's cap is the reference face, a polygon of its rim,
+			// and B's cap is clipped to it, as a hull face clips. The overlap
+			// is kept whichever cap is the larger, and however far off centre.
+			b3Plane sides[B3_CYLINDER_CAP_POINTS];
+			int sideCount = b3GetCylinderCapSidePlanes( sides, &frameA, capCenter, capNormal );
+			b3Plane refPlane = b3MakePlaneFromNormalAndPoint( capNormal, capCenter );
+			b3BuildCylinderFaceContact( manifold, capacity, feature, count, refPlane, sides, sideCount, speculative );
+			if ( manifold->pointCount > 0 )
 			{
-				b3Vec3 offset = b3Sub( feature[i].position, capCenter );
-				b3Vec3 across = b3MulSub( offset, b3Dot( offset, capNormal ), capNormal );
-				if ( b3Dot( across, across ) <= frameA.radius * frameA.radius )
-				{
-					kept[keptCount++] = feature[i];
-				}
+				return;
 			}
 		}
 

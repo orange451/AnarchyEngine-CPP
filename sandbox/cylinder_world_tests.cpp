@@ -565,3 +565,38 @@ TEST_CASE("CY29 200 tumbling cylinders cost no more than the layered hulls they 
     INFO("layered " << layered << " s, cylinders " << cylinders << " s");
     CHECK(cylinders <= layered);
 }
+
+TEST_CASE("CY31 a cylinder falling through a sensor box sets it off", "[cylinder]") {
+    World world;
+    const b3BodyId zone = world.body(b3_staticBody, v3(0.f, 0.f, 0.f));
+    const b3BoxHull hull = b3MakeBoxHull(1.f, 1.f, 1.f);
+    b3ShapeDef sensor = b3DefaultShapeDef();
+    sensor.isSensor = true;
+    sensor.enableSensorEvents = true;
+    b3CreateHullShape(zone, &sensor, &hull.base);
+    const b3BodyId barrel = world.body(b3_dynamicBody, v3(0.f, 3.f, 0.f));
+    const b3Cylinder c{v3(0.f, -0.3f, 0.f), v3(0.f, 0.3f, 0.f), 0.3f};
+    b3ShapeDef def = b3DefaultShapeDef();
+    def.enableSensorEvents = true;
+    b3CreateCylinderShape(barrel, &def, &c);
+    bool began = false;
+    for (int i = 0; i < 480 && !began; ++i) {
+        world.step();
+        began = b3World_GetSensorEvents(world.id).beginCount > 0;
+    }
+    REQUIRE(began);
+}
+
+TEST_CASE("CY33 a drum set off centre on another, and a wide disc on a narrow post, stay standing", "[cylinder]") {
+    World world;
+    world.floor();
+    world.cylinder(b3_staticBody, v3(0.f, 0.5f, 0.f), b3Quat_identity, 0.5f, 0.5f);
+    const b3BodyId drum = world.cylinder(b3_dynamicBody, v3(0.15f, 1.5f, 0.f), b3Quat_identity, 0.5f, 0.5f);
+    world.cylinder(b3_staticBody, v3(5.f, 1.f, 0.f), b3Quat_identity, 0.3f, 1.f);
+    const b3BodyId disc = world.cylinder(b3_dynamicBody, v3(5.f, 2.1f, 0.f), b3Quat_identity, 1.f, 0.1f);
+    world.seconds(5.f);
+    REQUIRE(std::fabs(axis_of(drum).y) > 0.999f);
+    REQUIRE(near(position_of(drum).y, 1.5f, 0.01f));
+    REQUIRE(std::fabs(axis_of(disc).y) > 0.999f);
+    REQUIRE(near(position_of(disc).y, 2.1f, 0.01f));
+}

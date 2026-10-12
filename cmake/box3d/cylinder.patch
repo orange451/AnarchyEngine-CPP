@@ -884,7 +884,7 @@ index 951e2c3..88c4d5a 100644
  {
  	B3_VALIDATE( b3IsValidHull( hull ) );
 diff --git a/src/shape.h b/src/shape.h
-index 91e8eef..2abf23a 100644
+index 91e8eef..69c5051 100644
 --- a/src/shape.h
 +++ b/src/shape.h
 @@ -61,6 +61,14 @@ typedef struct b3Shape
@@ -902,6 +902,13 @@ index 91e8eef..2abf23a 100644
  	};
  
  } b3Shape;
+@@ -155,5 +163,5 @@ static inline bool b3ShouldQueryCollide( const b3Filter* shapeFilter, const b3Qu
+ 
+ static inline bool b3IsConvex( b3ShapeType type )
+ {
+-	return type == b3_sphereShape || type == b3_capsuleShape || type == b3_hullShape;
++	return type == b3_sphereShape || type == b3_capsuleShape || type == b3_hullShape || type == b3_cylinderShape;
+ }
 diff --git a/src/world_snapshot.c b/src/world_snapshot.c
 index c3f0271..99a9836 100644
 --- a/src/world_snapshot.c

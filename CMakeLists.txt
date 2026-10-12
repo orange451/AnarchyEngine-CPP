@@ -479,10 +479,12 @@ if(NOT box3d_POPULATED)
 endif()
 set(BOX3D_SOURCE_DIR "${box3d_SOURCE_DIR}")
 # The cylinder shape (docs/superpowers/specs/2026-10-12-cylinder-shape-design.md)
-# patches Box3D's own files; cmake/box3d/cylinder.c is ours. The patch goes in
-# once: when it already reverses cleanly it is in place and left alone. One that
-# does not apply means the pin moved, and configuring stops rather than build
-# Box3D without it.
+# patches Box3D's own files; cmake/box3d/cylinder.c is ours. When the patch
+# reverses cleanly it is already in place and left alone. Otherwise Box3D's
+# clone goes back to its pinned files (an earlier patch, or none) and the patch
+# goes in fresh; the patch adds no files, so that is all it ever changed. A
+# patch that does not apply to the clean clone means the pin moved, and
+# configuring stops rather than build Box3D without it.
 set(BOX3D_PATCH "${CMAKE_CURRENT_SOURCE_DIR}/cmake/box3d/cylinder.patch")
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${BOX3D_PATCH}")
 find_package(Git REQUIRED)
@@ -493,13 +495,22 @@ execute_process(
     OUTPUT_QUIET ERROR_QUIET)
 if(NOT box3d_patch_in_place EQUAL 0)
     execute_process(
+        COMMAND "${GIT_EXECUTABLE}" checkout -- .
+        WORKING_DIRECTORY "${BOX3D_SOURCE_DIR}"
+        RESULT_VARIABLE box3d_restore_failed
+        ERROR_VARIABLE box3d_restore_error)
+    if(NOT box3d_restore_failed EQUAL 0)
+        message(FATAL_ERROR "Box3D in ${BOX3D_SOURCE_DIR} could not be restored to its pinned files for "
+                            "cmake/box3d/cylinder.patch (is it a git clone?): ${box3d_restore_error}")
+    endif()
+    execute_process(
         COMMAND "${GIT_EXECUTABLE}" apply "${BOX3D_PATCH}"
         WORKING_DIRECTORY "${BOX3D_SOURCE_DIR}"
         RESULT_VARIABLE box3d_patch_failed
         ERROR_VARIABLE box3d_patch_error)
     if(NOT box3d_patch_failed EQUAL 0)
-        message(FATAL_ERROR "cmake/box3d/cylinder.patch does not apply to Box3D in ${BOX3D_SOURCE_DIR}: "
-                            "${box3d_patch_error}")
+        message(FATAL_ERROR "cmake/box3d/cylinder.patch does not apply to Box3D's pinned files in "
+                            "${BOX3D_SOURCE_DIR} (did the pin move?): ${box3d_patch_error}")
     endif()
     message(STATUS "Box3D: applied cmake/box3d/cylinder.patch")
 endif()

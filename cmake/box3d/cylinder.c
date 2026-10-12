@@ -466,3 +466,344 @@ void b3CollideCylinderAndCapsule( b3LocalManifold* manifold, int capacity, const
 	b3Vec3 surfaceB = b3MulSub( output.pointB, capsuleRadius, normal );
 	b3SinglePoint( manifold, normal, surfaceA, surfaceB, separation );
 }
+
+#define B3_CYLINDER_CAP_POINTS 16
+
+// What the cylinder presents to another shape: its near cap, as points round
+// the cap's rim fixed in its frame (ids 2..17 for the first cap, 18..33 for the
+// second), or its side line, the tread from one rim to the other (ids 0 and 1).
+// An id names the feature, not where on the round surface it lies, so a
+// rolling cylinder's points keep their ids and Box3D's warm starting holds.
+typedef struct b3CylinderFeature
+{
+	b3Vec3 points[B3_CYLINDER_CAP_POINTS];
+	uint8_t ids[B3_CYLINDER_CAP_POINTS];
+	int count;
+	bool cap;
+} b3CylinderFeature;
+
+// direction: unit, in the cylinder's frame, from the cylinder toward the other shape.
+static void b3GetCylinderFeature( b3CylinderFeature* feature, const b3CylinderFrame* frame, b3Vec3 direction )
+{
+	float along = b3Dot( direction, frame->axis );
+	if ( b3AbsFloat( along ) >= b3_cylinderCapCos )
+	{
+		float sign = along > 0.0f ? 1.0f : -1.0f;
+		b3Vec3 capCenter = b3MulAdd( frame->center, sign * frame->halfHeight, frame->axis );
+		b3Vec3 e1 = b3Normalize( b3Perp( frame->axis ) );
+		b3Vec3 e2 = b3Cross( frame->axis, e1 );
+		int first = along > 0.0f ? 2 + B3_CYLINDER_CAP_POINTS : 2;
+		for ( int i = 0; i < B3_CYLINDER_CAP_POINTS; ++i )
+		{
+			float angle = 2.0f * B3_PI * (float)i / (float)B3_CYLINDER_CAP_POINTS;
+			b3Vec3 rim = b3Add( b3MulSV( cosf( angle ), e1 ), b3MulSV( sinf( angle ), e2 ) );
+			feature->points[i] = b3MulAdd( capCenter, frame->radius, rim );
+			feature->ids[i] = (uint8_t)( first + i );
+		}
+		feature->count = B3_CYLINDER_CAP_POINTS;
+		feature->cap = true;
+		return;
+	}
+
+	b3Vec3 radial = b3Normalize( b3MulSub( direction, along, frame->axis ) );
+	feature->points[0] = b3MulAdd( b3MulSub( frame->center, frame->halfHeight, frame->axis ), frame->radius, radial );
+	feature->points[1] = b3MulAdd( b3MulAdd( frame->center, frame->halfHeight, frame->axis ), frame->radius, radial );
+	feature->ids[0] = 0;
+	feature->ids[1] = 1;
+	feature->count = 2;
+	feature->cap = false;
+}
+
+// The cylinder's feature facing towardOther (the cylinder's own frame), as clip
+// vertices in the frame transform takes it to, paired with the other shape's
+// feature otherIndex.
+static int b3CylinderFeatureVertices( b3ClipVertex* out, const b3Cylinder* cylinder, b3Vec3 towardOther,
+									  b3Transform transform, b3FeatureOwner cylinderOwner, b3FeatureOwner otherOwner,
+									  int otherIndex )
+{
+	b3CylinderFrame frame = b3MakeCylinderFrame( cylinder );
+	b3CylinderFeature feature;
+	b3GetCylinderFeature( &feature, &frame, towardOther );
+	for ( int i = 0; i < feature.count; ++i )
+	{
+		out[i].position = b3TransformPoint( transform, feature.points[i] );
+		out[i].separation = 0.0f;
+		out[i].pair = b3MakeFeaturePair( cylinderOwner, feature.ids[i], otherOwner, otherIndex );
+	}
+	return feature.count;
+}
+
+// The part of the points on the inner side of plane (separation <= 0). Two
+// points are a segment, more a closed polygon. A point made where an edge
+// crosses the plane names clipId as its feature on the clipping shape.
+static int b3ClipToPlane( b3ClipVertex* out, const b3ClipVertex* in, int count, b3Plane plane, int clipId )
+{
+	int outCount = 0;
+	if ( count == 1 )
+	{
+		if ( b3PlaneSeparation( plane, in[0].position ) <= 0.0f )
+		{
+			out[outCount++] = in[0];
+		}
+		return outCount;
+	}
+
+	int edgeCount = count == 2 ? 1 : count;
+	for ( int i = 0; i < edgeCount; ++i )
+	{
+		const b3ClipVertex* a = in + i;
+		const b3ClipVertex* b = in + ( i + 1 ) % count;
+		float da = b3PlaneSeparation( plane, a->position );
+		float db = b3PlaneSeparation( plane, b->position );
+		if ( da <= 0.0f )
+		{
+			out[outCount++] = *a;
+		}
+		if ( ( da < 0.0f && db > 0.0f ) || ( da > 0.0f && db < 0.0f ) )
+		{
+			b3ClipVertex crossing;
+			crossing.position = b3Lerp( a->position, b->position, da / ( da - db ) );
+			crossing.separation = 0.0f;
+			// Named for the end the plane cut away, and the clipping edge.
+			crossing.pair = da > 0.0f ? a->pair : b->pair;
+			crossing.pair.index2 = (uint8_t)clipId;
+			out[outCount++] = crossing;
+		}
+	}
+
+	if ( count == 2 && b3PlaneSeparation( plane, in[1].position ) <= 0.0f )
+	{
+		out[outCount++] = in[1];
+	}
+	return outCount;
+}
+
+// At most min(capacity, 4) of the points: the deepest, the farthest from it,
+// then the two spanning the most area, as Box3D's hull pairs keep theirs.
+static int b3ReducePoints( b3ClipVertex* points, int count, int capacity, b3Vec3 normal )
+{
+	int limit = b3MinInt( capacity, 4 );
+	if ( count <= limit )
+	{
+		return count;
+	}
+
+	int chosen[4];
+	int chosenCount = 0;
+
+	int deepest = 0;
+	for ( int i = 1; i < count; ++i )
+	{
+		if ( points[i].separation < points[deepest].separation )
+		{
+			deepest = i;
+		}
+	}
+	chosen[chosenCount++] = deepest;
+
+	if ( limit > 1 )
+	{
+		int farthest = -1;
+		float best = -1.0f;
+		for ( int i = 0; i < count; ++i )
+		{
+			float d = b3DistanceSquared( points[i].position, points[deepest].position );
+			if ( d > best )
+			{
+				best = d;
+				farthest = i;
+			}
+		}
+		chosen[chosenCount++] = farthest;
+	}
+
+	if ( limit > 2 )
+	{
+		b3Vec3 p0 = points[chosen[0]].position;
+		b3Vec3 p1 = points[chosen[1]].position;
+		int third = -1;
+		float best = -1.0f;
+		for ( int i = 0; i < count; ++i )
+		{
+			float area = b3AbsFloat( b3Dot( b3Cross( b3Sub( p1, p0 ), b3Sub( points[i].position, p0 ) ), normal ) );
+			if ( area > best && i != chosen[0] && i != chosen[1] )
+			{
+				best = area;
+				third = i;
+			}
+		}
+		chosen[chosenCount++] = third;
+	}
+
+	if ( limit > 3 )
+	{
+		b3Vec3 corners[3] = { points[chosen[0]].position, points[chosen[1]].position, points[chosen[2]].position };
+		float winding = b3Dot( b3Cross( b3Sub( corners[1], corners[0] ), b3Sub( corners[2], corners[0] ) ), normal );
+		float sign = winding >= 0.0f ? 1.0f : -1.0f;
+		int fourth = -1;
+		float best = 0.0f;
+		for ( int i = 0; i < count; ++i )
+		{
+			if ( i == chosen[0] || i == chosen[1] || i == chosen[2] )
+			{
+				continue;
+			}
+			// How far outside the triangle it reaches, over its three edges.
+			for ( int e = 0; e < 3; ++e )
+			{
+				b3Vec3 a = corners[e];
+				b3Vec3 b = corners[( e + 1 ) % 3];
+				float outside = -sign * b3Dot( b3Cross( b3Sub( b, a ), b3Sub( points[i].position, a ) ), normal );
+				if ( outside > best )
+				{
+					best = outside;
+					fourth = i;
+				}
+			}
+		}
+		if ( fourth >= 0 )
+		{
+			chosen[chosenCount++] = fourth;
+		}
+	}
+
+	b3ClipVertex kept[4];
+	for ( int i = 0; i < chosenCount; ++i )
+	{
+		kept[i] = points[chosen[i]];
+	}
+	for ( int i = 0; i < chosenCount; ++i )
+	{
+		points[i] = kept[i];
+	}
+	return chosenCount;
+}
+
+// A face contact: the cylinder's feature clipped to the reference face's
+// sides, its points within maxSeparation of the face, at most capacity of
+// them, the normal the face's.
+static void b3BuildCylinderFaceContact( b3LocalManifold* manifold, int capacity, const b3ClipVertex* feature,
+										int featureCount, b3Plane refPlane, const b3Plane* sidePlanes, int sideCount,
+										float maxSeparation )
+{
+	b3ClipVertex bufferA[B3_MAX_CLIP_POINTS];
+	b3ClipVertex bufferB[B3_MAX_CLIP_POINTS];
+	b3ClipVertex* in = bufferA;
+	b3ClipVertex* out = bufferB;
+	int count = featureCount;
+	for ( int i = 0; i < count; ++i )
+	{
+		in[i] = feature[i];
+	}
+
+	for ( int i = 0; i < sideCount && count > 0; ++i )
+	{
+		B3_ASSERT( count < B3_MAX_CLIP_POINTS );
+		count = b3ClipToPlane( out, in, count, sidePlanes[i], 128 + ( i & 127 ) );
+		b3ClipVertex* swap = in;
+		in = out;
+		out = swap;
+	}
+
+	int kept = 0;
+	for ( int i = 0; i < count; ++i )
+	{
+		float separation = b3PlaneSeparation( refPlane, in[i].position );
+		if ( separation <= maxSeparation )
+		{
+			in[kept] = in[i];
+			in[kept].separation = separation;
+			kept += 1;
+		}
+	}
+
+	kept = b3ReducePoints( in, kept, capacity, refPlane.normal );
+	manifold->normal = refPlane.normal;
+	manifold->pointCount = kept;
+	for ( int i = 0; i < kept; ++i )
+	{
+		b3LocalManifoldPoint* mp = manifold->points + i;
+		mp->point = b3MulSub( in[i].position, 0.5f * in[i].separation, refPlane.normal );
+		mp->separation = in[i].separation;
+		mp->pair = in[i].pair;
+	}
+}
+
+// The planes through a hull face's edges, facing out of the face.
+static int b3GetHullFaceSidePlanes( b3Plane* planes, int capacity, const b3HullData* hull, int faceIndex )
+{
+	const b3HullFace* faces = b3GetHullFaces( hull );
+	const b3HullHalfEdge* edges = b3GetHullEdges( hull );
+	const b3Vec3* points = b3GetHullPoints( hull );
+	b3Vec3 normal = b3GetHullPlanes( hull )[faceIndex].normal;
+	const b3HullFace* face = faces + faceIndex;
+
+	int count = 0;
+	int edgeIndex = face->edge;
+	do
+	{
+		const b3HullHalfEdge* edge = edges + edgeIndex;
+		const b3HullHalfEdge* next = edges + edge->next;
+		b3Vec3 v1 = points[edge->origin];
+		b3Vec3 v2 = points[next->origin];
+		b3Vec3 binormal = b3Normalize( b3Cross( b3Sub( v2, v1 ), normal ) );
+		if ( count < capacity )
+		{
+			planes[count++] = b3MakePlaneFromNormalAndPoint( binormal, v1 );
+		}
+		edgeIndex = edge->next;
+	}
+	while ( edgeIndex != face->edge );
+
+	return count;
+}
+
+void b3CollideHullAndCylinder( b3LocalManifold* manifold, int capacity, const b3HullData* hullA, const b3Cylinder* cylinderB,
+							   const b3HullData* standInB, b3Transform transformBtoA, b3SATCache* cache )
+{
+	manifold->pointCount = 0;
+	if ( capacity < 1 )
+	{
+		return;
+	}
+
+	b3CylinderCore core = b3MakeCylinderCore( cylinderB );
+	b3PointCloud cloudA = { b3GetHullPoints( hullA ), hullA->vertexCount };
+	b3DistanceOutput output =
+		b3SupportDistance( b3PointCloudSupport, &cloudA, b3CylinderCoreSupport, &core, transformBtoA );
+	float separation = output.distance - core.margin;
+	if ( separation > B3_SPECULATIVE_DISTANCE )
+	{
+		return;
+	}
+
+	if ( output.distance < 100.0f * FLT_EPSILON )
+	{
+		// The cores overlap: Box3D's hulls answer, the stand-in in the cylinder's place.
+		b3CollideHulls( manifold, capacity, hullA, standInB, transformBtoA, cache );
+		return;
+	}
+
+	b3Vec3 normal = output.normal;
+	int refFace = b3FindHullSupportFace( hullA, normal );
+	b3Plane refPlane = b3GetHullPlanes( hullA )[refFace];
+	if ( b3Dot( refPlane.normal, normal ) > 0.998f )
+	{
+		// On a face: the cylinder's side line or cap, clipped to the face.
+		b3ClipVertex feature[B3_CYLINDER_CAP_POINTS];
+		b3Vec3 towardA = b3InvRotateVector( transformBtoA.q, b3Neg( refPlane.normal ) );
+		int count =
+			b3CylinderFeatureVertices( feature, cylinderB, towardA, transformBtoA, b3_featureShapeB, b3_featureShapeA, refFace );
+		b3Plane sides[B3_MAX_CLIP_POINTS];
+		int sideCount = b3GetHullFaceSidePlanes( sides, B3_MAX_CLIP_POINTS - B3_CYLINDER_CAP_POINTS, hullA, refFace );
+		b3BuildCylinderFaceContact( manifold, capacity, feature, count, refPlane, sides, sideCount, B3_SPECULATIVE_DISTANCE );
+		if ( manifold->pointCount > 0 )
+		{
+			return;
+		}
+	}
+
+	// An edge or a corner of the hull against the cylinder: one point.
+	b3Vec3 surfaceB = b3MulSub( output.pointB, core.margin, normal );
+	b3SinglePoint( manifold, normal, output.pointA, surfaceB, separation );
+}

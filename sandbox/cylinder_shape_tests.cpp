@@ -245,3 +245,71 @@ TEST_CASE("CY12 a capsule along a cylinder's side or across its cap touches at t
     REQUIRE(near(m.points[0].separation, std::sqrt(nearEnd.x * nearEnd.x + nearEnd.z * nearEnd.z) - 0.6f, 1e-4f));
     b3DestroyHull(standIn);
 }
+
+TEST_CASE("CY14 a cylinder on its side on a box: two points along its tread, the same two however it has turned",
+          "[cylinder]") {
+    const b3BoxHull box = b3MakeBoxHull(5.f, 0.5f, 5.f);  // top at y = 0.5
+    const b3Cylinder wheel = upright(0.5f, 0.25f);
+    b3HullData* standIn = b3MakeCylinderHull(&wheel);
+    b3LocalManifoldPoint points[4];
+    b3LocalManifold m{};
+    m.points = points;
+    b3SATCache cache{};
+    const b3Quat lie = b3MakeQuatFromAxisAngle(v3(1.f, 0.f, 0.f), 0.5f * kPi);
+    for (const float spin : {0.f, 0.37f, 1.3f, 2.9f}) {
+        INFO(spin);
+        // Lying along Z, 0.005 into the box, turned spin about its own axis.
+        const b3Quat turned = b3MulQuat(lie, b3MakeQuatFromAxisAngle(v3(0.f, 1.f, 0.f), spin));
+        b3CollideHullAndCylinder(&m, 4, &box.base, &wheel, standIn, b3Transform{v3(0.f, 0.995f, 0.f), turned}, &cache);
+        REQUIRE(m.pointCount == 2);
+        REQUIRE(near(m.normal.y, 1.f, 1e-6f));
+        REQUIRE(near(m.points[0].separation, -0.005f, 1e-5f));
+        REQUIRE(near(m.points[1].separation, -0.005f, 1e-5f));
+        // The ends of its tread, by name, whatever the spin.
+        const int first = std::min(m.points[0].pair.index1, m.points[1].pair.index1);
+        const int second = std::max(m.points[0].pair.index1, m.points[1].pair.index1);
+        REQUIRE(first == 0);
+        REQUIRE(second == 1);
+    }
+    b3DestroyHull(standIn);
+}
+
+TEST_CASE("CY15 a cylinder on its cap on a box: four points, normal up", "[cylinder]") {
+    const b3BoxHull box = b3MakeBoxHull(5.f, 0.5f, 5.f);
+    const b3Cylinder drum = upright(0.5f, 1.f);
+    b3HullData* standIn = b3MakeCylinderHull(&drum);
+    b3LocalManifoldPoint points[4];
+    b3LocalManifold m{};
+    m.points = points;
+    b3SATCache cache{};
+    b3CollideHullAndCylinder(&m, 4, &box.base, &drum, standIn, b3Transform{v3(0.f, 1.495f, 0.f), b3Quat_identity}, &cache);
+    REQUIRE(m.pointCount == 4);
+    REQUIRE(near(m.normal.y, 1.f, 1e-6f));
+    for (int i = 0; i < 4; ++i) {
+        REQUIRE(near(m.points[i].separation, -0.005f, 1e-5f));
+    }
+    b3DestroyHull(standIn);
+}
+
+TEST_CASE("CY16 a leaning wheel's tread rises from its low end, with no change of radius", "[cylinder]") {
+    const b3BoxHull box = b3MakeBoxHull(5.f, 0.5f, 5.f);
+    const b3Cylinder wheel = upright(0.5f, 0.25f);
+    b3HullData* standIn = b3MakeCylinderHull(&wheel);
+    b3LocalManifoldPoint points[4];
+    b3LocalManifold m{};
+    m.points = points;
+    b3SATCache cache{};
+    // Lying along Z, then leaned 2 degrees about X; its low rim 0.005 into the box.
+    // The lean as Box3D's quaternion makes it: its approximate sine, not exact trig.
+    const b3Quat q = b3MakeQuatFromAxisAngle(v3(1.f, 0.f, 0.f), 0.5f * kPi + 2.f * kPi / 180.f);
+    const float sinLean = std::fabs(b3RotateVector(q, v3(0.f, 1.f, 0.f)).y);
+    const float cosLean = std::sqrt(1.f - sinLean * sinLean);
+    const float y = 0.5f + 0.5f * cosLean + 0.25f * sinLean - 0.005f;
+    b3CollideHullAndCylinder(&m, 4, &box.base, &wheel, standIn, b3Transform{v3(0.f, y, 0.f), q}, &cache);
+    REQUIRE(m.pointCount == 2);
+    const float low = std::min(m.points[0].separation, m.points[1].separation);
+    const float high = std::max(m.points[0].separation, m.points[1].separation);
+    REQUIRE(near(low, -0.005f, 1e-5f));
+    REQUIRE(near(high, -0.005f + 0.5f * sinLean, 1e-5f));
+    b3DestroyHull(standIn);
+}

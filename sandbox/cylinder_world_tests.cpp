@@ -6,6 +6,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <vector>
@@ -204,4 +205,196 @@ TEST_CASE("CY13 a sphere rests on a cylinder's cap, a capsule along its side", "
     REQUIRE(near(position_of(ball).y, 1.2f, 0.01f));
     REQUIRE(near(position_of(ball).x, 0.1f, 0.01f));
     REQUIRE(near(position_of(stick).y, 0.7f, 0.01f));
+}
+
+namespace {
+
+// Lying along Z on the floor at x, set rolling toward +X at speed without
+// slipping. capsule: Box3D's own capsule of the same radius and length instead,
+// the baseline a two-point rolling contact in Box3D gets.
+b3BodyId rolling_wheel(World& world, float x, float speed, float radius = 0.5f, float half = 0.25f,
+                       bool capsule = false) {
+    b3BodyId wheel;
+    if (capsule) {
+        wheel = world.body(b3_dynamicBody, v3(x, radius, 0.f), on_side());
+        const b3Capsule shape{v3(0.f, -half, 0.f), v3(0.f, half, 0.f), radius};
+        b3ShapeDef def = b3DefaultShapeDef();
+        b3CreateCapsuleShape(wheel, &def, &shape);
+    } else {
+        wheel = world.cylinder(b3_dynamicBody, v3(x, radius, 0.f), on_side(), radius, half);
+    }
+    world.seconds(0.25f);
+    b3Body_SetLinearVelocity(wheel, v3(speed, 0.f, 0.f));
+    b3Body_SetAngularVelocity(wheel, v3(0.f, 0.f, -speed / radius));
+    return wheel;
+}
+
+}  // namespace
+
+namespace {
+
+struct Roll {
+    float rise;   // the centre's height range once rolling
+    float drift;  // the farthest it strays along its axis
+    float tilt;   // the most its axis leans
+    float reached;
+};
+
+// Rolled from x = -10 toward x = 10 at 4 units a second, measured from half a
+// second after the push: the one-time settle from resting into rolling is not
+// rolling.
+Roll roll_across(bool capsule) {
+    World world;
+    world.floor();
+    const b3BodyId wheel = rolling_wheel(world, -10.f, 4.f, 0.5f, 0.25f, capsule);
+    Roll out{0.f, 0.f, 0.f, 0.f};
+    float low = 1e9f;
+    float high = -1e9f;
+    for (int i = 0; i < 240 * 8 && position_of(wheel).x < 10.f; ++i) {
+        world.step();
+        const b3Vec3 at = position_of(wheel);
+        if (i >= 120) {
+            low = std::min(low, at.y);
+            high = std::max(high, at.y);
+        }
+        out.drift = std::max(out.drift, std::fabs(at.z));
+        out.tilt = std::max(out.tilt, std::fabs(axis_of(wheel).y));
+    }
+    out.rise = high - low;
+    out.reached = position_of(wheel).x;
+    return out;
+}
+
+}  // namespace
+
+TEST_CASE("CY17 a cylinder rolls 20 units with its centre level and upright, as straight as Box3D's capsule",
+          "[cylinder]") {
+    const Roll cylinder = roll_across(false);
+    const Roll capsule = roll_across(true);
+    INFO("cylinder rise " << cylinder.rise << " drift " << cylinder.drift << " tilt " << cylinder.tilt);
+    INFO("capsule drift " << capsule.drift);
+    REQUIRE(cylinder.reached >= 10.f);
+    REQUIRE(cylinder.rise < 1e-4f);
+    REQUIRE(cylinder.tilt < 1.75e-4f);  // sin 0.01 degrees
+    // A two-point rolling contact creeps along its axis in Box3D's central
+    // friction; Box3D's own capsule does. No more than twice that.
+    REQUIRE(cylinder.drift <= 2.f * capsule.drift);
+}
+
+TEST_CASE("CY18 a cylinder on its side rolls down a 5 degree slope, and lies still on the flat", "[cylinder]") {
+    World world;
+    // A slope falling toward +X, its surface through the origin.
+    const float slope = 5.f * kPi / 180.f;
+    const b3Quat tilt = b3MakeQuatFromAxisAngle(v3(0.f, 0.f, 1.f), -slope);
+    world.box(b3RotateVector(tilt, v3(0.f, -0.5f, 0.f)), v3(20.f, 0.5f, 5.f), 1.f, tilt);
+    const b3BodyId down = world.cylinder(b3_dynamicBody, v3(0.f, 0.51f, 0.f), on_side(), 0.5f, 0.25f, 1.f);
+    world.seconds(2.f);
+    REQUIRE(position_of(down).x > 1.f);
+
+    World flat;
+    flat.floor();
+    const b3BodyId still = flat.cylinder(b3_dynamicBody, v3(0.f, 0.5f, 0.f), on_side(), 0.5f, 0.25f);
+    flat.seconds(1.f);
+    const b3Vec3 before = position_of(still);
+    flat.seconds(10.f);
+    REQUIRE(b3Distance(before, position_of(still)) < 1e-4f);
+    REQUIRE_FALSE(b3Body_IsAwake(still));
+}
+
+TEST_CASE("CY19 a cylinder on its cap does not creep, and sleeps", "[cylinder]") {
+    World world;
+    world.floor();
+    const b3BodyId drum = world.cylinder(b3_dynamicBody, v3(0.f, 1.f, 0.f), b3Quat_identity, 0.5f, 1.f);
+    world.seconds(1.f);
+    const b3Vec3 before = position_of(drum);
+    world.seconds(10.f);
+    REQUIRE(b3Distance(before, position_of(drum)) < 1e-4f);
+    REQUIRE_FALSE(b3Body_IsAwake(drum));
+}
+
+TEST_CASE("CY20 a coin spun on its rim settles on a cap", "[cylinder]") {
+    World world;
+    world.floor();
+    // A coin, radius 0.5 and 0.05 thick, on its rim, leaning 30 degrees, spinning.
+    const b3Quat lean = b3MakeQuatFromAxisAngle(v3(1.f, 0.f, 0.f), 0.5f * kPi - 30.f * kPi / 180.f);
+    const b3BodyId coin = world.cylinder(b3_dynamicBody, v3(0.f, 0.47f, 0.f), lean, 0.5f, 0.025f);
+    b3Body_SetAngularVelocity(coin, v3(0.f, 6.f, 0.f));
+    world.seconds(10.f);
+    REQUIRE(std::fabs(axis_of(coin).y) > 0.99f);
+    REQUIRE(position_of(coin).y < 0.05f);
+}
+
+TEST_CASE("CY21 the same rolling run twice gives the same poses, bit for bit", "[cylinder]") {
+    auto run = [] {
+        World world;
+        world.floor();
+        const b3BodyId wheel = rolling_wheel(world, 0.f, 4.f);
+        world.seconds(2.f);
+        const b3Vec3 at = position_of(wheel);
+        const b3Quat q = b3Body_GetRotation(wheel);
+        return std::vector<float>{at.x, at.y, at.z, q.v.x, q.v.y, q.v.z, q.s};
+    };
+    const std::vector<float> first = run();
+    const std::vector<float> second = run();
+    REQUIRE(std::memcmp(first.data(), second.data(), first.size() * sizeof(float)) == 0);
+}
+
+namespace {
+
+// The centre's height range rolling across the seam between two boxes, from
+// x = -3 to 3, measured from a sixth of a second after the push.
+float seam_rise(bool capsule) {
+    World world;
+    world.box(v3(-5.f, -0.5f, 0.f), v3(5.f, 0.5f, 5.f));
+    world.box(v3(5.f, -0.5f, 0.f), v3(5.f, 0.5f, 5.f));
+    const b3BodyId wheel = rolling_wheel(world, -3.f, 3.f, 0.5f, 0.25f, capsule);
+    float low = 1e9f;
+    float high = -1e9f;
+    for (int i = 0; i < 240 * 3 && position_of(wheel).x < 3.f; ++i) {
+        world.step();
+        if (i >= 40) {
+            low = std::min(low, position_of(wheel).y);
+            high = std::max(high, position_of(wheel).y);
+        }
+    }
+    REQUIRE(position_of(wheel).x >= 3.f);
+    return high - low;
+}
+
+}  // namespace
+
+TEST_CASE("CY22 a cylinder rolls across the seam between two boxes with no bigger jump than Box3D's capsule",
+          "[cylinder]") {
+    // Separate boxes have no internal-edge smoothing in Box3D: every shape
+    // feels the edge. Box3D's capsule is the bar.
+    const float cylinder = seam_rise(false);
+    const float capsule = seam_rise(true);
+    INFO("cylinder " << cylinder << " capsule " << capsule);
+    REQUIRE(cylinder <= capsule);
+    REQUIRE(cylinder < 2e-3f);
+}
+
+TEST_CASE("CY22b a long thin pipe lying on a box rests still", "[cylinder]") {
+    World world;
+    world.floor();
+    const b3BodyId pipe = world.cylinder(b3_dynamicBody, v3(0.f, 0.1f, 0.f), on_side(), 0.1f, 5.f);
+    world.seconds(2.f);
+    const b3Vec3 before = position_of(pipe);
+    world.seconds(3.f);
+    REQUIRE(b3Distance(before, position_of(pipe)) < 1e-3f);
+    REQUIRE(near(position_of(pipe).y, 0.1f, 2e-3f));
+}
+
+TEST_CASE("CY22c a box rests on two anchored logs", "[cylinder]") {
+    World world;
+    // Two static logs along Z at x = -0.5 and +0.5, their tops at y = 0.3.
+    world.cylinder(b3_staticBody, v3(-0.5f, 0.f, 0.f), on_side(), 0.3f, 2.f);
+    world.cylinder(b3_staticBody, v3(0.5f, 0.f, 0.f), on_side(), 0.3f, 2.f);
+    const b3BodyId crate = world.body(b3_dynamicBody, v3(0.f, 0.6f, 0.f));
+    const b3BoxHull hull = b3MakeBoxHull(1.f, 0.2f, 1.f);
+    b3ShapeDef def = b3DefaultShapeDef();
+    b3CreateHullShape(crate, &def, &hull.base);
+    world.seconds(3.f);
+    REQUIRE(near(position_of(crate).y, 0.5f, 0.01f));
+    REQUIRE(near(position_of(crate).x, 0.f, 0.01f));
 }

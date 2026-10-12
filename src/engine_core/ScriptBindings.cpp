@@ -804,7 +804,7 @@ const char* ScriptBindings::signal_cause(const SignalUd& ud) {
     static const char* const kHost[] = {"SelectionChanged", "Started", "Stopped", "OnUndo",
                                         "OnRedo", "OnRecordingStarted", "OnRecordingFinished"};
     static const char* const kPhases[] = {"PreAnimation", "PreSimulation", "PhysicsSubstep", "PostSimulation",
-                                          "Heartbeat", "RenderStepped", "PreRender", "PostRender"};
+                                          "Heartbeat", "RenderStepped", "PreRender"};
     if (ud.kind == kSignalChanged) {
         return "Changed";
     }

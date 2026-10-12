@@ -119,16 +119,12 @@ TEST_CASE("BB3 a billboard's anchor and its adornee's row come from the same fra
         REQUIRE(shot.billboards[0].anchor.x == static_cast<float>(step));
     }
     // A path-C override moves the drawn row; the anchor follows it.
-    // override_visual is only legal from the render thread inside its
-    // window, so this borrows that role for the one call, the way SimRole
-    // borrows the simulation role for the rest of the test.
+    // override_visual is only legal inside the render window.
     engine_core::SnapshotOverride moved;
     moved.id = part.id();
     moved.transform = engine_core::matrix4_translation(50.f, 0.f, 0.f);
-    engine_core::set_thread_role(engine_core::ThreadRole::Render);
     pump.begin_prerender_window(game);
     pump.override_visual(moved);
     pump.end_prerender_window(game);
-    engine_core::set_thread_role(engine_core::ThreadRole::Simulation);
     REQUIRE(publish(pump, game).billboards[0].anchor.x == 50.f);
 }

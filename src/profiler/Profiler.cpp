@@ -74,9 +74,9 @@ thread_local std::vector<std::pair<ScopeId, Ring*>> t_open;
 // Rings this thread made for RowScope, by row name.
 thread_local std::vector<std::pair<std::string, Ring*>> t_rows;
 
-constexpr const char* kFixedRows[] = {"Sim", "Render", "Render draw", "UI", "GPU"};
+constexpr const char* kFixedRows[] = {"Engine", "Render draw", "UI", "GPU"};
 static_assert(sizeof(kFixedRows) / sizeof(kFixedRows[0]) == kFixedRowCount, "fixed rows");
-constexpr std::uint16_t kGpuRow = 4;
+constexpr std::uint16_t kGpuRow = 3;
 
 class Recorder {
 public:

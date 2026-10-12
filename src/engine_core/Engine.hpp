@@ -27,31 +27,10 @@
 
 namespace engine_core {
 
-// RenderStepped's dt in the render loop. A frame that misses the 2 ms Prepare
-// lock runs no RenderStepped, so its time carries to the next frame that does:
-// dt-integrated motion keeps pace under load. Every pass adds its time; a
-// prepared pass takes the sum, clamped at kMaxDt as one frame's dt always was.
-// RenderThread only.
-struct RenderStepTime {
-    static constexpr double kMaxDt = 0.1;
-    double pending = 0;
-
-    void add(double seconds) {
-        if (seconds > 0) {
-            pending += seconds;
-        }
-    }
-    // The carried time, or fallback when there is none. Starts the next sum.
-    double take(double fallback) {
-        const double dt = pending > kMaxDt ? kMaxDt : pending;
-        pending = 0;
-        return dt > 0.0 ? dt : fallback;
-    }
-};
-
-// Two loops. SimulationThread steps the DataModel. RenderThread prepares a
-// snapshot under a short write lock, then Perform/Present with the lock down.
-// PostRender runs after Present, still on RenderThread, without the lock.
+// One engine thread runs each frame under one DataModel write lock: the sim
+// step (or, paused, the stopped tick), then the render window (RenderStepped,
+// PreRender) and the snapshot copy. Perform and Present follow with the lock
+// down. The UI thread draws from the published snapshot.
 class ScriptAnalysis;
 class ScriptRuntime;
 
@@ -66,19 +45,20 @@ public:
     void set_renderer(IRenderer* renderer);
     void set_clock(IClock* clock);
     void set_timing(double render_dt, double physics_dt);
-    // 0 runs as fast as the machine allows. set_pace_hz sets both loops.
-    // The IDE leaves both loops uncapped and syncs them to the window's paint.
+    // Frames a second. 0 runs as fast as the machine allows, or, with client
+    // sync, once per paint. The IDE leaves it at 0 and syncs to the window.
     void set_pace_hz(double hz);
-    void set_simulation_pace_hz(double hz);
-    void set_render_pace_hz(double hz);
-    // An uncapped render loop normally spins. With this set, it waits for
-    // note_client_frame instead, so it stays with the window that is actually drawing.
-    void set_render_client_sync(bool enabled);
-    // The same for an uncapped simulation loop: it steps once per paint, so it
-    // runs as often as the window draws. Its steps then take the measured time
-    // as dt, not render_dt. A window that stops painting still steps at about 60 Hz.
-    void set_simulation_client_sync(bool enabled);
+    // An unpaced loop normally spins. With this set, it waits for
+    // note_client_frame instead, one frame per paint, so it runs as often as
+    // the window draws. Its steps then take the measured time as dt, not
+    // render_dt. A window that stops painting still gets about 60 frames a second.
+    void set_client_sync(bool enabled);
     void note_client_frame();
+    // One frame on the calling thread: the sim step (or, paused, the stopped
+    // tick), then the window and the copy, then Perform and Present. wall is
+    // the time since the last frame. engine_loop calls it after its wait;
+    // tests call it on an engine that was never started.
+    void run_frame(double wall);
 
     DataModel& datamodel() { return game_; }
     SnapshotPump& pump() { return pump_; }
@@ -96,20 +76,20 @@ public:
     void start();
     void stop();
 
-    // start() launches the threads and leaves the simulation paused.
-    // resume() lets steps run. pause() stops them again. The render thread
-    // keeps presenting the last snapshot either way.
+    // start() launches the engine thread and leaves the simulation paused.
+    // resume() lets steps run. pause() stops them again. Paused, each frame
+    // still runs the window and publishes a snapshot.
     void resume();
     void pause();
     bool paused() const;
 
-    // Runs fn on the DataModel from SimulationThread.
+    // Runs fn on the DataModel from the engine thread.
     // While the simulation is paused, the caller runs it under the write lock
     // so the change is visible before the next Test.
     void on_simulation(std::function<void(DataModel&)> fn);
 
+    // The engine thread.
     std::thread::id simulation_thread_id() const { return simulation_id_; }
-    std::thread::id render_thread_id() const { return render_id_; }
     std::uint64_t present_count() const { return present_count_.load(); }
     std::uint64_t sim_frame_count() const { return sim_frames_.load(); }
     int last_substep_count() const { return last_substeps_.load(); }
@@ -118,8 +98,14 @@ public:
     std::uint64_t contract_count() const { return contract_count_.load(); }
 
 private:
-    void simulation_loop();
-    void render_loop();
+    void engine_loop();
+    // The sim step's body, under the frame's lock.
+    void run_step(double wall);
+    // The stopped tick: tools' meshes, convex pieces, terrain, and physics that
+    // follows the tree, and the plugins' and command line's tool step.
+    void run_stopped_tick();
+    // RenderStepped, PreRender, and the copy, under the frame's lock.
+    void run_window(double dt);
     void step_physics(double dt);
     void drain_edits();
     // Runs one step of a loop. A contract failure goes to on_contract. Any other
@@ -159,20 +145,20 @@ private:
     IClock* clock_ = nullptr;
     double render_dt_ = 1.0 / 60.0;
     double physics_dt_ = 1.0 / 240.0;
-    double simulation_pace_hz_ = 0;
-    double render_pace_hz_ = 0;
-    std::atomic<bool> render_client_sync_{false};
-    std::atomic<bool> simulation_client_sync_{false};
-    // note_client_frame bumps client_frames_. Each uncapped loop waits on it
-    // when its client sync is set. Tests leave the sync off.
+    double pace_hz_ = 0;
+    std::atomic<bool> client_sync_{false};
+    // Wall time not yet stepped by physics. Engine thread only.
+    double accumulator_ = 0;
+    // When the stopped tick last ran. Engine thread only.
+    std::chrono::steady_clock::time_point last_tool_{};
+    // note_client_frame bumps client_frames_. The unpaced loop waits on it
+    // when client sync is set. Tests leave the sync off.
     std::mutex client_frame_mu_;
     std::condition_variable client_frame_cv_;
     std::uint64_t client_frames_ = 0;
 
     std::thread simulation_;
-    std::thread render_;
     std::thread::id simulation_id_{};
-    std::thread::id render_id_{};
     std::atomic<bool> running_{false};
     std::atomic<std::uint64_t> present_count_{0};
     std::atomic<std::uint64_t> sim_frames_{0};
@@ -183,17 +169,16 @@ private:
     std::mutex start_mu_;
     std::condition_variable start_cv_;
     bool simulation_ready_ = false;
-    bool render_ready_ = false;
     bool start_release_ = false;
 
-    // Guards paused_. SimulationThread waits on pause_cv_ while paused.
+    // Guards paused_. An unpaced engine thread waits on pause_cv_ while paused.
     // The UI thread takes it only to flip the flag or to publish a paused edit.
     // Hold is a store, or one paused edit.
     mutable std::mutex pause_mu_;
     std::condition_variable pause_cv_;
     bool paused_ = true;
 
-    // Edits posted while the simulation is running. Drained on SimulationThread
+    // Edits posted while the simulation is running. Drained on the engine thread
     // at the start of the next step, under the write lock.
     std::mutex edit_mu_;
     std::vector<std::function<void(DataModel&)>> edits_;
@@ -203,7 +188,7 @@ private:
     std::unordered_map<std::string, std::chrono::steady_clock::time_point> recent_faults_;
 
     // Declared last so it is destroyed before the DataModel, after stop() joins
-    // the simulation and render threads.
+    // the engine thread.
     std::unique_ptr<ScriptAnalysis> analysis_;
 };
 

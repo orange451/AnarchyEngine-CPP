@@ -656,19 +656,16 @@ void ScriptRuntime::render_step(double dt) {
 }
 
 void ScriptRuntime::assert_lua_thread() const {
-    // Lua runs wherever the DataModel write lock is held: the simulation step,
-    // a paused edit, or the render thread inside the Prepare window.
-    if (game_ != nullptr && game_->prerender_window() && thread_role() == ThreadRole::Render) {
+    // Lua runs wherever the DataModel write lock is held: the engine thread's
+    // sim step or window, or a paused edit.
+    if (game_ != nullptr && game_->prerender_window()) {
+        if (!game_->engine_thread()) {
+            contract_fail("Lua runs on the engine thread");
+        }
         return;
     }
-    if (thread_role() == ThreadRole::Render) {
-        contract_fail("Lua runs on SimulationThread");
-    }
     if (game_ != nullptr && !game_->on_gameplay_thread()) {
-        contract_fail("Lua runs on SimulationThread");
-    }
-    if (game_ != nullptr && game_->prerender_window()) {
-        contract_fail("Lua runs on SimulationThread");
+        contract_fail("Lua runs on the engine thread");
     }
 }
 

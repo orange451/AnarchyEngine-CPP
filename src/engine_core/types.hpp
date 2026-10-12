@@ -24,20 +24,20 @@ constexpr std::uint32_t kMaxGeneration = 0xffffu;
 
 // Simulation phases stay contiguous at the front. Resume checks treat
 // PreAnimation..Heartbeat as the simulation range.
-// Render-frame order is RenderStepped, PreRender, then PostRender.
+// Every phase runs on the engine thread under the frame's lock: the sim step's
+// phases first, then the render window's RenderStepped and PreRender.
 enum class Phase {
-    PreAnimation,    // SimulationThread
-    PreSimulation,   // SimulationThread, once per physics substep
-    PhysicsSubstep,  // SimulationThread, once per physics substep
-    PostSimulation,  // SimulationThread, once per physics substep
-    Heartbeat,       // SimulationThread
-    RenderStepped,   // RenderThread, inside Prepare, before PreRender and the copy
-    PreRender,       // RenderThread, inside Prepare, before the copy
-    PostRender       // RenderThread, after Present, lock released
+    PreAnimation,    // the sim step
+    PreSimulation,   // the sim step, once per physics substep
+    PhysicsSubstep,  // the sim step, once per physics substep
+    PostSimulation,  // the sim step, once per physics substep
+    Heartbeat,       // the sim step
+    RenderStepped,   // the window, before PreRender and the copy
+    PreRender        // the window, before the copy
 };
 
-// PostRender is the last enumerator. The scheduler's job tables use this bound.
-inline constexpr int kPhaseCount = static_cast<int>(Phase::PostRender) + 1;
+// PreRender is the last enumerator. The scheduler's job tables use this bound.
+inline constexpr int kPhaseCount = static_cast<int>(Phase::PreRender) + 1;
 
 enum class VisualField : std::uint32_t {
     Transform = 1u << 0,
@@ -85,10 +85,10 @@ inline bool any(VisualField field, VisualField bit) {
     return (static_cast<std::uint32_t>(field) & static_cast<std::uint32_t>(bit)) != 0;
 }
 
+// Simulation is the engine thread, which runs the sim step and the window.
 enum class ThreadRole {
     Unknown,
-    Simulation,
-    Render
+    Simulation
 };
 
 void set_thread_role(ThreadRole role);

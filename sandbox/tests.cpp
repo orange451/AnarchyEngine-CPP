@@ -31,6 +31,7 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <stdexcept>
@@ -100,13 +101,22 @@ public:
 
 }  // namespace
 
-TEST_CASE("simulation and render are different threads", "[T1]") {
+TEST_CASE("the engine runs on one thread", "[T1]") {
     engine_core::Engine engine;
+    std::atomic<std::thread::id> heartbeat_thread{};
+    std::atomic<std::thread::id> render_thread{};
+    engine.scheduler().bind(engine_core::Phase::Heartbeat,
+                            [&](double) { heartbeat_thread.store(std::this_thread::get_id()); });
+    engine.scheduler().bind(engine_core::Phase::RenderStepped,
+                            [&](double) { render_thread.store(std::this_thread::get_id()); });
     engine.start();
     engine.resume();
+    wait_until([&] {
+        return heartbeat_thread.load() != std::thread::id{} && render_thread.load() != std::thread::id{};
+    });
     REQUIRE(engine.simulation_thread_id() != std::thread::id{});
-    REQUIRE(engine.render_thread_id() != std::thread::id{});
-    REQUIRE(engine.simulation_thread_id() != engine.render_thread_id());
+    REQUIRE(heartbeat_thread.load() == engine.simulation_thread_id());
+    REQUIRE(render_thread.load() == engine.simulation_thread_id());
     engine.stop();
 }
 
@@ -134,62 +144,8 @@ TEST_CASE("DataModel write during Perform is rejected", "[T2]") {
     engine.start();
     engine.resume();
     wait_until([&] { return probe.hits.load() == 1; });
-    REQUIRE(probe.message.find("PreRender") != std::string::npos);
-    engine.stop();
-}
-
-TEST_CASE("heartbeat writes run alongside present", "[T3]") {
-    engine_core::Engine engine;
-    CountingRenderer renderer;
-    engine.set_renderer(&renderer);
-    const engine_core::InstanceId id = engine.datamodel().create_game_object().id();
-    std::atomic<int> writes{0};
-    engine.scheduler().bind(engine_core::Phase::Heartbeat, [&](double) {
-        if (writes.load() != 0) {
-            return;
-        }
-        for (int i = 0; i < 10000; ++i) {
-            engine.datamodel().game_object(id)->set_transform(
-                engine_core::matrix4_translation(static_cast<float>(i & 255) / 255.f, 0.25f, 0.5f));
-        }
-        writes.store(10000);
-    });
-    engine.start();
-    engine.resume();
-    wait_until([&] { return writes.load() == 10000 && engine.present_count() >= 1000; });
-    engine.stop();
-}
-
-TEST_CASE("a long sim write does not block present", "[T4]") {
-    engine_core::Engine engine;
-    CountingRenderer renderer;
-    engine.set_renderer(&renderer);
-    std::atomic<int> stage{0};
-    std::atomic<std::uint64_t> presents_at_sleep{0};
-    std::atomic<std::uint64_t> presents_after_sleep{0};
-    std::atomic<std::uint64_t> frame_at_sleep{0};
-    std::atomic<std::uint64_t> frame_after_sleep{0};
-    engine.scheduler().bind(engine_core::Phase::Heartbeat, [&](double) {
-        if (stage.load() == 0 && engine.present_count() > 2) {
-            // Still inside the sim write lock. Render may Present, but it cannot Prepare.
-            presents_at_sleep.store(engine.present_count());
-            // Render publishes after it releases the lock, so a Prepare that
-            // finished just before this step took it may still publish now.
-            // Read the frame once that publish has landed; a later change
-            // would need a Prepare inside this lock.
-            std::this_thread::sleep_for(std::chrono::milliseconds(10));
-            frame_at_sleep.store(engine.published_frame());
-            std::this_thread::sleep_for(std::chrono::milliseconds(40));
-            presents_after_sleep.store(engine.present_count());
-            frame_after_sleep.store(engine.published_frame());
-            stage.store(2);
-        }
-    });
-    engine.start();
-    engine.resume();
-    wait_until([&] { return stage.load() == 2; });
-    REQUIRE(presents_after_sleep.load() > presents_at_sleep.load());
-    REQUIRE(frame_after_sleep.load() == frame_at_sleep.load());
+    // Perform runs after the frame's lock is released.
+    REQUIRE(probe.message.find("frame lock") != std::string::npos);
     engine.stop();
 }
 
@@ -1091,7 +1047,7 @@ TEST_CASE("Heartbeat steps descendants of the root", "[instance]") {
     engine.stop();
 }
 
-TEST_CASE("RenderStepped writes this frame and PostRender does not", "[T21]") {
+TEST_CASE("RenderStepped writes this frame and Perform does not", "[T21]") {
     engine_core::Engine engine;
     engine_core::DataModel& game = engine.datamodel();
     const engine_core::InstanceId id = create_part(game).id();
@@ -1140,7 +1096,7 @@ TEST_CASE("RenderStepped writes this frame and PostRender does not", "[T21]") {
             }
             rs_window.store(game.prerender_window() ? 1 : 0);
             rs_depth.store(game.write_depth());
-            if (engine_core::thread_role() != engine_core::ThreadRole::Render) {
+            if (engine_core::thread_role() != engine_core::ThreadRole::Simulation) {
                 bad.store(1);
             }
             game.game_object(id)->set_transform(posed);
@@ -1165,12 +1121,10 @@ TEST_CASE("RenderStepped writes this frame and PostRender does not", "[T21]") {
         pre_saw.store(near(game.game_object(id)->transform(), posed) ? 1 : 0);
         stage.store(2);
     });
-    engine.scheduler().bind(engine_core::Phase::PostRender, [&](double) {
-        if (stage.load() != 3) {
-            return;
-        }
+    // After the frame: Perform runs with the lock released and the window closed.
+    const auto after_frame = [&] {
         post_window.store(game.prerender_window() ? 1 : 0);
-        if (engine_core::thread_role() != engine_core::ThreadRole::Render) {
+        if (engine_core::thread_role() != engine_core::ThreadRole::Simulation) {
             bad.store(1);
         }
         const engine_core::VisualInstance* inst = engine.pump().find(id);
@@ -1193,7 +1147,7 @@ TEST_CASE("RenderStepped writes this frame and PostRender does not", "[T21]") {
         const bool held = inst != nullptr && near(inst->world, posed);
         front_held.store(held ? 1 : 0);
         stage.store(4);
-    });
+    };
 
     struct Probe : CountingRenderer {
         engine_core::InstanceId id = 0;
@@ -1212,13 +1166,16 @@ TEST_CASE("RenderStepped writes this frame and PostRender does not", "[T21]") {
             *snapped = inst->world;
             *origin = inst->transform_origin;
             stage->store(3);
+            after();
         }
+        std::function<void()> after;
     } probe;
     probe.id = id;
     probe.stage = &stage;
     probe.snapped = &snapped;
     probe.origin = &origin;
     probe.posed = &posed;
+    probe.after = after_frame;
     engine.set_renderer(&probe);
     engine.start();
     engine.resume();
@@ -1239,19 +1196,17 @@ TEST_CASE("RenderStepped writes this frame and PostRender does not", "[T21]") {
     REQUIRE(near(snapped, posed));
     REQUIRE(origin == engine_core::WriteOrigin::PreRenderDataModel);
     REQUIRE(near(game.game_object(id)->transform(), posed));
-    REQUIRE(post_write.find("PreRender") != std::string::npos);
+    REQUIRE(post_write.find("frame lock") != std::string::npos);
     REQUIRE(post_override.find("PreRender") != std::string::npos);
     REQUIRE(game.events().count(engine_core::WriteOrigin::PreRenderDataModel) >= 1);
 }
 
-TEST_CASE("RenderStepped and PostRender run while simulation is paused", "[T22]") {
+TEST_CASE("RenderStepped runs every pass while paused", "[T22]") {
     engine_core::Engine engine;
     std::atomic<int> stepped{0};
-    std::atomic<int> posted{0};
     engine.scheduler().bind(engine_core::Phase::RenderStepped, [&](double) { stepped.fetch_add(1); });
-    engine.scheduler().bind(engine_core::Phase::PostRender, [&](double) { posted.fetch_add(1); });
     engine.start();
-    wait_until([&] { return stepped.load() > 0 && posted.load() > 0; });
+    wait_until([&] { return stepped.load() > 2; });
     REQUIRE(engine.paused());
     REQUIRE(engine.sim_frame_count() == 0);
     engine.stop();
@@ -1277,7 +1232,7 @@ TEST_CASE("render phases do not yield or drain", "[T23]") {
             stepped_wait.store(1);
         }
     });
-    engine.scheduler().bind(engine_core::Phase::PostRender, [&](double) {
+    engine.scheduler().bind(engine_core::Phase::PreRender, [&](double) {
         if (posted_wait.load() != 0) {
             return;
         }
@@ -1300,7 +1255,7 @@ TEST_CASE("render phases do not yield or drain", "[T23]") {
     engine.stop();
     REQUIRE(stepped_message.find("simulation job") != std::string::npos);
     REQUIRE(posted_wait_message.find("simulation job") != std::string::npos);
-    REQUIRE(posted_drain_message.find("SimulationThread") != std::string::npos);
+    REQUIRE(posted_drain_message.find("during RenderStepped") != std::string::npos);
 }
 
 TEST_CASE("a RenderStepped contract still runs PreRender", "[T24]") {
@@ -1415,7 +1370,7 @@ TEST_CASE("an edit during play runs on the simulation thread", "[edit]") {
 
 TEST_CASE("a paced simulation steps at the rate it is given", "[pace]") {
     engine_core::Engine engine;
-    engine.set_simulation_pace_hz(60.0);
+    engine.set_pace_hz(60.0);
     engine.start();
     engine.resume();
     wait_until([&] { return engine.sim_frame_count() > 0; });
@@ -1433,37 +1388,78 @@ TEST_CASE("a paced simulation steps at the rate it is given", "[pace]") {
     REQUIRE(hz < 63.0);
 }
 
-TEST_CASE("client sync keeps an uncapped render loop with the window", "[pace]") {
+TEST_CASE("a paused engine with client sync runs the window once per paint", "[pace]") {
     engine_core::Engine engine;
-    engine.set_simulation_pace_hz(60.0);
-    engine.set_render_pace_hz(0.0);
-    engine.set_render_client_sync(true);
+    engine.set_pace_hz(0.0);
+    engine.set_client_sync(true);
+    std::atomic<int> stepped{0};
+    engine.scheduler().bind(engine_core::Phase::RenderStepped, [&](double) { stepped.fetch_add(1); });
     engine.start();
-    std::this_thread::sleep_for(std::chrono::milliseconds(120));
-    const auto idle = engine.present_count();
-    // An empty step with nothing to wait for would present tens of thousands of times.
-    REQUIRE(idle < 12);
+    wait_until([&] { return stepped.load() > 0; });
+    // Paints every 4 ms, a 250 Hz window, well above the 16 ms tool tick.
+    // Paced against a deadline: Windows sleeps in ~15.6 ms ticks.
+    const int first = stepped.load();
     const auto paced_at = std::chrono::steady_clock::now();
-    for (int i = 0; i < 20; ++i) {
-        const auto before = engine.present_count();
+    auto next_paint = paced_at;
+    for (int i = 0; i < 60; ++i) {
+        next_paint += std::chrono::milliseconds(4);
+        while (std::chrono::steady_clock::now() < next_paint) {
+            std::this_thread::yield();
+        }
         engine.note_client_frame();
-        wait_until([&] { return engine.present_count() > before; });
     }
-    const auto paced_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-                              std::chrono::steady_clock::now() - paced_at)
-                              .count();
-    // Each note releases one step. Waiting out the 50 ms fallback twenty times would take a second.
-    REQUIRE(paced_ms < 400);
-    REQUIRE(engine.present_count() < idle + 50);
+    const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - paced_at).count();
+    const double hz = static_cast<double>(stepped.load() - first) / seconds;
     engine.stop();
+    INFO("windows a second: " << hz);
+    REQUIRE(hz > 120.0);
+}
+
+TEST_CASE("an edit from another thread while playing lands under the lock", "[edit]") {
+    engine_core::Engine engine;
+    const engine_core::InstanceId id = engine.datamodel().create_game_object().id();
+    engine.start();
+    engine.resume();
+    wait_until([&] { return engine.sim_frame_count() > 2; });
+    std::atomic<bool> ran{false};
+    std::atomic<bool> playing_ok{false};
+    engine.on_simulation([&](engine_core::DataModel& game) {
+        game.game_object(id)->set_transform(T1());
+        playing_ok.store(near(game.game_object(id)->transform(), T1()));
+        ran.store(true);
+    });
+    wait_until([&] { return ran.load(); });
+    engine.pause();
+    bool paused_ok = false;
+    engine.on_simulation([&](engine_core::DataModel& game) {
+        game.game_object(id)->set_transform(T0());
+        paused_ok = near(game.game_object(id)->transform(), T0());
+    });
+    engine.stop();
+    REQUIRE(playing_ok.load());
+    REQUIRE(paused_ok);
+    REQUIRE(near(engine.datamodel().game_object(id)->transform(), T0()));
+}
+
+TEST_CASE("a C++ render job writing a plain part is refused in the window", "[T21]") {
+    engine_core::Engine engine;
+    engine_core::GameObject& object = engine.datamodel().create_game_object();
+    std::atomic<int> tries{0};
+    engine.scheduler().bind(engine_core::Phase::RenderStepped, [&](double) {
+        if (tries.fetch_add(1) == 0) {
+            object.set_transform(T1());
+        }
+    });
+    engine.start();
+    wait_until([&] { return tries.load() > 2 && engine.contract_count() > 0; });
+    engine.stop();
+    REQUIRE_FALSE(near(object.transform(), T1()));
 }
 
 TEST_CASE("client sync steps an uncapped simulation with each paint", "[pace]") {
     engine_core::Engine engine;
-    engine.set_simulation_pace_hz(0.0);
-    engine.set_render_pace_hz(0.0);
-    engine.set_simulation_client_sync(true);
-    engine.set_render_client_sync(true);
+    engine.set_pace_hz(0.0);
+    engine.set_client_sync(true);
     std::mutex dts_mu;
     std::vector<double> dts;
     engine.scheduler().bind(engine_core::Phase::Heartbeat, [&](double dt) {
@@ -4154,17 +4150,15 @@ TEST_CASE("E1 one drain delivers more events than the queue first held", "[E1]")
 TEST_CASE("E2 more worker writes than the command queue first held all apply", "[E2]") {
     engine_core::Game game;
     engine_core::GameObject& part = game.create_game_object();
-    std::thread::id simulation;
-    std::thread::id render;
-    std::thread([&simulation] { simulation = std::this_thread::get_id(); }).join();
-    std::thread([&render] { render = std::this_thread::get_id(); }).join();
-    game.set_thread_ids(simulation, render);
+    std::thread::id engine;
+    std::thread([&engine] { engine = std::this_thread::get_id(); }).join();
+    game.set_engine_thread(engine);
     game.set_threads_running(true);
-    // This thread is neither engine thread, so each write waits as a command.
+    // This thread is not the engine thread, so each write waits as a command.
     for (int i = 1; i <= 5000; ++i) {
         part.set_transform(engine_core::matrix4_translation(static_cast<float>(i), 0.f, 0.f));
     }
-    game.set_thread_ids(std::this_thread::get_id(), render);
+    game.set_engine_thread(std::this_thread::get_id());
     {
         SimRole role;
         engine_core::DataModelLock lock(game, engine_core::DataModelLock::Write);
@@ -4978,7 +4972,7 @@ TEST_CASE("RW5 a continuation parked at Stop never resumes into the restored wor
 
 TEST_CASE("RW6 a window handler's visual write lands in that frame's snapshot", "[RW6]") {
     // T21 (sandbox/tests.cpp, the Engine-driven "RenderStepped writes this frame
-    // and PostRender does not" case) is the model for this path: a render-step
+    // and Perform does not" case) is the model for this path: a render-step
     // write needs visual_only (or ForceSimWrite) to pass authorize, and the
     // write lock must be held across begin/end-window and take_changes, exactly
     // as Engine::render_once holds it (Engine.cpp around line 400), for the
@@ -4999,9 +4993,9 @@ TEST_CASE("RW6 a window handler's visual write lands in that frame's snapshot", 
     pump.reserve(engine_core::DataModel::kMaxInstances);
     rig.game.start_simulation();
     play_step(rig, 0.05);
-    std::thread render([&] {
-        engine_core::set_thread_role(engine_core::ThreadRole::Render);
-        rig.game.set_thread_ids(std::thread::id(), std::this_thread::get_id());
+    {
+        // The window, inline: this thread is the engine thread.
+        rig.game.set_engine_thread(std::this_thread::get_id());
         rig.game.set_threads_running(true);
         {
             engine_core::DataModelLock lock(rig.game, engine_core::DataModelLock::Write);
@@ -5011,9 +5005,7 @@ TEST_CASE("RW6 a window handler's visual write lands in that frame's snapshot", 
             pump.take_changes(rig.game);
         }
         rig.game.set_threads_running(false);
-        engine_core::set_thread_role(engine_core::ThreadRole::Unknown);
-    });
-    render.join();
+    }
     pump.finish_copy();
     pump.publish();
     const engine_core::VisualInstance* vis = pump.find(part.id());
@@ -5056,9 +5048,9 @@ TEST_CASE("RW9 a window script write authorizes as a sim write, untagged or not"
     rig.game.start_simulation();
     play_step(rig, 0.05);
     bool deferred_left = true;
-    std::thread render([&] {
-        engine_core::set_thread_role(engine_core::ThreadRole::Render);
-        rig.game.set_thread_ids(std::thread::id(), std::this_thread::get_id());
+    {
+        // The window, inline: this thread is the engine thread.
+        rig.game.set_engine_thread(std::this_thread::get_id());
         rig.game.set_threads_running(true);
         {
             engine_core::DataModelLock lock(rig.game, engine_core::DataModelLock::Write);
@@ -5069,9 +5061,7 @@ TEST_CASE("RW9 a window script write authorizes as a sim write, untagged or not"
             pump.take_changes(rig.game);
         }
         rig.game.set_threads_running(false);
-        engine_core::set_thread_role(engine_core::ThreadRole::Unknown);
-    });
-    render.join();
+    }
     pump.finish_copy();
     pump.publish();
 
@@ -5267,27 +5257,6 @@ TEST_CASE("RW12 a refusal a window script reaches is a Lua error, with no contra
     REQUIRE_FALSE(engine_core::in_script_contract_scope());
 }
 
-TEST_CASE("RW13 frames that miss the Prepare lock carry their time to the next RenderStepped", "[RW13]") {
-    // Engine::render_loop adds every pass's time and takes it only when it
-    // holds the lock, so RenderStepped's dt covers the frames it skipped.
-    engine_core::RenderStepTime time;
-    time.add(0.016);  // missed the 2 ms lock
-    time.add(0.016);  // missed again
-    time.add(0.016);  // prepared
-    REQUIRE(std::fabs(time.take(1.0 / 60.0) - 0.048) < 1e-12);
-    // Taken: the next frame starts from nothing.
-    time.add(0.008);
-    REQUIRE(std::fabs(time.take(1.0 / 60.0) - 0.008) < 1e-12);
-    // The sum clamps at 0.1, as one frame's dt did.
-    time.add(0.06);
-    time.add(0.06);
-    REQUIRE(time.take(1.0 / 60.0) == engine_core::RenderStepTime::kMaxDt);
-    REQUIRE(engine_core::RenderStepTime::kMaxDt == 0.1);
-    // A clock that went back adds nothing; no time at all is the fallback.
-    time.add(-0.5);
-    REQUIRE(time.take(0.02) == 0.02);
-}
-
 TEST_CASE("RW8 pause silences play handlers, Stop removes them, plugins run through", "[RW8]") {
     ScriptRig rig;
     // A real plugin, loaded as the studio loads SceneCamera: its connection is
@@ -5410,8 +5379,7 @@ TEST_CASE("RW10 RenderStepped and Heartbeat handlers share state with both threa
         RunService.Heartbeat:Connect(function() touch("hb") end)
     )");
     // Paced so neither loop starves the other of the lock: many turns each way.
-    engine.set_simulation_pace_hz(240);
-    engine.set_render_pace_hz(480);
+    engine.set_pace_hz(240);
     engine.start();
     engine.on_simulation([](engine_core::DataModel& g) { g.start_simulation(); });
     engine.resume();
@@ -5513,9 +5481,8 @@ TEST_CASE("RW1 invoke_render runs a host signal's handlers in the window", "[RW1
         false);
     signal.connect_scripted([&](engine_core::InstanceId, engine_core::Field) { ++tagged_runs; }, 7, 1, false);
 
-    std::thread render([&] {
-        engine_core::set_thread_role(engine_core::ThreadRole::Render);
-        // Right thread, window still closed: the window-flag guard must fire.
+    {
+        // Window still closed: the window-flag guard must fire.
         REQUIRE_THROWS_AS(events.invoke_render(signal, false), engine_core::ContractViolation);
         game.set_prerender_window(true);
         events.invoke_render(signal, false);  // paused: tagged skipped
@@ -5527,14 +5494,7 @@ TEST_CASE("RW1 invoke_render runs a host signal's handlers in the window", "[RW1
         REQUIRE(tagged_runs == 1);
         REQUIRE(once_runs == 1);
         game.set_prerender_window(false);
-        engine_core::set_thread_role(engine_core::ThreadRole::Unknown);
-    });
-    render.join();
-    // Window open, wrong thread (this test case runs under SimRole): the
-    // thread-role guard must fire even though the window flag would pass.
-    game.set_prerender_window(true);
-    REQUIRE_THROWS_AS(events.invoke_render(signal, false), engine_core::ContractViolation);
-    game.set_prerender_window(false);
+    }
     events.release_signal(signal);
 }
 

@@ -31,13 +31,11 @@ void Runner::prepare() {
     auto lua = std::make_unique<engine_core::LuaEngine>();
     lua->start();
     auto simulation = std::make_unique<engine_core::Engine>();
-    // Neither thread has a fixed rate. Each waits for the Scene View's paint, so
-    // the place steps as often as the window draws: 120 times a second on a
-    // 120 Hz display. An empty step cannot run ahead of the picture.
-    simulation->set_simulation_pace_hz(0.0);
-    simulation->set_render_pace_hz(0.0);
-    simulation->set_simulation_client_sync(true);
-    simulation->set_render_client_sync(true);
+    // No fixed rate. The engine waits for the Scene View's paint, so the place
+    // steps as often as the window draws: 120 times a second on a 120 Hz
+    // display. An empty step cannot run ahead of the picture.
+    simulation->set_pace_hz(0.0);
+    simulation->set_client_sync(true);
     simulation->set_renderer(feed_.get());
     // The IDE console reads the script log. Sandbox print shares that log with play scripts.
     engine_core::ScriptRuntime* scripts = &simulation->scripts();

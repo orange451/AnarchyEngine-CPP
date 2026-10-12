@@ -138,11 +138,9 @@ struct DataModel::State {
     MeshEditors mesh_editors;
 
     // Guards slots, free lists, invalidation, and resync.
-    // SimulationThread may hold Write across a whole step and may re-enter
-    // (this world's owner and depth below; the mutex is taken once).
-    // RenderThread may hold Write only inside Prepare (RenderStepped, PreRender, copy),
-    // budget 2ms. PostRender does not hold it.
-    // Workers never take it.
+    // The engine thread holds Write across a whole frame (sim step, window,
+    // copy) and may re-enter (this world's owner and depth below; the mutex is
+    // taken once). Perform and Present do not hold it. Workers never take it.
     std::timed_mutex write_mu;
     // The thread that holds write_mu, and how many guards it has open. Only that
     // thread changes these, so another reads owner only to learn it is not the
@@ -155,8 +153,7 @@ struct DataModel::State {
     // loop that made them takes them. Rare, so a mutex and a list are enough.
     std::mutex deferred_mu;
     std::vector<std::pair<std::thread::id, const char*>> deferred;
-    std::thread::id simulation_thread{};
-    std::thread::id render_thread{};
+    std::thread::id engine_thread{};
     // Set while Engine runs a paused edit on the caller. Empty otherwise.
     std::thread::id edit_owner{};
     bool threads_running = false;

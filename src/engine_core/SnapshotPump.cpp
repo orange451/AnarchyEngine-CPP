@@ -160,7 +160,7 @@ void SnapshotPump::end_prerender_window(DataModel& game) {
 }
 
 void SnapshotPump::override_visual(const SnapshotOverride& override) {
-    if (!window_open_ || thread_role() != ThreadRole::Render) {
+    if (!window_open_) {
         contract_fail("SnapshotOverride is only valid inside RenderStepped or PreRender");
     }
     if (overrides_.size() == overrides_.capacity()) {

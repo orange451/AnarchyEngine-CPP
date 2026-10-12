@@ -111,25 +111,16 @@ void Engine::set_timing(double render_dt, double physics_dt) {
     physics_dt_ = physics_dt;
 }
 
-void Engine::set_pace_hz(double hz) {
-    simulation_pace_hz_ = hz;
-    render_pace_hz_ = hz;
-}
+void Engine::set_pace_hz(double hz) { pace_hz_ = hz; }
 
-void Engine::set_simulation_pace_hz(double hz) { simulation_pace_hz_ = hz; }
-
-void Engine::set_render_pace_hz(double hz) { render_pace_hz_ = hz; }
-
-void Engine::set_render_client_sync(bool enabled) { render_client_sync_.store(enabled); }
-
-void Engine::set_simulation_client_sync(bool enabled) { simulation_client_sync_.store(enabled); }
+void Engine::set_client_sync(bool enabled) { client_sync_.store(enabled); }
 
 void Engine::note_client_frame() {
     {
         std::lock_guard<std::mutex> guard(client_frame_mu_);
         ++client_frames_;
     }
-    // Both loops may be waiting on the same paint.
+    // The engine loop may be waiting on this paint.
     client_frame_cv_.notify_all();
 }
 
@@ -140,16 +131,14 @@ void Engine::start() {
     {
         std::lock_guard<std::mutex> guard(start_mu_);
         simulation_ready_ = false;
-        render_ready_ = false;
         start_release_ = false;
     }
     running_.store(true);
-    simulation_ = std::thread([this] { simulation_loop(); });
-    render_ = std::thread([this] { render_loop(); });
+    simulation_ = std::thread([this] { engine_loop(); });
     {
         std::unique_lock<std::mutex> guard(start_mu_);
-        start_cv_.wait(guard, [&] { return simulation_ready_ && render_ready_; });
-        game_.set_thread_ids(simulation_id_, render_id_);
+        start_cv_.wait(guard, [&] { return simulation_ready_; });
+        game_.set_engine_thread(simulation_id_);
         game_.set_threads_running(true);
         start_release_ = true;
     }
@@ -282,16 +271,12 @@ void Engine::stop() {
     if (simulation_.joinable()) {
         simulation_.join();
     }
-    if (render_.joinable()) {
-        render_.join();
-    }
     game_.set_threads_running(false);
 }
 
-void Engine::simulation_loop() {
+void Engine::engine_loop() {
     set_thread_role(ThreadRole::Simulation);
-    profiler::register_thread("Sim");
-    static const profiler::ScopeId kLockWait = profiler::intern("Lock wait", profiler::Group::Engine);
+    profiler::register_thread("Engine");
     {
         std::unique_lock<std::mutex> guard(start_mu_);
         simulation_id_ = std::this_thread::get_id();
@@ -304,384 +289,294 @@ void Engine::simulation_loop() {
     }
 
     auto last = std::chrono::steady_clock::now();
-    std::chrono::steady_clock::time_point next_step;
-    double accumulator = 0;
+    std::chrono::steady_clock::time_point next_frame;
+    bool was_paused = true;
     while (running_.load()) {
-        bool woke = false;
-        {
-            std::unique_lock<std::mutex> pause_lock(pause_mu_);
-            if (paused_) {
-                // Paused, the play step waits, but the command line's and the plugins'
-                // threads keep time. The tool step takes the write lock, as a paused edit
-                // does, so the two take turns. pause_mu_ is let go meanwhile.
-                auto last_tool = std::chrono::steady_clock::now();
-                while (!pause_cv_.wait_for(pause_lock, kToolInterval, [&] { return !paused_ || !running_.load(); })) {
-                    const auto now = std::chrono::steady_clock::now();
-                    const double dt = std::min(0.1, std::chrono::duration<double>(now - last_tool).count());
-                    last_tool = now;
-                    pause_lock.unlock();
-                    // Stopped, Custom PhysicsObjects' Meshes are split into convex
-                    // pieces, and bodies follow the tree and the GameObjects they
-                    // move without being simulated. A paused test writes no files
-                    // and moves no body.
-                    guarded_step(
-                        [&] {
-                            PROFILE_SCOPE("Stopped physics", profiler::Group::Physics);
-                            DataModelLock lock(game_, DataModelLock::Write);
-                            if (!game_.simulation_running()) {
-                                // The last tick's tool and command line edits, first,
-                                // so the pieces below are cut from the newest geometry.
-                                game_.mesh_editors().step(game_, std::chrono::steady_clock::now());
-                                decomposer_.update(game_);
-                                // Textures before terrain_: a Material newly seen this tick
-                                // already has its layer index (TerrainTextures::layer_of) by
-                                // the time rebuild_look runs inside terrain_.update().
-                                // Terrain meshes before physics syncs, as the running tick
-                                // also orders it (see below): a Terrain's shape and collider
-                                // need to exist before physics_.sync looks for them, or a
-                                // Terrain created this tick still shows up in TerrainWorld's
-                                // views with no collider built yet, for one tick.
-                                textures_.update(game_);
-                                terrain_.update(game_);
-                                report_terrain_failures();
-                                terrain_.attach_textures(textures_);
-                                physics_.sync(game_);
-                                // Any RigidConstraint sub a write left off its parent's
-                                // pivot goes back on it; a consistent place writes nothing.
-                                if (game_.assemblies().follow(game_, 0) > 0) {
-                                    game_.history().mark_dirty();
-                                }
-                            }
-                        },
-                        [&] { contract_count_.fetch_add(1); });
-                    if (!scripts_ || !scripts_->tools_open()) {
-                        pause_lock.lock();
-                        continue;
-                    }
-                    guarded_step(
-                        [&] {
-                            PROFILE_SCOPE("Tool step", profiler::Group::Engine);
-                            DataModelLock lock(game_, DataModelLock::Write);
-                            scripts_->step_tools(dt);
-                        },
-                        [&] { contract_count_.fetch_add(1); });
-                    pause_lock.lock();
-                }
-                woke = true;
-            }
-        }
-        if (!running_.load()) {
-            break;
-        }
-        // The time spent paused is not a simulation step.
-        if (woke && clock_ == nullptr) {
-            last = std::chrono::steady_clock::now();
-        }
-        // Nor slots to catch up on.
-        if (woke) {
-            next_step = {};
-        }
-
-        // Sample before the step so a paint that arrives during it is not missed.
+        // Sample before the frame so a paint that arrives during it is not missed.
         std::uint64_t client_seen = 0;
-        const bool wait_for_client = simulation_client_sync_.load() && !(simulation_pace_hz_ > 0.0);
+        const bool wait_for_client = client_sync_.load() && !(pace_hz_ > 0.0);
         if (wait_for_client) {
             std::lock_guard<std::mutex> guard(client_frame_mu_);
             client_seen = client_frames_;
         }
         const auto frame_start = std::chrono::steady_clock::now();
-        double wall = render_dt_;
-        if (clock_ != nullptr) {
-            wall = clock_->delta_seconds();
-        } else {
-            const auto now = std::chrono::steady_clock::now();
-            wall = std::chrono::duration<double>(now - last).count();
-            last = now;
-            if (wall < 0) {
-                wall = 0;
-            }
-            if (wall > 0.1) {
-                wall = 0.1;
-            }
+        double wall = std::chrono::duration<double>(frame_start - last).count();
+        last = frame_start;
+        const bool paused_now = paused();
+        // The time spent paused is not a simulation step, nor slots to catch up on.
+        if (was_paused && !paused_now) {
+            wall = 0;
+            next_frame = {};
         }
+        was_paused = paused_now;
+        run_frame(std::clamp(wall, 0.0, 0.1));
 
-        // A step that follows the paint has no fixed length, so it is given the
-        // time it actually covers. A paced step keeps render_dt.
-        const double step_dt = wait_for_client && wall > 0.0 ? wall : render_dt_;
-
-        int substeps = 0;
-        guarded_step(
-            [&] {
-                PROFILE_SCOPE("Simulation step", profiler::Group::Engine);
-                const bool timing = profiler::enabled();
-                if (timing) {
-                    profiler::begin(kLockWait);
-                }
-                DataModelLock lock(game_, DataModelLock::Write);
-                if (timing) {
-                    profiler::end();
-                }
-                {
-                    PROFILE_SCOPE("Commands", profiler::Group::Engine);
-                    game_.drain_commands();
-                    drain_edits();
-                }
-                {
-                    PROFILE_SCOPE("PreAnimation", profiler::Group::Engine);
-                    scheduler_.run_phase(Phase::PreAnimation, step_dt);
-                }
-                {
-                    // Deferred handlers run on this thread, still under the step lock,
-                    // after the phase that queued them and before Prepare can copy.
-                    PROFILE_SCOPE("Events", profiler::Group::Engine);
-                    game_.events().drain();
-                }
-                {
-                    // After the frame's input and its handlers (a script's Play
-                    // or Stop counts this frame), before physics moves anything.
-                    PROFILE_SCOPE("Animation", profiler::Group::Engine);
-                    step_animators(game_, step_dt);
-                }
-                {
-                    // Once per frame, not per substep: the camera for job
-                    // ordering only needs to move once a frame, and meshing
-                    // is already off this thread (TerrainMesher's workers).
-                    // textures_ first: see the stopped tick's own comment above.
-                    PROFILE_SCOPE("Terrain", profiler::Group::Engine);
-                    {
-                        PROFILE_SCOPE("Terrain textures", profiler::Group::Engine);
-                        textures_.update(game_);
-                    }
-                    terrain_.update(game_);
-                    report_terrain_failures();
-                    terrain_.attach_textures(textures_);
-                }
-                accumulator += wall;
-                constexpr int kMaxSubsteps = 32;
-                if (accumulator >= physics_dt_) {
-                    PROFILE_SCOPE("Physics", profiler::Group::Physics);
-                    while (accumulator >= physics_dt_ && substeps < kMaxSubsteps) {
-                        PROFILE_SCOPE("Substep", profiler::Group::Physics);
-                        scheduler_.run_phase(Phase::PreSimulation, physics_dt_);
-                        game_.events().drain();
-                        scheduler_.run_phase(Phase::PhysicsSubstep, physics_dt_);
-                        game_.events().drain();
-                        {
-                            PROFILE_SCOPE("Box3D", profiler::Group::Physics);
-                            step_physics(physics_dt_);
-                        }
-                        scheduler_.run_phase(Phase::PostSimulation, physics_dt_);
-                        game_.events().drain();
-                        accumulator -= physics_dt_;
-                        ++substeps;
-                    }
-                }
-                {
-                    PROFILE_SCOPE("Heartbeat", profiler::Group::Engine);
-                    scheduler_.run_phase(Phase::Heartbeat, step_dt);
-                    // Stepping instances under the root step in this phase. Bound
-                    // Heartbeat jobs stay for callers that are not instances.
-                    game_.step_instances(step_dt);
-                    game_.events().drain();
-                }
-                // Same dt Heartbeat jobs just received. Scripts resume after that drain.
-                if (scripts_) {
-                    {
-                        PROFILE_SCOPE("Scripts", profiler::Group::Engine);
-                        scripts_->heartbeat(step_dt);
-                    }
-                    // The command line and plugins keep time with the play step.
-                    PROFILE_SCOPE("Tools", profiler::Group::Engine);
-                    scripts_->step_tools(step_dt);
-                }
-                {
-                    PROFILE_SCOPE("Events", profiler::Group::Engine);
-                    game_.events().drain();
-                }
-                {
-                    // This frame's MeshEditor edits, drawn from the next frame.
-                    PROFILE_SCOPE("Mesh edits", profiler::Group::Engine);
-                    game_.mesh_editors().step(game_, std::chrono::steady_clock::now());
-                }
-                {
-                    // After the scripts' writes (a character turned to face
-                    // where it goes), what a hand holds is drawn on the hand.
-                    PROFILE_SCOPE("Held", profiler::Group::Engine);
-                    game_.assemblies().place_held(game_);
-                }
-                // After the scripts, so a Play, Stop, or Destroy this frame is heard this frame.
-                PROFILE_SCOPE("Audio", profiler::Group::Engine);
-                audio_.step(game_, step_dt);
-            },
-            [&] { contract_count_.fetch_add(1); });
-        if (game_.take_deferred_violation()) {
-            contract_count_.fetch_add(1);
-        }
-        last_substeps_.store(substeps);
-        sim_frames_.fetch_add(1);
-
-        if (simulation_pace_hz_ > 0) {
-            WaitForSlot(next_step, frame_start, simulation_pace_hz_);
+        if (pace_hz_ > 0) {
+            WaitForSlot(next_frame, frame_start, pace_hz_);
         } else if (wait_for_client) {
-            // Steps with the window's paint, as the uncapped render loop does.
-            // stop() wakes this wait as well.
+            // Steps with the window's paint. stop() wakes this wait as well.
             std::unique_lock<std::mutex> guard(client_frame_mu_);
             client_frame_cv_.wait_until(guard, frame_start + kSimulationClientFallback, [&] {
                 return !running_.load() || client_frames_ != client_seen;
             });
+        } else if (paused_now) {
+            // Unpaced and paused: the editor's tick rate, woken early by resume or stop.
+            std::unique_lock<std::mutex> guard(pause_mu_);
+            pause_cv_.wait_for(guard, kToolInterval, [&] { return !paused_ || !running_.load(); });
         }
     }
 }
 
-void Engine::render_loop() {
-    set_thread_role(ThreadRole::Render);
-    profiler::register_thread("Render");
-    static const profiler::ScopeId kStep = profiler::intern("Render step", profiler::Group::Render);
-    static const profiler::ScopeId kPrepare = profiler::intern("Prepare", profiler::Group::Render);
+void Engine::run_frame(double wall) {
+    static const profiler::ScopeId kFrame = profiler::intern("Frame", profiler::Group::Engine);
     static const profiler::ScopeId kLockWait = profiler::intern("Lock wait", profiler::Group::Engine);
+    profiler::frame_boundary();
+    // Read before the lock: a paused edit holds pause_mu_ while it waits for the lock.
+    const bool paused_now = paused();
+    const bool timing = profiler::enabled();
+    if (timing) {
+        profiler::begin(kFrame);
+        profiler::begin(kLockWait);
+    }
+    double window_dt = wall;
+    std::uint64_t hold_ns = 0;
+    bool saw_contract = false;
     {
-        std::unique_lock<std::mutex> guard(start_mu_);
-        render_id_ = std::this_thread::get_id();
-        render_ready_ = true;
-        start_cv_.notify_all();
-        start_cv_.wait(guard, [&] { return start_release_; });
-    }
-    if (!running_.load()) {
-        return;
-    }
-
-    auto last_frame = std::chrono::steady_clock::now();
-    std::chrono::steady_clock::time_point next_frame;
-    RenderStepTime step_time;
-    while (running_.load()) {
-        // A frame is one pass of this loop, from one Prepare to the next.
-        profiler::frame_boundary();
-        // Sample before the work so a paint that arrives during the step is not missed.
-        std::uint64_t client_seen = 0;
-        const bool wait_for_client = render_client_sync_.load() && !(render_pace_hz_ > 0.0);
-        if (wait_for_client) {
-            std::lock_guard<std::mutex> guard(client_frame_mu_);
-            client_seen = client_frames_;
-        }
-        const auto frame_start = std::chrono::steady_clock::now();
-        double frame_dt = std::chrono::duration<double>(frame_start - last_frame).count();
-        last_frame = frame_start;
-        step_time.add(frame_dt);
-        if (frame_dt < 0) {
-            frame_dt = 0;
-        }
-        if (frame_dt > 0.1) {
-            frame_dt = 0.1;
-        }
-        if (!(frame_dt > 0.0)) {
-            frame_dt = render_dt_;
-        }
-        bool prepared = false;
-        bool saw_contract = false;
-        std::uint64_t hold_ns = 0;
-        const bool timing = profiler::enabled();
-        // The frame's work, Prepare to PostRender, as one scope; the wait for the
-        // next paint after it is not part of it.
-        if (timing) {
-            profiler::begin(kStep);
-            profiler::begin(kPrepare);
-            profiler::begin(kLockWait);
-        }
-        {
-            DataModelLock lock(game_, DataModelLock::Write, std::chrono::milliseconds(2));
-            if (timing) {
-                profiler::end();
-            }
-            if (lock.owns()) {
-                const auto hold_start = std::chrono::steady_clock::now();
-                // Includes the frames since the last prepared one, which ran no RenderStepped.
-                const double step_dt = step_time.take(render_dt_);
-                pump_.begin_prerender_window(game_);
-                // Roblox order inside the pre-draw window: RenderStepped, then PreRender.
-                // A failure in one does not skip the other or the copy.
-                const auto contract = [&saw_contract] { saw_contract = true; };
-                guarded_step(
-                    [&] {
-                        PROFILE_SCOPE("RenderStepped", profiler::Group::Engine);
-                        scheduler_.run_phase(Phase::RenderStepped, step_dt);
-                    },
-                    contract);
-                guarded_step(
-                    [&] {
-                        PROFILE_SCOPE("PreRender", profiler::Group::Engine);
-                        scheduler_.run_phase(Phase::PreRender, step_dt);
-                    },
-                    contract);
-                pump_.end_prerender_window(game_);
-                // Copy even after a rejected PreRender write. Authorize fails before
-                // mutation, so the queue still describes real sim state.
-                guarded_step(
-                    [&] {
-                        PROFILE_SCOPE("Snapshot copy", profiler::Group::Engine);
-                        pump_.take_changes(game_);
-                        prepared = true;
-                    },
-                    contract);
-                hold_ns = static_cast<std::uint64_t>(
-                    std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - hold_start)
-                        .count());
-            }
-        }
-        if (game_.take_deferred_violation()) {
-            saw_contract = true;
-        }
-        if (saw_contract) {
-            contract_count_.fetch_add(1);
-            contract_prepare_ns_.store(hold_ns);
-        }
-        if (prepared) {
-            // The buffer copy needs no DataModel state, so it is out of the lock.
-            PROFILE_SCOPE("Publish", profiler::Group::Engine);
-            pump_.finish_copy();
-            pump_.publish();
-        }
+        DataModelLock lock(game_, DataModelLock::Write);
         if (timing) {
             profiler::end();
         }
-        // Perform is outside the pre-draw window. A DataModel write there is path D.
-        const auto late_contract = [this] { contract_count_.fetch_add(1); };
-        if (renderer_ != nullptr) {
-            guarded_step(
-                [&] {
-                    {
-                        PROFILE_SCOPE("Perform", profiler::Group::Render);
-                        renderer_->perform(pump_.front());
-                    }
-                    PROFILE_SCOPE("Present", profiler::Group::Render);
-                    renderer_->present();
-                },
-                late_contract);
+        if (paused_now) {
+            run_stopped_tick();
+        } else {
+            const double step_wall = clock_ != nullptr ? clock_->delta_seconds() : wall;
+            // RenderStepped gets the frame's dt, the one Heartbeat gets.
+            const bool measured = client_sync_.load() && !(pace_hz_ > 0.0);
+            window_dt = measured && step_wall > 0.0 ? step_wall : render_dt_;
+            guarded_step([&] { run_step(step_wall); }, [&] { contract_count_.fetch_add(1); });
+            if (game_.take_deferred_violation()) {
+                contract_count_.fetch_add(1);
+            }
+            sim_frames_.fetch_add(1);
         }
-        // After Present the snapshot for this frame is already published.
-        // PostRender does not hold the Prepare lock and is not part of the 2 ms budget.
+        const auto hold_start = std::chrono::steady_clock::now();
+        {
+            PROFILE_SCOPE("Prepare", profiler::Group::Render);
+            run_window(window_dt);
+        }
+        hold_ns = static_cast<std::uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - hold_start)
+                .count());
+        saw_contract = game_.take_deferred_violation();
+    }
+    if (saw_contract) {
+        contract_count_.fetch_add(1);
+        contract_prepare_ns_.store(hold_ns);
+    }
+    {
+        // The buffer copy needs no DataModel state, so it is out of the lock.
+        PROFILE_SCOPE("Publish", profiler::Group::Engine);
+        pump_.finish_copy();
+        pump_.publish();
+    }
+    // Perform is after the frame's lock. A DataModel write there is refused.
+    if (renderer_ != nullptr) {
         guarded_step(
             [&] {
-                PROFILE_SCOPE("PostRender", profiler::Group::Engine);
-                scheduler_.run_phase(Phase::PostRender, frame_dt);
+                {
+                    PROFILE_SCOPE("Perform", profiler::Group::Render);
+                    renderer_->perform(pump_.front());
+                }
+                PROFILE_SCOPE("Present", profiler::Group::Render);
+                renderer_->present();
             },
-            late_contract);
-        if (timing) {
-            profiler::end();
-        }
-        present_count_.fetch_add(1);
+            [this] { contract_count_.fetch_add(1); });
+    }
+    if (timing) {
+        profiler::end();
+    }
+    present_count_.fetch_add(1);
+}
 
-        if (render_pace_hz_ > 0) {
-            WaitForSlot(next_frame, frame_start, render_pace_hz_);
-        } else if (wait_for_client) {
-            // The window paints much slower than an empty step. Waiting here keeps
-            // the step with that paint. The timeout only covers a window that is
-            // not painting; stop() wakes this wait as well.
-            std::unique_lock<std::mutex> guard(client_frame_mu_);
-            client_frame_cv_.wait_for(guard, std::chrono::milliseconds(50), [&] {
-                return !running_.load() || client_frames_ != client_seen;
-            });
+void Engine::run_stopped_tick() {
+    const auto now = std::chrono::steady_clock::now();
+    const bool first = last_tool_ == std::chrono::steady_clock::time_point{};
+    if (!first && now - last_tool_ < kToolInterval) {
+        return;
+    }
+    const double dt = first ? render_dt_ : std::min(0.1, std::chrono::duration<double>(now - last_tool_).count());
+    last_tool_ = now;
+    // Paused, the play step waits, but the command line's and the plugins'
+    // threads keep time. Stopped, Custom PhysicsObjects' Meshes are split into
+    // convex pieces, and bodies follow the tree and the GameObjects they move
+    // without being simulated. A paused test writes no files and moves no body.
+    guarded_step(
+        [&] {
+            PROFILE_SCOPE("Stopped physics", profiler::Group::Physics);
+            if (!game_.simulation_running()) {
+                // The last tick's tool and command line edits, first,
+                // so the pieces below are cut from the newest geometry.
+                game_.mesh_editors().step(game_, std::chrono::steady_clock::now());
+                decomposer_.update(game_);
+                // Textures before terrain_: a Material newly seen this tick
+                // already has its layer index (TerrainTextures::layer_of) by
+                // the time rebuild_look runs inside terrain_.update().
+                // Terrain meshes before physics syncs, as the running tick
+                // also orders it (see below): a Terrain's shape and collider
+                // need to exist before physics_.sync looks for them, or a
+                // Terrain created this tick still shows up in TerrainWorld's
+                // views with no collider built yet, for one tick.
+                textures_.update(game_);
+                terrain_.update(game_);
+                report_terrain_failures();
+                terrain_.attach_textures(textures_);
+                physics_.sync(game_);
+                // Any RigidConstraint sub a write left off its parent's
+                // pivot goes back on it; a consistent place writes nothing.
+                if (game_.assemblies().follow(game_, 0) > 0) {
+                    game_.history().mark_dirty();
+                }
+            }
+        },
+        [&] { contract_count_.fetch_add(1); });
+    if (!scripts_ || !scripts_->tools_open()) {
+        return;
+    }
+    guarded_step(
+        [&] {
+            PROFILE_SCOPE("Tool step", profiler::Group::Engine);
+            scripts_->step_tools(dt);
+        },
+        [&] { contract_count_.fetch_add(1); });
+}
+
+void Engine::run_step(double wall) {
+    PROFILE_SCOPE("Simulation step", profiler::Group::Engine);
+    // A step that follows the paint has no fixed length, so it is given the
+    // time it actually covers. A paced step keeps render_dt.
+    const bool measured = client_sync_.load() && !(pace_hz_ > 0.0);
+    const double step_dt = measured && wall > 0.0 ? wall : render_dt_;
+    int substeps = 0;
+    {
+        PROFILE_SCOPE("Commands", profiler::Group::Engine);
+        game_.drain_commands();
+        drain_edits();
+    }
+    {
+        PROFILE_SCOPE("PreAnimation", profiler::Group::Engine);
+        scheduler_.run_phase(Phase::PreAnimation, step_dt);
+    }
+    {
+        // Deferred handlers run on this thread, still under the step lock,
+        // after the phase that queued them and before Prepare can copy.
+        PROFILE_SCOPE("Events", profiler::Group::Engine);
+        game_.events().drain();
+    }
+    {
+        // After the frame's input and its handlers (a script's Play
+        // or Stop counts this frame), before physics moves anything.
+        PROFILE_SCOPE("Animation", profiler::Group::Engine);
+        step_animators(game_, step_dt);
+    }
+    {
+        // Once per frame, not per substep: the camera for job
+        // ordering only needs to move once a frame, and meshing
+        // is already off this thread (TerrainMesher's workers).
+        // textures_ first: see the stopped tick's own comment above.
+        PROFILE_SCOPE("Terrain", profiler::Group::Engine);
+        {
+            PROFILE_SCOPE("Terrain textures", profiler::Group::Engine);
+            textures_.update(game_);
+        }
+        terrain_.update(game_);
+        report_terrain_failures();
+        terrain_.attach_textures(textures_);
+    }
+    accumulator_ += wall;
+    constexpr int kMaxSubsteps = 32;
+    if (accumulator_ >= physics_dt_) {
+        PROFILE_SCOPE("Physics", profiler::Group::Physics);
+        while (accumulator_ >= physics_dt_ && substeps < kMaxSubsteps) {
+            PROFILE_SCOPE("Substep", profiler::Group::Physics);
+            scheduler_.run_phase(Phase::PreSimulation, physics_dt_);
+            game_.events().drain();
+            scheduler_.run_phase(Phase::PhysicsSubstep, physics_dt_);
+            game_.events().drain();
+            {
+                PROFILE_SCOPE("Box3D", profiler::Group::Physics);
+                step_physics(physics_dt_);
+            }
+            scheduler_.run_phase(Phase::PostSimulation, physics_dt_);
+            game_.events().drain();
+            accumulator_ -= physics_dt_;
+            ++substeps;
         }
     }
+    {
+        PROFILE_SCOPE("Heartbeat", profiler::Group::Engine);
+        scheduler_.run_phase(Phase::Heartbeat, step_dt);
+        // Stepping instances under the root step in this phase. Bound
+        // Heartbeat jobs stay for callers that are not instances.
+        game_.step_instances(step_dt);
+        game_.events().drain();
+    }
+    // Same dt Heartbeat jobs just received. Scripts resume after that drain.
+    if (scripts_) {
+        {
+            PROFILE_SCOPE("Scripts", profiler::Group::Engine);
+            scripts_->heartbeat(step_dt);
+        }
+        // The command line and plugins keep time with the play step.
+        PROFILE_SCOPE("Tools", profiler::Group::Engine);
+        scripts_->step_tools(step_dt);
+    }
+    {
+        PROFILE_SCOPE("Events", profiler::Group::Engine);
+        game_.events().drain();
+    }
+    {
+        // This frame's MeshEditor edits, drawn from the next frame.
+        PROFILE_SCOPE("Mesh edits", profiler::Group::Engine);
+        game_.mesh_editors().step(game_, std::chrono::steady_clock::now());
+    }
+    {
+        // After the scripts' writes (a character turned to face
+        // where it goes), what a hand holds is drawn on the hand.
+        PROFILE_SCOPE("Held", profiler::Group::Engine);
+        game_.assemblies().place_held(game_);
+    }
+    // After the scripts, so a Play, Stop, or Destroy this frame is heard this frame.
+    PROFILE_SCOPE("Audio", profiler::Group::Engine);
+    audio_.step(game_, step_dt);
+    last_substeps_.store(substeps);
+}
+
+void Engine::run_window(double dt) {
+    pump_.begin_prerender_window(game_);
+    // Roblox order inside the pre-draw window: RenderStepped, then PreRender.
+    // A failure in one does not skip the other or the copy.
+    const auto contract = [this] { contract_count_.fetch_add(1); };
+    guarded_step(
+        [&] {
+            PROFILE_SCOPE("RenderStepped", profiler::Group::Engine);
+            scheduler_.run_phase(Phase::RenderStepped, dt);
+        },
+        contract);
+    guarded_step(
+        [&] {
+            PROFILE_SCOPE("PreRender", profiler::Group::Engine);
+            scheduler_.run_phase(Phase::PreRender, dt);
+        },
+        contract);
+    pump_.end_prerender_window(game_);
+    // Copy even after a rejected PreRender write. Authorize fails before
+    // mutation, so the queue still describes real sim state.
+    guarded_step(
+        [&] {
+            PROFILE_SCOPE("Snapshot copy", profiler::Group::Engine);
+            pump_.take_changes(game_);
+        },
+        contract);
 }
 
 void Engine::step_physics(double dt) {

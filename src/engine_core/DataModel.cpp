@@ -180,16 +180,15 @@ EventQueue& DataModel::events() { return state_->events; }
 
 const EventQueue& DataModel::events() const { return state_->events; }
 
-void DataModel::set_thread_ids(std::thread::id simulation, std::thread::id render) {
-    state_->simulation_thread = simulation;
-    state_->render_thread = render;
-}
+void DataModel::set_engine_thread(std::thread::id engine) { state_->engine_thread = engine; }
 
 void DataModel::set_threads_running(bool running) { state_->threads_running = running; }
 
-std::thread::id DataModel::simulation_thread_id() const { return state_->simulation_thread; }
+std::thread::id DataModel::simulation_thread_id() const { return state_->engine_thread; }
 
-std::thread::id DataModel::render_thread_id() const { return state_->render_thread; }
+bool DataModel::engine_thread() const {
+    return !state_->threads_running || std::this_thread::get_id() == state_->engine_thread;
+}
 
 bool DataModel::threads_running() const { return state_->threads_running; }
 
@@ -204,19 +203,25 @@ bool DataModel::gameplay_thread() const {
         return true;
     }
     const std::thread::id self = std::this_thread::get_id();
-    return self == state_->simulation_thread || self == state_->edit_owner;
+    if (self == state_->edit_owner) {
+        return true;
+    }
+    // The engine thread is the sim while it holds the frame's lock outside the
+    // window. Inside the window only a script may act as the sim
+    // (mutation_thread); after the lock (Perform, Present) nothing may.
+    return self == state_->engine_thread && !state_->prerender_window && holds_write();
 }
 
 bool DataModel::mutation_thread() const {
     if (gameplay_thread()) {
         return true;
     }
-    // A script running in the render window: the render thread holds the write
-    // lock for the whole window, exactly as SimulationThread holds it for a step,
-    // and Prepare copies only after the phases. Both flags are written only by
-    // the render thread, so it alone may read them here, and checks its id first.
-    // A C++ render job runs with window_script false and keeps today's limits.
-    return std::this_thread::get_id() == state_->render_thread && state_->prerender_window &&
+    // A script running in the render window: the engine thread holds the write
+    // lock for the whole frame, and copies only after the window's phases. Both
+    // flags are written only by the engine thread, so it alone may read them
+    // here, and checks its id first. A C++ render job runs with window_script
+    // false and keeps today's limits.
+    return std::this_thread::get_id() == state_->engine_thread && state_->prerender_window &&
            state_->window_script;
 }
 
@@ -281,7 +286,7 @@ void DataModel::unlock_write() {
     // thread, such as one running a paused edit, never does, so its entry goes
     // with its last guard rather than waiting for a thread that reuses its id.
     const std::thread::id self = std::this_thread::get_id();
-    if (self != state_->simulation_thread && self != state_->render_thread) {
+    if (self != state_->engine_thread) {
         std::lock_guard<std::mutex> guard(state_->deferred_mu);
         for (auto it = state_->deferred.begin(); it != state_->deferred.end(); ++it) {
             if (it->first == self) {
@@ -325,7 +330,8 @@ const GameObject* DataModel::game_object_at_slot(std::uint32_t index) const {
 }
 
 WriteOrigin DataModel::current_origin() const {
-    if (state_->threads_running && std::this_thread::get_id() == state_->render_thread) {
+    if (state_->threads_running && state_->prerender_window &&
+        std::this_thread::get_id() == state_->engine_thread) {
         return WriteOrigin::PreRenderDataModel;
     }
     return WriteOrigin::Simulation;
@@ -378,12 +384,15 @@ bool DataModel::authorize(const Slot& part, bool force_sim_write) {
         return true;
     }
     const std::thread::id self = std::this_thread::get_id();
-    if (self == state_->simulation_thread || self == state_->edit_owner) {
+    if (self == state_->edit_owner) {
         return true;
     }
-    if (self == state_->render_thread) {
+    if (self == state_->engine_thread) {
+        if (!holds_write()) {
+            return reject_write("DataModel write from the engine thread outside its frame lock");
+        }
         if (!state_->prerender_window) {
-            return reject_write("DataModel write from RenderThread outside RenderStepped and PreRender");
+            return true;
         }
         // A write made while Lua runs in the window (a RenderStepped/PreRender
         // handler, or a Wait resumption there) authorizes as a sim write would,
@@ -676,8 +685,8 @@ GameObject& DataModel::create_game_object() {
 void DataModel::destroy(InstanceId id) {
     // A paused edit owns the world like SimulationThread does, so it destroys now.
     if (!mutation_thread()) {
-        if (std::this_thread::get_id() == state_->render_thread) {
-            contract_fail("destroy from RenderThread");
+        if (std::this_thread::get_id() == state_->engine_thread) {
+            contract_fail("destroy from a render job or outside the frame lock");
         }
         Command command;
         command.type = Command::Type::Destroy;
@@ -739,8 +748,8 @@ void DataModel::destroy(InstanceId id) {
 }
 
 bool DataModel::queues_visual_write() const {
-    // A paused edit writes now, like SimulationThread. Any other thread enqueues.
-    return state_->threads_running && !gameplay_thread() && std::this_thread::get_id() != state_->render_thread;
+    // A paused edit writes now, like the engine thread. Any other thread enqueues.
+    return state_->threads_running && !gameplay_thread() && std::this_thread::get_id() != state_->engine_thread;
 }
 
 SpatialObject* DataModel::visual_target(InstanceId id, bool force, const char* dead, const char* not_object) {

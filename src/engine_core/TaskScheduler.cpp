@@ -119,20 +119,7 @@ namespace {
 thread_local Phase tls_phase = Phase::PreAnimation;
 
 bool is_render_phase(Phase phase) {
-    return phase == Phase::RenderStepped || phase == Phase::PreRender || phase == Phase::PostRender;
-}
-
-const char* render_phase_thread_message(Phase phase) {
-    switch (phase) {
-    case Phase::RenderStepped:
-        return "RenderStepped runs on RenderThread";
-    case Phase::PreRender:
-        return "PreRender runs on RenderThread";
-    case Phase::PostRender:
-        return "PostRender runs on RenderThread";
-    default:
-        return "render phases run on RenderThread";
-    }
+    return phase == Phase::RenderStepped || phase == Phase::PreRender;
 }
 
 }  // namespace
@@ -421,12 +408,10 @@ void TaskScheduler::resume_ready() {
 }
 
 void TaskScheduler::run_phase(Phase phase, double dt) {
-    if (is_render_phase(phase)) {
-        if (thread_role() != ThreadRole::Render) {
-            contract_fail(render_phase_thread_message(phase));
-        }
-    } else if (thread_role() != ThreadRole::Simulation) {
-        contract_fail("gameplay phases run on SimulationThread");
+    // The window's phases must also run inside the window: EventQueue::invoke_render,
+    // which every window delivery goes through, checks that.
+    if (thread_role() != ThreadRole::Simulation) {
+        contract_fail("phases run on the engine thread");
     }
     tls_phase = phase;
     const int phase_index = static_cast<int>(phase);

@@ -30,7 +30,7 @@ inline constexpr std::size_t kRingEvents = 65536;
 inline constexpr std::size_t kHistoryFrames = 300;
 inline constexpr std::size_t kMaxNameBytes = 64;
 // Sim, Render, Render draw, UI, and GPU: the rows every history has, in order.
-inline constexpr std::size_t kFixedRowCount = 5;
+inline constexpr std::size_t kFixedRowCount = 4;
 // A 60 Hz frame's budget, and the length past which a frame counts as over it:
 // a little slack, so vsync's jitter around 16.7 ms is not called slow.
 inline constexpr double kBudgetMs = 16.6;

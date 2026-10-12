@@ -296,9 +296,6 @@ void EventQueue::invoke_connections(Signal& signal, const Event& event) {
 // and once-tombstoning, because drain() refuses to run inside the prerender
 // window and this is the only other door in.
 void EventQueue::invoke_render(Signal& signal, bool include_tagged) {
-    if (thread_role() != ThreadRole::Render) {
-        contract_fail("invoke_render runs on RenderThread");
-    }
     if (prerender_open_ == nullptr || !*prerender_open_) {
         contract_fail("invoke_render runs inside RenderStepped or PreRender");
     }
@@ -445,7 +442,8 @@ std::size_t EventQueue::queued_with_args() const {
 }
 
 void EventQueue::post(const Event& event) {
-    const bool on_sim = thread_role() == ThreadRole::Simulation;
+    // Inside the window a write queues its handlers, as it did from the render thread.
+    const bool on_sim = thread_role() == ThreadRole::Simulation && !(prerender_open_ != nullptr && *prerender_open_);
     const bool run_now = policy_ == EventPolicy::Immediate && on_sim && immediate_depth_ < kImmediateCap;
     if (!run_now) {
         enqueue(event);
@@ -459,7 +457,7 @@ void EventQueue::post(const Event& event) {
 
 void EventQueue::drain() {
     if (thread_role() != ThreadRole::Simulation) {
-        contract_fail("EventQueue::drain runs on SimulationThread");
+        contract_fail("EventQueue::drain runs on the engine thread");
     }
     if (prerender_open_ != nullptr && *prerender_open_) {
         contract_fail("EventQueue::drain during RenderStepped or PreRender");

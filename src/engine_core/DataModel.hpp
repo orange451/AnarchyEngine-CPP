@@ -112,18 +112,19 @@ struct PropertyValue;
 //
 // print(object.transform()) after a PreRender GameObject write shows the new
 // value immediately, because this object is live memory. The GPU does not
-// read it. Pixels come from VisualSnapshot, filled later in the same Prepare
+// read it. Pixels come from VisualSnapshot, filled later in the same frame
 // for path B, or not at all for a write that lands after the copy.
 //
-// Path A: SimulationThread phases write here. They dirty the queue and become
-//         sim truth. The snapshot sees them at the next Prepare.
-// Path B: RenderThread may write a GameObject only inside RenderStepped or
-//         PreRender, before the copy, and only for visual_only parts
-//         (or ForceSimWrite).
+// One engine thread runs each frame under the write lock: the sim step, then
+// the render window (RenderStepped, PreRender), then the snapshot copy.
+// Path A: the sim step's phases write here. They dirty the queue and become
+//         sim truth. The snapshot sees them at this frame's copy.
+// Path B: inside the window, a script may write anything; a C++ render job
+//         may write a GameObject only if it is visual_only (or ForceSimWrite).
 // Path C: does not enter this class. See SnapshotPump::override.
-// Path D: a render-thread write outside that window fails the contract.
-//         Perform, Present, and PostRender are outside it.
-// Path E: any other OS thread enqueues a command. Simulation applies it.
+// Path E: any other OS thread enqueues a command. The sim step applies it.
+// The engine thread writing without the frame's lock (Perform, Present)
+// fails the contract.
 class DataModel {
 public:
     static constexpr std::size_t kMaxInstances = 16384;
@@ -215,13 +216,15 @@ public:
     // True for a Constraint. Read once, when its entity is issued.
     virtual bool constraint() const { return false; }
 
-    void set_thread_ids(std::thread::id simulation, std::thread::id render);
+    // The engine's one thread: the sim step and the render window both run on it.
+    void set_engine_thread(std::thread::id engine);
     void set_threads_running(bool running);
     // What the two setters above last stored, so a test rig that borrows the
-    // engine's thread roles can put them back.
+    // engine's thread can put it back.
     std::thread::id simulation_thread_id() const;
-    std::thread::id render_thread_id() const;
     bool threads_running() const;
+    // True while threads are not running, or on the engine thread.
+    bool engine_thread() const;
 
     // Plain instance in this world. No transform or velocity.
     DataModel& create();

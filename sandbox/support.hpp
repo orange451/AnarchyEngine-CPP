@@ -120,44 +120,36 @@ struct ScriptRig {
         }
     }
 
-    // One rendered frame, as Engine::render_loop runs it (Engine.cpp, the Prepare
-    // block): a thread of its own in the render role, registered as the render
-    // thread with threads running and this thread as the simulation thread, so
-    // authorize and every SimulationThread guard see the real render thread. It
-    // holds the write lock across the window, opens it, runs RenderStepped,
-    // closes it, and takes its deferred violation as the engine does after the
-    // lock, counting it in render_violations. The thread ids and threads_running
-    // go back to what they were after.
+    // One rendered frame's window, as Engine::run_window runs it, on this
+    // thread as the engine thread with threads running, so authorize and every
+    // engine-thread guard see a real window. It holds the write lock across the
+    // window, opens it, runs RenderStepped, closes it, and takes its deferred
+    // violation as the engine does after the lock, counting it in
+    // render_violations. The engine thread and threads_running go back to what
+    // they were after.
     void render(double dt = 1.0 / 60.0) {
-        const std::thread::id saved_sim = game.simulation_thread_id();
-        const std::thread::id saved_render = game.render_thread_id();
+        const std::thread::id saved_engine = game.simulation_thread_id();
         const bool saved_running = game.threads_running();
-        const std::thread::id sim = std::this_thread::get_id();
         bool violated = false;
         const char* reason = nullptr;
-        std::thread render_thread([&] {
-            engine_core::set_thread_role(engine_core::ThreadRole::Render);
-            game.set_thread_ids(sim, std::this_thread::get_id());
-            game.set_threads_running(true);
-            {
-                engine_core::DataModelLock lock(game, engine_core::DataModelLock::Write);
-                game.set_prerender_window(true);
-                scheduler.run_phase(engine_core::Phase::RenderStepped, dt);
-                game.set_prerender_window(false);
-            }
-            violated = game.take_deferred_violation(&reason);
-            game.set_threads_running(saved_running);
-            game.set_thread_ids(saved_sim, saved_render);
-            engine_core::set_thread_role(engine_core::ThreadRole::Unknown);
-        });
-        render_thread.join();
+        game.set_engine_thread(std::this_thread::get_id());
+        game.set_threads_running(true);
+        {
+            engine_core::DataModelLock lock(game, engine_core::DataModelLock::Write);
+            game.set_prerender_window(true);
+            scheduler.run_phase(engine_core::Phase::RenderStepped, dt);
+            game.set_prerender_window(false);
+        }
+        violated = game.take_deferred_violation(&reason);
+        game.set_threads_running(saved_running);
+        game.set_engine_thread(saved_engine);
         if (violated) {
             ++render_violations;
             last_render_violation = reason != nullptr ? reason : "";
         }
     }
 
-    // Refused writes the render thread deferred, one per render() call at most,
+    // Refused writes the window deferred, one per render() call at most,
     // as the engine counts them, and the last one's reason.
     int render_violations = 0;
     std::string last_render_violation;

@@ -287,7 +287,7 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight, const std::filesys
     });
 
     // Docked before the threads start. Its first paint is what lets the
-    // uncapped render thread leave its wait.
+    // uncapped engine loop leave its wait.
     auto game_view = jadefx::make<runner::GameView>(runner_);
     frame_view_ = game_view.get();
     scene_view_ = std::move(game_view);

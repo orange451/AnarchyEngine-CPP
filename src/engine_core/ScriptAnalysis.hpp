@@ -178,9 +178,9 @@ struct LuauAnswer {
 // scripts in batches and parses, lints, and type-checks them on a pool of
 // threads; a second thread answers Luau requests from editors. pump() is the
 // only publisher. It runs on the gameplay thread, as
-// DataModel::gameplay_thread counts it (the simulation thread, or the thread
-// running a paused edit), or on the UI thread. Never on
-// RenderThread, and never inside lua_resume or Prepare.
+// DataModel::gameplay_thread counts it (the engine thread in its sim step, or
+// the thread running a paused edit), or on the UI thread. Never inside the
+// render window, and never inside lua_resume.
 //
 // The place is checked in Edit mode only. While the simulation runs nothing is
 // captured or checked: Play cancels a running batch, and changes queue and wait.

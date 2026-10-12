@@ -147,7 +147,7 @@ struct DataModel::State {
     // The thread that holds write_mu, and how many guards it has open. Only that
     // thread changes these, so another reads owner only to learn it is not the
     // holder. The mutex itself is taken only for the outermost guard, so
-    // RenderThread's try_lock waits on a normal timed mutex instead of a
+    // a timed try_lock waits on a normal timed mutex instead of a
     // recursive one.
     std::atomic<std::thread::id> owner{};
     int write_depth = 0;

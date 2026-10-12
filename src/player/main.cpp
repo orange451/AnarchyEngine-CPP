@@ -151,7 +151,7 @@ public:
         stage.setFrameTail([scripts] { PrintOutput(*scripts); });
         // The window's own work each frame, on the profiler's UI row.
         runner::profile_ui_frames(stage);
-        // The view's first paint is what lets the render thread leave its wait.
+        // The view's first paint is what lets the engine loop leave its wait.
         runner_.start();
         // As Test does in the studio: the place as loaded is what plays.
         engine.on_simulation([](engine_core::DataModel& game) {

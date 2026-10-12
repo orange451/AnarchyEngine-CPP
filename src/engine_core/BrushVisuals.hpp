@@ -30,7 +30,7 @@ struct VisualBrushDraw;
 // other Brush (moving, transparent, or with a transparent face) draws on its
 // own, in its own space, its mesh rebuilt only when it changes.
 //
-// RenderThread, inside take_changes, under the DataModel write lock.
+// The engine thread, inside take_changes, under the DataModel write lock.
 class BrushVisuals {
 public:
     static constexpr double kCellSize = 64.0;

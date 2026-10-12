@@ -1654,7 +1654,7 @@ unsigned CreateTerrainArray(engine_core::texture::PixelFormat format, int size, 
     return texture;
 }
 
-// One level of one layer, all three planes, into the arrays. RenderThread.
+// One level of one layer, all three planes, into the arrays. UI thread, GL context current.
 void UploadTerrainLevel(const unsigned arrays[3], int layerIndex, int level, int levelSize,
                         const engine_core::terrain::LayerBytes& layer) {
     const std::array<engine_core::texture::PixelFormat, 3> formats = engine_core::terrain::layer_formats();

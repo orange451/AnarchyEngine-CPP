@@ -24,7 +24,7 @@ class ViewportPane;
 // - its camera, its Skybox, one of its Prefabs, or one of its poses reads differently;
 // - mark_all was called.
 // A pane that is built again publishes a new VisualViewport, with the next
-// revision, only when the result differs from the last one. RenderThread,
+// revision, only when the result differs from the last one. The engine thread,
 // under the Prepare lock, as SnapshotPump.
 class ViewportScenes {
 public:

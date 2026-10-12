@@ -75,7 +75,7 @@ Engine::Engine() {
     physics_.set_terrain_world(&terrain_);
     // Task 5: rebuild_look's layer_of source.
     terrain_.set_terrain_textures(&textures_);
-    // RenderThread's snapshot carries each Terrain's chunks and look, read
+    // The engine's snapshot carries each Terrain's chunks and look, read
     // from terrain_ by SnapshotPump::resolve_terrains.
     pump_.set_terrain_world(&terrain_);
     // So do instances' warnings, such as a Terrain whose voxel file is missing.
@@ -95,8 +95,8 @@ Engine::~Engine() {
     stop();
     // game_ is declared before physics_, so it is destroyed after physics_
     // goes away. Clear the pointer here so no one can reach a dangling world
-    // during teardown. This runs after stop() has joined the simulation and
-    // render threads, so nothing else touches game_ and no lock is needed.
+    // during teardown. This runs after stop() has joined the engine thread,
+    // so nothing else touches game_ and no lock is needed.
     game_.set_physics(nullptr);
     // terrain_ is declared after physics_ and pump_, so it goes first.
     physics_.set_terrain_world(nullptr);

@@ -1,5 +1,7 @@
 # RenderStepped in the Render Window Design
 
+> Superseded in part by 2026-10-12-single-engine-loop-design.md: there is one engine thread, and the window is a phase of it, after the sim step. What this document says of RenderThread now holds for the engine thread inside the window.
+
 2026-10-03 · Replaces the sim-thread delivery of `39d28ff` (Let scripts connect to RunService.RenderStepped) with Roblox's semantics: handlers run before the frame is drawn, and what they read is what that frame draws.
 
 ## Goal

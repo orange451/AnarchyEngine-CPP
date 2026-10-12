@@ -34,7 +34,7 @@ void open_host_libraries(lua_State* state);
 // Three Luau states, each with its own scheduler: the play VM for the play session,
 // the console VM for the command line, and the plugin VM for plugins. Every caller of
 // lua_* holds the DataModel write lock: SimulationThread's step, a paused edit (the
-// command line arrives as one, through Engine::on_simulation), or RenderThread inside
+// command line arrives as one, through Engine::on_simulation), or the engine thread inside
 // the Prepare window, which enters only the play and plugin VMs (render_step).
 // A play script's task.wait sleeps on sim_clock, which advances by the Heartbeat dt.
 // The console and plugin VMs keep their own clocks, which step_tools advances, so
@@ -486,7 +486,7 @@ private:
     int lua_depth_ = 0;
     // The thread resume_one is running, which a coroutine inside it runs for.
     Thread* running_ = nullptr;
-    // The render job that runs window handlers. RenderThread, inside Prepare.
+    // The render job that runs window handlers. The engine thread, inside the window.
     void render_step(double dt);
     // True while render_step invokes handlers. Bindings branch on it: a Wait on
     // the window signal resumes here, and a refused write raises instead of

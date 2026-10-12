@@ -289,7 +289,7 @@ void EventQueue::invoke_connections(Signal& signal, const Event& event) {
     }
 }
 
-// The render thread's synchronous counterpart to invoke(): no queued Event,
+// The window's synchronous counterpart to invoke(): no queued Event,
 // no drain, no invoke_epoch_ bookkeeping (nothing here is deferred, so there
 // is nothing for a later drain to pick up). A host signal's slots are walked
 // directly off signal.head_/ConnSlot::next, mirroring invoke's save-restore
@@ -442,7 +442,7 @@ std::size_t EventQueue::queued_with_args() const {
 }
 
 void EventQueue::post(const Event& event) {
-    // Inside the window a write queues its handlers, as it did from the render thread.
+    // Inside the window a write queues its handlers for the next drain.
     const bool on_sim = thread_role() == ThreadRole::Simulation && !(prerender_open_ != nullptr && *prerender_open_);
     const bool run_now = policy_ == EventPolicy::Immediate && on_sim && immediate_depth_ < kImmediateCap;
     if (!run_now) {

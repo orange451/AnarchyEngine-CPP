@@ -1058,12 +1058,12 @@ void GameView::renderContent(jadefx::UiRenderer& renderer, float opacity) {
         }
         Node::renderChildren(renderer, opacity);
     }
-    // The render thread waits on this when it is uncapped, so its step follows
+    // The engine loop waits on this when it is uncapped, so its frame follows
     // the paint instead of looping again as soon as the step itself returns.
     if (engine_ != nullptr) {
         engine_->note_client_frame();
-        // This paint runs on the UI thread. The engine render thread is waiting
-        // on the frame note above, so publishing analysis here is not RenderThread.
+        // This paint runs on the UI thread. The engine thread is waiting
+        // on the frame note above, so publishing analysis here is not on it.
         engine_->analysis().pump();
     }
     // The frame is painted: let the snapshot go, so the feed can reuse its buffer.

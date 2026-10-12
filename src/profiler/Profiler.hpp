@@ -13,7 +13,7 @@
 // gets a ring of its own, so recording never takes a lock: a scope is two clock
 // reads and two writes into that ring. collect() drains every ring into a
 // history of the last kHistoryFrames frames, a frame being the time from one
-// frame_boundary() to the next (the render thread marks one at each Prepare).
+// frame_boundary() to the next (the engine thread marks one at each frame).
 // Other threads' scopes go into the frame in which they began.
 //
 // Nothing records until someone asks: acquire() turns recording on and
@@ -93,7 +93,7 @@ CauseId intern_cause(std::string_view cause);
 void register_thread(const char* row);
 void begin(ScopeId scope, CauseId cause = kNoCause);
 void end();
-// The render thread, at the start of each Prepare.
+// The engine thread, at the start of each frame.
 void frame_boundary();
 // A GPU pass that ran from start_ns to end_ns on this process's clock, read
 // lag_frames frames after it was issued.

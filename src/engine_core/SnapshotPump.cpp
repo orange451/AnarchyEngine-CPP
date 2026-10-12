@@ -762,7 +762,7 @@ void SnapshotPump::resolve_wireframes(DataModel& game) {
 }
 
 void SnapshotPump::resolve_terrains(DataModel& game) {
-    (void)game;  // Called from RenderThread's snapshot copy, under the DataModel write
+    (void)game;  // Called from the frame's snapshot copy, under the DataModel write
     // lock; views() is read under that same write lock that TerrainWorld::update also
     // takes, so nothing more to read here.
     base_.terrains.clear();

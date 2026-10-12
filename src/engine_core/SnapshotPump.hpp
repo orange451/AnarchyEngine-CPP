@@ -351,7 +351,7 @@ struct VisualSnapshot {
 class ViewportScenes;
 
 // Double buffer plus the one-frame override list.
-// Only RenderThread calls these methods. front() is the buffer Perform reads.
+// Only the engine thread calls these methods. front() is the buffer Perform reads.
 // find() returns a pointer into that buffer; it dies at the next publish.
 class SnapshotPump {
 public:

@@ -177,7 +177,7 @@ void TaskScheduler::unbind(JobId id) {
             // render-phase entry stays until shutdown.
             entry.permanent = false;
             entry.retired = true;
-            // A render job may be inside its closure on the render thread, and a
+            // A render job may be unbinding itself from inside its closure, and a
             // running or parked job is inside it here.
             if (!is_render_phase(static_cast<Phase>(phase)) && &entry != tls_entry_ &&
                 entry.state == JobState::Idle) {
@@ -224,8 +224,8 @@ void TaskScheduler::cancel_session_jobs() {
                 }
             }
         }
-        // Render jobs run without a fiber. One may be inside its std::function on the
-        // render thread while stop runs here, so those entries stay put.
+        // Render jobs run without a fiber. One may be inside its std::function
+        // while stop runs from it, so those entries stay put.
         if (holds_current || is_render_phase(static_cast<Phase>(phase))) {
             for (const std::unique_ptr<Entry>& owned : list) {
                 Entry& entry = *owned;

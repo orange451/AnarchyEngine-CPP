@@ -13,9 +13,9 @@ class SceneFeed;
 
 // Play session. The IDE owns one and starts it with the shell.
 // prepare() builds the Lua VM and the simulation object. start() launches the
-// simulation and render threads. Jobs bound between those two calls are in
-// place before either loop runs. SimulationThread is the only thread that
-// runs gameplay on the DataModel.
+// engine thread. Jobs bound between those two calls are in place before its
+// loop runs. The engine thread is the only thread that runs gameplay on the
+// DataModel.
 class Runner {
 public:
     Runner();
@@ -31,7 +31,7 @@ public:
 
     engine_core::LuaEngine& lua();
     engine_core::Engine& simulation();
-    // What the Scene Views draw: the snapshots the simulation's render thread publishes.
+    // What the Scene Views draw: the snapshots the engine thread publishes.
     SceneFeed& feed() { return *feed_; }
     // Whether every Scene View draws the floor grid. The IDE turns it off
     // during a test and when the ribbon's Grid is off. UI thread only.
@@ -43,7 +43,7 @@ public:
     void setTesting(bool testing) { testing_ = testing; }
 
 private:
-    // Declared first, so it outlives the engine whose render thread writes it.
+    // Declared first, so it outlives the engine whose engine thread writes it.
     std::unique_ptr<SceneFeed> feed_;
     std::unique_ptr<engine_core::LuaEngine> lua_;
     std::unique_ptr<engine_core::Engine> simulation_;

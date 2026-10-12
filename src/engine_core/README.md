@@ -1,6 +1,6 @@
 # engine_core
 
-Simulation and render are two threads. The DataModel is live memory. The GPU reads a `VisualSnapshot` only.
+One engine thread steps the simulation and then prepares that frame's snapshot; the UI thread draws it. Its role is `ThreadRole::Simulation`, and comments and contract messages call it SimulationThread. The DataModel is live memory. The GPU reads a `VisualSnapshot` only.
 
 `DataModel` is the tree every other package builds on. The instance classes are in `engine_instances`, `Game` and the services are in `engine_services`, and value types such as `Vector3` are in `engine_datatypes`. `GameObject` inherits `DataModel` and is the instance that carries a transform, a velocity, and a Prefab. A plain instance has hierarchy and signals, and none of those fields.
 
@@ -10,16 +10,15 @@ The root holds only the scene services, which cannot be moved, renamed, or destr
 
 A class's properties are listed once, in its Lua registration (`LuaApi.hpp`). One registered with `lua_saved_property` needs nothing else from the core: `DataModel` saves it, loads it, gives it a default, puts it back at Stop, and undoes it, all through its registered read and write. Its setter validates the value, stores it, and calls `note_property_change`, which records undo and fires `Changed` with the property's name. The `Field` enum is only for the properties the core itself tracks, such as Transform and Parent.
 
-Prepare holds the DataModel write lock: RenderStepped, PreRender, then the dirty copy, then path-C overrides. Perform/Present runs with the lock released and reads the front snapshot. PostRender runs after Present, still on the render thread, without that lock. If the lock is not acquired within 2 ms, Present repeats the previous snapshot and PostRender still runs. Play and plugin RenderStepped handlers run inside this window; the write lock that serializes Prepare against the sim step is what makes Lua safe here.
+Each frame (`Engine::run_frame`) holds the DataModel write lock across the sim step (or, paused, the stopped tick), then the window: RenderStepped, PreRender, then the dirty copy, then path-C overrides. Perform/Present runs with the lock released and reads the front snapshot. The engine thread counts as the sim only while it holds that lock, so a DataModel write from Perform or Present fails the contract. Play and plugin RenderStepped handlers run inside the window, on the same thread as the step, under the same lock.
 
-Roblox fires `RenderStepped`, then `PreRender`, before the frame is drawn. Both are that locked window here, RenderStepped first. A write from either one is path B and records `PreRenderDataModel`. Job priority inside a phase is unchanged: a larger value runs first. Roblox does not publish a PostRender script event; the task scheduler's render section ends at the asynchronous render. PostRender is the boundary after this frame's snapshot has been presented. A DataModel write there is path D, and a snapshot override is rejected. It is outside the 2 ms budget and does not drain signals.
+Roblox fires `RenderStepped`, then `PreRender`, before the frame is drawn. Both are that locked window here, RenderStepped first, after this frame's sim step, so a camera handler reads this frame's physics. A write from either one is path B and records `PreRenderDataModel`. Job priority inside a phase is unchanged: a larger value runs first.
 
 | Path | Who | What it changes |
 | --- | --- | --- |
-| A | SimulationThread phases | DataModel. Snapshot on the next Prepare. |
-| B | RenderStepped or PreRender. A C++ job needs visual-only or ForceSimWrite. A script running here — a RenderStepped/PreRender handler, or a Wait resumption — is unrestricted, as a sim write, and records `PreRenderDataModel`. Its instance operations (`Instance.new`, `Destroy`, `Parent`, `Name`, every setter) pass the SimulationThread guards too: they ask `DataModel::mutation_thread`, which admits the render thread while `window_script` is set | DataModel, and this frame's snapshot. |
+| A | The sim step's phases | DataModel. Snapshot at this frame's copy. |
+| B | RenderStepped or PreRender. A C++ job needs visual-only or ForceSimWrite. A script running here — a RenderStepped/PreRender handler, or a Wait resumption — is unrestricted, as a sim write, and records `PreRenderDataModel`. Its instance operations (`Instance.new`, `Destroy`, `Parent`, `Name`, every setter) pass the engine-thread guards too: they ask `DataModel::mutation_thread`, which admits the window while `window_script` is set | DataModel, and this frame's snapshot. |
 | C | `SnapshotPump::override_visual` | This frame's snapshot only. |
-| D | RenderThread outside that window, including Perform, Present, and PostRender | Contract failure (abort, or the test handler). |
 | E | Any other thread | Command queue, applied on the next sim step. |
 
 While Lua runs, on any thread, a contract failure a script reaches throws `ContractViolation` instead of calling the handler or aborting, and the script sees a Lua error it can `pcall` (`ScriptContractScope`, held around every `lua_resume`). The studio installs no handler, so this is what keeps a refused script operation from ending it.
@@ -28,7 +27,9 @@ While Lua runs, on any thread, a contract failure a script reaches throws `Contr
 
 Physics may substep inside one sim frame (240 Hz). Display rate does not set that count. Pools are reserved at startup; the step does not allocate.
 
-Terrain meshing is the one other set of threads. `TerrainWorld` runs on SimulationThread under the write lock: each tick it hands the dirty chunks of every Terrain in Workspace to `TerrainMesher`, whose workers (hardware threads less one, at most 4) run `surface_nets` (`terrain/SurfaceNets`) and build a chunk's collider when `PhysicsWorld` wants one. Workers read only the immutable chunks a job holds and take only the mesher's own lock; finished meshes are collected on the next tick and published for `PhysicsWorld` and `SnapshotPump`.
+Interpolation: a frame's substeps leave time over (the accumulator), so a body steps a whole number of substeps per frame while the frame's dt does not. `PoseBlend` captures the frame's last substep, every pose its Box3D step, pull, and held placement write, and the window draws each one between that substep's start and end at `alpha = accumulator / physics_dt`: the current pose rewound by the part of the substep not yet due, so a pose a script writes after the substep still blends. It is swapped in at the window's start and the true poses go back after the copy; the sim step and Heartbeat never see it. A body therefore draws at most one substep (1/240 s) behind, at evenly spaced positions whatever the display rate.
+
+Terrain meshing is the one other set of threads. `TerrainWorld` runs on the engine thread under the write lock: each tick it hands the dirty chunks of every Terrain in Workspace to `TerrainMesher`, whose workers (hardware threads less one, at most 4) run `surface_nets` (`terrain/SurfaceNets`) and build a chunk's collider when `PhysicsWorld` wants one. Workers read only the immutable chunks a job holds and take only the mesher's own lock; finished meshes are collected on the next tick and published for `PhysicsWorld` and `SnapshotPump`.
 
 `TerrainWorld` also keeps each Terrain's LOD octree (`terrain/LodTree`), on the same mesher workers: `terrain/LodNode` keys a node by level and chunk coordinate, `terrain/LodBuilder` builds one node's mesh from its 8 children by sampling the voxels through `terrain/VoxelSampler`, and `LodTree` is the bookkeeping that decides which nodes are stale and ready to build. Levels 0-1 publish full chunk meshes and stay resident only within `kNearChunks` of the camera; levels 2 and up always stay resident, as a compact mesh, within a per-vertex/per-triangle RAM budget. `PhysicsWorld` streams colliders only around chunks a moving body is actually near, not the whole LOD tree, and a raycast that finds no collider there (far terrain, or a chunk never asked for one) marches the voxels directly instead, so it still hits the terrain's surface at any distance.
 
@@ -37,7 +38,7 @@ Terrain meshing is the one other set of threads. `TerrainWorld` runs on Simulati
 ```sh
 cmake -S . -B build-tsan -DCMAKE_BUILD_TYPE=RelWithDebInfo -DENGINE_CORE_TSAN=ON
 cmake --build build-tsan --target sandbox --parallel
-./build-tsan/sandbox "[T3]"
+./build-tsan/sandbox "[T21]"
 ```
 
-`[T1]` through `[T11]` are the acceptance tests. `./build/sandbox` runs them without the sanitizer.
+`[T1]` through `[T24]` are the acceptance tests for the frame, its window, and the write paths. `./build/sandbox` runs them without the sanitizer.

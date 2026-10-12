@@ -1068,7 +1068,7 @@ void show_banner(jadefx::Label& status, const ScriptProblemSummary& summary) {
 }  // namespace
 
 void IdeScriptEditor::refresh_marks() {
-    // Publishing here is the UI thread. The engine render thread does not run this.
+    // Publishing here is the UI thread. The engine thread does not run this.
     engine_.analysis().pump();
     if (!area_ || !status_ || !loaded_ || missing_) {
         return;

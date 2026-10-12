@@ -439,7 +439,7 @@ public:
     void shutdown();
     // terrain's look table as a GL texture for MeshDraw::terrainLook: made
     // with MakeTerrainLookTexture the first time, and its texels replaced
-    // (same texture name) when look.revision changes. RenderThread, with the
+    // (same texture name) when look.revision changes. The UI thread, with the
     // GL context current; reads look only, which TerrainWorld never changes
     // once published, so it needs no DataModel lock.
     std::uint32_t terrainLookTexture(engine_core::InstanceId terrain, const engine_core::TerrainLook& look);
@@ -456,7 +456,7 @@ public:
     // layer count fills new arrays while the old ones keep drawing, and
     // swaps once every layer has its small levels. set may be null (nothing
     // published yet). outLayerCount 0 (no arrays yet) selects terrain.frag's
-    // flat-color path. RenderThread, GL context current.
+    // flat-color path. The UI thread, GL context current.
     void terrainArrays(engine_core::InstanceId terrain, const std::shared_ptr<const engine_core::TerrainTextureSet>& set,
                        unsigned outSurface[3], int& outLayerCount);
     // Deletes the array pairs no terrainArrays call asked for since the last

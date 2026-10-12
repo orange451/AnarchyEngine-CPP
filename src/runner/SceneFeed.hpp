@@ -10,7 +10,7 @@
 
 namespace runner {
 
-// Hands each published VisualSnapshot from the engine's render thread to the
+// Hands each published VisualSnapshot from the engine thread to the
 // Scene Views, which draw on the UI thread. The engine calls perform() with
 // its front snapshot; a view calls hold() in its layout and keeps the pointer
 // through its paint, so both see the same frame. perform() writes only a
@@ -20,7 +20,7 @@ class SceneFeed : public engine_core::IRenderer {
 public:
     SceneFeed();
 
-    // RenderThread. Copies front, unless it is the frame already handed over.
+    // The engine thread. Copies front, unless it is the frame already handed over.
     void perform(const engine_core::VisualSnapshot& front) override;
     void present() override {}
 
@@ -37,7 +37,7 @@ private:
     std::vector<std::shared_ptr<engine_core::VisualSnapshot>> pool_;
     std::shared_ptr<engine_core::VisualSnapshot> newest_;
     std::shared_ptr<const engine_core::VisualSnapshot> latest_;
-    // RenderThread only.
+    // Engine thread only.
     std::uint64_t last_frame_ = 0;
 };
 

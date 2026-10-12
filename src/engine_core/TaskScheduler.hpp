@@ -14,13 +14,13 @@ namespace engine_core {
 class Signal;
 
 // Cooperative jobs. The engine resumes a phase; jobs must return.
-// PreAnimation..Heartbeat run on SimulationThread.
-// RenderStepped and PreRender run on RenderThread during the Prepare lock,
-// before the copy. PostRender runs on RenderThread after Present, lock down.
+// Every phase runs on the engine thread, under the frame's lock:
+// PreAnimation..Heartbeat in the sim step, then RenderStepped and PreRender
+// in the window, before the copy.
 //
 // A job may call Signal::wait(). That parks the job on its own stack and
-// resumes it at the start of a later simulation phase. Render-thread jobs
-// are not parked and cannot wait.
+// resumes it at the start of a later simulation phase. Window jobs are not
+// parked and cannot wait.
 class TaskScheduler {
 public:
     using Job = std::function<void(double dt)>;
@@ -35,8 +35,8 @@ public:
     // The job does not run again. A simulation-phase closure is released now,
     // or at the next cancel_session_jobs when it is the job running on this
     // thread. A render-phase entry keeps its closure and its slot until
-    // shutdown: the render thread may be inside it, and jobs_ is iterated
-    // there without a lock. Bind a render job once and keep it; each phase
+    // shutdown: it may be unbinding itself from inside its closure, and the
+    // window iterates jobs_ without a lock. Bind a render job once and keep it; each phase
     // holds the entries Engine reserved (64), and bind past that aborts.
     void unbind(JobId id);
     // Read-only: jobs held in a phase (render entries stay after unbind) and the capacity reserved for it.

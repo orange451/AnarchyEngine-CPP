@@ -86,7 +86,7 @@ public:
     // session: the command line's and plugins' handlers. Its owner disconnects it.
     Connection connect_kept(Handler handler, bool once);
     // Yields the current simulation job until the next firing.
-    // Resumes at a later simulation phase. RenderThread cannot call this.
+    // Resumes at a later simulation phase. The window cannot call this.
     void wait();
 
     SignalId id() const { return id_; }
@@ -107,7 +107,7 @@ private:
     bool bound() const { return queue_ != nullptr && id_.valid(); }
 };
 
-// SimulationThread drains. RenderThread may only enqueue (path B).
+// The sim step drains. The window may only enqueue (path B).
 // Path C never calls emit. WriteOrigin is stored on each event.
 class EventQueue {
 public:
@@ -166,7 +166,7 @@ public:
     void host_signal(Signal* signal);
     void release_signal(Signal& signal);
 
-    // Runs this host signal's handlers now, on RenderThread inside the prerender
+    // Runs this host signal's handlers now, on the engine thread inside the prerender
     // window, where drain is forbidden. include_tagged false skips the slots a
     // script tagged, which is how a paused play session stays silent; the kept
     // slots, the console's and plugins', always run. The script gate still

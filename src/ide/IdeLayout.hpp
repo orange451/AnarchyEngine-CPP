@@ -116,7 +116,7 @@ public:
     ~IdeLayout();
 
     engine_core::Engine& simulation();
-    // Binds the scene view, then starts the simulation and render threads.
+    // Binds the scene view, then starts the engine thread.
     void start();
     // Starts or stops the MCP server, as decide_mcp says from the preference
     // Preferences' AI tab sets and the ANARCHY_MCP variables. The server lets

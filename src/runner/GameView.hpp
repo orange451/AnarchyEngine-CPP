@@ -297,7 +297,7 @@ private:
     // What the list shows now, so it is rebuilt only on a change.
     std::vector<CameraChoice> listed_;
     std::string listedGuid_;
-    // The engine that owns game_. Each paint tells its render thread a frame happened.
+    // The engine that owns game_. Each paint tells its engine loop a frame happened.
     engine_core::Engine* engine_ = nullptr;
     // Whether this view last locked its scene's pointer.
     bool pointerLocked_ = false;

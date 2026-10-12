@@ -211,7 +211,7 @@ void ScriptRuntime::attach(DataModel& game, TaskScheduler& scheduler) {
     for (Phase phase : {Phase::PreAnimation, Phase::PreSimulation, Phase::PostSimulation, Phase::Heartbeat}) {
         phase_jobs_.push_back(scheduler.bind(phase, [this, phase](double dt) { fire_phase(phase, dt); }));
     }
-    // On RenderThread this runs window handlers and counts the frame for the
+    // In the window this runs window handlers and counts the frame for the
     // console fallback. Scripts in the window hold the same write lock the sim
     // step holds, so the two never run Lua at once.
     phase_jobs_.push_back(scheduler.bind(Phase::RenderStepped, [this](double dt) { render_step(dt); }));
@@ -633,7 +633,7 @@ void ScriptRuntime::render_step(double dt) {
         // While handlers run (or Wait resumptions it parks): bindings know they are
         // in the window, and a write or instance operation authorizes as a sim one
         // would (DataModel::authorize, mutation_thread). Both are written only here,
-        // by the render thread, which holds the write lock for the whole window; the
+        // by the engine thread, which holds the write lock for the whole frame; the
         // scope clears them even when a contract failure unwinds the walk.
         struct WindowScope {
             ScriptRuntime& runtime;

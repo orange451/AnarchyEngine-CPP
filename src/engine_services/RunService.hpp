@@ -12,14 +12,14 @@ namespace engine_core {
 // host-owned Signal fired with that step's dt. PreRender is declared to scripts
 // but blocked, so it has no signal.
 //
-// RenderStepped reaches play and plugin scripts on RenderThread, inside the
-// Prepare window, once per displayed frame with that frame's dt: ScriptRuntime's
+// RenderStepped reaches play and plugin scripts in the render window, after
+// the frame's sim step, once per frame with that frame's dt: ScriptRuntime's
 // render job invokes window_signal's handlers directly, since the queue cannot
 // drain there. The console VM cannot join the window (its command line enters it
 // without the write lock), so its connections stay on the sim-side signal:
 // note_frame counts each frame, and the next step fires it with their summed time.
 //
-// SimulationThread is the only caller, except of note_frame and drop_frames. Between bind and
+// The engine thread is the only caller, except of drop_frames. Between bind and
 // release the signals belong to one world's EventQueue, and they must outlive that use.
 class RunService {
 public:
@@ -39,7 +39,7 @@ public:
     // delivers, which can be after another phase has fired.
     double dt(Phase phase) const { return dt_[static_cast<int>(phase)]; }
 
-    // A rendered frame of dt seconds. RenderThread calls it from its RenderStepped job.
+    // A rendered frame of dt seconds. The window's RenderStepped job calls it.
     void note_frame(double dt);
     // Fires RenderStepped once for the frames noted since the last call, with
     // their time summed. Nothing when no frame was drawn.
@@ -62,8 +62,8 @@ private:
     Signal heartbeat_;
     Signal render_stepped_;
     // The window signal: play and plugin RenderStepped connections land here and
-    // are invoked on RenderThread inside the Prepare window, once per displayed
-    // frame. render_stepped_ keeps the sim-side delivery for the console VM.
+    // are invoked in the render window, once per frame. render_stepped_ keeps
+    // the sim-side delivery for the console VM.
     Signal render_stepped_window_;
     Signal started_;
     Signal stopped_;

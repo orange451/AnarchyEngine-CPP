@@ -29,8 +29,8 @@ enum class JobPriority : int {
 
 class TexturePool {
 public:
-    // threads 0: max(1, hardware_concurrency - 2), leaving the simulation and
-    // render threads a core each.
+    // threads 0: max(1, hardware_concurrency - 2), leaving the engine and UI
+    // threads a core each.
     explicit TexturePool(int threads = 0);
     // Finishes the jobs running now and drops the ones still queued.
     ~TexturePool();

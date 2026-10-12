@@ -558,7 +558,7 @@ public:
 
     void set_prerender_window(bool open);
     bool prerender_window() const;
-    // Set only by the render thread, while it holds the write lock, around Lua
+    // Set only by the engine thread, while it holds the write lock, around Lua
     // execution inside the window (ScriptRuntime::render_step). While set,
     // authorize's render-thread branch admits a write as a sim write would.
     void set_window_script(bool active);
@@ -793,7 +793,7 @@ private:
     // capture, start, and stop ask only this: they swap the whole tree and
     // close the play VM, which a window handler must not do from inside it.
     bool gameplay_thread() const;
-    // gameplay_thread, or the render thread while a script runs in the window
+    // gameplay_thread, or the engine thread while a script runs in the window
     // (prerender_window and window_script both set). The write lock serializes
     // a window script's mutation as it does a sim step's, so the instance
     // operations a script reaches (create, destroy, Parent, Name, every

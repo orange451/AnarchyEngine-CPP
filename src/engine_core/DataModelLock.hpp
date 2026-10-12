@@ -10,7 +10,7 @@ class DataModel;
 // must not observe a half-updated instance.
 //
 // Re-entrant only on the thread that already holds it, which is legal for
-// SimulationThread. RenderThread takes Write only for the Prepare window.
+// the engine thread, which holds Write across each frame.
 class DataModelLock {
 public:
     enum Kind { Write, Read };

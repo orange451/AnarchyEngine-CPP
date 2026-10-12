@@ -19,7 +19,7 @@ namespace runner {
 // nodes SelectTerrainPrefetch picks. fades carries the cross-fades from
 // frame to frame. Then sweeps: node uploads not asked for in
 // MeshCache::kTerrainNodeGraceSeconds, looks no Terrain shows, and fades of
-// Terrains gone. Once a frame, on RenderThread with the GL context current.
+// Terrains gone. Once a frame, on the UI thread with the GL context current.
 // The views are the snapshot's immutable copies, so it takes no DataModel
 // lock. GameView's collectMeshes calls it, and scene-render-check, to draw
 // what the Scene View draws.

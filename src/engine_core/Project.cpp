@@ -34,6 +34,7 @@
 #include "Brush.hpp"
 #include "Terrain.hpp"
 #include "TerrainMaterial.hpp"
+#include "ValueBase.hpp"
 #include "terrain/TerrainStash.hpp"
 
 #include <algorithm>
@@ -207,6 +208,11 @@ std::vector<ClassEntry>& class_registry() {
         out.push_back({"Brush", [](DataModel& world) -> DataModel& { return world.create<Brush>(); }});
         out.push_back(
             {"TerrainMaterial", [](DataModel& world) -> DataModel& { return world.create<TerrainMaterial>(); }});
+        out.push_back({"IntValue", [](DataModel& world) -> DataModel& { return world.create<IntValue>(); }});
+        out.push_back({"NumberValue", [](DataModel& world) -> DataModel& { return world.create<NumberValue>(); }});
+        out.push_back({"StringValue", [](DataModel& world) -> DataModel& { return world.create<StringValue>(); }});
+        out.push_back({"BoolValue", [](DataModel& world) -> DataModel& { return world.create<BoolValue>(); }});
+        out.push_back({"ObjectValue", [](DataModel& world) -> DataModel& { return world.create<ObjectValue>(); }});
         return out;
     }();
     return entries;

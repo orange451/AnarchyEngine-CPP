@@ -1071,6 +1071,11 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
         "at its pivot and turns or slides along its Y axis.",
         "PVInstance?", false, {});
     add("Constraint", "Enabled", "Off disconnects the constraint without deleting it.", "boolean", false, {});
+    add("IntValue", "Value", "The whole number it holds. A fraction is rounded to the nearest.", "number", false, {});
+    add("NumberValue", "Value", "The number it holds.", "number", false, {});
+    add("StringValue", "Value", "The text it holds.", "string", false, {});
+    add("BoolValue", "Value", "The true or false it holds.", "boolean", false, {});
+    add("ObjectValue", "Value", "The instance it refers to, or nil.", "Instance?", false, {});
     add("Constraint", "Active",
         "Whether it holds anything now: Enabled, it and both its ends in Workspace, and the ends two different "
         "objects. Read-only.",

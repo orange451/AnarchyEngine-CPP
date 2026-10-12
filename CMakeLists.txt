@@ -638,6 +638,7 @@ add_library(engine_instances STATIC
     src/engine_instances/Brush.cpp
     src/engine_instances/Terrain.cpp
     src/engine_instances/TerrainMaterial.cpp
+    src/engine_instances/ValueBase.cpp
     src/engine_instances/Script.cpp
 )
 add_library(engine_services STATIC
@@ -1074,6 +1075,7 @@ add_executable(sandbox
     sandbox/skybox_tests.cpp
     sandbox/dynamic_sky_tests.cpp
     sandbox/bloom_tests.cpp
+    sandbox/value_tests.cpp
     sandbox/physics_tests.cpp
     sandbox/physics_game_object_tests.cpp
     sandbox/edit_physics_tests.cpp

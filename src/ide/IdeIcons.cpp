@@ -81,6 +81,10 @@ const char* IconFileOverride(const std::string& class_name) {
     if (class_name == "Slider") {
         return "ui-slider.png";
     }
+    if (class_name == "IntValue" || class_name == "NumberValue" || class_name == "StringValue" ||
+        class_name == "BoolValue" || class_name == "ObjectValue") {
+        return "Value.png";
+    }
     if (class_name == "Brush") {
         return "layer-shape-polygon.png";
     }

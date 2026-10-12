@@ -7,7 +7,7 @@
 namespace ide {
 
 // Where a class's cluster sits in the explorer and the Insert list. Lower
-// comes first. The Camera leads, then Terrain, then Folders, then scripts and CSS, then the things
+// comes first. The Camera leads, then Terrain, then Folders, then scripts, CSS, and the values scripts share, then the things
 // in the world: the physics objects, then plain GameObjects, the sky, effects,
 // lights, sound, and what attaches things (Attachments, Bones, Animators, and
 // constraints), then the GUI. A class not listed comes after every listed one.
@@ -23,6 +23,11 @@ inline int class_rank(std::string_view class_name) {
         {"Script", 3},
         {"ModuleScript", 3},
         {"CSS", 3},
+        {"IntValue", 3},
+        {"NumberValue", 3},
+        {"StringValue", 3},
+        {"BoolValue", 3},
+        {"ObjectValue", 3},
         {"PhysicsObject", 4},
         {"Brush", 4},
         {"PlayerController", 4},

@@ -37,6 +37,7 @@
 #include "Brush.hpp"
 #include "Terrain.hpp"
 #include "TerrainMaterial.hpp"
+#include "ValueBase.hpp"
 #include "UserInputService.hpp"
 #include "Vector2.hpp"
 #include "Vector3.hpp"
@@ -245,6 +246,11 @@ DataModel& create_prefab(DataModel& world) { return world.create<Prefab>(); }
 DataModel& create_terrain(DataModel& world) { return world.create<Terrain>(); }
 DataModel& create_brush(DataModel& world) { return world.create<Brush>(); }
 DataModel& create_terrain_material(DataModel& world) { return world.create<TerrainMaterial>(); }
+DataModel& create_int_value(DataModel& world) { return world.create<IntValue>(); }
+DataModel& create_number_value(DataModel& world) { return world.create<NumberValue>(); }
+DataModel& create_string_value(DataModel& world) { return world.create<StringValue>(); }
+DataModel& create_bool_value(DataModel& world) { return world.create<BoolValue>(); }
+DataModel& create_object_value(DataModel& world) { return world.create<ObjectValue>(); }
 
 // The factories stay here, which ScriptRuntime.cpp links, so each class's
 // object file stays linked.
@@ -302,6 +308,11 @@ ANARCHY_LUA_REGISTER(register_creatable_instances) {
     register_lua_creatable("Terrain", create_terrain);
     register_lua_creatable("Brush", create_brush);
     register_lua_creatable("TerrainMaterial", create_terrain_material, false);
+    register_lua_creatable("IntValue", create_int_value);
+    register_lua_creatable("NumberValue", create_number_value);
+    register_lua_creatable("StringValue", create_string_value);
+    register_lua_creatable("BoolValue", create_bool_value);
+    register_lua_creatable("ObjectValue", create_object_value);
 }
 
 }  // namespace

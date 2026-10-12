@@ -6,6 +6,7 @@
 
 #include "AssetInstances.hpp"
 #include "Camera.hpp"
+#include "CollisionGroups.hpp"
 #include "Constraint.hpp"
 #include "DataModel.hpp"
 #include "Folder.hpp"
@@ -1424,6 +1425,68 @@ void TestEnumRowAndShownWhen() {
     Expect(!rig.hasRow("Mesh"), "Mesh hides unless every selected body is a Hull");
 }
 
+// CollisionGroup picks from the place's collision groups, then offers the
+// Collision Groups pane; a name no group has shows as its own item.
+void TestCollisionGroupDropdown() {
+    Rig rig;
+    engine_core::CollisionGroups& groups = rig.game.collision_groups();
+    groups.register_group("Players", engine_core::CollisionGroups::FilterType::Exclude);
+    groups.register_group("Ghosts", engine_core::CollisionGroups::FilterType::Include);
+    const InstanceId body = rig.add<engine_core::PhysicsObject>("Body");
+    auto group_of = [&rig, body] {
+        auto* object = dynamic_cast<engine_core::PhysicsObject*>(rig.game.instance(body));
+        return object != nullptr ? object->collision_group() : std::string("?");
+    };
+    std::vector<std::string> opened;
+    rig.panel.set_choice_editor([&opened](const std::string& property) { opened.push_back(property); });
+    rig.game.history().reset_waypoints();
+    rig.select({body});
+    const ide::PropertyRow* row = rig.panel.sheet().find("CollisionGroup");
+    Expect(row != nullptr && row->kind == ide::PropertyKind::String &&
+               row->choices == std::vector<std::string>{"Default", "Players", "Ghosts"},
+           "CollisionGroup lists the registered groups");
+    auto* choice = dynamic_cast<jadefx::ComboBox*>(rig.panel.editor("CollisionGroup"));
+    Expect(choice != nullptr, "CollisionGroup is a dropdown");
+    if (choice == nullptr) {
+        return;
+    }
+    Expect(choice->getItems().items() ==
+               std::vector<std::string>{"Default", "Players", "Ghosts", "Edit Collision Groups…"},
+           "then Edit Collision Groups...");
+    Expect(choice->getSelectionIndex() == 0, "Default is picked");
+
+    choice->requestFocus();
+    rig.scene->noteKey(jadefx::Key::Down, true, false, 0);
+    rig.frame();
+    rig.frame();
+    Expect(group_of() == "Players", "a pick writes the group");
+    rig.game.history().undo();
+    rig.frame();
+    rig.frame();
+    Expect(group_of() == "Default", "as one undo step");
+
+    choice = dynamic_cast<jadefx::ComboBox*>(rig.panel.editor("CollisionGroup"));
+    choice->select(2);
+    choice->requestFocus();
+    rig.scene->noteKey(jadefx::Key::Down, true, false, 0);
+    rig.frame();
+    rig.frame();
+    Expect(opened == std::vector<std::string>{"CollisionGroup"}, "Edit Collision Groups... opens the pane");
+    Expect(group_of() == "Default", "and writes nothing");
+    choice = dynamic_cast<jadefx::ComboBox*>(rig.panel.editor("CollisionGroup"));
+    Expect(choice != nullptr && choice->getSelectionIndex() == 0, "the dropdown shows the value again");
+
+    auto* object = dynamic_cast<engine_core::PhysicsObject*>(rig.game.instance(body));
+    object->set_collision_group("Crates");
+    rig.frame();
+    rig.frame();
+    choice = dynamic_cast<jadefx::ComboBox*>(rig.panel.editor("CollisionGroup"));
+    Expect(choice != nullptr && choice->getSelectionIndex() >= 0 &&
+               choice->getItems().items()[static_cast<std::size_t>(choice->getSelectionIndex())] ==
+                   "Crates (not registered)",
+           "a name no group has shows as its own item");
+}
+
 InstanceId BodyMesh(Game& game, InstanceId body) {
     auto* object = dynamic_cast<engine_core::PhysicsObject*>(game.instance(body));
     return object != nullptr ? object->mesh().id : 0;
@@ -1445,6 +1508,9 @@ void TestAssetReferencePicker() {
     ide::apply_edit(rig.game, {body}, hull);
     rig.game.history().reset_waypoints();
     rig.select({body});
+    rig.frame();
+    // Mesh sits near the bottom of a PhysicsObject's rows: scrolled into view.
+    rig.panel.scroll_pane()->setVvalue(rig.panel.scroll_pane()->getVmax());
     rig.frame();
 
     rig.click(rig.panel.editor("Mesh", 0));
@@ -1477,14 +1543,14 @@ void TestAssetReferencePicker() {
     Expect(BodyMesh(rig.game, body) == 0, "None clears the Mesh");
 
     // A reference to a class that is not an asset still picks from the selection.
-    // GameObject is the sheet's last row, below the page: scrolled to first.
+    // Parent is the sheet's second row, above the page: scrolled to first.
     if (jadefx::ScrollPane* scroll = rig.panel.scroll_pane()) {
-        scroll->setVvalue(scroll->getVmax());
+        scroll->setVvalue(scroll->getVmin());
         rig.frame();
     }
-    rig.click(rig.panel.editor("GameObject", 0));
+    rig.click(rig.panel.editor("Parent", 0));
     rig.frame();
-    Expect(rig.panel.picking() && !rig.panel.asset_picking(), "GameObject picks from the selection");
+    Expect(rig.panel.picking() && !rig.panel.asset_picking(), "Parent picks from the selection");
     engine_core::set_thread_role(engine_core::ThreadRole::Unknown);
 }
 
@@ -1766,7 +1832,7 @@ void TestClassGroups() {
     const std::vector<std::string> player = GroupedRows(rig, rig.add<engine_core::PlayerController>("Player"));
     Expect(!Has(player, "Behavior:GameObject"), "a PlayerController has no GameObject row");
     const std::vector<std::string> body = GroupedRows(rig, rig.add<engine_core::PhysicsObject>("Body"));
-    Expect(Has(body, "Behavior:GameObject"), "a PhysicsObject keeps its GameObject row, in Behavior");
+    Expect(!Has(body, "Behavior:GameObject"), "a PhysicsObject has no GameObject row: a GameObject above it moves");
     for (const std::vector<std::string>& sheet : {brush, player, body}) {
         Expect(Has(sheet, "Physics:CollisionGroup"), "every body has CollisionGroup, in Physics");
     }
@@ -1888,6 +1954,7 @@ int main() {
     TestAssetPreview();
     TestSoundPreviewStops();
     TestEnumRowAndShownWhen();
+    TestCollisionGroupDropdown();
     TestAssetReferencePicker();
     TestR1SingleSelectionEditsName();
     TestR2MixedNameWritesEveryone();

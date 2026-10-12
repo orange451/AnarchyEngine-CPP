@@ -1,6 +1,7 @@
 #include "PhysicsBase.hpp"
 
 #include "Assemblies.hpp"
+#include "CollisionGroups.hpp"
 #include "Contract.hpp"
 #include "GameObject.hpp"
 #include "LuaApi.hpp"
@@ -310,6 +311,13 @@ bool read_collision_group(DataModel&, DataModel& object, LuaSlot& out) {
     return true;
 }
 
+// The place's collision groups, Default first, for the Properties dropdown.
+void collision_group_choices(DataModel& world, std::vector<std::string>& out) {
+    for (const CollisionGroups::Info& info : world.collision_groups().groups()) {
+        out.push_back(info.name);
+    }
+}
+
 bool write_collision_group(DataModel&, DataModel& object, LuaSlot& in) {
     PhysicsBase* body = base_of(object);
     return body != nullptr && refuse(in, body->set_collision_group(in.text));
@@ -328,7 +336,9 @@ ANARCHY_LUA_REGISTER(register_physics_base_lua) {
         lua_group("Physics"),
         lua_saved_property("Anchored", "boolean", read_anchored, write_anchored, "false"),
         lua_saved_property("CanCollide", "boolean", read_can_collide, write_can_collide, "true"),
-        lua_saved_property("CollisionGroup", "string", read_collision_group, write_collision_group, "\"Default\""),
+        lua_choices(lua_saved_property("CollisionGroup", "string", read_collision_group, write_collision_group,
+                                       "\"Default\""),
+                    collision_group_choices, "Edit Collision Groups…"),
         lua_slider(lua_saved_property("Mass", "number", read_number<PhysicsBase, &PhysicsBase::mass>,
                                       write_number<PhysicsBase, &PhysicsBase::set_mass>, mass.c_str()),
                    0.0, 100.0),

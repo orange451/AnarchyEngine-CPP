@@ -272,7 +272,7 @@ std::vector<InstanceId> instance_drag_ids(std::string_view text) {
 
 bool PropertyRow::operator==(const PropertyRow& other) const {
     if (!same_slot(other) || writable != other.writable || mixed != other.mixed || label != other.label ||
-        path != other.path) {
+        path != other.path || choices != other.choices || choices_more != other.choices_more) {
         return false;
     }
     for (int axis = 0; axis < kTransformParts; ++axis) {
@@ -291,7 +291,8 @@ bool PropertyRow::operator==(const PropertyRow& other) const {
 
 bool PropertyRow::same_slot(const PropertyRow& other) const {
     return name == other.name && type_name == other.type_name && kind == other.kind && group == other.group &&
-           slider_min == other.slider_min && slider_max == other.slider_max && enum_type == other.enum_type;
+           slider_min == other.slider_min && slider_max == other.slider_max && enum_type == other.enum_type &&
+           has_choices == other.has_choices;
 }
 
 const PropertyRow* PropertySheet::find(const std::string& name) const {
@@ -382,6 +383,11 @@ PropertySheet read_sheet(DataModel& world, const std::vector<InstanceId>& select
             row.slider_max = field.slider_max;
         }
         row.enum_type = field.enum_type;
+        if (kind == PropertyKind::String && field.choices != nullptr) {
+            row.has_choices = true;
+            field.choices(world, row.choices);
+            row.choices_more = field.choices_more != nullptr ? field.choices_more : "";
+        }
         bool keep = true;
         bool have_first = false;
         for (InstanceId id : sheet.ids) {

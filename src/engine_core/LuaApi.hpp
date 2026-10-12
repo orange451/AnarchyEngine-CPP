@@ -114,6 +114,12 @@ struct LuaField {
     // A service's own signal, found by tag through ScriptRuntime::host_signal
     // (HostSignal); its handlers get whatever values the event carries.
     bool host_signal = false;
+    // A string property Properties shows as a dropdown: the values it offers
+    // now, read under the lock, then choices_more, an item that opens where the
+    // choices are made (PropertiesPanel::set_choice_editor) and writes nothing.
+    // See lua_choices. Scripts may still write any string.
+    void (*choices)(DataModel& world, std::vector<std::string>& out) = nullptr;
+    const char* choices_more = nullptr;
 
     bool shown_for(int value) const { return value >= 0 && value < 32 && ((shown_when_items >> value) & 1u) != 0; }
 
@@ -188,6 +194,15 @@ inline LuaField lua_group(const char* name) {
     LuaField field;
     field.name = name;
     field.group_marker = true;
+    return field;
+}
+
+// field, a dropdown in Properties of what choices lists, then more
+// (LuaField::choices).
+inline LuaField lua_choices(LuaField field, void (*choices)(DataModel& world, std::vector<std::string>& out),
+                            const char* more) {
+    field.choices = choices;
+    field.choices_more = more;
     return field;
 }
 

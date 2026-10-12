@@ -71,6 +71,11 @@ struct PropertyRow {
     double slider_min = 0;
     double slider_max = 0;
     const engine_core::EnumType* enum_type = nullptr;
+    // A String row picked from these (LuaField::choices), then choices_more,
+    // which opens where they are made. has_choices is false for a plain field.
+    bool has_choices = false;
+    std::vector<std::string> choices;
+    std::string choices_more;
     bool writable = false;
     bool mixed = false;
     bool axis_mixed[kTransformParts] = {false, false, false, false, false, false};

@@ -516,8 +516,12 @@ struct RowView {
     std::shared_ptr<PropertyColor> color;
     // A Number row with a range, beside its field.
     std::shared_ptr<PropertySlider> slider;
-    // An Enum row's items, in value order.
+    // An Enum row's items, in value order, or a String row's choices.
     std::shared_ptr<jadefx::ComboBox> choice;
+    // A String row's dropdown: the value each item writes, and the item that
+    // opens the choice editor, or -1.
+    std::vector<std::string> choice_values;
+    int choice_more = -1;
     std::shared_ptr<jadefx::Button> pick;
     std::shared_ptr<jadefx::Button> clear;
     std::shared_ptr<jadefx::Tooltip> tip;
@@ -574,6 +578,7 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
     engine_core::SelectionService* selection = nullptr;
     engine_core::ChangeHistoryService* history = nullptr;
     PropertiesRun run;
+    std::function<void(const std::string&)> choice_editor;
 
     std::shared_ptr<PropertiesPane> pane;
     std::shared_ptr<jadefx::Label> empty;
@@ -1087,6 +1092,20 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
         case PropertyKind::String:
         case PropertyKind::Number:
         case PropertyKind::ReadOnlyText:
+            if (row.has_choices) {
+                view->choice = jadefx::make<jadefx::ComboBox>();
+                view->choice->getClassList().add("properties-choice");
+                view->choice->setDisable(!row.writable);
+                view->choice->setOnAction([weak_self, weak_view](jadefx::ActionEvent&) {
+                    const auto self = weak_self.lock();
+                    const auto row_view = weak_view.lock();
+                    if (self && row_view) {
+                        self->commit_text_choice(*row_view);
+                    }
+                });
+                body->getChildren().add(view->choice);
+                break;
+            }
             view->field = make_field(view, !row.writable);
             if (row.slider()) {
                 view->slider = jadefx::make<PropertySlider>(row.slider_min, row.slider_max);
@@ -1431,6 +1450,10 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
         case PropertyKind::String:
         case PropertyKind::Number:
         case PropertyKind::ReadOnlyText:
+            if (view.choice) {
+                show_text_choice(view, row);
+                break;
+            }
             put(*view.field, shown_text(row));
             // A mixed row rests the thumb at the start. A held one keeps the drag.
             if (view.slider && !view.slider->held()) {
@@ -1656,6 +1679,59 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
         edit.property = view.row.name;
         edit.kind = PropertyKind::Enum;
         edit.value.number = value;
+        submit(view.ids, edit);
+    }
+
+    // The choices, the value when it is not one of them, then the item that
+    // opens the choice editor. Mixed shows no item.
+    void show_text_choice(RowView& view, const PropertyRow& row) {
+        std::vector<std::string> items = row.choices;
+        view.choice_values = row.choices;
+        const bool listed = std::find(row.choices.begin(), row.choices.end(), row.value.text) != row.choices.end();
+        if (!row.mixed && !listed) {
+            items.push_back(row.value.text + " (not registered)");
+            view.choice_values.push_back(row.value.text);
+        }
+        view.choice_more = -1;
+        if (!row.choices_more.empty()) {
+            view.choice_more = static_cast<int>(items.size());
+            items.push_back(row.choices_more);
+            view.choice_values.emplace_back();
+        }
+        if (view.choice->getItems().items() != items) {
+            view.choice->getItems().setAll(std::move(items));
+        }
+        int selected = -1;
+        for (std::size_t index = 0; !row.mixed && index < view.choice_values.size(); ++index) {
+            if (static_cast<int>(index) != view.choice_more && view.choice_values[index] == row.value.text) {
+                selected = static_cast<int>(index);
+                break;
+            }
+        }
+        view.choice->select(selected);
+    }
+
+    void commit_text_choice(RowView& view) {
+        const int index = view.choice->getSelectionIndex();
+        if (index >= 0 && index == view.choice_more) {
+            // Opens where the choices are made, and shows the value again.
+            show_text_choice(view, view.row);
+            if (choice_editor) {
+                choice_editor(view.row.name);
+            }
+            return;
+        }
+        if (!view.row.writable || index < 0 || index >= static_cast<int>(view.choice_values.size())) {
+            return;
+        }
+        const std::string& value = view.choice_values[static_cast<std::size_t>(index)];
+        if (!view.row.mixed && view.row.value.text == value) {
+            return;
+        }
+        PropertyEdit edit;
+        edit.property = view.row.name;
+        edit.kind = PropertyKind::String;
+        edit.value.text = value;
         submit(view.ids, edit);
     }
 
@@ -2060,7 +2136,9 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
                 break;
             }
             default:
-                if (view->slider) {
+                if (view->choice) {
+                    place(*view->choice, editor_x, editor_width, kRowHeight);
+                } else if (view->slider) {
                     // The track first, then the field that takes any number.
                     const double typed = std::clamp(editor_width * 0.35, 40.0, kSliderFieldWidth);
                     const double track = std::max(0.0, editor_width - typed - kAxisGap);
@@ -2254,6 +2332,10 @@ void PropertiesPanel::bind(engine_core::DataModel& world, engine_core::Selection
 
 void PropertiesPanel::set_runner(PropertiesRun run) { impl_->run = std::move(run); }
 
+void PropertiesPanel::set_choice_editor(std::function<void(const std::string& property)> open) {
+    impl_->choice_editor = std::move(open);
+}
+
 void PropertiesPanel::rebuild() {
     impl_->force = true;
     impl_->poll();
@@ -2311,6 +2393,9 @@ jadefx::Node* PropertiesPanel::editor(const std::string& property, int part) con
                    : part == 1 ? static_cast<jadefx::Node*>(view->clear.get())
                                : nullptr;
         default:
+            if (view->choice) {
+                return part == 0 ? view->choice.get() : nullptr;
+            }
             return part == 0 ? static_cast<jadefx::Node*>(view->field.get())
                    : part == 1 ? static_cast<jadefx::Node*>(view->slider.get())
                                : nullptr;

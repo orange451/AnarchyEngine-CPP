@@ -45,6 +45,12 @@ using PropertiesRun = std::function<void(std::function<void(engine_core::DataMod
 // stay. Clicking the arrow or the name folds the row, and it stays folded for
 // the session; Tab passes over a folded row.
 //
+// A string property that lists its choices (LuaField::choices), such as a
+// body's CollisionGroup, is a dropdown of them. A value that is not one shows
+// as its own item, "Name (not registered)". The last item, such as "Edit
+// Collision Groups…", calls the choice editor (set_choice_editor) and writes
+// nothing.
+//
 // A Color3 row is a color picker. While its chooser is open, each color shows
 // on the instances at once, but the history does not hear of it. Closing the
 // chooser on a new color records the whole pick as one undo step, from the
@@ -95,6 +101,9 @@ public:
     void bind(engine_core::DataModel& world, engine_core::SelectionService& selection,
               engine_core::ChangeHistoryService& history);
     void set_runner(PropertiesRun run);
+    // What a dropdown's last item calls, with the row's property, such as
+    // opening the Collision Groups pane for CollisionGroup.
+    void set_choice_editor(std::function<void(const std::string& property)> open);
     // Reads the selection and the world now and updates the rows. The page
     // also does this on every layout.
     void rebuild();

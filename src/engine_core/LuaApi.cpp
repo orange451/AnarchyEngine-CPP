@@ -1766,13 +1766,17 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
         "string", false, {});
 
     add("PhysicsService", "RegisterCollisionGroup",
-        "Registers a collision group for this run. filterType is Exclude (the default: it collides with every "
+        "Registers a collision group. filterType is Exclude (the default: it collides with every "
         "group but those set not to) or Include (with none but those set to). A name already "
-        "registered changes nothing. Groups are not saved: each run starts with Default alone.",
+        "registered changes nothing. The place saves its groups: a run starts with them, and Stop puts them back.",
         "nil", false, {P("name", "string"), P("filterType", "Enum.CollisionFilterType?")});
     add("PhysicsService", "UnregisterCollisionGroup",
         "Removes a group and its settings; its bodies behave as Default. Default cannot be unregistered.", "nil",
         false, {P("name", "string")});
+    add("PhysicsService", "RenameCollisionGroup",
+        "Renames a group, keeping its filter type and settings, and moves every body in it to the new name. "
+        "Default cannot be renamed, and the new name must not be registered.",
+        "nil", false, {P("from", "string"), P("to", "string")});
     add("PhysicsService", "SetCollisionGroupFilterType",
         "Makes a group Exclude or Include, keeping the settings made for it.", "nil", false,
         {P("name", "string"), P("filterType", "Enum.CollisionFilterType")});
@@ -1787,7 +1791,7 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
         "Whether two groups collide: as set, else only when both are Exclude. An unregistered name counts as "
         "Default.",
         "boolean", false, {P("name1", "string"), P("name2", "string")});
-    add("PhysicsService", "IsCollisionGroupRegistered", "Whether a script has registered this group.", "boolean",
+    add("PhysicsService", "IsCollisionGroupRegistered", "Whether this group is registered.", "boolean",
         false, {P("name", "string")});
     add("PhysicsService", "GetRegisteredCollisionGroups",
         "Each registered group, Default first, as {name, filterType, list}: list is the exceptions to its type (for a "

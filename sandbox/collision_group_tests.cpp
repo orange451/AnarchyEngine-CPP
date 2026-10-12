@@ -108,3 +108,100 @@ TEST_CASE("CG6 unregistering frees the bit and its settings; reset leaves Defaul
     REQUIRE(groups.revision() != before);
     REQUIRE(groups.groups().size() == 1);
 }
+
+TEST_CASE("CG7 save_text is empty for Default alone, and load_text rebuilds the registry from it",
+          "[collision-group][editor]") {
+    CollisionGroups groups;
+    REQUIRE(groups.save_text().empty());
+    REQUIRE_FALSE(groups.register_group("Players", FilterType::Exclude));
+    REQUIRE_FALSE(groups.register_group("Ghosts", FilterType::Include));
+    REQUIRE_FALSE(groups.register_group("Debris", FilterType::Exclude));
+    REQUIRE_FALSE(groups.set_collidable("Players", "Players", false));
+    REQUIRE_FALSE(groups.set_collidable("Ghosts", "Players", true));
+    REQUIRE_FALSE(groups.unregister_group("Debris"));
+    REQUIRE_FALSE(groups.register_group("Crates", FilterType::Exclude));
+    const std::string text = groups.save_text();
+    REQUIRE(text ==
+            "{\"groups\":[[\"Default\",\"Exclude\"],[\"Players\",\"Exclude\"],[\"Ghosts\",\"Include\"],"
+            "[\"Crates\",\"Exclude\"]],\"pairs\":[[\"Players\",\"Players\",false],[\"Players\",\"Ghosts\",true]]}");
+
+    CollisionGroups loaded;
+    const std::uint64_t before = loaded.revision();
+    REQUIRE_FALSE(loaded.load_text(text));
+    REQUIRE(loaded.revision() > before);
+    REQUIRE(loaded.save_text() == text);
+    REQUIRE_FALSE(loaded.collidable("Players", "Players"));
+    REQUIRE(loaded.collidable("Ghosts", "Players"));
+    REQUIRE_FALSE(loaded.collidable("Ghosts", "Crates"));
+    REQUIRE(loaded.collidable("Crates", "Default"));
+
+    // Loading "" is Default alone again, and the revision still only grows.
+    const std::uint64_t later = loaded.revision();
+    REQUIRE_FALSE(loaded.load_text(""));
+    REQUIRE(loaded.revision() > later);
+    REQUIRE(loaded.groups().size() == 1);
+    REQUIRE(loaded.save_text().empty());
+
+    // Only Default's type changed: still saved.
+    REQUIRE_FALSE(loaded.set_filter_type("Default", FilterType::Include));
+    REQUIRE(loaded.save_text() == "{\"groups\":[[\"Default\",\"Include\"]],\"pairs\":[]}");
+}
+
+TEST_CASE("CG8 load_text refuses a malformed table and changes nothing", "[collision-group][editor]") {
+    CollisionGroups groups;
+    REQUIRE_FALSE(groups.register_group("Kept", FilterType::Include));
+    const std::string kept = groups.save_text();
+    const std::uint64_t revision = groups.revision();
+    for (const char* bad : {
+             "nope",
+             "[]",
+             "{\"groups\":[]}",
+             "{\"groups\":[[\"Players\",\"Exclude\"]],\"pairs\":[]}",
+             "{\"groups\":[[\"Default\",\"Exclude\"],[\"\",\"Exclude\"]],\"pairs\":[]}",
+             "{\"groups\":[[\"Default\",\"Exclude\"],[\"A\",\"Exclude\"],[\"A\",\"Include\"]],\"pairs\":[]}",
+             "{\"groups\":[[\"Default\",\"Greylist\"]],\"pairs\":[]}",
+             "{\"groups\":[[\"Default\",\"Exclude\"]],\"pairs\":[[\"Default\",\"Nope\",true]]}",
+             "{\"groups\":[[\"Default\",\"Exclude\"]],\"pairs\":[[\"Default\",\"Default\",1]]}",
+         }) {
+        INFO(bad);
+        REQUIRE(groups.load_text(bad));
+        REQUIRE(groups.save_text() == kept);
+        REQUIRE(groups.revision() == revision);
+    }
+    std::string many = "{\"groups\":[[\"Default\",\"Exclude\"]";
+    for (int i = 0; i < CollisionGroups::kMaxGroups; ++i) {
+        many += ",[\"G" + std::to_string(i) + "\",\"Exclude\"]";
+    }
+    many += "],\"pairs\":[]}";
+    REQUIRE(groups.load_text(many));
+    REQUIRE(groups.save_text() == kept);
+}
+
+TEST_CASE("CG9 rename_group keeps the bit, the type, the order, and the pair settings", "[collision-group][editor]") {
+    CollisionGroups groups;
+    REQUIRE_FALSE(groups.register_group("A", FilterType::Include));
+    REQUIRE_FALSE(groups.register_group("B", FilterType::Exclude));
+    REQUIRE_FALSE(groups.set_collidable("A", "B", true));
+    REQUIRE_FALSE(groups.set_collidable("A", "A", true));
+    const std::uint64_t bit = groups.category("A");
+    const std::uint64_t revision = groups.revision();
+    REQUIRE_FALSE(groups.rename_group("A", "Renamed"));
+    REQUIRE(groups.revision() > revision);
+    REQUIRE_FALSE(groups.registered("A"));
+    REQUIRE(groups.category("Renamed") == bit);
+    REQUIRE(groups.collidable("Renamed", "B"));
+    REQUIRE(groups.collidable("Renamed", "Renamed"));
+    REQUIRE_FALSE(groups.collidable("Renamed", "Default"));
+    REQUIRE(groups.groups()[1].name == "Renamed");
+    REQUIRE(groups.groups()[1].filter_type == FilterType::Include);
+
+    const std::string before = groups.save_text();
+    REQUIRE(*groups.rename_group("Default", "Base") == "Default cannot be renamed");
+    REQUIRE(*groups.rename_group("Renamed", "B") == "A collision group named \"B\" already exists");
+    REQUIRE(*groups.rename_group("Renamed", "") == "Collision group name must not be empty");
+    REQUIRE(*groups.rename_group("Nope", "Other") ==
+            "Unknown collision group \"Nope\"; did you forget to call RegisterCollisionGroup?");
+    REQUIRE(groups.save_text() == before);
+    // To its own name: nothing to do.
+    REQUIRE_FALSE(groups.rename_group("B", "B"));
+}

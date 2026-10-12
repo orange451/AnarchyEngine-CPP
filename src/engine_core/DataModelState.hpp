@@ -132,7 +132,7 @@ struct DataModel::State {
     flecs::query<> constraint_query;
     // Which PVInstances move together; DataModel::assemblies.
     Assemblies assemblies;
-    // PhysicsService's collision groups; DataModel::collision_groups. Not saved.
+    // The place's collision groups; DataModel::collision_groups. Saved as Workspace's CollisionGroups.
     CollisionGroups collision_groups;
     // Every live MeshEditor; DataModel::mesh_editors. Not saved.
     MeshEditors mesh_editors;

@@ -1655,7 +1655,7 @@ TEST_CASE("P42 a PlayerController that cannot collide falls through the floor", 
     REQUIRE(y_of(player.transform()) < -5.f);
 }
 
-TEST_CASE("P43 every PhysicsBase has CollisionGroup, saved, Default; Play and Stop clear the groups",
+TEST_CASE("P43 every PhysicsBase has CollisionGroup, saved, Default; Play keeps the place's groups, Stop restores them",
           "[physics][collision-group]") {
     for (const char* name : {"PhysicsBase", "PhysicsObject", "PlayerController", "Brush"}) {
         INFO(name);
@@ -1675,10 +1675,11 @@ TEST_CASE("P43 every PhysicsBase has CollisionGroup, saved, Default; Play and St
     REQUIRE_FALSE(game.collision_groups().register_group("Crates", engine_core::CollisionGroups::FilterType::Include));
     game.capture_place();
     game.start_simulation();
-    REQUIRE_FALSE(game.collision_groups().registered("Crates"));
-    REQUIRE_FALSE(game.collision_groups().register_group("Crates", engine_core::CollisionGroups::FilterType::Include));
+    REQUIRE(game.collision_groups().registered("Crates"));
+    REQUIRE_FALSE(game.collision_groups().register_group("Barrels", engine_core::CollisionGroups::FilterType::Include));
     game.stop_simulation();
-    REQUIRE_FALSE(game.collision_groups().registered("Crates"));
+    REQUIRE(game.collision_groups().registered("Crates"));
+    REQUIRE_FALSE(game.collision_groups().registered("Barrels"));
 }
 
 namespace {

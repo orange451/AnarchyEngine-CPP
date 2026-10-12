@@ -510,8 +510,9 @@ public:
     // Which PVInstances move together (Assemblies): one cache per world,
     // refreshed by whoever reads it. Under the lock.
     Assemblies& assemblies() const;
-    // PhysicsService's collision groups (CollisionGroups.hpp): not saved,
-    // reset at Play and Stop.
+    // The place's collision groups (CollisionGroups.hpp), saved as
+    // Workspace's hidden CollisionGroups. Edits go through
+    // edit_collision_groups (CollisionGroupEdits.hpp), which notes them there.
     CollisionGroups& collision_groups() const;
     // Every live MeshEditor, one per Mesh (MeshEditors.hpp). Not saved.
     MeshEditors& mesh_editors() const;

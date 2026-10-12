@@ -1,5 +1,6 @@
 #include "SceneService.hpp"
 
+#include "CollisionGroupEdits.hpp"
 #include "Containment.hpp"
 #include "LuaApi.hpp"
 #include "PropertyBag.hpp"
@@ -70,6 +71,16 @@ std::optional<std::string> Workspace::set_gravity(double value) {
     return std::nullopt;
 }
 
+void Workspace::note_collision_groups(std::string before, std::string after) {
+    LuaSlot previous;
+    previous.kind = LuaSlot::Kind::String;
+    previous.text = std::move(before);
+    LuaSlot next;
+    next.kind = LuaSlot::Kind::String;
+    next.text = std::move(after);
+    note_property_change("CollisionGroups", previous, next);
+}
+
 const char* Storage::class_name() const { return "Storage"; }
 
 const char* Scripts::class_name() const { return "Scripts"; }
@@ -128,6 +139,33 @@ bool write_gravity(DataModel&, DataModel& object, LuaSlot& in) {
     return true;
 }
 
+bool read_collision_groups(DataModel&, DataModel& object, LuaSlot& out) {
+    if (dynamic_cast<Workspace*>(&object) == nullptr) {
+        return false;
+    }
+    out.kind = LuaSlot::Kind::String;
+    out.text = object.collision_groups().save_text();
+    return true;
+}
+
+// A load, undo, or Stop: the whole table, rebuilt and noted.
+bool write_collision_groups(DataModel&, DataModel& object, LuaSlot& in) {
+    if (dynamic_cast<Workspace*>(&object) == nullptr) {
+        return false;
+    }
+    if (in.kind != LuaSlot::Kind::String) {
+        in.error = "CollisionGroups must be a string";
+        return false;
+    }
+    const std::string text = in.text;
+    if (const auto error = edit_collision_groups(
+            object, [&text](CollisionGroups& groups) { return groups.load_text(text); })) {
+        in.error = *error;
+        return false;
+    }
+    return true;
+}
+
 ANARCHY_LUA_REGISTER(register_scene_service_lua) {
     register_lua_class("Service", "DataModel", nullptr, 0);
     register_lua_class("SceneService", "Service", nullptr, 0);
@@ -136,6 +174,9 @@ ANARCHY_LUA_REGISTER(register_scene_service_lua) {
     const LuaField workspace[] = {
         lua_property("CurrentCamera", "Camera?", true, read_current_camera, write_current_camera),
         lua_saved_property("Gravity", "number", read_gravity, write_gravity, gravity.c_str()),
+        // Set through PhysicsService or the Collision Groups pane, not Properties.
+        lua_hidden(lua_saved_property("CollisionGroups", "string", read_collision_groups, write_collision_groups,
+                                      "\"\"")),
     };
     register_lua_class("Workspace", "SceneService", workspace, static_cast<int>(sizeof(workspace) / sizeof(workspace[0])));
     register_lua_class("Storage", "SceneService", nullptr, 0);

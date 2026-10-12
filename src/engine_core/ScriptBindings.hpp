@@ -407,6 +407,8 @@ struct ScriptBindings {
     static void link_physics_service_methods();
     // The DataModel's collision groups, for PhysicsService's methods (self at 1).
     static CollisionGroups& physics_service_groups(lua_State* state);
+    // The world whose groups those are, for the methods that change them.
+    static DataModel& physics_service_world(lua_State* state);
     static Camera& camera_self(lua_State* state);
     // WireframeAdornment's methods, in WireframeBindings.cpp.
     static void link_wireframe_methods();

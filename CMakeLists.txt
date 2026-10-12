@@ -715,6 +715,7 @@ add_library(engine_core STATIC
     src/engine_core/AssemblyFollow.cpp
     src/engine_core/AssemblyPlay.cpp
     src/engine_core/CollisionGroups.cpp
+    src/engine_core/CollisionGroupEdits.cpp
     src/engine_core/BrushVisuals.cpp
     src/engine_core/terrain/VoxelChunk.cpp
     src/engine_core/terrain/ChunkCache.cpp
@@ -1054,6 +1055,7 @@ add_executable(sandbox
     sandbox/assembly_play_tests.cpp
     sandbox/collision_group_tests.cpp
     sandbox/collision_group_lua_tests.cpp
+    sandbox/collision_group_save_tests.cpp
     sandbox/no_collision_tests.cpp
     sandbox/touch_tests.cpp
     sandbox/constraint_lines_tests.cpp

@@ -12,8 +12,9 @@ namespace engine_core {
 // The collision groups PhysicsService keeps while the place runs
 // (docs/superpowers/specs/2026-10-11-collision-groups-design.md): each
 // registered group's type and filter bit, and the explicit pair settings.
-// Pure data: PhysicsWorld turns it into Box3D filter bits. Not saved;
-// DataModel resets it at Play and Stop. Simulation thread, under the
+// Pure data: PhysicsWorld turns it into Box3D filter bits. The place saves it
+// as Workspace's hidden CollisionGroups property (save_text), so it is undone
+// and restored at Stop like any saved property. Simulation thread, under the
 // DataModel lock.
 class CollisionGroups {
 public:
@@ -41,6 +42,19 @@ public:
     std::optional<std::string> unregister_group(const std::string& name);
     std::optional<std::string> set_filter_type(const std::string& name, FilterType filter_type);
     std::optional<std::string> set_collidable(const std::string& a, const std::string& b, bool collidable);
+    // Keeps the group's bit, type, order, and pair settings. Default cannot be
+    // renamed; to must be non-empty and not registered. To its own name: nothing.
+    std::optional<std::string> rename_group(const std::string& from, const std::string& to);
+
+    // The registry as a place saves it (Workspace.CollisionGroups): JSON,
+    // {"groups":[[name, "Exclude"|"Include"], ...], "pairs":[[a, b, bool], ...]},
+    // groups in registration order, each explicit setting once with its
+    // earlier group first. "" while it is Default alone, Exclude, with no settings.
+    std::string save_text() const;
+    // Rebuilds the registry from save_text's form ("" is Default alone). The
+    // revision only grows. Refuses, changing nothing, anything else: see
+    // docs/superpowers/specs/2026-10-12-collision-groups-editor-design.md §1.
+    std::optional<std::string> load_text(const std::string& text);
 
     bool registered(std::string_view name) const;
     // An explicit setting decides; else true only when both are Exclude.
@@ -66,6 +80,8 @@ private:
         std::uint64_t order = 0;
     };
     int bit_of(std::string_view name) const;
+    // The registered slots in registration order.
+    std::vector<int> ordered() const;
     int resolved(std::string_view name) const;
     bool pair(int a, int b) const;
     void changed();

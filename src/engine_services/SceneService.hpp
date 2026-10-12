@@ -44,6 +44,12 @@ inline constexpr const char* kSceneServiceClasses[] = {"Workspace", "Lighting", 
 // downward, in units per second per second: a saved registry property
 // (lua_saved_property), so it is saved, undone, and restored at Stop. Below 0
 // pulls up; 0 is none. A change during play takes effect on the next step.
+//
+// CollisionGroups is the place's collision groups (DataModel::collision_groups)
+// as CollisionGroups::save_text writes them: a hidden saved string, so a save
+// writes it, a load reads it, Stop restores it, and undo puts it back. The
+// registry is its only record; a write rebuilds the registry
+// (CollisionGroups::load_text), and edit_collision_groups notes every change.
 class Workspace : public SceneService {
 public:
     static constexpr double kDefaultGravity = 9.81;
@@ -60,6 +66,11 @@ public:
     // Runs on SimulationThread. A value that is not finite is refused: it
     // returns why and changes nothing. Otherwise empty.
     std::optional<std::string> set_gravity(double value);
+
+    // Notes a change to the collision groups, as save_text gave them before
+    // and after (CollisionGroupEdits.hpp calls it): undo, Changed, and an
+    // unsaved place, as any saved property's setter does.
+    void note_collision_groups(std::string before, std::string after);
 
 private:
     InstanceId current_camera_ = 0;

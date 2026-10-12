@@ -34,7 +34,7 @@ index a48a15d..1dcf9ca 100644
  /// This does not modify the mass properties.
  /// @see b3Body_ApplyMassFromShapes
 diff --git a/include/box3d/collision.h b/include/box3d/collision.h
-index cb99349..0a3ce28 100644
+index cb99349..1e02510 100644
 --- a/include/box3d/collision.h
 +++ b/include/box3d/collision.h
 @@ -595,6 +595,16 @@ B3_API void b3QueryHeightField( const b3HeightFieldData* heightField, b3AABB bou
@@ -54,7 +54,7 @@ index cb99349..0a3ce28 100644
  /// Perform a linear shape cast of shape B moving and shape A fixed. Determines the hit point, normal, and translation fraction.
  /// The query runs in frame A, so the hit point and normal are returned in frame A. Initially touching shapes are a miss.
  B3_API b3CastOutput b3ShapeCast( const b3ShapeCastPairInput* input );
-@@ -615,6 +625,37 @@ B3_API b3TOIOutput b3TimeOfImpact( const b3TOIInput* input );
+@@ -615,6 +625,43 @@ B3_API b3TOIOutput b3TimeOfImpact( const b3TOIInput* input );
   * @{
   */
  
@@ -88,6 +88,12 @@ index cb99349..0a3ce28 100644
 +B3_API void b3CollideHullAndCylinder( b3LocalManifold* manifold, int capacity, const b3HullData* hullA,
 +									  const b3Cylinder* cylinderB, const b3HullData* standInB, b3Transform transformBtoA,
 +									  b3SATCache* cache );
++
++/// Collide a triangle and a cylinder, the triangle in the cylinder's frame. Normal points from triangle to
++/// cylinder. standInB is the cylinder's stand-in hull, for deep overlap. Anarchy Engine.
++B3_API void b3CollideTriangleAndCylinder( b3LocalManifold* manifold, int capacity, const b3Vec3* triangleA, int triangleFlags,
++										  const b3Cylinder* cylinderB, const b3HullData* standInB, b3SATCache* cache,
++										  bool enableSpeculative );
 +
  /// Collide two spheres.
  B3_API void b3CollideSpheres( b3LocalManifold* manifold, int capacity, const b3Sphere* sphereA, const b3Sphere* sphereB,
@@ -166,20 +172,21 @@ index 4b96393..9113c68 100644
  			continue;
  		}
 diff --git a/src/contact.c b/src/contact.c
-index dab7f1e..09ca9f5 100644
+index dab7f1e..652de36 100644
 --- a/src/contact.c
 +++ b/src/contact.c
-@@ -138,6 +138,9 @@ void b3InitializeContactRegisters( void )
+@@ -138,6 +138,10 @@ void b3InitializeContactRegisters( void )
  		b3AddType( b3_heightShape, b3_sphereShape );
  		b3AddType( b3_heightShape, b3_capsuleShape );
  		b3AddType( b3_heightShape, b3_hullShape );
 +		b3AddType( b3_cylinderShape, b3_sphereShape );
 +		b3AddType( b3_cylinderShape, b3_capsuleShape );
 +		b3AddType( b3_hullShape, b3_cylinderShape );
++		b3AddType( b3_meshShape, b3_cylinderShape );
  		s_initialized = true;
  	}
  }
-@@ -233,7 +236,8 @@ void b3CreateContact( b3World* world, b3Shape* shapeA, b3Shape* shapeB, int chil
+@@ -233,7 +237,8 @@ void b3CreateContact( b3World* world, b3Shape* shapeA, b3Shape* shapeB, int chil
  	}
  
  	// todo impose these restrictions to make life easier
@@ -189,7 +196,7 @@ index dab7f1e..09ca9f5 100644
  	// B3_ASSERT( bodyB->type != b3_staticBody );
  
  	// Is either body static?
-@@ -306,6 +310,10 @@ void b3CreateContact( b3World* world, b3Shape* shapeA, b3Shape* shapeB, int chil
+@@ -306,6 +311,10 @@ void b3CreateContact( b3World* world, b3Shape* shapeA, b3Shape* shapeB, int chil
  	{
  		radiusA = shapeA->capsule.radius;
  	}
@@ -200,7 +207,7 @@ index dab7f1e..09ca9f5 100644
  
  	float radiusB = 0.0f;
  	if ( typeB == b3_sphereShape )
-@@ -316,6 +324,10 @@ void b3CreateContact( b3World* world, b3Shape* shapeA, b3Shape* shapeB, int chil
+@@ -316,6 +325,10 @@ void b3CreateContact( b3World* world, b3Shape* shapeA, b3Shape* shapeB, int chil
  	{
  		radiusB = shapeB->capsule.radius;
  	}
@@ -211,7 +218,7 @@ index dab7f1e..09ca9f5 100644
  
  	float maxRadius = b3MaxFloat( radiusA, radiusB );
  
-@@ -512,6 +524,19 @@ static bool b3ComputeConvexManifold( b3World* world, int workerIndex, b3Contact*
+@@ -512,6 +525,19 @@ static bool b3ComputeConvexManifold( b3World* world, int workerIndex, b3Contact*
  			b3CollideCapsules( &geomManifold, pointCapacity, &shapeA->capsule, &shapeB->capsule, transformBtoA );
  		}
  	}
@@ -231,7 +238,7 @@ index dab7f1e..09ca9f5 100644
  	else
  	{
  		B3_ASSERT( typeA == b3_hullShape );
-@@ -526,6 +551,11 @@ static bool b3ComputeConvexManifold( b3World* world, int workerIndex, b3Contact*
+@@ -526,6 +552,11 @@ static bool b3ComputeConvexManifold( b3World* world, int workerIndex, b3Contact*
  			b3CollideHullAndCapsule( &geomManifold, pointCapacity, shapeA->hull, &shapeB->capsule, transformBtoA,
  									 &cache->simplexCache );
  		}
@@ -243,7 +250,7 @@ index dab7f1e..09ca9f5 100644
  		else
  		{
  			B3_ASSERT( typeB == b3_hullShape );
-@@ -665,6 +695,10 @@ static bool b3UpdateConvexContact( b3World* world, int workerIndex, b3Contact* c
+@@ -665,6 +696,10 @@ static bool b3UpdateConvexContact( b3World* world, int workerIndex, b3Contact* c
  		{
  			radiusA = shapeA->capsule.radius;
  		}
@@ -254,7 +261,7 @@ index dab7f1e..09ca9f5 100644
  		else if ( typeA == b3_hullShape )
  		{
  			radiusA = 0.25f * shapeA->hull->innerRadius;
-@@ -679,6 +713,10 @@ static bool b3UpdateConvexContact( b3World* world, int workerIndex, b3Contact* c
+@@ -679,6 +714,10 @@ static bool b3UpdateConvexContact( b3World* world, int workerIndex, b3Contact* c
  		{
  			radiusB = shapeB->capsule.radius;
  		}
@@ -439,6 +446,33 @@ index ffe0c0e..b24ce74 100644
 +
  // Separation function:
  // f(t) = (c2 + t * dp2 - c1 - t * dp1 ) * n
+ 
+diff --git a/src/mesh_contact.c b/src/mesh_contact.c
+index 67c9b6f..3893084 100644
+--- a/src/mesh_contact.c
++++ b/src/mesh_contact.c
+@@ -632,6 +632,11 @@ bool b3ComputeMeshManifolds( b3World* world, int workerIndex, b3Contact* contact
+ 				b3CollideTriangleAndSphere( manifold, pointCapacity, vertices, &shapeB->sphere );
+ 				break;
+ 
++			case b3_cylinderShape:
++				b3CollideTriangleAndCylinder( manifold, pointCapacity, vertices, triangle.flags, &shapeB->cylinder,
++											  shapeB->cylinderHull, &cache->satCache, enableSpeculative );
++				break;
++
+ 			default:
+ 				B3_ASSERT( false );
+ 				return false;
+@@ -1180,6 +1185,10 @@ bool b3ComputeMeshManifolds( b3World* world, int workerIndex, b3Contact* contact
+ 	{
+ 		radiusB = shapeB->hull->innerRadius;
+ 	}
++	else if ( shapeB->type == b3_cylinderShape )
++	{
++		radiusB = shapeB->cylinder.radius;
++	}
+ 
+ 	contact->rollingResistance = materialB->rollingResistance * radiusB;
  
 diff --git a/src/physics_world.c b/src/physics_world.c
 index 8dbc2f7..5484eb4 100644

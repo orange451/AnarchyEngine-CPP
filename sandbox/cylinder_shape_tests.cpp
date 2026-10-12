@@ -313,3 +313,28 @@ TEST_CASE("CY16 a leaning wheel's tread rises from its low end, with no change o
     REQUIRE(near(high, -0.005f + 0.5f * sinLean, 1e-5f));
     b3DestroyHull(standIn);
 }
+
+TEST_CASE("CY23 a cylinder on its side on one triangle: two points, the triangle's face", "[cylinder]") {
+    // The triangle, counter-clockwise from above, in the world.
+    const b3Vec3 world[3] = {v3(-5.f, 0.f, 5.f), v3(5.f, 0.f, 5.f), v3(0.f, 0.f, -5.f)};
+    // The cylinder lies along Z, 0.005 into the triangle; Box3D gives the triangle in its frame.
+    const b3Cylinder wheel = upright(0.5f, 0.25f);
+    b3HullData* standIn = b3MakeCylinderHull(&wheel);
+    const b3Transform xf{v3(0.f, 0.495f, 0.f), b3MakeQuatFromAxisAngle(v3(1.f, 0.f, 0.f), 0.5f * kPi)};
+    b3Vec3 local[3];
+    for (int i = 0; i < 3; ++i) {
+        local[i] = b3InvTransformPoint(xf, world[i]);
+    }
+    b3LocalManifoldPoint points[8];
+    b3LocalManifold m{};
+    m.points = points;
+    b3SATCache cache{};
+    b3CollideTriangleAndCylinder(&m, 8, local, 0, &wheel, standIn, &cache, true);
+    REQUIRE(m.pointCount == 2);
+    REQUIRE(m.feature == b3_featureTriangleFace);
+    const b3Vec3 up = b3RotateVector(xf.q, m.normal);
+    REQUIRE(near(up.y, 1.f, 1e-5f));
+    REQUIRE(near(m.points[0].separation, -0.005f, 1e-5f));
+    REQUIRE(near(m.points[1].separation, -0.005f, 1e-5f));
+    b3DestroyHull(standIn);
+}

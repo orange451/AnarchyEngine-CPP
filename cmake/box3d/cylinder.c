@@ -807,3 +807,122 @@ void b3CollideHullAndCylinder( b3LocalManifold* manifold, int capacity, const b3
 	b3Vec3 surfaceB = b3MulSub( output.pointB, core.margin, normal );
 	b3SinglePoint( manifold, normal, output.pointA, surfaceB, separation );
 }
+
+// Which part of the triangle the point on it lies on: its face, an edge, or a corner.
+static b3TriangleFeature b3TriangleFeatureAt( b3Vec3 v1, b3Vec3 v2, b3Vec3 v3, b3Vec3 point )
+{
+	b3Vec3 e1 = b3Sub( v2, v1 );
+	b3Vec3 e2 = b3Sub( v3, v1 );
+	b3Vec3 p = b3Sub( point, v1 );
+	float d11 = b3Dot( e1, e1 );
+	float d12 = b3Dot( e1, e2 );
+	float d22 = b3Dot( e2, e2 );
+	float dp1 = b3Dot( p, e1 );
+	float dp2 = b3Dot( p, e2 );
+	float det = d11 * d22 - d12 * d12;
+	if ( det < 1000.0f * FLT_MIN )
+	{
+		return b3_featureTriangleFace;
+	}
+
+	float w2 = ( d22 * dp1 - d12 * dp2 ) / det;
+	float w3 = ( d11 * dp2 - d12 * dp1 ) / det;
+	float w1 = 1.0f - w2 - w3;
+	const float tolerance = 1.0e-4f;
+	bool on1 = w1 > tolerance;
+	bool on2 = w2 > tolerance;
+	bool on3 = w3 > tolerance;
+	if ( on1 && on2 && on3 )
+	{
+		return b3_featureTriangleFace;
+	}
+	if ( on1 && on2 )
+	{
+		return b3_featureEdge1;
+	}
+	if ( on2 && on3 )
+	{
+		return b3_featureEdge2;
+	}
+	if ( on3 && on1 )
+	{
+		return b3_featureEdge3;
+	}
+	if ( on1 )
+	{
+		return b3_featureVertex1;
+	}
+	if ( on2 )
+	{
+		return b3_featureVertex2;
+	}
+	return b3_featureVertex3;
+}
+
+void b3CollideTriangleAndCylinder( b3LocalManifold* manifold, int capacity, const b3Vec3* triangleA, int triangleFlags,
+								   const b3Cylinder* cylinderB, const b3HullData* standInB, b3SATCache* cache,
+								   bool enableSpeculative )
+{
+	manifold->pointCount = 0;
+	if ( capacity < 2 )
+	{
+		return;
+	}
+
+	b3Vec3 v1 = triangleA[0];
+	b3Vec3 v2 = triangleA[1];
+	b3Vec3 v3 = triangleA[2];
+	b3Plane plane = b3MakePlaneFromPoints( v1, v2, v3 );
+	b3CylinderFrame frame = b3MakeCylinderFrame( cylinderB );
+	if ( b3PlaneSeparation( plane, frame.center ) < 0.0f )
+	{
+		// Cull the back side, as Box3D's capsule does.
+		return;
+	}
+
+	float maxSeparation = enableSpeculative ? B3_SPECULATIVE_DISTANCE : 0.0f;
+	b3CylinderCore core = b3MakeCylinderCore( cylinderB );
+	b3PointCloud cloudA = { triangleA, 3 };
+	b3DistanceOutput output =
+		b3SupportDistance( b3PointCloudSupport, &cloudA, b3CylinderCoreSupport, &core, b3Transform_identity );
+	float separation = output.distance - core.margin;
+	if ( separation > maxSeparation )
+	{
+		return;
+	}
+
+	if ( output.distance < 100.0f * FLT_EPSILON )
+	{
+		// The cores overlap: Box3D's triangle and hull answer, the stand-in in the cylinder's place.
+		b3CollideTriangleAndHull( manifold, capacity, v1, v2, v3, triangleFlags, standInB, cache, enableSpeculative );
+		return;
+	}
+
+	b3Vec3 normal = output.normal;
+	if ( b3Dot( plane.normal, normal ) > 0.2f )
+	{
+		// Prefer the face, as Box3D's capsule does: the cylinder's side line or
+		// cap, clipped to the triangle.
+		b3ClipVertex feature[B3_CYLINDER_CAP_POINTS];
+		int count = b3CylinderFeatureVertices( feature, cylinderB, b3Neg( plane.normal ), b3Transform_identity,
+											   b3_featureShapeB, b3_featureShapeA, 0 );
+		b3Vec3 corners[3] = { v1, v2, v3 };
+		b3Plane sides[3];
+		for ( int i = 0; i < 3; ++i )
+		{
+			b3Vec3 a = corners[i];
+			b3Vec3 b = corners[( i + 1 ) % 3];
+			sides[i] = b3MakePlaneFromNormalAndPoint( b3Normalize( b3Cross( b3Sub( b, a ), plane.normal ) ), a );
+		}
+		b3BuildCylinderFaceContact( manifold, capacity, feature, count, plane, sides, 3, maxSeparation );
+		if ( manifold->pointCount > 0 )
+		{
+			manifold->feature = b3_featureTriangleFace;
+			return;
+		}
+	}
+
+	b3Vec3 surfaceB = b3MulSub( output.pointB, core.margin, normal );
+	b3SinglePoint( manifold, normal, output.pointA, surfaceB, separation );
+	manifold->feature = b3TriangleFeatureAt( v1, v2, v3, output.pointA );
+}

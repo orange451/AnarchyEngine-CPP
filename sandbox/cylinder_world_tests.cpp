@@ -398,3 +398,81 @@ TEST_CASE("CY22c a box rests on two anchored logs", "[cylinder]") {
     REQUIRE(near(position_of(crate).y, 0.5f, 0.01f));
     REQUIRE(near(position_of(crate).x, 0.f, 0.01f));
 }
+
+namespace {
+
+// A static mesh floor at y = 0: cells 1 unit across from -half to +half, two
+// triangles each, its edges identified so Box3D smooths over the seams.
+b3BodyId mesh_floor(World& world, int half, std::vector<b3Vec3>& vertices, std::vector<int32_t>& indices,
+                    b3MeshData*& mesh) {
+    const int side = 2 * half + 1;
+    for (int z = -half; z <= half; ++z) {
+        for (int x = -half; x <= half; ++x) {
+            vertices.push_back(v3(static_cast<float>(x), 0.f, static_cast<float>(z)));
+        }
+    }
+    for (int z = 0; z < side - 1; ++z) {
+        for (int x = 0; x < side - 1; ++x) {
+            const int i = z * side + x;
+            // Counter-clockwise seen from above.
+            indices.insert(indices.end(), {i, i + side, i + 1, i + 1, i + side, i + side + 1});
+        }
+    }
+    b3MeshDef def{};
+    def.vertices = vertices.data();
+    def.indices = indices.data();
+    def.vertexCount = static_cast<int>(vertices.size());
+    def.triangleCount = static_cast<int>(indices.size() / 3);
+    def.identifyEdges = true;
+    mesh = b3CreateMesh(&def, nullptr, 0);
+    const b3BodyId ground = world.body(b3_staticBody, v3(0.f, 0.f, 0.f));
+    b3ShapeDef shape = b3DefaultShapeDef();
+    b3CreateMeshShape(ground, &shape, mesh, v3(1.f, 1.f, 1.f));
+    return ground;
+}
+
+}  // namespace
+
+TEST_CASE("CY24 a cylinder rolls across a mesh's triangle seams without a jump", "[cylinder]") {
+    std::vector<b3Vec3> vertices;
+    std::vector<int32_t> indices;
+    b3MeshData* mesh = nullptr;
+    {
+        World world;
+        mesh_floor(world, 15, vertices, indices, mesh);
+        REQUIRE(mesh != nullptr);
+        // Off the grid lines, so it crosses diagonals and edges both.
+        const b3BodyId wheel = world.cylinder(b3_dynamicBody, v3(-10.f, 0.5f, 0.3f), on_side(), 0.5f, 0.25f);
+        world.seconds(0.25f);
+        b3Body_SetLinearVelocity(wheel, v3(4.f, 0.f, 0.f));
+        b3Body_SetAngularVelocity(wheel, v3(0.f, 0.f, -8.f));
+        float low = 1e9f;
+        float high = -1e9f;
+        for (int i = 0; i < 240 * 6 && position_of(wheel).x < 10.f; ++i) {
+            world.step();
+            low = std::min(low, position_of(wheel).y);
+            high = std::max(high, position_of(wheel).y);
+        }
+        INFO(low << " .. " << high);
+        REQUIRE(position_of(wheel).x >= 10.f);
+        REQUIRE(high - low < 5e-4f);
+    }
+    b3DestroyMesh(mesh);
+}
+
+TEST_CASE("CY25 a cylinder lying on a mesh does not creep, and sleeps", "[cylinder]") {
+    std::vector<b3Vec3> vertices;
+    std::vector<int32_t> indices;
+    b3MeshData* mesh = nullptr;
+    {
+        World world;
+        mesh_floor(world, 5, vertices, indices, mesh);
+        const b3BodyId wheel = world.cylinder(b3_dynamicBody, v3(0.3f, 0.5f, 0.2f), on_side(), 0.5f, 0.25f);
+        world.seconds(1.f);
+        const b3Vec3 before = position_of(wheel);
+        world.seconds(10.f);
+        REQUIRE(b3Distance(before, position_of(wheel)) < 1e-4f);
+        REQUIRE_FALSE(b3Body_IsAwake(wheel));
+    }
+    b3DestroyMesh(mesh);
+}

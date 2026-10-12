@@ -5,10 +5,11 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <unordered_map>
 #include <vector>
 
 namespace engine_core {
+
+class DataModel;
 
 // Simulated bodies drawn between their last two physics substeps. The engine
 // arms it before a frame's last substep; PhysicsWorld opens a capture around
@@ -50,10 +51,33 @@ public:
     static Matrix4 blended(const Entry& entry, const Matrix4& current, double alpha);
 
 private:
+    friend void swap_in_blend(DataModel& game, double alpha);
+    friend void swap_out_blend(DataModel& game);
+
+    // What swap_in_blend wrote, and the true pose it replaced.
+    struct Swap {
+        InstanceId id = 0;
+        Kind kind = Kind::Body;
+        Matrix4 truth;
+        Matrix4 shown;
+    };
+
     std::vector<Entry> entries_;
-    std::unordered_map<InstanceId, std::size_t> index_;
+    std::vector<Swap> swaps_;
+    // Per instance slot: its entry's index, valid while slot_stamp_ holds this
+    // capture's stamp_. Sized once, so a warm capture allocates nothing.
+    std::vector<std::uint32_t> slot_entry_;
+    std::vector<std::uint32_t> slot_stamp_;
+    std::uint32_t stamp_ = 0;
     bool armed_ = false;
     bool capturing_ = false;
 };
+
+// At the window's start: every entry's instance shows its blended pose,
+// written quietly so nothing hears it. Its true pose is kept.
+void swap_in_blend(DataModel& game, double alpha);
+// After the copy: each instance still showing its blend gets its true pose
+// back. One a window script wrote keeps the script's value.
+void swap_out_blend(DataModel& game);
 
 }  // namespace engine_core

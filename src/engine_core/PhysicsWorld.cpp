@@ -4,6 +4,7 @@
 #include "AssetInstances.hpp"
 #include "Brush.hpp"
 #include "CollisionGroups.hpp"
+#include "PoseBlend.hpp"
 #include "ConvexDecomposition.hpp"
 #include "DataModel.hpp"
 #include "GameObject.hpp"
@@ -1860,6 +1861,13 @@ struct PhysicsWorld::Impl {
             drive_held(game, dt);
         }
         save_motion();
+        // Armed for the frame's last substep: the poses this step, pull, and
+        // held placement write are what the render window draws through.
+        PoseBlend& blend = game.pose_blend();
+        const bool capture = blend.armed();
+        if (capture) {
+            blend.begin_capture();
+        }
         {
             PROFILE_SCOPE("Box3D step", profiler::Group::Physics);
             b3World_Step(world, static_cast<float>(dt), 1);
@@ -1879,6 +1887,9 @@ struct PhysicsWorld::Impl {
             // The hand moved with its GameObject this step: what it holds is
             // drawn on it, though its body comes along only next step.
             game.assemblies().place_held(game);
+        }
+        if (capture) {
+            blend.end_capture();
         }
     }
 

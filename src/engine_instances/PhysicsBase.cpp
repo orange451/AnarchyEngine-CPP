@@ -5,6 +5,7 @@
 #include "Contract.hpp"
 #include "GameObject.hpp"
 #include "LuaApi.hpp"
+#include "PoseBlend.hpp"
 #include "PropertyBag.hpp"
 
 #include <algorithm>
@@ -216,9 +217,14 @@ std::optional<std::string> PhysicsBase::set_linear_damping(double damping) {
 }
 
 void PhysicsBase::store_simulated(const Matrix4& transform, Vec3 velocity) {
+    // While the frame's last substep is captured, the window draws this body
+    // between where it was and where physics put it.
+    pose_blend().record(id(), PoseBlend::Kind::Body, transform_, transform);
     transform_ = transform;
     velocity_ = velocity;
 }
+
+void PhysicsBase::store_pose(const Matrix4& transform) { transform_ = transform; }
 
 void PhysicsBase::on_reuse() {
     transform_ = matrix4_identity();

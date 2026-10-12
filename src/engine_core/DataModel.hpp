@@ -84,6 +84,7 @@ public:
 
 class ChangeHistoryService;
 class Assemblies;
+class PoseBlend;
 class CollisionGroups;
 class MeshEditors;
 class Engine;
@@ -519,10 +520,18 @@ public:
     CollisionGroups& collision_groups() const;
     // Every live MeshEditor, one per Mesh (MeshEditors.hpp). Not saved.
     MeshEditors& mesh_editors() const;
+    // Bodies drawn through the frame's last physics substep (PoseBlend.hpp).
+    PoseBlend& pose_blend() const;
     // A GameObject's Transform as the physics world moved it: stored and
     // drawn, as integrate_simulated moves one, with no Changed, no history,
     // and no check. SimulationThread. A dead id or a non-GameObject does nothing.
     void write_simulated_transform(InstanceId id, const Matrix4& transform);
+    // A GameObject's Transform for the render window's blend: stored and
+    // drawn, with no Changed, no history, no watchers. A dead id or a
+    // non-GameObject does nothing.
+    void store_visual_transform(InstanceId id, const Matrix4& transform);
+    // A GameObject's Transform into out. False for a dead id or a non-GameObject.
+    bool spatial_transform(InstanceId id, Matrix4& out) const;
     // Heartbeat. Calls step(dt) on every stepping instance under the root, in
     // no set order. The ids are gathered first, so a step may create, destroy,
     // or reparent; an instance destroyed before its turn is skipped.

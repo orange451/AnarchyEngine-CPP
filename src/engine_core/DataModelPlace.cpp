@@ -41,6 +41,7 @@ void DataModel::start_simulation() {
     state_->mesh_editors.write_all(*this, true);
     state_->simulation_running = true;
     state_->physics_stepped = false;
+    state_->pose_blend.clear();
     // Each assembly's body frame and member offsets, before any script runs.
     state_->assemblies.capture_play(*this);
     // Script analysis checks the authored tree only. It stops checking until Stop.
@@ -82,6 +83,7 @@ void DataModel::stop_simulation() {
     restore_place_unlocked();
     ++state_->world_generation;
     state_->simulation_running = false;
+    state_->pose_blend.clear();
     // Restore's own notes came while the simulation still ran, so analysis
     // ignored them. It brings itself up to date with the restored tree now.
     if (ScriptAnalysis* analysis = script_analysis()) {

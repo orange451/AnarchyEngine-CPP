@@ -3,9 +3,16 @@
 
 #include "PoseBlend.hpp"
 
+#include "Engine.hpp"
+#include "PhysicsObject.hpp"
+#include "SceneService.hpp"
+#include "support.hpp"
+#include "alloc_counter.hpp"
+
 #include <catch2/catch_test_macros.hpp>
 
 #include <cmath>
+#include <vector>
 
 using engine_core::Matrix4;
 using engine_core::PoseBlend;
@@ -69,4 +76,150 @@ TEST_CASE("PB4 clear forgets every entry", "[pose_blend]") {
     blend.clear();
     REQUIRE(blend.entries().empty());
     REQUIRE_FALSE(blend.capturing());
+}
+
+namespace {
+
+// An Engine that is never started: run_frame runs each frame on this thread.
+// One 1-unit cube in zero gravity moves along X at speed, and each frame's
+// RenderStepped reads where it is drawn.
+struct Drive {
+    SimRole role;
+    engine_core::Engine engine;
+    engine_core::PhysicsObject* body = nullptr;
+    engine_core::TaskScheduler::JobId probe{};
+    std::vector<float> drawn;
+
+    explicit Drive(float speed) {
+        engine_core::DataModel& game = engine.datamodel();
+        auto* workspace = dynamic_cast<engine_core::Workspace*>(game.instance(workspace_of(game)));
+        REQUIRE(workspace != nullptr);
+        REQUIRE_FALSE(workspace->set_gravity(0.0));
+        body = &game.create<engine_core::PhysicsObject>();
+        REQUIRE_FALSE(body->set_transform(at(0, 10, 0)));
+        REQUIRE_FALSE(body->set_size({1, 1, 1}));
+        game.set_parent(body->id(), workspace_of(game));
+        game.start_simulation();
+        engine.set_timing(1.0 / 120.0, 1.0 / 240.0);
+        engine.resume();
+        REQUIRE_FALSE(body->set_velocity({speed, 0, 0}));
+        probe = engine.scheduler().bind(engine_core::Phase::RenderStepped,
+                                        [this](double) { drawn.push_back(body->transform().m[12]); });
+    }
+};
+
+}  // namespace
+
+TEST_CASE("PB5 uneven frames draw evenly spaced", "[pose_blend]") {
+    Drive drive(30.f);
+    const double walls[] = {0.007, 0.009, 0.008, 0.0075, 0.0085, 0.007, 0.009, 0.008};
+    for (int warm = 0; warm < 4; ++warm) {
+        drive.engine.run_frame(0.008);
+    }
+    drive.drawn.clear();
+    for (double wall : walls) {
+        drive.engine.run_frame(wall);
+    }
+    REQUIRE(drive.drawn.size() == 8);
+    for (std::size_t i = 1; i < drive.drawn.size(); ++i) {
+        INFO("frame " << i << ": moved " << drive.drawn[i] - drive.drawn[i - 1]);
+        REQUIRE(std::fabs((drive.drawn[i] - drive.drawn[i - 1]) - 30.f * static_cast<float>(walls[i])) < 1e-3f);
+    }
+}
+
+TEST_CASE("PB6 the sim step reads true poses", "[pose_blend]") {
+    Drive drive(30.f);
+    std::vector<float> heartbeat;
+    drive.engine.scheduler().bind(engine_core::Phase::Heartbeat,
+                                  [&](double) { heartbeat.push_back(drive.body->transform().m[12]); });
+    drive.engine.run_frame(0.009);
+    drive.engine.run_frame(0.009);
+    REQUIRE(heartbeat.size() == 2);
+    // Each Heartbeat reads where physics left the body: whole substeps.
+    const float substep = 30.f / 240.f;
+    const float steps = (heartbeat[1] - heartbeat[0]) / substep;
+    REQUIRE(std::fabs(steps - std::round(steps)) < 1e-3f);
+    // And after the frame the body holds its true pose again.
+    REQUIRE(std::fabs(drive.body->transform().m[12] - heartbeat[1]) < 1e-5f);
+}
+
+TEST_CASE("PB7 a RenderStepped write to a body wins over the swap-out", "[pose_blend]") {
+    Drive drive(30.f);
+    drive.engine.run_frame(0.009);
+    drive.engine.scheduler().bind(engine_core::Phase::RenderStepped,
+                                  [&](double) { drive.body->store_pose(at(100, 10, 0)); });
+    drive.engine.run_frame(0.009);
+    REQUIRE(std::fabs(drive.body->transform().m[12] - 100.f) < 1e-5f);
+}
+
+TEST_CASE("PB8 a frame with no substep keeps blending forward", "[pose_blend]") {
+    Drive drive(30.f);
+    // Two and a half substeps: two run, half a substep is left over.
+    drive.engine.run_frame(2.5 / 240.0);
+    const int stepped = drive.engine.last_substep_count();
+    drive.drawn.clear();
+    drive.engine.run_frame(0.001);  // three quarters of a substep left: none runs
+    drive.engine.run_frame(0.001);  // still under one
+    REQUIRE(stepped == 2);
+    REQUIRE(drive.engine.last_substep_count() == 0);
+    REQUIRE(drive.drawn.size() == 2);
+    REQUIRE(std::fabs((drive.drawn[1] - drive.drawn[0]) - 30.f * 0.001f) < 1e-3f);
+}
+
+TEST_CASE("PB9 Stop clears the blend and a destroyed body is skipped", "[pose_blend]") {
+    Drive drive(30.f);
+    drive.engine.run_frame(0.009);
+    REQUIRE_FALSE(drive.engine.datamodel().pose_blend().entries().empty());
+    drive.engine.scheduler().unbind(drive.probe);  // the probe reads body
+    drive.engine.datamodel().destroy(drive.body->id());
+    drive.body = nullptr;
+    drive.engine.run_frame(0.009);  // must not touch the dead id
+    drive.engine.datamodel().stop_simulation();
+    REQUIRE(drive.engine.datamodel().pose_blend().entries().empty());
+}
+
+TEST_CASE("PB10 a body turned by Heartbeat after the substeps still blends", "[pose_blend]") {
+    Drive drive(30.f);
+    float yaw = 0.f;
+    drive.engine.scheduler().bind(engine_core::Phase::Heartbeat, [&](double) {
+        yaw += 0.05f;
+        const Matrix4 now = drive.body->transform();
+        REQUIRE_FALSE(drive.body->set_transform(engine_core::matrix4_multiply(
+            at(now.m[12], now.m[13], now.m[14]), engine_core::matrix4_axis_angle({0, 1, 0}, yaw))));
+    });
+    const double walls[] = {0.007, 0.009, 0.008, 0.0075, 0.0085};
+    for (int warm = 0; warm < 4; ++warm) {
+        drive.engine.run_frame(0.008);
+    }
+    drive.drawn.clear();
+    for (double wall : walls) {
+        drive.engine.run_frame(wall);
+    }
+    REQUIRE(drive.drawn.size() == 5);
+    for (std::size_t i = 1; i < drive.drawn.size(); ++i) {
+        INFO("frame " << i << ": moved " << drive.drawn[i] - drive.drawn[i - 1]);
+        REQUIRE(std::fabs((drive.drawn[i] - drive.drawn[i - 1]) - 30.f * static_cast<float>(walls[i])) < 2e-3f);
+    }
+}
+
+TEST_CASE("PB11 a warm capture records without allocating", "[pose_blend][alloc]") {
+#if defined(_ITERATOR_DEBUG_LEVEL) && _ITERATOR_DEBUG_LEVEL != 0
+    SKIP("Debug containers allocate proxies; run in Release");
+#endif
+    PoseBlend blend;
+    const auto capture = [&](float x) {
+        blend.begin_capture();
+        for (engine_core::InstanceId id = 1; id <= 64; ++id) {
+            blend.record(id, PoseBlend::Kind::Body, at(x, 0, 0), at(x + 1.f, 0, 0));
+            blend.record(id, PoseBlend::Kind::Body, at(x + 1.f, 0, 0), at(x + 2.f, 0, 0));
+        }
+        blend.end_capture();
+    };
+    capture(0.f);  // warm: the first capture sizes its storage
+    alloc_counter::arm();
+    capture(1.f);
+    capture(2.f);
+    alloc_counter::disarm();
+    REQUIRE(alloc_counter::count() == 0u);
+    REQUIRE(blend.entries().size() == 64u);
 }

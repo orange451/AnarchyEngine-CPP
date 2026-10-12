@@ -7,6 +7,7 @@
 #include "Assemblies.hpp"
 #include "CollisionGroups.hpp"
 #include "MeshEditors.hpp"
+#include "PoseBlend.hpp"
 #include "ChangeHistoryService.hpp"
 #include "DataModelLock.hpp"
 #include "DraggerWorld.hpp"
@@ -136,6 +137,7 @@ struct DataModel::State {
     CollisionGroups collision_groups;
     // Every live MeshEditor; DataModel::mesh_editors. Not saved.
     MeshEditors mesh_editors;
+    PoseBlend pose_blend;
 
     // Guards slots, free lists, invalidation, and resync.
     // The engine thread holds Write across a whole frame (sim step, window,

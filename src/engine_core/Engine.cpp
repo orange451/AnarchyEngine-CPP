@@ -6,6 +6,7 @@
 #include "ChangeHistoryService.hpp"
 #include "DataModelLock.hpp"
 #include "MeshEditors.hpp"
+#include "PoseBlend.hpp"
 #include "ScriptAnalysis.hpp"
 #include "ScriptRuntime.hpp"
 
@@ -498,6 +499,11 @@ void Engine::run_step(double wall) {
         PROFILE_SCOPE("Physics", profiler::Group::Physics);
         while (accumulator_ >= physics_dt_ && substeps < kMaxSubsteps) {
             PROFILE_SCOPE("Substep", profiler::Group::Physics);
+            // The last substep's motion is what the window draws through.
+            const bool last = accumulator_ - physics_dt_ < physics_dt_ || substeps + 1 == kMaxSubsteps;
+            if (last) {
+                game_.pose_blend().arm();
+            }
             scheduler_.run_phase(Phase::PreSimulation, physics_dt_);
             game_.events().drain();
             scheduler_.run_phase(Phase::PhysicsSubstep, physics_dt_);
@@ -506,6 +512,7 @@ void Engine::run_step(double wall) {
                 PROFILE_SCOPE("Box3D", profiler::Group::Physics);
                 step_physics(physics_dt_);
             }
+            game_.pose_blend().disarm();
             scheduler_.run_phase(Phase::PostSimulation, physics_dt_);
             game_.events().drain();
             accumulator_ -= physics_dt_;
@@ -553,6 +560,9 @@ void Engine::run_step(double wall) {
 
 void Engine::run_window(double dt) {
     pump_.begin_prerender_window(game_);
+    // Bodies the last substep moved show where they are between it and the
+    // next, until the copy below has taken them.
+    swap_in_blend(game_, std::clamp(accumulator_ / physics_dt_, 0.0, 1.0));
     // Roblox order inside the pre-draw window: RenderStepped, then PreRender.
     // A failure in one does not skip the other or the copy.
     const auto contract = [this] { contract_count_.fetch_add(1); };
@@ -577,6 +587,8 @@ void Engine::run_window(double dt) {
             pump_.take_changes(game_);
         },
         contract);
+    // Its own step, so a failed copy cannot leave blended poses in the sim.
+    guarded_step([&] { swap_out_blend(game_); }, contract);
 }
 
 void Engine::step_physics(double dt) {

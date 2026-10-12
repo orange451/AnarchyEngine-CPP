@@ -1130,6 +1130,8 @@ CollisionGroups& DataModel::collision_groups() const { return state_->collision_
 
 MeshEditors& DataModel::mesh_editors() const { return state_->mesh_editors; }
 
+PoseBlend& DataModel::pose_blend() const { return state_->pose_blend; }
+
 void DataModel::constraints(std::vector<InstanceId>& out) const {
     out.clear();
     ecs_iter_t it = ecs_query_iter(ecs_world(), state_->constraint_query.c_ptr());
@@ -1146,9 +1148,28 @@ void DataModel::write_simulated_transform(InstanceId id, const Matrix4& transfor
     if (part == nullptr || part->body == nullptr) {
         return;
     }
+    state_->pose_blend.record(id, PoseBlend::Kind::Spatial, part->body->transform(), transform);
     write_component(ecs_world(), part->entity, state_->ecs_ids.transform, transform);
     note(id, VisualField::Transform, WriteOrigin::Simulation);
     notify_watchers(id);
+}
+
+void DataModel::store_visual_transform(InstanceId id, const Matrix4& transform) {
+    const Slot* part = slot(id);
+    if (part == nullptr || part->body == nullptr) {
+        return;
+    }
+    write_component(ecs_world(), part->entity, state_->ecs_ids.transform, transform);
+    note(id, VisualField::Transform, WriteOrigin::Simulation);
+}
+
+bool DataModel::spatial_transform(InstanceId id, Matrix4& out) const {
+    const Slot* part = slot(id);
+    if (part == nullptr || part->body == nullptr) {
+        return false;
+    }
+    out = part->body->transform();
+    return true;
 }
 
 void DataModel::step_instances(double dt) {

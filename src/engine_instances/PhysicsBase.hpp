@@ -105,6 +105,9 @@ public:
         return out;
     }
     void store_simulated(const Matrix4& transform, Vec3 velocity);
+    // The pose alone, for the render window's blend: no velocity, no dirty
+    // bit, no Changed.
+    void store_pose(const Matrix4& transform);
 
     // One warning, until the condition clears: this one lost its GameObject
     // to an earlier body.

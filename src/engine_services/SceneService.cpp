@@ -175,8 +175,8 @@ ANARCHY_LUA_REGISTER(register_scene_service_lua) {
         lua_property("CurrentCamera", "Camera?", true, read_current_camera, write_current_camera),
         lua_saved_property("Gravity", "number", read_gravity, write_gravity, gravity.c_str()),
         // Set through PhysicsService or the Collision Groups pane, not Properties.
-        lua_hidden(lua_saved_property("CollisionGroups", "string", read_collision_groups, write_collision_groups,
-                                      "\"\"")),
+        lua_hidden(lua_json_text(
+            lua_saved_property("CollisionGroups", "string", read_collision_groups, write_collision_groups, "null"))),
     };
     register_lua_class("Workspace", "SceneService", workspace, static_cast<int>(sizeof(workspace) / sizeof(workspace[0])));
     register_lua_class("Storage", "SceneService", nullptr, 0);

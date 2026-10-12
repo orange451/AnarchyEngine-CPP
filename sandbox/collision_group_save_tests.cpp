@@ -70,7 +70,9 @@ TEST_CASE("CGS1 Workspace saves the groups as its hidden CollisionGroups, and a 
         workspace(game).save_properties(bag);
         const JsonValue* value = engine_core::bag_find(bag, "CollisionGroups");
         REQUIRE(value != nullptr);
-        REQUIRE(value->as_string() == game.collision_groups().save_text());
+        // Saved as the table itself, not a string holding it, so a file diffs by group.
+        REQUIRE(value->is_object());
+        REQUIRE(engine_core::compact_json(*value) == game.collision_groups().save_text());
         saved = *value;
     }
     SimRole role;
@@ -80,6 +82,10 @@ TEST_CASE("CGS1 Workspace saves the groups as its hidden CollisionGroups, and a 
     REQUIRE(error.empty());
     REQUIRE(game.collision_groups().registered("Crates"));
     REQUIRE(game.collision_groups().collidable("Crates", "Default"));
+    // The table as a string, as a hand-edited file may hold it, loads too.
+    REQUIRE(workspace(game).load_property("CollisionGroups", JsonValue::string(engine_core::compact_json(saved)), error));
+    REQUIRE(error.empty());
+    REQUIRE(game.collision_groups().registered("Crates"));
     // A table that is not one is refused, saying why, and changes nothing.
     REQUIRE(workspace(game).load_property("CollisionGroups", JsonValue::string("nope"), error));
     REQUIRE(error == "CollisionGroups is not a collision group table");

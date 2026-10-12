@@ -2263,14 +2263,31 @@ JsonValue saved_default(const LuaField& field) {
 bool saved_value(DataModel& world, const DataModel& object, const LuaField& field, JsonValue& out) {
     DataModel& self = const_cast<DataModel&>(object);
     LuaSlot slot;
-    return field.read(world, self, slot) && slot_to_json(slot, field.type_name, out);
+    if (!field.read(world, self, slot)) {
+        return false;
+    }
+    // JSON text is saved as its value: "" as null, and text that is not JSON as the string.
+    if (field.json_text && slot.kind == LuaSlot::Kind::String) {
+        std::string message;
+        if (slot.text.empty()) {
+            out = JsonValue();
+            return true;
+        }
+        if (parse_json(slot.text, out, message)) {
+            return true;
+        }
+    }
+    return slot_to_json(slot, field.type_name, out);
 }
 
 // value put through the property's write, which validates it.
 bool write_saved(DataModel& world, DataModel& object, const LuaField& field, const JsonValue& value,
                  std::string& error) {
     LuaSlot slot;
-    if (!slot_from_json(value, field.type_name, field.name, slot, error, field.enum_type)) {
+    if (field.json_text && !value.is_string()) {
+        slot.kind = LuaSlot::Kind::String;
+        slot.text = value.is_null() ? std::string() : compact_json(value);
+    } else if (!slot_from_json(value, field.type_name, field.name, slot, error, field.enum_type)) {
         return false;
     }
     if (!field.write(world, object, slot)) {

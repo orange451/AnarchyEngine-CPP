@@ -20,15 +20,15 @@ effect in Studio and when the game runs.
 
 | Question | Decision |
 | --- | --- |
-| Where groups are saved | A hidden saved string property on Workspace, `CollisionGroups` (`lua_hidden(lua_saved_property)`). Its value is the registry as JSON, `""` for Default alone. So a project save writes it, a load reads it, Stop restores it, and undo puts it back, all through the registry property machinery that Gravity already uses. |
+| Where groups are saved | A hidden saved string property on Workspace, `CollisionGroups` (`lua_hidden(lua_json_text(lua_saved_property))`). Its value is the registry as JSON, `""` for Default alone. So a project save writes it, a load reads it, Stop restores it, and undo puts it back, all through the registry property machinery that Gravity already uses. `lua_json_text` makes the file hold the table itself rather than a string of it, so a project in git diffs by group; a load takes either form. |
 | Source of truth | The DataModel's `CollisionGroups` registry, as now. The property reads it and writes it; it keeps no copy. |
 | Play and Stop | No longer reset the groups. Play starts with the place's groups; scripts change them as before; Stop restores the place, Workspace's `CollisionGroups` included, which puts the authored groups back. |
 | Script changes | Every PhysicsService change goes through the Workspace property, so it fires `Changed`, records undo inside an open recording (a plugin's, or the editor's), and marks the place unsaved in edit mode. During play, as for any play write, it is not on the edit stack. |
 | Renaming | New `PhysicsService:RenameCollisionGroup(from, to)`. Keeps the group's bit, type, and pair settings, and moves every PhysicsBase in the place whose `CollisionGroup` is `from` to `to`. Default cannot be renamed; `to` must be non-empty and unregistered. |
 | Where the editor lives | A dockable pane, "Collision Groups", in the Window menu, opened beside Properties' column like the other side windows. Also a "Collision Groups" card in a "Physics" group on the ribbon's Home tab, and an "Edit Collision Groups…" item in the Properties dropdown. |
 | The matrix | A lower triangle of toggle cells, one per pair, the diagonal being a group against itself. Each column's group name sits on the hypotenuse, right of its diagonal cell, so no rotated text is needed. Hovering a cell lights its row and column and both names. |
-| Group rows | Left of the matrix, aligned: a color dot, the name, how many bodies are in it, its filter type, and on hover: Select Bodies, Assign Selection, Delete. |
-| Group colors | Derived from the name (a hash to a hue), never saved; Default is grey. They tie a row to its column label. |
+| Group rows | Left of the matrix, aligned: a color dot, the name, how many bodies are in it, its filter type, and, while the row is hovered or selected, three icons: Select (its bodies), Assign (the selection to it), and delete. The icons sit beside the filter, not after the matrix, so a wide matrix never scrolls them out of a short dock. |
+| Group colors | By registration order, round the hue circle by the golden angle from blue, never saved; Default is grey. Neighbours never share a hue (a hash of the name did), and the order is saved, so a group keeps its color. They tie a row to its column label. |
 | Removing a group in use | Asks: "Move N bodies to Default" or Cancel. Unused groups go at once. |
 | Bodies naming unregistered groups | A notice row lists those names and counts ("they collide as Default"), with Register, which registers them all. |
 | Properties | `CollisionGroup` is a dropdown of the registered groups, then "Edit Collision Groups…". A value naming no registered group shows as an extra item, "Name (not registered)". |
@@ -43,6 +43,9 @@ effect in Studio and when the game runs.
 {"groups":[["Default","Exclude"],["Players","Exclude"],["Ghosts","Include"]],
  "pairs":[["Players","Players",false],["Players","Ghosts",true]]}
 ```
+
+A project file holds it as that table under Workspace's `"CollisionGroups"`
+(`lua_json_text`), and omits it for Default alone.
 
 - `groups`: every registered group in registration order, Default first,
   with its filter type's name.
@@ -76,11 +79,12 @@ still works; it just records nothing.
  │ ⚠ 3 bodies name groups that don't exist: Crates (3). They collide as     │
  │   Default.                                                  [Register]   │
  ├──────────────────────────────────────────────────────────────────────────┤
- │  GROUP                 BODIES  FILTER       COLLIDES WITH                │
- │  ● Default              1,204  Exclude      ■ ● Default                  │
- │  ● Players                  4  Exclude      ■ ■ ● Players                │
- │  ● Ghosts                   0  Include      □ ■ □ ● Ghosts               │
- │  ● Debris                 120  Exclude      ■ ■ □ ■ ● Debris             │
+ │  GROUP           BODIES  FILTER               COLLIDES WITH              │
+ │                                               ● Default                  │
+ │  ● Default        1,204  [Exclude|Include]     ■ ● Players               │
+ │  ● Players            4  [Exclude|Include] ⬚⇩✕ ■ ■ ● Ghosts              │
+ │  ● Ghosts             0  [Exclude|Include]     □ ■ □ ● Debris            │
+ │  ● Debris           120  [Exclude|Include]     ■ ■ □ ■                   │
  └──────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -92,9 +96,11 @@ still works; it just records nothing.
   no delete, and a lock in their place. The filter pill toggles Exclude and
   Include, with a tooltip saying what each means. The count is the bodies
   whose `CollisionGroup` is exactly that name.
-- **Hover actions:** Select Bodies selects every body in the group; Assign
-  Selection puts the selected bodies, and the bodies under selected Models
-  and Folders, in the group.
+- **Hover actions:** Select selects every body in the group; Assign puts the
+  selected bodies, and the bodies under selected Models and Folders, in the
+  group (dimmed with nothing selected); delete removes it.
+- **Column names:** each sits in the row above its column, its dot centered
+  over the column's cells, so the staircase reads as column headers.
 - **Cells:** filled with a check when the pair collides, hollow when it does
   not; a click toggles it. Tooltip: "Players and Ghosts collide" or "don't
   collide"; the diagonal says "Players bodies collide with each other".

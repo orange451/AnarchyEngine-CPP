@@ -120,6 +120,10 @@ struct LuaField {
     // See lua_choices. Scripts may still write any string.
     void (*choices)(DataModel& world, std::vector<std::string>& out) = nullptr;
     const char* choices_more = nullptr;
+    // A saved string property whose text is JSON: a save writes the JSON value
+    // itself, so a file holds a table rather than a string of one, and "" as
+    // null. A load takes either form. See lua_json_text.
+    bool json_text = false;
 
     bool shown_for(int value) const { return value >= 0 && value < 32 && ((shown_when_items >> value) & 1u) != 0; }
 
@@ -203,6 +207,13 @@ inline LuaField lua_choices(LuaField field, void (*choices)(DataModel& world, st
                             const char* more) {
     field.choices = choices;
     field.choices_more = more;
+    return field;
+}
+
+// field, a saved string holding JSON, saved as that JSON (LuaField::json_text).
+// Its default_json is "null", for "".
+inline LuaField lua_json_text(LuaField field) {
+    field.json_text = true;
     return field;
 }
 

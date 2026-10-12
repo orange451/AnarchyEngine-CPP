@@ -49,7 +49,9 @@ overlapping on a diagonal, under a red circle with a slash.
 
 CollisionGroups.png is our own, in the same style: a staircase of six cells,
 as the Collision Groups pane's matrix, blue and ticked where groups collide,
-hollow where they do not, and round on the diagonal.
+hollow where they do not, and round on the diagonal. CGSelect.png (a dashed
+marquee) and CGAssign.png (an arrow down into a tray) are our own white
+glyphs, tinted by the theme as Plus.png and Check.png are.
 
 RevoluteConstraint.png, PrismaticConstraint.png, DistanceConstraint.png,
 SphericalConstraint.png, and WheelConstraint.png are our own, in the same

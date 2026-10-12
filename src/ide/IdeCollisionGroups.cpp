@@ -24,32 +24,27 @@ constexpr double kTitleHeight = 22;
 constexpr double kDotX = 0;
 constexpr double kDot = 10;
 constexpr double kNameX = 18;
-constexpr double kNameWidth = 168;
-constexpr double kCountX = 192;
-constexpr double kCountWidth = 56;
-constexpr double kFilterX = 266;
-constexpr double kSegmentWidth = 64;
+constexpr double kNameWidth = 132;
+constexpr double kCountX = 156;
+constexpr double kCountWidth = 48;
+constexpr double kFilterX = 218;
+constexpr double kSegmentWidth = 57;
 constexpr double kFilterHeight = 24;
-constexpr double kCellsX = 424;
+// Select, Assign, and delete: icons after the filter, so they never scroll
+// out of sight with a wide matrix.
+constexpr double kActionsX = 346;
+constexpr double kIconButton = 24;
+constexpr double kIconGap = 3;
+constexpr double kCellsX = kActionsX + 3 * kIconButton + 2 * kIconGap + 18;
 constexpr double kPitch = 30;
 constexpr double kCell = 22;
-constexpr double kLabelWidth = 168;
+constexpr double kLabelWidth = 128;
 constexpr double kLabelHeight = 22;
 constexpr double kLabelDot = 8;
-// Select, Assign, and delete, after the column names, from where actions_x puts them.
-constexpr double kSelectWidth = 56;
-constexpr double kAssignWidth = 60;
-constexpr double kIconButton = 24;
-constexpr double kActionsWidth = kSelectWidth + 4 + kAssignWidth + 4 + kIconButton;
 
 // Where column j's name starts: its dot centered over the column's cells.
 double label_x(std::size_t column) {
     return kCellsX + static_cast<double>(column) * kPitch + kCell * 0.5 - kLabelDot * 0.5;
-}
-
-// Where every row's actions start, past the widest reach of the column names.
-double actions_x(std::size_t groups) {
-    return label_x(groups > 0 ? groups - 1 : 0) + kLabelWidth + 12;
 }
 // Left and right inside a row, as its CSS padding.
 constexpr double kRowPad = 14;
@@ -63,7 +58,7 @@ constexpr const char* kRules = R"CSS(
     border-width: 0 0 1px 0;
     border-style: solid;
     border-color: var(--border-color);
-    padding: 14px 20px;
+    padding: 9px 16px;
     spacing: 12px;
 }
 .cg-badge {
@@ -72,7 +67,7 @@ constexpr const char* kRules = R"CSS(
 }
 .cg-title {
     color: var(--ide-text-color);
-    font-size: 17px;
+    font-size: 15px;
     font-weight: bold;
 }
 .cg-subtitle {
@@ -92,7 +87,7 @@ constexpr const char* kRules = R"CSS(
     border-radius: 7px;
     color: var(--surface-color);
     font-weight: bold;
-    padding: 7px 14px 7px 10px;
+    padding: 5px 12px 5px 9px;
     box-shadow: 0 1px 2px rgba(0, 0, 0, 0.15);
     transition: box-shadow 120ms;
 }
@@ -107,7 +102,7 @@ constexpr const char* kRules = R"CSS(
     border-width: 0 0 1px 0;
     border-style: solid;
     border-color: var(--border-color);
-    padding: 8px 20px;
+    padding: 5px 16px;
     spacing: 10px;
 }
 .cg-banner {
@@ -115,7 +110,7 @@ constexpr const char* kRules = R"CSS(
     border-width: 0 0 1px 0;
     border-style: solid;
     border-color: var(--border-color);
-    padding: 7px 20px;
+    padding: 5px 16px;
     spacing: 10px;
 }
 .cg-notice-text {
@@ -129,13 +124,13 @@ constexpr const char* kRules = R"CSS(
 }
 .cg-secondary {
     border-radius: 7px;
-    padding: 4px 12px;
+    padding: 2px 12px;
 }
 .cg-scroll, .cg-canvas {
     background-color: var(--background-color);
 }
 .cg-table {
-    padding: 14px 16px 24px 16px;
+    padding: 8px 12px 20px 12px;
 }
 .cg-col-title {
     color: var(--ide-muted-text-color);
@@ -201,19 +196,6 @@ constexpr const char* kRules = R"CSS(
     font-weight: bold;
     box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);
 }
-.cg-action {
-    border-radius: 6px;
-    padding: 2px 8px;
-    font-size: 11px;
-    opacity: 0;
-    transition: opacity 120ms;
-}
-.cg-row:hover .cg-action, .cg-row.selected .cg-action {
-    opacity: 1;
-}
-.cg-row:hover .cg-action:disabled, .cg-row.selected .cg-action:disabled {
-    opacity: 0.4;
-}
 .cg-icon-button {
     border-radius: 6px;
     cursor: pointer;
@@ -223,14 +205,20 @@ constexpr const char* kRules = R"CSS(
 .cg-row:hover .cg-icon-button, .cg-row.selected .cg-icon-button {
     opacity: 1;
 }
+.cg-row:hover .cg-icon-button:disabled, .cg-row.selected .cg-icon-button:disabled {
+    opacity: 0.3;
+}
 .cg-icon-button:hover {
-    background-color: var(--row-hover-color);
+    background-color: var(--surface-color);
 }
 .cg-icon-button image-view {
     image-color: var(--ide-muted-text-color);
 }
 .cg-icon-button:hover image-view {
-    image-color: var(--ide-text-color);
+    image-color: var(--accent-color);
+}
+.cg-icon-button.danger:hover image-view {
+    image-color: var(--error-color);
 }
 .cg-lock {
     opacity: 0;
@@ -386,6 +374,26 @@ std::shared_ptr<jadefx::StackPane> icon_box(const std::string& file, double size
     return pane;
 }
 
+// A small flat button showing a white glyph under resources/icons, tinted by
+// CSS. A left click runs run; a disabled one takes none.
+std::shared_ptr<jadefx::StackPane> icon_button(const std::string& file, std::function<void()> run) {
+    auto button = jadefx::make<jadefx::StackPane>();
+    button->getClassList().add("cg-icon-button");
+    button->setAlignment(jadefx::Pos::Center);
+    if (std::shared_ptr<jadefx::ImageView> icon = icon_graphic(file)) {
+        icon->setPrefSize(15, 15);
+        icon->setMinSize(15, 15);
+        icon->setMaxSize(15, 15);
+        button->getChildren().add(std::move(icon));
+    }
+    button->setOnMouseClicked([run = std::move(run)](const jadefx::MouseEvent& event) {
+        if (event.button == 0) {
+            run();
+        }
+    });
+    return button;
+}
+
 void tip(jadefx::Node& node, const std::string& text) {
     jadefx::Tooltip::install(&node, jadefx::make<jadefx::Tooltip>(text));
 }
@@ -503,9 +511,9 @@ struct IdeCollisionGroups::Row {
     std::shared_ptr<jadefx::Tooltip> count_tip;
     std::shared_ptr<jadefx::Label> exclude;
     std::shared_ptr<jadefx::Label> include;
-    std::shared_ptr<jadefx::Button> select;
+    std::shared_ptr<jadefx::StackPane> select;
     std::shared_ptr<jadefx::Tooltip> select_tip;
-    std::shared_ptr<jadefx::Button> assign;
+    std::shared_ptr<jadefx::StackPane> assign;
     // Delete, or null for Default, which shows a lock.
     std::shared_ptr<jadefx::StackPane> remove;
     // Cells for groups 0 to this row's own, left to right.
@@ -526,7 +534,7 @@ IdeCollisionGroups::IdeCollisionGroups(engine_core::DataModel& world, CollisionG
     header->getClassList().add("cg-header");
     header->setAlignment(jadefx::Pos::CenterLeft);
     header->setStyle("width: 100%;");
-    header->getChildren().add(icon_box("CollisionGroups.png", 22, 38, "cg-badge"));
+    header->getChildren().add(icon_box("CollisionGroups.png", 20, 32, "cg-badge"));
     auto heading = jadefx::make<jadefx::VBox>();
     heading->setSpacing(1);
     heading->setMouseTransparent(true);
@@ -736,7 +744,8 @@ void IdeCollisionGroups::refresh() {
 }
 
 double IdeCollisionGroups::table_width() const {
-    return kRowPad * 2 + actions_x(view_.groups.size()) + kActionsWidth;
+    const std::size_t groups = view_.groups.size();
+    return kRowPad * 2 + label_x(groups > 0 ? groups - 1 : 0) + kLabelWidth + 8;
 }
 
 void IdeCollisionGroups::show_header() {
@@ -917,46 +926,32 @@ std::shared_ptr<IdeCollisionGroups::Row> IdeCollisionGroups::make_row(std::size_
     filter->place(row->include, kSegmentWidth + 1, kSegmentWidth, kFilterHeight - 4);
     row->root->place(filter, kFilterX, kSegmentWidth * 2 + 4, kFilterHeight);
 
-    row->select = jadefx::make<jadefx::Button>("Select");
-    row->select->getClassList().add("cg-action");
-    row->select->setOnAction([this, name](jadefx::ActionEvent&) {
+    row->select = icon_button("CGSelect.png", [this, name] {
         if (host_.select_bodies) {
             host_.select_bodies(name);
         }
     });
     row->select_tip = jadefx::make<jadefx::Tooltip>("");
     jadefx::Tooltip::install(row->select.get(), row->select_tip);
-    const double actions = actions_x(view_.groups.size());
-    row->root->place(row->select, actions, kSelectWidth, 22);
-    row->assign = jadefx::make<jadefx::Button>("Assign");
-    row->assign->getClassList().add("cg-action");
-    row->assign->setOnAction([this, name](jadefx::ActionEvent&) {
+    row->root->place(row->select, kActionsX, kIconButton, kIconButton);
+    row->assign = icon_button("CGAssign.png", [this, name] {
         if (host_.assign_selection) {
             host_.assign_selection(name);
         }
     });
     tip(*row->assign, "Put the selected bodies, and the bodies inside what is selected, in " + name);
-    row->root->place(row->assign, actions + kSelectWidth + 4, kAssignWidth, 22);
+    row->root->place(row->assign, kActionsX + kIconButton + kIconGap, kIconButton, kIconButton);
+    const double third = kActionsX + 2 * (kIconButton + kIconGap);
     if (base) {
         auto lock = icon_box("lock.png", 14, kIconButton, "cg-lock");
         lock->setMouseTransparent(false);
         tip(*lock, "Default is always there: it holds every body in no other group");
-        row->root->place(lock, actions + kSelectWidth + kAssignWidth + 8, kIconButton, kIconButton);
+        row->root->place(lock, third, kIconButton, kIconButton);
     } else {
-        auto remove = jadefx::make<jadefx::StackPane>();
-        remove->getClassList().add("cg-icon-button");
-        remove->setAlignment(jadefx::Pos::Center);
-        if (std::shared_ptr<jadefx::ImageView> icon = icon_graphic("Cross.png")) {
-            remove->getChildren().add(std::move(icon));
-        }
-        remove->setOnMouseClicked([this, name](const jadefx::MouseEvent& event) {
-            if (event.button == 0) {
-                requestRemove(name);
-            }
-        });
-        tip(*remove, "Delete " + name);
-        row->remove = remove;
-        row->root->place(remove, actions + kSelectWidth + kAssignWidth + 8, kIconButton, kIconButton);
+        row->remove = icon_button("Cross.png", [this, name] { requestRemove(name); });
+        row->remove->getClassList().add("danger");
+        tip(*row->remove, "Delete " + name);
+        row->root->place(row->remove, third, kIconButton, kIconButton);
     }
 
     // The cells: one for each group up to this one, the last against itself.

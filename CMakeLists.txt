@@ -464,13 +464,17 @@ option(ENGINE_FLECS_CHECKS "Build flecs with its debug checks (slower entity acc
 set(FLECS_SOURCE_DIR "${FETCHCONTENT_BASE_DIR}/flecs-src")
 add_subdirectory(cmake/flecs "${CMAKE_BINARY_DIR}/flecs")
 
-# Box3D simulates PhysicsObject rigid bodies: MIT-licensed C by Erin Catto,
-# pinned by commit. Only fetched here; cmake/box3d builds its sources, since
-# its own CMakeLists needs a newer CMake and compiler than the engine requires.
+# Box3D simulates PhysicsObject rigid bodies: MIT-licensed C by Erin Catto.
+# The engine's fork (github.com/orange451/box3d, branch anarchy) carries our
+# own commits, such as the cylinder shape (docs/superpowers/specs/
+# 2026-10-12-cylinder-shape-design.md), on top of upstream; pinned by commit.
+# To take a newer Box3D, rebase anarchy onto upstream/main, push, and move
+# the pin. Only fetched here; cmake/box3d builds its sources, since its own
+# CMakeLists needs a newer CMake and compiler than the engine requires.
 FetchContent_Declare(
     box3d
-    GIT_REPOSITORY https://github.com/erincatto/box3d.git
-    GIT_TAG 9f998c862d54c03a633ecea3831937385c78b532
+    GIT_REPOSITORY https://github.com/orange451/box3d.git
+    GIT_TAG 2802bd53500e8e01fd7001dddf33b1e4f271c68c
 )
 FetchContent_GetProperties(box3d)
 if(NOT box3d_POPULATED)
@@ -480,42 +484,6 @@ if(NOT box3d_POPULATED)
     FetchContent_Populate(box3d)
 endif()
 set(BOX3D_SOURCE_DIR "${box3d_SOURCE_DIR}")
-# The cylinder shape (docs/superpowers/specs/2026-10-12-cylinder-shape-design.md)
-# patches Box3D's own files; cmake/box3d/cylinder.c is ours. When the patch
-# reverses cleanly it is already in place and left alone. Otherwise Box3D's
-# clone goes back to its pinned files (an earlier patch, or none) and the patch
-# goes in fresh; the patch adds no files, so that is all it ever changed. A
-# patch that does not apply to the clean clone means the pin moved, and
-# configuring stops rather than build Box3D without it.
-set(BOX3D_PATCH "${CMAKE_CURRENT_SOURCE_DIR}/cmake/box3d/cylinder.patch")
-set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${BOX3D_PATCH}")
-find_package(Git REQUIRED)
-execute_process(
-    COMMAND "${GIT_EXECUTABLE}" apply --reverse --check "${BOX3D_PATCH}"
-    WORKING_DIRECTORY "${BOX3D_SOURCE_DIR}"
-    RESULT_VARIABLE box3d_patch_in_place
-    OUTPUT_QUIET ERROR_QUIET)
-if(NOT box3d_patch_in_place EQUAL 0)
-    execute_process(
-        COMMAND "${GIT_EXECUTABLE}" checkout -- .
-        WORKING_DIRECTORY "${BOX3D_SOURCE_DIR}"
-        RESULT_VARIABLE box3d_restore_failed
-        ERROR_VARIABLE box3d_restore_error)
-    if(NOT box3d_restore_failed EQUAL 0)
-        message(FATAL_ERROR "Box3D in ${BOX3D_SOURCE_DIR} could not be restored to its pinned files for "
-                            "cmake/box3d/cylinder.patch (is it a git clone?): ${box3d_restore_error}")
-    endif()
-    execute_process(
-        COMMAND "${GIT_EXECUTABLE}" apply "${BOX3D_PATCH}"
-        WORKING_DIRECTORY "${BOX3D_SOURCE_DIR}"
-        RESULT_VARIABLE box3d_patch_failed
-        ERROR_VARIABLE box3d_patch_error)
-    if(NOT box3d_patch_failed EQUAL 0)
-        message(FATAL_ERROR "cmake/box3d/cylinder.patch does not apply to Box3D's pinned files in "
-                            "${BOX3D_SOURCE_DIR} (did the pin move?): ${box3d_patch_error}")
-    endif()
-    message(STATUS "Box3D: applied cmake/box3d/cylinder.patch")
-endif()
 add_subdirectory(cmake/box3d "${CMAKE_BINARY_DIR}/box3d")
 
 # zstd compresses a Terrain's .avox chunks: BSD-licensed C by Meta, pinned by
@@ -1167,7 +1135,7 @@ add_executable(sandbox
 target_link_libraries(sandbox PRIVATE studio_core Catch2::Catch2WithMain)
 # The dense views tests check flecs state the engine keeps private.
 target_link_libraries(sandbox PRIVATE flecs)
-# The cylinder tests call Box3D directly (cmake/box3d/cylinder.c).
+# The cylinder tests call Box3D directly (src/cylinder.c in the Box3D fork).
 target_link_libraries(sandbox PRIVATE box3d)
 target_compile_definitions(sandbox PRIVATE ANARCHY_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 target_compile_features(sandbox PRIVATE cxx_std_17)

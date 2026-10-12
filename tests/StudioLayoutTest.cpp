@@ -1,4 +1,5 @@
 #include "ide/IdeAssets.hpp"
+#include "ide/IdeCollisionGroups.hpp"
 #include "ide/IdeConsole.hpp"
 #include "ide/IdeDock.hpp"
 #include "ide/IdeExplorer.hpp"
@@ -347,10 +348,10 @@ int main() {
         for (const std::shared_ptr<jadefx::MenuItem>& item : windows->getItems().items()) {
             labels.push_back(item ? item->getText() : std::string());
         }
-        expect(labels == std::vector<std::string>{"Game Explorer", "Current Scene", "Properties", "Console", "Search", "Conflicts", "Problems", "Assets", "Plugins", "",
+        expect(labels == std::vector<std::string>{"Game Explorer", "Current Scene", "Properties", "Console", "Search", "Conflicts", "Problems", "Assets", "Collision Groups", "Plugins", "",
                                                   "New Scene View", "New Terminal", "Welcome Page", "", "Save Layout as Default", "Reset to Default Layout",
                                                   "Restore Built-in Default"},
-               "Window lists the explorers, Properties, Console, Search, Conflicts, Problems, Assets, and the Plugins submenu, then New Scene View, New Terminal, Welcome Page, and the default layout's items");
+               "Window lists the explorers, Properties, Console, Search, Conflicts, Problems, Assets, Collision Groups, and the Plugins submenu, then New Scene View, New Terminal, Welcome Page, and the default layout's items");
         double time = 1.1;
         auto frame = [&] {
             scene->layout(1280, 800, time);
@@ -435,6 +436,33 @@ int main() {
         auto* search_again = dynamic_cast<ide::IdeSearch*>(showing("Search"));
         expect(search_again != nullptr && checked("Search") && search_again->findInput().text() == "kept",
                "Search opens again from the menu with its search");
+
+        // Collision Groups starts closed, and opens under the scene from the menu or the ribbon's Physics group.
+        expect(!checked("Collision Groups") && showing("Collision Groups") == nullptr, "Collision Groups starts closed");
+        pick("Collision Groups");
+        ide::IdePane* groups_page = showing("Collision Groups");
+        expect(dynamic_cast<ide::IdeCollisionGroups*>(groups_page) != nullptr && checked("Collision Groups"),
+               "Collision Groups opens from the menu as its pane");
+        expect(groups_page != nullptr && groups_page->getAbsoluteY() > 400, "under the scene, with the console");
+        pick("Collision Groups");
+        expect(showing("Collision Groups") == nullptr, "and closes from it");
+        jadefx::Node* card = scene->getElementById("collision-groups-button");
+        expect(card != nullptr, "the ribbon's Physics group has Collision Groups");
+        if (card != nullptr) {
+            const double x = card->getAbsoluteX() + card->getWidth() * 0.5;
+            const double y = card->getAbsoluteY() + card->getHeight() * 0.5;
+            scene->noteMove(x, y);
+            scene->noteButton(0, true, x, y);
+            scene->noteButton(0, false, x, y);
+            frame();
+            frame();
+        }
+        expect(showing("Collision Groups") != nullptr, "which opens it");
+        pick("Collision Groups");
+        // Assets in front again, as the checks below expect.
+        if (showing("Assets") == nullptr) {
+            pick("Assets");
+        }
 
         // Each pick makes another view, which closes like any tab.
         pick("New Scene View");

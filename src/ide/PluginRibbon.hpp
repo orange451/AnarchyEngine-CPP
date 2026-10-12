@@ -30,6 +30,20 @@ public:
                  std::shared_ptr<jadefx::Node> home, jadefx::Node* homeAnchor,
                  std::function<void(std::uint32_t button)> click, std::function<void(const std::string&)> warn);
 
+    // One of the shell's own buttons, drawn as a plugin's is: icon is a file
+    // under resources/icons.
+    struct ShellCard {
+        std::string text;
+        std::string icon;
+        std::string tooltip;
+        std::string element_id;
+        std::function<void()> action;
+    };
+    // A captioned group of shell cards, for the Home row the shell builds.
+    static std::shared_ptr<jadefx::Node> makeShellGroup(const std::string& name, const std::vector<ShellCard>& cards);
+    // The gap with a line down its middle that goes between groups.
+    static std::shared_ptr<jadefx::Node> makeSeparator();
+
     // Rebuilds the Plugins row when toolbars differ from the last ones given.
     void setToolbars(const std::vector<engine_core::PluginToolbarState>& toolbars);
     // 0 is Home, 1 is Plugins.

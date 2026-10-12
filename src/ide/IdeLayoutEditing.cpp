@@ -4,6 +4,7 @@
 
 #include "IdeLayoutInternal.hpp"
 #include "IdeCssEditor.hpp"
+#include "IdeCollisionGroups.hpp"
 #include "IdeTerrainEditor.hpp"
 
 #include "Assemblies.hpp"
@@ -185,6 +186,65 @@ std::shared_ptr<IdePane> IdeLayout::make_problems() {
 }
 
 void IdeLayout::show_problems() { open_window(*problems_window_); }
+
+void IdeLayout::show_collision_groups() { open_window(*collision_groups_window_); }
+
+std::shared_ptr<IdePane> IdeLayout::make_collision_groups() {
+    return jadefx::make<IdeCollisionGroups>(runner_.simulation().datamodel(), collision_groups_host());
+}
+
+CollisionGroupsHost IdeLayout::collision_groups_host() {
+    // Each write is its own run_* step, so the tests run what the studio runs.
+    CollisionGroupsHost host;
+    // Runs write on the simulation thread; a refusal comes back as a toast.
+    auto post = [this](std::function<std::optional<std::string>(engine_core::DataModel&)> write) {
+        runner_.simulation().on_simulation(
+            [this, alive = std::weak_ptr<int>(alive_), write = std::move(write)](engine_core::DataModel& world) {
+                if (std::optional<std::string> error = write(world)) {
+                    toast_later(this, alive, std::move(*error));
+                }
+            });
+    };
+    host.add = [this](std::shared_ptr<NewGroupResult> result) {
+        runner_.simulation().on_simulation([result](engine_core::DataModel& world) {
+            std::string made;
+            if (std::optional<std::string> error = run_new_group(world, made)) {
+                result->error = std::move(*error);
+            }
+            result->name = std::move(made);
+            result->done.store(true, std::memory_order_release);
+        });
+    };
+    host.rename = [post](std::string from, std::string to) {
+        post([from, to](engine_core::DataModel& world) { return run_rename_group(world, from, to); });
+    };
+    host.remove = [post](std::string name) {
+        post([name](engine_core::DataModel& world) { return run_delete_group(world, name); });
+    };
+    host.set_filter_type = [post](std::string name, engine_core::CollisionGroups::FilterType type) {
+        post([name, type](engine_core::DataModel& world) { return run_set_filter_type(world, name, type); });
+    };
+    host.set_collidable = [post](std::string a, std::string b, bool collidable) {
+        post([a, b, collidable](engine_core::DataModel& world) { return run_set_collidable(world, a, b, collidable); });
+    };
+    host.assign_selection = [post](std::string name) {
+        post([name](engine_core::DataModel& world) {
+            std::size_t moved = 0;
+            return run_assign_group(world, world.selection().get(), name, moved);
+        });
+    };
+    host.select_bodies = [post](std::string name) {
+        post([name](engine_core::DataModel& world) -> std::optional<std::string> {
+            world.selection().set(collision_group_bodies(world, name));
+            return std::nullopt;
+        });
+    };
+    host.register_names = [post](std::vector<std::string> names) {
+        post([names](engine_core::DataModel& world) { return run_register_groups(world, names); });
+    };
+    host.notice = [this](std::string text) { show_toast(std::move(text)); };
+    return host;
+}
 
 IdePane* IdeLayout::problemsPaneForTests() const {
     return problems_window_ != nullptr ? problems_window_->pane.get() : nullptr;

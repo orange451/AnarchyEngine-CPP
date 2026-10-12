@@ -233,6 +233,34 @@ std::shared_ptr<jadefx::Node> MakeSeparator() {
 
 }  // namespace
 
+std::shared_ptr<jadefx::Node> PluginRibbon::makeShellGroup(const std::string& name,
+                                                          const std::vector<ShellCard>& cards) {
+    auto group = jadefx::make<jadefx::VBox>();
+    group->getClassList().add("ide-ribbon-group");
+    group->setAlignment(jadefx::Pos::TopCenter);
+    auto row = jadefx::make<jadefx::HBox>();
+    row->setSpacing(2);
+    row->setAlignment(jadefx::Pos::CenterLeft);
+    for (const ShellCard& card : cards) {
+        auto button = jadefx::make<ToolCard>(card.text, card.icon, card.action);
+        if (!card.element_id.empty()) {
+            button->setElementId(card.element_id);
+        }
+        if (!card.tooltip.empty()) {
+            jadefx::Tooltip::install(button.get(), jadefx::make<jadefx::Tooltip>(card.tooltip));
+        }
+        row->getChildren().add(std::move(button));
+    }
+    group->getChildren().add(std::move(row));
+    auto caption = jadefx::make<jadefx::Label>(name);
+    caption->getClassList().add("ide-ribbon-group-name");
+    caption->setMouseTransparent(true);
+    group->getChildren().add(std::move(caption));
+    return group;
+}
+
+std::shared_ptr<jadefx::Node> PluginRibbon::makeSeparator() { return MakeSeparator(); }
+
 void PluginRibbon::rebuild() {
     buttons_.clear();
     // The user's plugins on the Plugins tab, a separator between each.

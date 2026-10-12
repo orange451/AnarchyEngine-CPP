@@ -127,6 +127,8 @@ set(STUDIO_SOURCES
     src/ide/IdeIcons.cpp
     src/ide/IdePrefabEditor.cpp
     src/ide/IdeTerrainEditor.cpp
+    src/ide/CollisionGroupsModel.cpp
+    src/ide/IdeCollisionGroups.cpp
     src/ide/PrefabModels.cpp
     src/ide/TerrainMaterials.cpp
     src/ide/AssetChoices.cpp
@@ -852,6 +854,12 @@ add_executable(terrain-editor-tests
 )
 target_link_libraries(terrain-editor-tests PRIVATE studio)
 
+# The Collision Groups pane: its rows, matrix, and actions, and the model logic under them.
+add_executable(collision-groups-tests
+    tests/CollisionGroupsTest.cpp
+)
+target_link_libraries(collision-groups-tests PRIVATE studio)
+
 # Opens and closes printed tables in the console log, by call and by click.
 add_executable(console-tests
     tests/ConsoleLogTest.cpp
@@ -973,6 +981,12 @@ target_link_libraries(billboard-demo PRIVATE studio)
 # By hand, not ctest: viewport-demo <out-dir> saves two ViewportPanes, an icon and a turning preview.
 add_executable(viewport-demo tests/ViewportDemo.cpp)
 target_link_libraries(viewport-demo PRIVATE studio)
+
+# By hand, not ctest: collision-groups-demo out-dir light saves the Collision Groups pane as PNGs.
+add_executable(collision-groups-demo
+    tests/CollisionGroupsDemo.cpp
+)
+target_link_libraries(collision-groups-demo PRIVATE studio)
 
 # By hand, not ctest: prefab-demo out-dir light saves the Prefab editor as PNGs.
 add_executable(prefab-demo
@@ -1256,7 +1270,7 @@ endif()
 # runs from the source folder, where resources/ is.
 enable_testing()
 foreach(suite engine-tests properties-tests console-tests studio-tests mcp-tests mcp-setup-tests sandbox shell-tests explorer-tests assets-tests
-              prefab-editor-tests terrain-editor-tests terminal-tests amesh-tests profiler-tests)
+              prefab-editor-tests terrain-editor-tests collision-groups-tests terminal-tests amesh-tests profiler-tests)
     if(TARGET ${suite})
         add_test(NAME ${suite} COMMAND ${suite} WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
     endif()

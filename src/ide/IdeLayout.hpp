@@ -50,6 +50,7 @@ class IdeTerrainEditor;
 class IdeCssEditor;
 struct PrefabEditorHost;
 struct TerrainEditorHost;
+struct CollisionGroupsHost;
 class IdeSearch;
 class IdeConflicts;
 class IdeProblems;
@@ -186,6 +187,9 @@ public:
     void show_conflicts();
     // Opens the Problems window, or brings it forward.
     void show_problems();
+    // Opens the Collision Groups window, or brings it forward. The ribbon's
+    // Physics group and Properties' CollisionGroup dropdown call it.
+    void show_collision_groups();
     // The Problems entry's page, made when this layout was constructed so it
     // counts from startup. For tests, to check it before Problems is ever
     // opened; show_problems docks this very pane.
@@ -485,6 +489,9 @@ private:
     std::shared_ptr<IdePane> make_terminal();
     // The Assets pane, over the place, with the explorers' actions.
     std::shared_ptr<IdePane> make_assets();
+    // The Collision Groups window, and its writes, each one undo step on the simulation thread.
+    std::shared_ptr<IdePane> make_collision_groups();
+    CollisionGroupsHost collision_groups_host();
     // Add as GameObject: a GameObject in Workspace for each Prefab in prefabs,
     // as one undo step, and they become the selection. Each is placed in
     // front of view's camera, or the main Scene View's with none.
@@ -668,6 +675,7 @@ private:
     WindowEntry* conflicts_window_ = nullptr;
     WindowEntry* problems_window_ = nullptr;
     WindowEntry* assets_window_ = nullptr;
+    WindowEntry* collision_groups_window_ = nullptr;
     // The Welcome page while one is made. It is not kept in layout.json.
     std::weak_ptr<LandingPage> landing_;
     // Scene views opened so far, which numbers the next one's tab.

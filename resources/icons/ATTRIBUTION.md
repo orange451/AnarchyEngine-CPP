@@ -47,6 +47,10 @@ held by a blue pin for a rigid joint.
 NoCollisionConstraint.png is our own, in the same style: two grey blocks
 overlapping on a diagonal, under a red circle with a slash.
 
+CollisionGroups.png is our own, in the same style: a staircase of six cells,
+as the Collision Groups pane's matrix, blue and ticked where groups collide,
+hollow where they do not, and round on the diagonal.
+
 RevoluteConstraint.png, PrismaticConstraint.png, DistanceConstraint.png,
 SphericalConstraint.png, and WheelConstraint.png are our own, in the same
 style: two grey arms on a blue pin; a grey block on a rail under a blue arrow;

@@ -186,11 +186,19 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight, const std::filesys
     native_menus_.quit = quit;
     native_menus_.window = window.get();
 
+    // The studio's own Physics tools on Home, after the built-in plugins' toolbars.
+    auto physics_gap = PluginRibbon::makeSeparator();
+    jadefx::Node* physics_anchor = physics_gap.get();
+    ribbon->getChildren().add(std::move(physics_gap));
+    ribbon->getChildren().add(PluginRibbon::makeShellGroup(
+        "Physics", {{"Collision Groups", "CollisionGroups.png", "Choose which groups of bodies collide",
+                     "collision-groups-button", [this] { show_collision_groups(); }}}));
+
     auto top = jadefx::make<jadefx::VBox>();
     top->setPrefWidthRatio(1);
     top->getChildren().add(menuBar);
     auto tabbed = jadefx::make<PluginRibbon>(
-        session, grid, ribbon, nullptr,
+        session, grid, ribbon, physics_anchor,
         [this](std::uint32_t button) {
             runner_.simulation().on_simulation(
                 [this, button](engine_core::DataModel&) { runner_.simulation().scripts().plugin_ui().click(button); });
@@ -268,6 +276,12 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight, const std::filesys
         runner_.simulation().on_simulation(std::move(write));
     });
     properties_->bind(game, game.selection(), game.history());
+    // A dropdown's last item, such as CollisionGroup's Edit Collision Groups…, opens where its choices are made.
+    properties_->set_choice_editor([this](const std::string& property) {
+        if (property == "CollisionGroup") {
+            show_collision_groups();
+        }
+    });
 
     // Docked before the threads start. Its first paint is what lets the
     // uncapped render thread leave its wait.
@@ -413,6 +427,10 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight, const std::filesys
     assets_window_ = &keep_closed("Assets", "AssetFolder.png", [this] { return make_assets(); });
     // In with the console, as a project browser docks under the scene.
     assets_window_->home = [this] { return beside_console(); };
+    collision_groups_window_ =
+        &keep_closed("Collision Groups", "CollisionGroups.png", [this] { return make_collision_groups(); });
+    // Wide, for its matrix: under the scene with the console, as Assets is.
+    collision_groups_window_->home = [this] { return beside_console(); };
 
     if (!restore_layout() && !apply_builtin_layout()) {
         default_layout(windowWidth, windowHeight,

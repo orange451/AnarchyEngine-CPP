@@ -58,6 +58,9 @@ A project file holds it as that table under Workspace's `"CollisionGroups"`
   that is not this shape, a group without a name, a repeated name, a filter
   type that is not Exclude or Include, more than 62 groups, a first group
   that is not Default, or a pair naming a group not listed.
+- A place being loaded (Workspace's write: a load, undo, or Stop) uses
+  `load_text(text, repair)` instead, which keeps what is sound and never
+  refuses, so a table a git merge damaged cannot stop a project opening.
 
 ## 2. Edits through the property
 

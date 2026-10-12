@@ -4,6 +4,7 @@
 #include "PhysicsBase.hpp"
 #include "SceneService.hpp"
 
+#include <algorithm>
 #include <vector>
 
 namespace engine_core {
@@ -35,7 +36,9 @@ std::optional<std::string> rename_collision_group(DataModel& world, const std::s
     if (from == to) {
         return std::nullopt;
     }
+    // The place's bodies: Core, the plugins' service, is not the place, and Stop never puts it back.
     std::vector<InstanceId> open = world.get_children(0);
+    open.erase(std::remove(open.begin(), open.end(), world.core()), open.end());
     while (!open.empty()) {
         const InstanceId id = open.back();
         open.pop_back();

@@ -148,7 +148,8 @@ bool read_collision_groups(DataModel&, DataModel& object, LuaSlot& out) {
     return true;
 }
 
-// A load, undo, or Stop: the whole table, rebuilt and noted.
+// A load, undo, or Stop: the whole table, rebuilt and noted. Repaired rather
+// than refused, so a merge-damaged project file still opens.
 bool write_collision_groups(DataModel&, DataModel& object, LuaSlot& in) {
     if (dynamic_cast<Workspace*>(&object) == nullptr) {
         return false;
@@ -159,7 +160,7 @@ bool write_collision_groups(DataModel&, DataModel& object, LuaSlot& in) {
     }
     const std::string text = in.text;
     if (const auto error = edit_collision_groups(
-            object, [&text](CollisionGroups& groups) { return groups.load_text(text); })) {
+            object, [&text](CollisionGroups& groups) { return groups.load_text(text, true); })) {
         in.error = *error;
         return false;
     }

@@ -73,6 +73,12 @@ public:
     // Frames between body counts during play, when bodies change groups with
     // no edit to watch.
     static constexpr int kPlayPollFrames = 30;
+    // Frames at least between two counts of the bodies when only the bodies
+    // changed: a drag that moves something every frame counts them a few
+    // times a second, not every frame. A change to the groups shows at once.
+    static constexpr int kCountFrames = 15;
+    // How many times the pane has read the place's bodies. For tests.
+    std::size_t readsForTests() const { return reads_; }
 
     const CollisionGroupsView& view() const { return view_; }
 
@@ -147,6 +153,10 @@ private:
     std::uint64_t seen_authored_ = ~std::uint64_t{0};
     std::uint64_t seen_selection_ = ~std::uint64_t{0};
     int poll_in_ = 0;
+    // Bodies changed since the last read, and frames since it.
+    bool counts_stale_ = false;
+    int since_read_ = 0;
+    std::size_t reads_ = 0;
     bool has_selection_ = false;
 
     std::shared_ptr<jadefx::Label> subtitle_;

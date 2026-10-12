@@ -201,58 +201,79 @@ std::string CollisionGroups::save_text() const {
     return compact_json(table);
 }
 
-std::optional<std::string> CollisionGroups::load_text(const std::string& text) {
+std::optional<std::string> CollisionGroups::load_text(const std::string& text, bool repair) {
     CollisionGroups built;
     built.revision_ = revision_;
+    const std::string refused = "CollisionGroups is not a collision group table";
     if (!text.empty()) {
-        const std::string refused = "CollisionGroups is not a collision group table";
         JsonValue table;
         std::string error;
         if (!parse_json(text, table, error) || !table.is_object()) {
-            return refused;
+            // Repairing: no table at all changes nothing.
+            return repair ? std::nullopt : std::optional<std::string>(refused);
         }
         const JsonValue* groups = table.find("groups");
         const JsonValue* pairs = table.find("pairs");
-        if (groups == nullptr || !groups->is_array() || groups->items().empty() || pairs == nullptr ||
-            !pairs->is_array()) {
+        const bool shaped = groups != nullptr && groups->is_array() && !groups->items().empty() && pairs != nullptr &&
+                            pairs->is_array();
+        if (!shaped && !repair) {
             return refused;
         }
-        for (std::size_t at = 0; at < groups->items().size(); ++at) {
-            const JsonValue& entry = groups->items()[at];
+        const std::vector<JsonValue> none;
+        const std::vector<JsonValue>& group_items = groups != nullptr && groups->is_array() ? groups->items() : none;
+        const std::vector<JsonValue>& pair_items = pairs != nullptr && pairs->is_array() ? pairs->items() : none;
+        bool default_seen = false;
+        for (std::size_t at = 0; at < group_items.size(); ++at) {
+            const JsonValue& entry = group_items[at];
             if (!entry.is_array() || entry.items().size() != 2 || !entry.items()[0].is_string() ||
                 !entry.items()[1].is_string()) {
+                if (repair) {
+                    continue;
+                }
                 return refused;
             }
             const std::string& name = entry.items()[0].as_string();
             const std::string& type = entry.items()[1].as_string();
-            if (type != "Exclude" && type != "Include") {
+            FilterType filter_type = type == "Include" ? FilterType::Include : FilterType::Exclude;
+            if (type != "Exclude" && type != "Include" && !repair) {
                 return "Collision group \"" + name + "\" has no filter type \"" + type + "\"";
             }
-            const FilterType filter_type = type == "Include" ? FilterType::Include : FilterType::Exclude;
-            if (at == 0) {
-                if (name != kDefault) {
-                    return std::string("A collision group table starts with Default");
+            if (name == kDefault) {
+                if (default_seen && !repair) {
+                    return "Collision group \"" + name + "\" is listed twice";
                 }
-                built.slots_[0].filter_type = filter_type;
+                if (!default_seen) {
+                    built.slots_[0].filter_type = filter_type;
+                }
+                default_seen = true;
                 continue;
             }
+            if (at == 0 && !repair) {
+                return std::string("A collision group table starts with Default");
+            }
+            std::optional<std::string> refusal;
             if (name.empty()) {
-                return std::string("Collision group name must not be empty");
+                refusal = std::string("Collision group name must not be empty");
+            } else if (built.bit_of(name) >= 0) {
+                refusal = "Collision group \"" + name + "\" is listed twice";
+            } else {
+                refusal = built.register_group(name, filter_type);
             }
-            if (built.bit_of(name) >= 0) {
-                return "Collision group \"" + name + "\" is listed twice";
-            }
-            if (std::optional<std::string> refusal = built.register_group(name, filter_type)) {
+            if (refusal && !repair) {
                 return refusal;
             }
         }
-        for (const JsonValue& entry : pairs->items()) {
+        for (const JsonValue& entry : pair_items) {
             if (!entry.is_array() || entry.items().size() != 3 || !entry.items()[0].is_string() ||
                 !entry.items()[1].is_string() || !entry.items()[2].is_bool()) {
+                if (repair) {
+                    continue;
+                }
                 return refused;
             }
-            if (std::optional<std::string> refusal = built.set_collidable(
-                    entry.items()[0].as_string(), entry.items()[1].as_string(), entry.items()[2].as_bool())) {
+            std::optional<std::string> refusal = built.set_collidable(
+                entry.items()[0].as_string(), entry.items()[1].as_string(), entry.items()[2].as_bool());
+            if (refusal && !repair) {
                 return refusal;
             }
         }

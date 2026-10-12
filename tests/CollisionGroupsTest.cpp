@@ -194,6 +194,19 @@ void M7_register() {
     Expect(!rig.groups().registered("Crates") && !rig.groups().registered("Barrels"), "M7 one undo step");
 }
 
+void M9_core_and_empty_names() {
+    Rig rig;
+    const InstanceId plugin = rig.body("PluginBody", "Players", rig.game.core());
+    const InstanceId blank = rig.body("Blank", "", rig.game.scene_service("Workspace"));
+    const ide::CollisionGroupsView view = ide::read_collision_groups(rig.game);
+    Expect(view.groups[1].bodies == 2, "M9 a body in Core is not the place's, so it is not counted");
+    Expect(view.unregistered.size() == 1 && view.unregistered[0].name == "Crates",
+           "M9 an empty name is Default's, not an unregistered group");
+    Expect(!ide::run_rename_group(rig.game, "Players", "Heroes"), "M9 rename");
+    Expect(rig.group_of(plugin) == "Players", "M9 a body in Core keeps its group: Stop never puts Core back");
+    Expect(rig.group_of(blank).empty(), "M9 and the blank one stays blank");
+}
+
 void M8_fresh_name() {
     CollisionGroups groups;
     Expect(ide::fresh_group_name(groups) == "New Group", "M8 New Group first");
@@ -385,6 +398,7 @@ void U4_new_group_renames_in_place() {
     rig.frames(2);
     Expect(rig.called("rename New Group -> Debris"), "U4 Enter renames");
     Expect(rig.pane->rowNode("Debris") != nullptr && rig.pane->rowNode("New Group") == nullptr, "U4 the row follows");
+    Expect(rig.pane->selectedRow() == "Debris", "U4 and stays selected under its new name");
     Expect(rig.subtitle().rfind("4 of 62 groups", 0) == 0, "U4 the count follows");
 }
 
@@ -489,7 +503,7 @@ void U9_outside_changes_show() {
     Expect(rig.pane->rowNode("Late") != nullptr, "U9 a group a script registers shows");
     auto* body = dynamic_cast<engine_core::PhysicsBase*>(rig.game.instance(rig.d1));
     body->set_collision_group("Late");
-    rig.frames(2);
+    rig.frames(ide::IdeCollisionGroups::kCountFrames + 1);
     const int late = rig.pane->view().index_of("Late");
     Expect(late >= 0 && rig.pane->view().groups[static_cast<std::size_t>(late)].bodies == 1,
            "U9 a body moving group is counted");
@@ -509,6 +523,89 @@ void U10_hover_lights_the_way() {
     rig.scene->noteMove(2, kHeight - 2);
     rig.frames();
     Expect(!ide::IdeCollisionGroups::lit(rig.pane->nameLabel("Ghosts")), "U10 leaving puts them out");
+}
+
+void U12_rename_survives_new_groups() {
+    PaneRig rig;
+    rig.pane->beginRename("Ghosts");
+    rig.frames();
+    if (rig.pane->renameField() != nullptr) {
+        rig.pane->renameField()->setText("Spirits");
+    }
+    // A script registers a group while the name is being typed.
+    engine_core::edit_collision_groups(rig.game, [](CollisionGroups& groups) {
+        return groups.register_group("Late", FilterType::Exclude);
+    });
+    rig.frames(3);
+    Expect(rig.pane->rowNode("Late") != nullptr, "U12 the new group shows");
+    jadefx::TextField* field = rig.pane->renameField();
+    Expect(field != nullptr && field->isVisible() && field->isFocused() && field->getText() == "Spirits",
+           "U12 the rename goes on with what was typed");
+    Expect(std::none_of(rig.calls.begin(), rig.calls.end(),
+                        [](const std::string& call) { return call.rfind("rename", 0) == 0; }),
+           "U12 and nothing was renamed yet");
+    if (field != nullptr) {
+        field->fire();
+    }
+    rig.frames(2);
+    Expect(rig.called("rename Ghosts -> Spirits"), "U12 Enter renames as typed");
+}
+
+void U13_counts_are_read_sparingly() {
+    PaneRig rig;
+    rig.frames(ide::IdeCollisionGroups::kCountFrames + 2);
+    const std::size_t before = rig.pane->readsForTests();
+    rig.game.selection().set({rig.d1});
+    rig.frames(2);
+    Expect(rig.pane->readsForTests() == before, "U13 a selection change reads no bodies");
+    auto* body = dynamic_cast<engine_core::PhysicsBase*>(rig.game.instance(rig.d1));
+    for (int i = 0; i < ide::IdeCollisionGroups::kCountFrames; ++i) {
+        body->set_collision_group(i % 2 == 0 ? "Players" : "Ghosts");
+        rig.frames();
+    }
+    Expect(rig.pane->readsForTests() <= before + 1, "U13 edits every frame read the bodies at most once a period");
+    body->set_collision_group("Players");
+    rig.frames(ide::IdeCollisionGroups::kCountFrames + 1);
+    const int players = rig.pane->view().index_of("Players");
+    Expect(players >= 0 && rig.pane->view().groups[static_cast<std::size_t>(players)].bodies == 3,
+           "U13 the counts catch up");
+    const std::size_t settled = rig.pane->readsForTests();
+    engine_core::edit_collision_groups(rig.game, [](CollisionGroups& groups) {
+        return groups.register_group("Now", FilterType::Exclude);
+    });
+    rig.frames();
+    Expect(rig.pane->readsForTests() == settled + 1 && rig.pane->rowNode("Now") != nullptr,
+           "U13 a change to the groups shows at once");
+}
+
+void U14_double_click_switches_twice() {
+    PaneRig rig;
+    jadefx::Node* cell = rig.pane->cellNode("Ghosts", "Default");
+    if (cell == nullptr) {
+        Expect(false, "U14 the cell is on screen");
+        return;
+    }
+    const double x = cell->getAbsoluteX() + cell->getWidth() * 0.5;
+    const double y = cell->getAbsoluteY() + cell->getHeight() * 0.5;
+    rig.scene->noteMove(x, y);
+    for (int i = 0; i < 2; ++i) {
+        rig.scene->noteButton(0, true, x, y);
+        rig.scene->noteButton(0, false, x, y);
+    }
+    rig.frames(2);
+    Expect(!rig.groups().collidable("Ghosts", "Default") && !rig.on(rig.pane->cellNode("Ghosts", "Default")),
+           "U14 two quick clicks switch it there and back");
+}
+
+void U15_backspace_does_not_delete() {
+    PaneRig rig;
+    rig.groups().register_group("Empty", FilterType::Exclude);
+    rig.frames(2);
+    rig.click(rig.pane->rowNode("Empty"), "Empty row");
+    rig.key(jadefx::Key::Backspace);
+    Expect(!rig.called("remove Empty") && rig.groups().registered("Empty"), "U15 Backspace deletes nothing");
+    rig.key(jadefx::Key::Delete);
+    Expect(rig.called("remove Empty"), "U15 Delete does");
 }
 
 void U11_play_banner_and_empty_hint() {
@@ -546,6 +643,7 @@ int main() {
     M6_assign();
     M7_register();
     M8_fresh_name();
+    M9_core_and_empty_names();
     U1_rows_and_matrix();
     U2_cell_click_switches();
     U3_filter_segments();
@@ -557,6 +655,10 @@ int main() {
     U9_outside_changes_show();
     U10_hover_lights_the_way();
     U11_play_banner_and_empty_hint();
+    U12_rename_survives_new_groups();
+    U13_counts_are_read_sparingly();
+    U14_double_click_switches_twice();
+    U15_backspace_does_not_delete();
     if (gFailures != 0) {
         std::fprintf(stderr, "%d failed\n", gFailures);
         return 1;

@@ -86,10 +86,32 @@ TEST_CASE("CGS1 Workspace saves the groups as its hidden CollisionGroups, and a 
     REQUIRE(workspace(game).load_property("CollisionGroups", JsonValue::string(engine_core::compact_json(saved)), error));
     REQUIRE(error.empty());
     REQUIRE(game.collision_groups().registered("Crates"));
-    // A table that is not one is refused, saying why, and changes nothing.
+    // Text that is no table never stops a place loading: it changes nothing.
     REQUIRE(workspace(game).load_property("CollisionGroups", JsonValue::string("nope"), error));
-    REQUIRE(error == "CollisionGroups is not a collision group table");
+    REQUIRE(error.empty());
     REQUIRE(game.collision_groups().registered("Crates"));
+}
+
+TEST_CASE("CGS5 a table a merge damaged still loads, keeping what is sound", "[collision-group][editor]") {
+    SimRole role;
+    engine_core::Game game;
+    // Both branches added Ghosts; one deleted X while the other set a pair with it.
+    JsonValue table;
+    std::string error;
+    REQUIRE(engine_core::parse_json(
+        "{\"groups\":[[\"Default\",\"Exclude\"],[\"Ghosts\",\"Include\"],[\"Ghosts\",\"Include\"],"
+        "[\"\",\"Exclude\"],[\"Odd\",\"Greylist\"]],"
+        "\"pairs\":[[\"Ghosts\",\"Default\",true],[\"Ghosts\",\"X\",false],[\"Ghosts\"]]}",
+        table, error));
+    REQUIRE(workspace(game).load_property("CollisionGroups", table, error));
+    REQUIRE(error.empty());
+    CollisionGroups& groups = game.collision_groups();
+    REQUIRE(groups.groups().size() == 3);
+    REQUIRE(groups.registered("Ghosts"));
+    REQUIRE(groups.collidable("Ghosts", "Default"));
+    // A filter type no one knows is Exclude.
+    REQUIRE(groups.registered("Odd"));
+    REQUIRE(groups.collidable("Odd", "Default"));
 }
 
 TEST_CASE("CGS2 a PhysicsService change inside a recording is one undo step, and fires Changed",

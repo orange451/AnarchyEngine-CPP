@@ -54,7 +54,11 @@ public:
     // Rebuilds the registry from save_text's form ("" is Default alone). The
     // revision only grows. Refuses, changing nothing, anything else: see
     // docs/superpowers/specs/2026-10-12-collision-groups-editor-design.md §1.
-    std::optional<std::string> load_text(const std::string& text);
+    // repair, for a place being loaded, keeps what is sound instead: a table a
+    // git merge damaged (a group twice, a pair naming a group gone, an unknown
+    // filter type, more than 62) loads without the bad parts, and text that is
+    // no table changes nothing. It never refuses.
+    std::optional<std::string> load_text(const std::string& text, bool repair = false);
 
     bool registered(std::string_view name) const;
     // An explicit setting decides; else true only when both are Exclude.

@@ -16,10 +16,14 @@ using engine_core::CollisionGroups;
 using engine_core::InstanceId;
 using engine_core::PhysicsBase;
 
-// Every PhysicsBase in the place, under the root, in tree order.
+// Every PhysicsBase in the place, under the root, in tree order. Core, the
+// plugins' service, is not the place: Stop never puts it back.
 template <typename Visit>
 void each_body(const engine_core::DataModel& world, InstanceId from, Visit&& visit) {
     for (const InstanceId child : world.get_children(from)) {
+        if (from == 0 && child == world.core()) {
+            continue;
+        }
         if (const auto* body = dynamic_cast<const PhysicsBase*>(world.instance(child))) {
             visit(child, *body);
         }
@@ -70,7 +74,8 @@ CollisionGroupsView read_collision_groups(const engine_core::DataModel& world) {
     }
     std::map<std::string, std::size_t> unknown;
     for (const auto& [name, count] : counts) {
-        if (!groups.registered(name)) {
+        // An empty name is Default's, as any unregistered one is, but no group could take it.
+        if (!name.empty() && !groups.registered(name)) {
             unknown[name] = count;
         }
     }

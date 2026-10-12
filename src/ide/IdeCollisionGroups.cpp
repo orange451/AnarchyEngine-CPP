@@ -711,17 +711,31 @@ void IdeCollisionGroups::refresh() {
         poll_in_ = kPlayPollFrames;
         poll = true;
     }
-    if (read_once_ && groups == seen_groups_ && tree == seen_tree_ && authored == seen_authored_ &&
-        selection == seen_selection_ && playing == view_.playing && !poll) {
-        return;
-    }
-    seen_groups_ = groups;
-    seen_tree_ = tree;
-    seen_authored_ = authored;
+    ++since_read_;
+    // A selection changes only what Assign offers: no bodies to read.
     if (selection != seen_selection_) {
         seen_selection_ = selection;
         has_selection_ = !world_.selection().get().empty();
+        for (const std::shared_ptr<Row>& row : rows_) {
+            row->assign->setDisable(!has_selection_);
+        }
     }
+    if (tree != seen_tree_ || authored != seen_authored_ || poll) {
+        seen_tree_ = tree;
+        seen_authored_ = authored;
+        counts_stale_ = true;
+    }
+    // The groups show at once. Body counts wait out kCountFrames after the last
+    // read, so an edit made every frame, as a drag is, walks the place a few
+    // times a second at most.
+    const bool groups_moved = !read_once_ || groups != seen_groups_ || playing != view_.playing;
+    if (!groups_moved && !(counts_stale_ && since_read_ >= kCountFrames)) {
+        return;
+    }
+    seen_groups_ = groups;
+    counts_stale_ = false;
+    since_read_ = 0;
+    ++reads_;
     CollisionGroupsView view = read_collision_groups(world_);
     const bool first = !read_once_;
     read_once_ = true;
@@ -819,8 +833,14 @@ void IdeCollisionGroups::sync_rows() {
     if (names != made_for_) {
         made_for_ = names;
         unlight();
-        if (!renaming_.empty() && std::find(names.begin(), names.end(), renaming_) == names.end()) {
-            renaming_.clear();
+        // A rename going on keeps its typing through the new rows.
+        std::optional<std::string> typed;
+        if (!renaming_.empty()) {
+            if (std::find(names.begin(), names.end(), renaming_) == names.end()) {
+                renaming_.clear();
+            } else if (jadefx::TextField* field = renameField()) {
+                typed = field->getText();
+            }
         }
         rows_.clear();
         column_labels_.clear();
@@ -848,6 +868,17 @@ void IdeCollisionGroups::sync_rows() {
         }
         if (names.size() <= 1) {
             children.add(empty_);
+        }
+        if (typed) {
+            for (const std::shared_ptr<Row>& row : rows_) {
+                if (row->name == renaming_) {
+                    row->rename->setText(*typed);
+                    row->rename->positionCaret(static_cast<int>(typed->size()));
+                    row->rename->setVisible(true);
+                    row->label->setVisible(false);
+                    row->rename->requestFocus();
+                }
+            }
         }
     }
     for (std::size_t index = 0; index < rows_.size(); ++index) {
@@ -1070,7 +1101,8 @@ void IdeCollisionGroups::clicked_cell(std::size_t row, std::size_t column) {
     if (row >= view_.groups.size() || column > row || !host_.set_collidable) {
         return;
     }
-    const bool collide = !view_.collide[row][column];
+    // From what the cell shows, so a second click before the place catches up switches it back.
+    const bool collide = !has_class(*rows_[row]->cells[column], "on");
     // Shown at once; the place catches up on the simulation thread.
     set_class(*rows_[row]->cells[column], "on", collide);
     host_.set_collidable(view_.groups[row].name, view_.groups[column].name, collide);
@@ -1155,6 +1187,12 @@ void IdeCollisionGroups::finish_rename(bool apply) {
         row->rename->setVisible(false);
         row->label->setVisible(true);
         if (apply && to != from && host_.rename) {
+            // The row keeps its selection under the new name, as the model trims it.
+            const std::size_t first = to.find_first_not_of(" \t");
+            const std::size_t last = to.find_last_not_of(" \t");
+            if (selected_ == from && first != std::string::npos) {
+                selected_ = to.substr(first, last - first + 1);
+            }
             host_.rename(from, to);
         }
         if (had_focus) {
@@ -1179,7 +1217,7 @@ void IdeCollisionGroups::handleKey(jadefx::KeyEvent& event) {
         IdePane::handleKey(event);
         return;
     }
-    if (event.key == jadefx::Key::Delete || event.key == jadefx::Key::Backspace) {
+    if (event.key == jadefx::Key::Delete) {
         event.consume();
         requestRemove(selected_);
         return;

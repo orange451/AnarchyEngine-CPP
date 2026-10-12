@@ -25,8 +25,8 @@ using CollisionGroupsEdit = std::function<std::optional<std::string>(CollisionGr
 std::optional<std::string> edit_collision_groups(DataModel& world, const CollisionGroupsEdit& edit);
 
 // PhysicsService:RenameCollisionGroup: renames the group, keeping its bit,
-// type, and pair settings, then moves every PhysicsBase in the place whose
-// CollisionGroup is from to to.
+// type, and pair settings, then moves every PhysicsBase in the place (under
+// the root, Core aside) whose CollisionGroup is from to to.
 std::optional<std::string> rename_collision_group(DataModel& world, const std::string& from, const std::string& to);
 
 }  // namespace engine_core

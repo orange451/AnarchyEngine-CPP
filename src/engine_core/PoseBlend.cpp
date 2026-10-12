@@ -77,19 +77,33 @@ void swap_in_blend(DataModel& game, double alpha) {
     }
 }
 
+namespace {
+
+// The pose to keep after the window: the true pose where the window left the
+// blend, or a window script's write carried from the blended frame into the
+// sim's, truth * inverse(shown) * now, so a write built from the blended read
+// (Transform = Transform * spin) does not set the body back by the rewind.
+Matrix4 kept_pose(const Matrix4& truth, const Matrix4& shown, const Matrix4& now) {
+    if (same_matrix4(now, shown)) {
+        return truth;
+    }
+    return matrix4_multiply(matrix4_multiply(truth, matrix4_inverse(shown)), now);
+}
+
+}  // namespace
+
 void swap_out_blend(DataModel& game) {
     PoseBlend& blend = game.pose_blend();
     for (const PoseBlend::Swap& swap : blend.swaps_) {
         if (swap.kind == PoseBlend::Kind::Body) {
-            auto* body = dynamic_cast<PhysicsBase*>(game.instance(swap.id));
-            if (body != nullptr && same_matrix4(body->transform(), swap.shown)) {
-                body->store_pose(swap.truth);
+            if (auto* body = dynamic_cast<PhysicsBase*>(game.instance(swap.id))) {
+                body->store_pose(kept_pose(swap.truth, swap.shown, body->transform()));
             }
             continue;
         }
         Matrix4 now;
-        if (game.spatial_transform(swap.id, now) && same_matrix4(now, swap.shown)) {
-            game.store_visual_transform(swap.id, swap.truth);
+        if (game.spatial_transform(swap.id, now)) {
+            game.store_visual_transform(swap.id, kept_pose(swap.truth, swap.shown, now));
         }
     }
     blend.swaps_.clear();

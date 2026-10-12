@@ -77,7 +77,9 @@ private:
 // written quietly so nothing hears it. Its true pose is kept.
 void swap_in_blend(DataModel& game, double alpha);
 // After the copy: each instance still showing its blend gets its true pose
-// back. One a window script wrote keeps the script's value.
+// back. One a window script wrote keeps the script's write, carried from the
+// blended frame it was read in to the sim's (truth * inverse(shown) * write),
+// so a relative write does not lose the rewind.
 void swap_out_blend(DataModel& game);
 
 }  // namespace engine_core

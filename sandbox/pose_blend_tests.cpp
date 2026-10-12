@@ -149,7 +149,9 @@ TEST_CASE("PB7 a RenderStepped write to a body wins over the swap-out", "[pose_b
     drive.engine.scheduler().bind(engine_core::Phase::RenderStepped,
                                   [&](double) { drive.body->store_pose(at(100, 10, 0)); });
     drive.engine.run_frame(0.009);
-    REQUIRE(std::fabs(drive.body->transform().m[12] - 100.f) < 1e-5f);
+    // The write is kept, carried into the sim's time: within one substep's motion.
+    REQUIRE(std::fabs(drive.body->transform().m[12] - 100.f) <= 30.f / 240.f + 1e-4f);
+    REQUIRE(drive.body->transform().m[12] >= 100.f);
 }
 
 TEST_CASE("PB8 a frame with no substep keeps blending forward", "[pose_blend]") {
@@ -222,4 +224,29 @@ TEST_CASE("PB11 a warm capture records without allocating", "[pose_blend][alloc]
     alloc_counter::disarm();
     REQUIRE(alloc_counter::count() == 0u);
     REQUIRE(blend.entries().size() == 64u);
+}
+
+TEST_CASE("PB12 a window write built from the blended read keeps the body's true motion", "[pose_blend]") {
+    // A RenderStepped handler that reads a moving body and writes it back
+    // turned (`part.Transform = part.Transform * spin`) must not set the
+    // body back by the blend's rewind.
+    Drive drive(30.f);
+    drive.engine.run_frame(0.008);
+    drive.engine.run_frame(2.5 / 240.0);  // half a substep left over: alpha 0.5
+    std::vector<float> heartbeat;
+    drive.engine.scheduler().bind(engine_core::Phase::Heartbeat,
+                                  [&](double) { heartbeat.push_back(drive.body->transform().m[12]); });
+    const engine_core::TaskScheduler::JobId echo = drive.engine.scheduler().bind(
+        engine_core::Phase::RenderStepped,
+        [&](double) {
+            REQUIRE_FALSE(drive.body->set_transform(engine_core::matrix4_multiply(
+                drive.body->transform(), engine_core::matrix4_axis_angle({0, 1, 0}, 0.01))));
+        });
+    drive.engine.run_frame(2.0 / 240.0);
+    drive.engine.scheduler().unbind(echo);
+    drive.engine.run_frame(2.0 / 240.0);
+    REQUIRE(heartbeat.size() == 2);
+    // Two substeps a frame at 30 units/s: 0.25 units between Heartbeats.
+    INFO("moved " << heartbeat[1] - heartbeat[0]);
+    REQUIRE(std::fabs((heartbeat[1] - heartbeat[0]) - 0.25f) < 1e-3f);
 }

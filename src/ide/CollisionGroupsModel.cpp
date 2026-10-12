@@ -131,7 +131,8 @@ std::optional<std::string> run_rename_group(engine_core::DataModel& world, const
     return engine_core::rename_collision_group(world, from, name);
 }
 
-std::optional<std::string> run_delete_group(engine_core::DataModel& world, const std::string& name) {
+std::optional<std::string> run_delete_group(engine_core::DataModel& world, const std::string& name,
+                                            GroupBodies bodies) {
     if (name == CollisionGroups::kDefault) {
         return std::string("Default cannot be unregistered");
     }
@@ -139,7 +140,8 @@ std::optional<std::string> run_delete_group(engine_core::DataModel& world, const
         return std::nullopt;
     }
     ScopedRecording step(world, "Delete Collision Group");
-    for (const InstanceId id : collision_group_bodies(world, name)) {
+    for (const InstanceId id : bodies == GroupBodies::Keep ? std::vector<InstanceId>{}
+                                                           : collision_group_bodies(world, name)) {
         if (auto* body = dynamic_cast<PhysicsBase*>(world.instance(id))) {
             body->set_collision_group(CollisionGroups::kDefault);
         }

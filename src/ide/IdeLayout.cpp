@@ -192,7 +192,10 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight, const std::filesys
     ribbon->getChildren().add(std::move(physics_gap));
     ribbon->getChildren().add(PluginRibbon::makeShellGroup(
         "Physics", {{"Collision Groups", "CollisionGroups.png", "Choose which groups of bodies collide",
-                     "collision-groups-button", [this] { show_collision_groups(); }}}));
+                     "collision-groups-button", [this] {
+                         // As its Window menu item: opens it, or closes it while it shows.
+                         toggle_window(collision_groups_window_->pane.get(), [this] { show_collision_groups(); });
+                     }}}));
 
     auto top = jadefx::make<jadefx::VBox>();
     top->setPrefWidthRatio(1);

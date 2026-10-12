@@ -156,6 +156,11 @@ void M4_delete() {
     Expect(rig.groups().registered("Players") && rig.group_of(rig.p1) == "Players" &&
                !rig.groups().collidable("Players", "Players"),
            "M4 one undo step puts the group, its settings, and its bodies back");
+    Expect(!ide::run_delete_group(rig.game, "Ghosts", ide::GroupBodies::Keep), "M4 delete, leaving the bodies");
+    Expect(!rig.groups().registered("Ghosts") && rig.group_of(rig.ghost) == "Ghosts",
+           "M4 its bodies keep the name, and collide as Default");
+    rig.game.history().undo();
+    Expect(rig.groups().registered("Ghosts"), "M4 one undo step");
     const std::optional<std::string> base = ide::run_delete_group(rig.game, "Default");
     Expect(base && *base == "Default cannot be unregistered", "M4 Default stays");
 }
@@ -248,9 +253,9 @@ struct PaneRig : Rig {
             calls.push_back("rename " + from + " -> " + to);
             note(ide::run_rename_group(game, from, to));
         };
-        host.remove = [this, note](std::string name) {
-            calls.push_back("remove " + name);
-            note(ide::run_delete_group(game, name));
+        host.remove = [this, note](std::string name, ide::GroupBodies bodies) {
+            calls.push_back("remove " + name + (bodies == ide::GroupBodies::Keep ? " keep" : ""));
+            note(ide::run_delete_group(game, name, bodies));
         };
         host.set_filter_type = [this, note](std::string name, FilterType type) {
             calls.push_back("filter " + name + (type == FilterType::Include ? " Include" : " Exclude"));
@@ -449,6 +454,21 @@ void U6_delete() {
     }
     rig.frames();
     Expect(!rig.called("remove Players") && rig.groups().registered("Players"), "U6 Cancel keeps it");
+    rig.pane->requestRemove("Ghosts");
+    auto* keep = dynamic_cast<jadefx::Button*>(rig.scene->getElementById("collision-groups-remove-keep"));
+    Expect(keep != nullptr && keep->getText() == "Leave Alone", "U6 the question offers to leave the bodies alone");
+    if (keep != nullptr) {
+        keep->fire();
+    }
+    rig.frames(2);
+    Expect(rig.called("remove Ghosts keep") && !rig.groups().registered("Ghosts"), "U6 Leave Alone removes it");
+    Expect(rig.group_of(rig.ghost) == "Ghosts", "U6 and its body keeps its name");
+    rig.frames(ide::IdeCollisionGroups::kCountFrames + 1);
+    const std::vector<ide::UnregisteredGroup>& named = rig.pane->view().unregistered;
+    Expect(rig.pane->unregisteredRow() != nullptr &&
+               std::any_of(named.begin(), named.end(),
+                           [](const ide::UnregisteredGroup& group) { return group.name == "Ghosts"; }),
+           "U6 which the notice now lists");
     rig.pane->requestRemove("Players");
     auto* move = dynamic_cast<jadefx::Button*>(rig.scene->getElementById("collision-groups-remove-move"));
     Expect(move != nullptr, "U6 the question offers to move the bodies");
@@ -608,6 +628,64 @@ void U15_backspace_does_not_delete() {
     Expect(rig.called("remove Empty"), "U15 Delete does");
 }
 
+// Right-clicks a row and returns its menu's items by text.
+std::vector<std::string> RowMenu(PaneRig& rig, const std::string& name) {
+    jadefx::Node* row = rig.pane->rowNode(name);
+    std::vector<std::string> items;
+    if (row == nullptr) {
+        return items;
+    }
+    // A menu still open takes the next press to close itself, as anywhere.
+    if (jadefx::Menu* open = rig.pane->rowMenu()) {
+        open->hide();
+        rig.frames();
+    }
+    const double x = row->getAbsoluteX() + 30;
+    const double y = row->getAbsoluteY() + row->getHeight() * 0.5;
+    rig.scene->noteMove(x, y);
+    rig.scene->noteButton(1, true, x, y);
+    rig.scene->noteButton(1, false, x, y);
+    rig.frames();
+    if (jadefx::Menu* menu = rig.pane->rowMenu()) {
+        for (const std::shared_ptr<jadefx::MenuItem>& item : menu->getItems().items()) {
+            if (item && !item->getText().empty()) {
+                items.push_back(item->getText());
+            }
+        }
+    }
+    return items;
+}
+
+void FireMenuItem(PaneRig& rig, const std::string& text) {
+    if (jadefx::Menu* menu = rig.pane->rowMenu()) {
+        for (const std::shared_ptr<jadefx::MenuItem>& item : menu->getItems().items()) {
+            if (item && item->getText() == text) {
+                item->fire();
+            }
+        }
+    }
+    rig.frames();
+}
+
+void U16_row_menu() {
+    PaneRig rig;
+    const std::vector<std::string> items = RowMenu(rig, "Ghosts");
+    Expect(items == std::vector<std::string>{"Rename", "Select Bodies", "Assign Selection", "Delete"},
+           "U16 a right-click on a row offers Rename, Select Bodies, Assign Selection, and Delete");
+    Expect(rig.pane->selectedRow() == "Ghosts", "U16 and selects the row");
+    FireMenuItem(rig, "Rename");
+    jadefx::TextField* field = rig.pane->renameField();
+    Expect(field != nullptr && field->isVisible() && field->isFocused() && field->getText() == "Ghosts",
+           "U16 Rename edits the name in place");
+    rig.key(jadefx::Key::Escape);
+    const std::vector<std::string> base = RowMenu(rig, "Default");
+    Expect(base == std::vector<std::string>{"Select Bodies", "Assign Selection"},
+           "U16 Default's menu has no Rename or Delete");
+    RowMenu(rig, "Players");
+    FireMenuItem(rig, "Select Bodies");
+    Expect(rig.called("select Players"), "U16 Select Bodies selects them");
+}
+
 void U11_play_banner_and_empty_hint() {
     PaneRig rig;
     rig.game.capture_place();
@@ -659,6 +737,7 @@ int main() {
     U13_counts_are_read_sparingly();
     U14_double_click_switches_twice();
     U15_backspace_does_not_delete();
+    U16_row_menu();
     if (gFailures != 0) {
         std::fprintf(stderr, "%d failed\n", gFailures);
         return 1;

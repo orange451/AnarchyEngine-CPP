@@ -28,8 +28,8 @@ struct NewGroupResult {
 struct CollisionGroupsHost {
     std::function<void(std::shared_ptr<NewGroupResult> result)> add;
     std::function<void(std::string from, std::string to)> rename;
-    // Moves the group's bodies to Default, then unregisters it.
-    std::function<void(std::string name)> remove;
+    // Unregisters the group, moving its bodies to Default unless bodies is Keep.
+    std::function<void(std::string name, GroupBodies bodies)> remove;
     std::function<void(std::string name, engine_core::CollisionGroups::FilterType filter_type)> set_filter_type;
     std::function<void(std::string a, std::string b, bool collidable)> set_collidable;
     // Puts the selected bodies, and those under selected instances, in the group.
@@ -45,8 +45,7 @@ struct CollisionGroupsHost {
 // (docs/superpowers/specs/2026-10-12-collision-groups-editor-design.md §3).
 //
 // The header holds the pane's badge, its title, "N of 62 groups · N bodies",
-// a legend of the two cell looks, and New Group, which adds "New Group" and
-// starts renaming it. Under it, while bodies name groups no one registered,
+// and New Group, which adds "New Group" and starts renaming it. Under it, while bodies name groups no one registered,
 // a row lists them with Register; during play, a banner says changes last
 // until Stop.
 //
@@ -61,10 +60,12 @@ struct CollisionGroupsHost {
 // cell under the pointer lights the cells between it and the two names, and
 // the names themselves.
 //
-// A click on a row selects it. Delete removes the selected group, asking
-// first when bodies are in it; F2, Enter, or a double-click on its name
-// renames it in place. Default has no rename and no delete. Rows and matrix
-// scroll together.
+// A click on a row selects it, and a right-click opens Rename, Select Bodies,
+// Assign Selection, and Delete for it. Delete removes the selected group,
+// asking first when bodies are in it: Move to Default, Leave Them Alone (they
+// keep naming it, and collide as Default), or Cancel. F2, Enter, or a
+// double-click on its name renames it in place. Default has no rename and no
+// delete. Rows and matrix scroll together.
 class IdeCollisionGroups : public IdePane {
 public:
     IdeCollisionGroups(engine_core::DataModel& world, CollisionGroupsHost host = {});
@@ -115,6 +116,8 @@ public:
     jadefx::Node* emptyHint() const;
     // Null when not asking.
     jadefx::Alert* removeAlert() const;
+    // The menu a right-click on a row opened, or null.
+    jadefx::Menu* rowMenu() const;
     // Whether the pointer's cell lights this node: a cell on the way to the names, or a name.
     static bool lit(const jadefx::Node* node);
 
@@ -139,6 +142,8 @@ private:
     void light(int row, int column);
     void unlight();
     void clicked_cell(std::size_t row, std::size_t column);
+    // Rename, Select Bodies, Assign Selection, and Delete for the row's group, at x, y.
+    void show_row_menu(const std::string& name, double x, double y);
     void finish_rename(bool apply);
     const Row* row_named(const std::string& name) const;
     double table_width() const;
@@ -186,6 +191,7 @@ private:
     int lit_column_ = -1;
 
     std::shared_ptr<jadefx::Alert> alert_;
+    std::shared_ptr<jadefx::Menu> menu_;
     std::string asking_;
     // A row's own control took the click that bubbles on to its row.
     bool took_click_ = false;

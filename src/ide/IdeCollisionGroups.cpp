@@ -74,13 +74,6 @@ constexpr const char* kRules = R"CSS(
     color: var(--ide-muted-text-color);
     font-size: 12px;
 }
-.cg-legend {
-    spacing: 6px;
-}
-.cg-legend-text {
-    color: var(--ide-muted-text-color);
-    font-size: 11px;
-}
 .cg-primary {
     background-color: var(--accent-color);
     border-width: 0;
@@ -263,16 +256,6 @@ constexpr const char* kRules = R"CSS(
 }
 .cg-cell.on image-view {
     opacity: 1;
-}
-.cg-swatch {
-    border-width: 1.5px;
-    border-style: solid;
-    border-color: var(--border-color);
-    border-radius: 4px;
-}
-.cg-swatch.on {
-    background-color: var(--accent-color);
-    border-color: var(--accent-color);
 }
 .cg-column {
     spacing: 6px;
@@ -543,23 +526,6 @@ IdeCollisionGroups::IdeCollisionGroups(engine_core::DataModel& world, CollisionG
     heading->getChildren().add(subtitle_);
     header->getChildren().add(heading);
     header->getChildren().add(spacer());
-    auto legend = jadefx::make<jadefx::HBox>();
-    legend->getClassList().add("cg-legend");
-    legend->setAlignment(jadefx::Pos::CenterLeft);
-    legend->setMouseTransparent(true);
-    for (const bool collide : {true, false}) {
-        auto swatch = jadefx::make<jadefx::StackPane>();
-        swatch->getClassList().add("cg-swatch");
-        set_class(*swatch, "on", collide);
-        swatch->setPrefSize(12, 12);
-        swatch->setMinSize(12, 12);
-        swatch->setMaxSize(12, 12);
-        legend->getChildren().add(swatch);
-        auto text = text_label(collide ? "Collide" : "Don't collide", "cg-legend-text");
-        text->setStyle(collide ? "padding: 0 8px 0 0;" : "");
-        legend->getChildren().add(text);
-    }
-    header->getChildren().add(legend);
     new_button_ = jadefx::make<jadefx::Button>("New Group");
     new_button_->getClassList().add("cg-primary");
     new_button_->setElementId("collision-groups-new");
@@ -662,6 +628,9 @@ IdeCollisionGroups::IdeCollisionGroups(engine_core::DataModel& world, CollisionG
 }
 
 IdeCollisionGroups::~IdeCollisionGroups() {
+    if (menu_) {
+        menu_->hide();
+    }
     // Closes the question without answering it.
     alert_.reset();
 }
@@ -904,6 +873,8 @@ std::shared_ptr<IdeCollisionGroups::Row> IdeCollisionGroups::make_row(std::size_
             requestFocus();
         }
     });
+    row->root->setOnContextMenuRequested(
+        [this, name](const jadefx::MouseEvent& event) { show_row_menu(name, event.x, event.y); });
 
     row->root->place(dot(index, kDot), kDotX, kDot, kDot);
     row->label = jadefx::make<jadefx::Label>(name);
@@ -1123,30 +1094,40 @@ void IdeCollisionGroups::requestRemove(const std::string& name) {
     }
     const std::size_t bodies = view_.groups[static_cast<std::size_t>(at)].bodies;
     if (bodies == 0) {
-        host_.remove(name);
+        host_.remove(name, GroupBodies::MoveToDefault);
         return;
     }
     jadefx::Scene* scene = getScene();
     if (scene == nullptr) {
         return;
     }
+    const jadefx::ButtonType keep("Leave Alone", jadefx::ButtonType::Data::Left);
     const jadefx::ButtonType move("Move to Default", jadefx::ButtonType::Data::OkDone);
+    // The Alert cuts a line too long for its Label short, so the lines are broken here.
     alert_ = std::make_shared<jadefx::Alert>(
         jadefx::AlertType::Warning,
-        "Deleting " + name + " moves them to Default,\nwhere they collide as Default does.",
-        std::vector<jadefx::ButtonType>{move, jadefx::ButtonType::Cancel()});
+        "Move to Default sets their CollisionGroup to\nDefault. Leave Alone keeps it: they collide as\n"
+        "Default anyway while no group has the name.",
+        std::vector<jadefx::ButtonType>{keep, move, jadefx::ButtonType::Cancel()});
     alert_->setTitle("Anarchy Engine");
     alert_->setHeaderText(bodies_text(bodies) + (bodies == 1 ? " is" : " are") + " in " + name);
     asking_ = name;
-    alert_->setOnClosed([this, name, move](const jadefx::ButtonType* choice) {
+    alert_->setOnClosed([this, name, keep, move](const jadefx::ButtonType* choice) {
         asking_.clear();
-        if (choice != nullptr && *choice == move && host_.remove) {
-            host_.remove(name);
+        if (choice == nullptr || !host_.remove) {
+            return;
+        }
+        if (*choice == move) {
+            host_.remove(name, GroupBodies::MoveToDefault);
+        } else if (*choice == keep) {
+            host_.remove(name, GroupBodies::Keep);
         }
     });
     alert_->show(*scene);
     const std::pair<const jadefx::ButtonType*, const char*> ids[] = {
-        {&move, "collision-groups-remove-move"}, {&jadefx::ButtonType::Cancel(), "collision-groups-remove-cancel"}};
+        {&keep, "collision-groups-remove-keep"},
+        {&move, "collision-groups-remove-move"},
+        {&jadefx::ButtonType::Cancel(), "collision-groups-remove-cancel"}};
     for (const auto& [type, element_id] : ids) {
         if (jadefx::Button* button = alert_->lookupButton(*type)) {
             button->setElementId(element_id);
@@ -1318,6 +1299,51 @@ jadefx::Node* IdeCollisionGroups::playBanner() const { return banner_->isVisible
 
 jadefx::Node* IdeCollisionGroups::emptyHint() const {
     return empty_->getParent() != nullptr && view_.groups.size() <= 1 ? empty_.get() : nullptr;
+}
+
+jadefx::Menu* IdeCollisionGroups::rowMenu() const { return menu_.get(); }
+
+void IdeCollisionGroups::show_row_menu(const std::string& name, double x, double y) {
+    jadefx::Scene* scene = getScene();
+    const int at = view_.index_of(name);
+    if (scene == nullptr || at < 0) {
+        return;
+    }
+    selectRow(name);
+    requestFocus();
+    if (menu_) {
+        menu_->hide();
+    }
+    menu_ = jadefx::make<jadefx::Menu>();
+    auto add = [this](const std::string& text, const char* icon, bool enabled, std::function<void()> run) {
+        auto item = jadefx::make<jadefx::MenuItem>(text);
+        if (std::shared_ptr<jadefx::ImageView> image = icon_graphic(icon)) {
+            item->setGraphic(std::move(image));
+        }
+        item->setDisable(!enabled);
+        item->setOnAction([run = std::move(run)](jadefx::ActionEvent&) { run(); });
+        menu_->getItems().add(item);
+    };
+    const bool base = name == engine_core::CollisionGroups::kDefault;
+    const std::size_t bodies = view_.groups[static_cast<std::size_t>(at)].bodies;
+    if (!base) {
+        add("Rename", "Rename.png", true, [this, name] { beginRename(name); });
+    }
+    add("Select Bodies", "selection-select.png", bodies > 0, [this, name] {
+        if (host_.select_bodies) {
+            host_.select_bodies(name);
+        }
+    });
+    add("Assign Selection", "arrow-in.png", has_selection_, [this, name] {
+        if (host_.assign_selection) {
+            host_.assign_selection(name);
+        }
+    });
+    if (!base) {
+        menu_->getItems().add(jadefx::make<jadefx::SeparatorMenuItem>());
+        add("Delete", "Cross.png", true, [this, name] { requestRemove(name); });
+    }
+    menu_->show(*scene, x, y);
 }
 
 jadefx::Alert* IdeCollisionGroups::removeAlert() const { return asking_.empty() ? nullptr : alert_.get(); }

@@ -448,17 +448,22 @@ int main() {
         expect(showing("Collision Groups") == nullptr, "and closes from it");
         jadefx::Node* card = scene->getElementById("collision-groups-button");
         expect(card != nullptr, "the ribbon's Physics group has Collision Groups");
-        if (card != nullptr) {
-            const double x = card->getAbsoluteX() + card->getWidth() * 0.5;
-            const double y = card->getAbsoluteY() + card->getHeight() * 0.5;
-            scene->noteMove(x, y);
-            scene->noteButton(0, true, x, y);
-            scene->noteButton(0, false, x, y);
-            frame();
-            frame();
-        }
+        auto press_card = [&] {
+            if (card != nullptr) {
+                const double x = card->getAbsoluteX() + card->getWidth() * 0.5;
+                const double y = card->getAbsoluteY() + card->getHeight() * 0.5;
+                scene->noteMove(1, 1);
+                scene->noteMove(x, y);
+                scene->noteButton(0, true, x, y);
+                scene->noteButton(0, false, x, y);
+                frame();
+                frame();
+            }
+        };
+        press_card();
         expect(showing("Collision Groups") != nullptr, "which opens it");
-        pick("Collision Groups");
+        press_card();
+        expect(showing("Collision Groups") == nullptr && !checked("Collision Groups"), "and closes it again");
         // Assets in front again, as the checks below expect.
         if (showing("Assets") == nullptr) {
             pick("Assets");

@@ -218,8 +218,8 @@ CollisionGroupsHost IdeLayout::collision_groups_host() {
     host.rename = [post](std::string from, std::string to) {
         post([from, to](engine_core::DataModel& world) { return run_rename_group(world, from, to); });
     };
-    host.remove = [post](std::string name) {
-        post([name](engine_core::DataModel& world) { return run_delete_group(world, name); });
+    host.remove = [post](std::string name, GroupBodies bodies) {
+        post([name, bodies](engine_core::DataModel& world) { return run_delete_group(world, name, bodies); });
     };
     host.set_filter_type = [post](std::string name, engine_core::CollisionGroups::FilterType type) {
         post([name, type](engine_core::DataModel& world) { return run_set_filter_type(world, name, type); });

@@ -77,8 +77,16 @@ std::optional<std::string> run_new_group(engine_core::DataModel& world, std::str
 // The group's bodies move with it.
 std::optional<std::string> run_rename_group(engine_core::DataModel& world, const std::string& from,
                                             const std::string& to);
-// Moves the group's bodies to Default, then unregisters it.
-std::optional<std::string> run_delete_group(engine_core::DataModel& world, const std::string& name);
+// What deleting a group does to the bodies in it.
+enum class GroupBodies {
+    // Their CollisionGroup becomes "Default".
+    MoveToDefault,
+    // They keep naming it, and collide as Default while no group has the name.
+    Keep,
+};
+// Unregisters the group, first moving its bodies to Default unless bodies is Keep.
+std::optional<std::string> run_delete_group(engine_core::DataModel& world, const std::string& name,
+                                            GroupBodies bodies = GroupBodies::MoveToDefault);
 std::optional<std::string> run_set_filter_type(engine_core::DataModel& world, const std::string& name,
                                                engine_core::CollisionGroups::FilterType filter_type);
 std::optional<std::string> run_set_collidable(engine_core::DataModel& world, const std::string& a,

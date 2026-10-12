@@ -74,7 +74,9 @@ private:
             result->done = true;
         };
         host.rename = [&game](std::string from, std::string to) { ide::run_rename_group(game, from, to); };
-        host.remove = [&game](std::string name) { ide::run_delete_group(game, name); };
+        host.remove = [&game](std::string name, ide::GroupBodies bodies) {
+            ide::run_delete_group(game, name, bodies);
+        };
         host.set_filter_type = [&game](std::string name, FilterType type) {
             ide::run_set_filter_type(game, name, type);
         };

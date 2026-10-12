@@ -676,6 +676,7 @@ add_library(engine_core STATIC
     src/engine_core/Containment.cpp
     src/engine_core/Ecs.cpp
     src/engine_core/PhysicsWorld.cpp
+    src/engine_core/PoseBlend.cpp
     src/engine_core/brush/BrushGeometry.cpp
     src/engine_core/BrushBindings.cpp
     src/engine_core/CameraBindings.cpp
@@ -1073,6 +1074,7 @@ add_executable(sandbox
     sandbox/bloom_tests.cpp
     sandbox/value_tests.cpp
     sandbox/physics_tests.cpp
+    sandbox/pose_blend_tests.cpp
     sandbox/physics_game_object_tests.cpp
     sandbox/edit_physics_tests.cpp
     sandbox/raycast_tests.cpp

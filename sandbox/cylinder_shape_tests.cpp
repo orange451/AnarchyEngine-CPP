@@ -133,3 +133,115 @@ TEST_CASE("CY4 a cylinder's stand-in hull is 32 sides on its true surface, along
     }
     b3DestroyHull(hull);
 }
+
+namespace {
+
+struct Cloud {
+    const b3Vec3* points;
+    int count;
+};
+
+b3Vec3 cloud_support(const void* data, b3Vec3 direction) {
+    const Cloud* cloud = static_cast<const Cloud*>(data);
+    int best = 0;
+    for (int i = 1; i < cloud->count; ++i) {
+        if (b3Dot(cloud->points[i], direction) > b3Dot(cloud->points[best], direction)) {
+            best = i;
+        }
+    }
+    return cloud->points[best];
+}
+
+}  // namespace
+
+TEST_CASE("CY10 GJK on support functions finds what Box3D's point GJK finds", "[cylinder]") {
+    const b3BoxHull a = b3MakeBoxHull(0.5f, 0.5f, 0.5f);
+    const b3BoxHull b = b3MakeBoxHull(0.3f, 0.6f, 0.2f);
+    const Cloud cloudA{b3GetHullPoints(&a.base), a.base.vertexCount};
+    const Cloud cloudB{b3GetHullPoints(&b.base), b.base.vertexCount};
+    for (const b3Vec3 offset : {v3(2.f, 0.4f, -0.3f), v3(0.f, 1.5f, 0.2f), v3(0.1f, 0.2f, 0.f)}) {
+        const b3Transform xf{offset, b3MakeQuatFromAxisAngle(b3Normalize(v3(1.f, 2.f, 3.f)), 0.7f)};
+        b3DistanceInput input{};
+        input.proxyA = b3ShapeProxy{cloudA.points, cloudA.count, 0.f};
+        input.proxyB = b3ShapeProxy{cloudB.points, cloudB.count, 0.f};
+        input.transform = xf;
+        input.useRadii = false;
+        b3SimplexCache cache{};
+        const b3DistanceOutput expected = b3ShapeDistance(&input, &cache, nullptr, 0);
+        const b3DistanceOutput got = b3SupportDistance(cloud_support, &cloudA, cloud_support, &cloudB, xf);
+        INFO(offset.x << " " << offset.y << " " << offset.z);
+        REQUIRE(near(got.distance, expected.distance, 1e-5f));
+        if (expected.distance > 0.f) {
+            REQUIRE(near(got.normal.x, expected.normal.x, 1e-4f));
+            REQUIRE(near(got.normal.y, expected.normal.y, 1e-4f));
+            REQUIRE(near(got.normal.z, expected.normal.z, 1e-4f));
+        }
+    }
+}
+
+TEST_CASE("CY11 a sphere touches a cylinder's side, cap, and rim at the true surface, at any depth", "[cylinder]") {
+    const b3Cylinder c = upright(0.5f, 1.f);
+    b3LocalManifoldPoint points[4];
+    b3LocalManifold m{};
+    m.points = points;
+    auto collide = [&](b3Vec3 at, float radius) {
+        const b3Sphere sphere{v3(0.f, 0.f, 0.f), radius};
+        b3CollideCylinderAndSphere(&m, 4, &c, &sphere, b3Transform{at, b3Quat_identity});
+    };
+    // Beside the side, 0.01 away.
+    collide(v3(0.71f, 0.3f, 0.f), 0.2f);
+    REQUIRE(m.pointCount == 1);
+    REQUIRE(near(m.normal.x, 1.f, 1e-6f));
+    REQUIRE(near(m.points[0].separation, 0.01f, 1e-5f));
+    // Above the top cap, 0.05 into it.
+    collide(v3(0.1f, 1.15f, 0.2f), 0.2f);
+    REQUIRE(m.pointCount == 1);
+    REQUIRE(near(m.normal.y, 1.f, 1e-6f));
+    REQUIRE(near(m.points[0].separation, -0.05f, 1e-5f));
+    // Off the rim, diagonally: the rim is nearest.
+    collide(v3(0.6f, 1.1f, 0.f), 0.13f);
+    REQUIRE(m.pointCount == 1);
+    REQUIRE(near(m.normal.x, std::sqrt(0.5f), 1e-5f));
+    REQUIRE(near(m.normal.y, std::sqrt(0.5f), 1e-5f));
+    REQUIRE(near(m.points[0].separation, std::sqrt(0.02f) - 0.13f, 1e-5f));
+    // Deep inside, nearer the side than a cap: out through the side.
+    collide(v3(0.3f, 0.f, 0.f), 0.1f);
+    REQUIRE(m.pointCount == 1);
+    REQUIRE(near(m.normal.x, 1.f, 1e-6f));
+    REQUIRE(near(m.points[0].separation, -0.3f, 1e-5f));
+    // Far off: nothing.
+    collide(v3(3.f, 0.f, 0.f), 0.1f);
+    REQUIRE(m.pointCount == 0);
+}
+
+TEST_CASE("CY12 a capsule along a cylinder's side or across its cap touches at two points, else one", "[cylinder]") {
+    const b3Cylinder c = upright(0.5f, 1.f);
+    b3HullData* standIn = b3MakeCylinderHull(&c);
+    b3LocalManifoldPoint points[4];
+    b3LocalManifold m{};
+    m.points = points;
+    b3SimplexCache cache{};
+    // Along the side: parallel to the axis, 0.01 off it.
+    const b3Capsule along{v3(0.f, -0.5f, 0.f), v3(0.f, 0.5f, 0.f), 0.1f};
+    b3CollideCylinderAndCapsule(&m, 4, &c, standIn, &along, b3Transform{v3(0.61f, 0.f, 0.f), b3Quat_identity}, &cache);
+    REQUIRE(m.pointCount == 2);
+    REQUIRE(near(m.normal.x, 1.f, 1e-5f));
+    REQUIRE(near(m.points[0].separation, 0.01f, 1e-5f));
+    REQUIRE(near(m.points[1].separation, 0.01f, 1e-5f));
+    // Lying across the top cap, 0.01 into it.
+    const b3Capsule across{v3(-0.3f, 0.f, 0.f), v3(0.3f, 0.f, 0.f), 0.1f};
+    b3CollideCylinderAndCapsule(&m, 4, &c, standIn, &across, b3Transform{v3(0.f, 1.09f, 0.f), b3Quat_identity}, &cache);
+    REQUIRE(m.pointCount == 2);
+    REQUIRE(near(m.normal.y, 1.f, 1e-5f));
+    REQUIRE(near(m.points[0].separation, -0.01f, 1e-5f));
+    REQUIRE(near(m.points[1].separation, -0.01f, 1e-5f));
+    // Slanting, its near end about 0.016 off the side: one point, at that end.
+    // (Box3D's quaternion from an angle uses its own approximate sine, so the
+    // end is where the transform puts it, not where exact trig would.)
+    const b3Transform slanted{v3(0.9f, 0.f, 0.f), b3MakeQuatFromAxisAngle(v3(0.f, 0.f, 1.f), 0.6f)};
+    b3CollideCylinderAndCapsule(&m, 4, &c, standIn, &along, slanted, &cache);
+    REQUIRE(m.pointCount == 1);
+    const b3Vec3 nearEnd = b3TransformPoint(slanted, along.center2);
+    REQUIRE(near(m.points[0].separation, std::sqrt(nearEnd.x * nearEnd.x + nearEnd.z * nearEnd.z) - 0.6f, 1e-4f));
+    b3DestroyHull(standIn);
+}

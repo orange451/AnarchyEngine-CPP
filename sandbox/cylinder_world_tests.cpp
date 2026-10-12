@@ -186,3 +186,22 @@ TEST_CASE("CY9 a cylinder shape made, reshaped, and destroyed again and again fr
     }
     REQUIRE(b3World_GetCounters(world.id).byteCount == before);
 }
+
+TEST_CASE("CY13 a sphere rests on a cylinder's cap, a capsule along its side", "[cylinder]") {
+    World world;
+    // Standing, radius 0.5, its top at y = 1.
+    world.cylinder(b3_staticBody, v3(0.f, 0.f, 0.f), b3Quat_identity, 0.5f, 1.f);
+    const b3BodyId ball = world.body(b3_dynamicBody, v3(0.1f, 1.5f, 0.f));
+    b3ShapeDef def = b3DefaultShapeDef();
+    const b3Sphere sphere{v3(0.f, 0.f, 0.f), 0.2f};
+    b3CreateSphereShape(ball, &def, &sphere);
+    // Lying along Z at x = 5, its top at y = 0.5: a capsule laid along it.
+    world.cylinder(b3_staticBody, v3(5.f, 0.f, 0.f), on_side(), 0.5f, 2.f);
+    const b3BodyId stick = world.body(b3_dynamicBody, v3(5.f, 0.8f, 0.f));
+    const b3Capsule capsule{v3(0.f, 0.f, -1.f), v3(0.f, 0.f, 1.f), 0.2f};
+    b3CreateCapsuleShape(stick, &def, &capsule);
+    world.seconds(2.f);
+    REQUIRE(near(position_of(ball).y, 1.2f, 0.01f));
+    REQUIRE(near(position_of(ball).x, 0.1f, 0.01f));
+    REQUIRE(near(position_of(stick).y, 0.7f, 0.01f));
+}

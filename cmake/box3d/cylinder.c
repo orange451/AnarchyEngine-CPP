@@ -190,3 +190,279 @@ b3HullData* b3MakeCylinderHull( const b3Cylinder* shape )
 	b3DestroyHull( upright );
 	return placed;
 }
+
+// Normal and axis within 10 degrees: a cap faces the other shape.
+static const float b3_cylinderCapCos = 0.98480775f;
+// Normal and axis within 10 degrees of square: the side faces it.
+static const float b3_cylinderSideSin = 0.17364818f;
+
+// The cylinder shrunk by margin on every side. The true shape is the core grown
+// by margin: exact on its side and caps, its rims rounded by margin. GJK keeps a
+// positive distance between cores while the true shapes overlap by less than
+// margin, as Box3D's capsule (a segment plus a radius) does.
+typedef struct b3CylinderCore
+{
+	b3Vec3 center1;
+	b3Vec3 center2;
+	b3Vec3 axis;
+	float radius;
+	float margin;
+} b3CylinderCore;
+
+static b3CylinderCore b3MakeCylinderCore( const b3Cylinder* shape )
+{
+	b3CylinderFrame frame = b3MakeCylinderFrame( shape );
+	float margin = b3MinFloat( B3_SPECULATIVE_DISTANCE, 0.25f * b3MinFloat( frame.radius, frame.halfHeight ) );
+	b3CylinderCore core;
+	core.axis = frame.axis;
+	core.center1 = b3MulSub( frame.center, frame.halfHeight - margin, frame.axis );
+	core.center2 = b3MulAdd( frame.center, frame.halfHeight - margin, frame.axis );
+	core.radius = frame.radius - margin;
+	core.margin = margin;
+	return core;
+}
+
+static b3Vec3 b3CylinderCoreSupport( const void* data, b3Vec3 direction )
+{
+	const b3CylinderCore* core = data;
+	float along = b3Dot( direction, core->axis );
+	b3Vec3 point = along >= 0.0f ? core->center2 : core->center1;
+	b3Vec3 across = b3MulSub( direction, along, core->axis );
+	float length = b3Length( across );
+	if ( length > 1000.0f * FLT_MIN )
+	{
+		point = b3MulAdd( point, core->radius / length, across );
+	}
+	return point;
+}
+
+typedef struct b3PointCloud
+{
+	const b3Vec3* points;
+	int count;
+} b3PointCloud;
+
+static b3Vec3 b3PointCloudSupport( const void* data, b3Vec3 direction )
+{
+	const b3PointCloud* cloud = data;
+	return cloud->points[b3GetPointSupport( cloud->points, cloud->count, direction )];
+}
+
+// One contact point midway between pointA on A and pointB on B.
+static void b3SinglePoint( b3LocalManifold* manifold, b3Vec3 normal, b3Vec3 pointA, b3Vec3 pointB, float separation )
+{
+	manifold->normal = normal;
+	manifold->pointCount = 1;
+	manifold->points[0].point = b3Lerp( pointA, pointB, 0.5f );
+	manifold->points[0].separation = separation;
+	manifold->points[0].pair = b3FeaturePair_single;
+}
+
+void b3CollideCylinderAndSphere( b3LocalManifold* manifold, int capacity, const b3Cylinder* cylinderA, const b3Sphere* sphereB,
+								 b3Transform transformBtoA )
+{
+	manifold->pointCount = 0;
+	if ( capacity < 1 )
+	{
+		return;
+	}
+
+	b3CylinderFrame frame = b3MakeCylinderFrame( cylinderA );
+	b3Vec3 center = b3TransformPoint( transformBtoA, sphereB->center );
+	b3Vec3 offset = b3Sub( center, frame.center );
+	float along = b3Dot( offset, frame.axis );
+	b3Vec3 across = b3MulSub( offset, along, frame.axis );
+	float acrossLength;
+	b3Vec3 radial = b3GetLengthAndNormalize( &acrossLength, across );
+	if ( acrossLength == 0.0f )
+	{
+		radial = b3Normalize( b3Perp( frame.axis ) );
+	}
+
+	// The closest point on the solid cylinder: exact at any depth.
+	b3Vec3 normal = b3Vec3_zero;
+	b3Vec3 surface = b3Vec3_zero;
+	float distance = 0.0f;
+	bool outside = acrossLength > frame.radius || b3AbsFloat( along ) > frame.halfHeight;
+	if ( outside )
+	{
+		float clampedAlong = b3ClampFloat( along, -frame.halfHeight, frame.halfHeight );
+		float clampedAcross = b3MinFloat( acrossLength, frame.radius );
+		surface = b3MulAdd( b3MulAdd( frame.center, clampedAlong, frame.axis ), clampedAcross, radial );
+		normal = b3GetLengthAndNormalize( &distance, b3Sub( center, surface ) );
+	}
+
+	if ( outside == false || distance == 0.0f )
+	{
+		// Inside: out through the nearer of the side and a cap.
+		float toSide = frame.radius - acrossLength;
+		float toCap = frame.halfHeight - b3AbsFloat( along );
+		if ( toSide < toCap )
+		{
+			normal = radial;
+			surface = b3MulAdd( b3MulAdd( frame.center, along, frame.axis ), frame.radius, radial );
+			distance = -toSide;
+		}
+		else
+		{
+			float sign = along >= 0.0f ? 1.0f : -1.0f;
+			normal = b3MulSV( sign, frame.axis );
+			surface = b3Add( b3MulAdd( frame.center, sign * frame.halfHeight, frame.axis ), across );
+			distance = -toCap;
+		}
+	}
+
+	float separation = distance - sphereB->radius;
+	if ( separation > B3_SPECULATIVE_DISTANCE )
+	{
+		return;
+	}
+
+	b3SinglePoint( manifold, normal, surface, b3MulSub( center, sphereB->radius, normal ), separation );
+}
+
+// The part of segment p1-p2 over the disc (center, unit normal, radius),
+// measured in the disc's plane, as fractions s0 <= s1 along it. False: none.
+static bool b3ClipSegmentToDisc( float* s0, float* s1, b3Vec3 p1, b3Vec3 p2, b3Vec3 center, b3Vec3 normal, float radius )
+{
+	b3Vec3 a = b3Sub( p1, center );
+	a = b3MulSub( a, b3Dot( a, normal ), normal );
+	b3Vec3 d = b3Sub( p2, p1 );
+	d = b3MulSub( d, b3Dot( d, normal ), normal );
+	float qa = b3Dot( d, d );
+	float qb = b3Dot( a, d );
+	float qc = b3Dot( a, a ) - radius * radius;
+	if ( qa < 1000.0f * FLT_MIN )
+	{
+		*s0 = 0.0f;
+		*s1 = 1.0f;
+		return qc <= 0.0f;
+	}
+
+	float discriminant = qb * qb - qa * qc;
+	if ( discriminant < 0.0f )
+	{
+		return false;
+	}
+
+	float root = sqrtf( discriminant );
+	*s0 = b3MaxFloat( ( -qb - root ) / qa, 0.0f );
+	*s1 = b3MinFloat( ( -qb + root ) / qa, 1.0f );
+	return *s0 <= *s1;
+}
+
+void b3CollideCylinderAndCapsule( b3LocalManifold* manifold, int capacity, const b3Cylinder* cylinderA,
+								  const b3HullData* standInA, const b3Capsule* capsuleB, b3Transform transformBtoA,
+								  b3SimplexCache* cache )
+{
+	manifold->pointCount = 0;
+	if ( capacity < 2 )
+	{
+		return;
+	}
+
+	b3CylinderFrame frame = b3MakeCylinderFrame( cylinderA );
+	b3CylinderCore core = b3MakeCylinderCore( cylinderA );
+	b3PointCloud segmentB = { &capsuleB->center1, 2 };
+	b3DistanceOutput output =
+		b3SupportDistance( b3CylinderCoreSupport, &core, b3PointCloudSupport, &segmentB, transformBtoA );
+	float capsuleRadius = capsuleB->radius;
+	float separation = output.distance - core.margin - capsuleRadius;
+	if ( separation > B3_SPECULATIVE_DISTANCE )
+	{
+		return;
+	}
+
+	if ( output.distance < 100.0f * FLT_EPSILON )
+	{
+		// The cores overlap: Box3D's hull and capsule answer, the stand-in in the cylinder's place.
+		b3CollideHullAndCapsule( manifold, capacity, standInA, capsuleB, transformBtoA, cache );
+		return;
+	}
+
+	b3Vec3 normal = output.normal;
+	b3Vec3 p1 = b3TransformPoint( transformBtoA, capsuleB->center1 );
+	b3Vec3 p2 = b3TransformPoint( transformBtoA, capsuleB->center2 );
+	b3Vec3 segment = b3Normalize( b3Sub( p2, p1 ) );
+	float normalAlong = b3Dot( normal, frame.axis );
+	float segmentAlong = b3Dot( segment, frame.axis );
+	float speculative = B3_SPECULATIVE_DISTANCE;
+
+	if ( b3AbsFloat( normalAlong ) < b3_cylinderSideSin && b3AbsFloat( segmentAlong ) > 0.998f )
+	{
+		// Along the side: a line contact, where the two overlap along the axis.
+		b3Vec3 radial = b3Normalize( b3MulSub( normal, normalAlong, frame.axis ) );
+		float t1 = b3Dot( b3Sub( p1, frame.center ), frame.axis );
+		float t2 = b3Dot( b3Sub( p2, frame.center ), frame.axis );
+		float lo = b3ClampFloat( b3MinFloat( t1, t2 ), -frame.halfHeight, frame.halfHeight );
+		float hi = b3ClampFloat( b3MaxFloat( t1, t2 ), -frame.halfHeight, frame.halfHeight );
+		if ( hi - lo > B3_LINEAR_SLOP )
+		{
+			float ends[2] = { lo, hi };
+			int count = 0;
+			for ( int i = 0; i < 2; ++i )
+			{
+				float s = ( ends[i] - t1 ) / ( t2 - t1 );
+				b3Vec3 onSegment = b3Lerp( p1, p2, s );
+				b3Vec3 onSide = b3MulAdd( b3MulAdd( frame.center, ends[i], frame.axis ), frame.radius, radial );
+				float pointSeparation = b3Dot( b3Sub( onSegment, onSide ), radial ) - capsuleRadius;
+				if ( pointSeparation > speculative )
+				{
+					continue;
+				}
+				b3LocalManifoldPoint* mp = manifold->points + count;
+				mp->point = b3Lerp( onSide, b3MulSub( onSegment, capsuleRadius, radial ), 0.5f );
+				mp->separation = pointSeparation;
+				mp->pair = b3MakeFeaturePair( b3_featureShapeA, i, b3_featureShapeB, i );
+				count += 1;
+			}
+			if ( count > 0 )
+			{
+				manifold->normal = radial;
+				manifold->pointCount = count;
+				return;
+			}
+		}
+	}
+
+	if ( b3AbsFloat( normalAlong ) >= b3_cylinderCapCos && b3AbsFloat( segmentAlong ) < b3_cylinderSideSin )
+	{
+		// Across a cap: a line contact, the segment's part over the cap.
+		float sign = normalAlong > 0.0f ? 1.0f : -1.0f;
+		b3Vec3 capNormal = b3MulSV( sign, frame.axis );
+		b3Vec3 capCenter = b3MulAdd( frame.center, sign * frame.halfHeight, frame.axis );
+		float s0, s1;
+		if ( b3ClipSegmentToDisc( &s0, &s1, p1, p2, capCenter, capNormal, frame.radius ) && ( s1 - s0 ) > 0.0f )
+		{
+			float fractions[2] = { s0, s1 };
+			int count = 0;
+			for ( int i = 0; i < 2; ++i )
+			{
+				b3Vec3 onSegment = b3Lerp( p1, p2, fractions[i] );
+				float height = b3Dot( b3Sub( onSegment, capCenter ), capNormal );
+				float pointSeparation = height - capsuleRadius;
+				if ( pointSeparation > speculative )
+				{
+					continue;
+				}
+				b3Vec3 onCap = b3MulSub( onSegment, height, capNormal );
+				b3LocalManifoldPoint* mp = manifold->points + count;
+				mp->point = b3Lerp( onCap, b3MulSub( onSegment, capsuleRadius, capNormal ), 0.5f );
+				mp->separation = pointSeparation;
+				mp->pair = b3MakeFeaturePair( b3_featureShapeA, 2 + i, b3_featureShapeB, i );
+				count += 1;
+			}
+			if ( count > 0 )
+			{
+				manifold->normal = capNormal;
+				manifold->pointCount = count;
+				return;
+			}
+		}
+	}
+
+	// Otherwise one point, the true surfaces' nearest.
+	b3Vec3 surfaceA = b3MulAdd( output.pointA, core.margin, normal );
+	b3Vec3 surfaceB = b3MulSub( output.pointB, capsuleRadius, normal );
+	b3SinglePoint( manifold, normal, surfaceA, surfaceB, separation );
+}

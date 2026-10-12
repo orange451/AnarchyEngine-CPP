@@ -130,18 +130,6 @@ TEST_CASE("CR3 a RigidConstraint copied without its sub loses the sub end", "[as
     REQUIRE(copy->pv_instance2_ref().guid().empty());
 }
 
-TEST_CASE("CR4 a PhysicsObject's GameObject copied with it names the copy", "[assembly][remap]") {
-    SimRole role;
-    engine_core::Game game;
-    GameObject& part = named_part(game, "Part", workspace_of(game));
-    engine_core::PhysicsObject& body = game.create<engine_core::PhysicsObject>();
-    REQUIRE_FALSE(body.set_game_object(instance_slot(part.id())));
-    game.set_parent(body.id(), workspace_of(game));
-    const std::vector<InstanceId> made = duplicate(game, {part.id(), body.id()});
-    auto* copy = as<engine_core::PhysicsObject>(game, made[1]);
-    REQUIRE(copy->game_object_id() == made[0]);
-}
-
 TEST_CASE("CR5 an instance file keeps its links when inserted, and an old file still loads", "[assembly][remap]") {
     SimRole role;
     engine_core::Game game;

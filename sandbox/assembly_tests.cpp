@@ -357,9 +357,9 @@ TEST_CASE("AS13 a PhysicsBase that lost its GameObject belongs to the winner's n
     SimRole role;
     engine_core::Game game;
     Part a = add_part(game);
+    // A second body under the same GameObject: the first in tree order drives it.
     PhysicsObject& loser = game.create<PhysicsObject>();
-    REQUIRE_FALSE(loser.set_game_object(instance_slot(a.object->id())));
-    game.set_parent(loser.id(), workspace_of(game));
+    game.set_parent(loser.id(), a.object->id());
     Part b = add_part(game);
     weld(game, loser.id(), b.object->id());
     Assemblies& graph = fresh(game);

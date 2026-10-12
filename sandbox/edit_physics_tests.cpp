@@ -97,8 +97,7 @@ TEST_CASE("E3 stopped, a body and its Transform follow its GameObject", "[physic
     PhysicsRig rig;
     GameObject& part = create_part(rig.game);
     part.set_transform(at(0.f, 8.f, 0.f));
-    PhysicsObject& body = rig.body(engine_core::matrix4_identity(), Vec3{1.f, 1.f, 1.f}, false);
-    REQUIRE_FALSE(body.set_game_object(instance_slot(part.id())));
+    PhysicsObject& body = rig.body(engine_core::matrix4_identity(), Vec3{1.f, 1.f, 1.f}, false, part.id());
     rig.sync_steps(1);
     REQUIRE(rig.physics.body_position(body.id())->y == 8.f);
     REQUIRE(y_of(body.transform()) == 8.f);

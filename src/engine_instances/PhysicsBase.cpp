@@ -195,6 +195,20 @@ std::optional<std::string> PhysicsBase::set_mass(double mass) {
     return refused;
 }
 
+void PhysicsBase::set_massless(bool massless) {
+    require_gameplay_thread(*this);
+    if (massless_ == massless) {
+        return;
+    }
+    massless_ = massless;
+    dirty_ |= kDirtyMass;
+    note_property_change("Massless", bool_slot(!massless), bool_slot(massless));
+    // Massless ranks roots.
+    if (assemblies().relevant(*this, id())) {
+        assemblies().bump();
+    }
+}
+
 std::optional<std::string> PhysicsBase::set_linear_damping(double damping) {
     return set_number("LinearDamping", linear_damping_, std::isfinite(damping) ? std::max(damping, 0.0) : damping,
                       kDirtyDamping);
@@ -212,6 +226,7 @@ void PhysicsBase::on_reuse() {
     can_collide_ = true;
     collision_group_ = "Default";
     mass_ = kDefaultMass;
+    massless_ = false;
     linear_damping_ = 0.0;
     dirty_ = kDirtyAll;
     warned_shared = false;
@@ -267,6 +282,24 @@ bool write_can_collide(DataModel&, DataModel& object, LuaSlot& in) {
     return body != nullptr && refuse(in, body->set_can_collide(in.flag));
 }
 
+bool read_massless(DataModel&, DataModel& object, LuaSlot& out) {
+    const PhysicsBase* body = base_of(object);
+    if (body == nullptr) {
+        return false;
+    }
+    out = bool_slot(body->massless());
+    return true;
+}
+
+bool write_massless(DataModel&, DataModel& object, LuaSlot& in) {
+    PhysicsBase* body = base_of(object);
+    if (body == nullptr) {
+        return false;
+    }
+    body->set_massless(in.flag);
+    return true;
+}
+
 bool read_collision_group(DataModel&, DataModel& object, LuaSlot& out) {
     const PhysicsBase* body = base_of(object);
     if (body == nullptr) {
@@ -299,6 +332,7 @@ ANARCHY_LUA_REGISTER(register_physics_base_lua) {
         lua_slider(lua_saved_property("Mass", "number", read_number<PhysicsBase, &PhysicsBase::mass>,
                                       write_number<PhysicsBase, &PhysicsBase::set_mass>, mass.c_str()),
                    0.0, 100.0),
+        lua_saved_property("Massless", "boolean", read_massless, write_massless, "false"),
         lua_group("Motion"),
         lua_saved_property("Velocity", "Vector3", read_vec<PhysicsBase, &PhysicsBase::velocity>,
                            write_vec<PhysicsBase, &PhysicsBase::set_velocity>, "[0,0,0]"),

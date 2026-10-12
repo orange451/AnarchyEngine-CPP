@@ -17,6 +17,7 @@
 #include "PhysicsObject.hpp"
 #include "PhysicsWorld.hpp"
 #include "PlayerController.hpp"
+#include "PropertyBag.hpp"
 #include "Terrain.hpp"
 #include "TerrainWorld.hpp"
 #include "terrain/VoxelVolume.hpp"
@@ -961,4 +962,101 @@ TEST_CASE("AP30 in play, a body's Transform write moves its GameObject at once, 
     // Held where it was written: one unit above the box's centre.
     REQUIRE(near(x_of(feet.transform()) - x_of(box.transform()), 0.f, 0.02f));
     REQUIRE(near(y_of(feet.transform()) - y_of(box.transform()), 0.5f, 0.02f));
+}
+
+TEST_CASE("AP31 a Massless body welded to another adds no mass, nor wins its root by Mass", "[assembly][play][massless]") {
+    PhysicsRig rig;
+    rig.floor();
+    PhysicsObject& chassis = rig.body(at(0.f, 1.f, 0.f), Vec3{2.f, 0.5f, 4.f}, false);
+    REQUIRE_FALSE(chassis.set_mass(50.0));
+    PhysicsObject& trim = rig.body(at(0.f, 1.5f, 0.f), Vec3{4.f, 0.5f, 4.f}, false);
+    REQUIRE_FALSE(trim.set_mass(100.0));
+    trim.set_massless(true);
+    weld(rig.game, chassis.id(), trim.id());
+    // Heavier and larger, it still does not root the assembly.
+    REQUIRE(rig.game.assemblies().root_of(rig.game, trim.id()) == chassis.id());
+    rig.play();
+    rig.engine_steps(2);
+    REQUIRE(near(rig.physics.body_mass(chassis.id()), 50.f, 0.5f));
+    // Weighing again, it adds its Mass, and roots the assembly by it.
+    trim.set_massless(false);
+    rig.engine_steps(2);
+    REQUIRE(near(rig.physics.body_mass(chassis.id()), 150.f, 0.5f));
+    REQUIRE(rig.game.assemblies().root_of(rig.game, chassis.id()) == trim.id());
+}
+
+TEST_CASE("AP32 a Massless body alone keeps its Mass, and falls", "[assembly][play][massless]") {
+    PhysicsRig rig;
+    PhysicsObject& box = rig.body(at(0.f, 10.f, 0.f), Vec3{1.f, 1.f, 1.f}, false);
+    REQUIRE_FALSE(box.set_mass(20.0));
+    box.set_massless(true);
+    rig.play();
+    rig.seconds(0.5);
+    REQUIRE(near(rig.physics.body_mass(box.id()), 20.f, 0.5f));
+    REQUIRE(y_of(box.transform()) < 9.f);
+}
+
+TEST_CASE("AP33 in an assembly of Massless bodies, the root weighs its Mass and the rest nothing",
+          "[assembly][play][massless]") {
+    PhysicsRig rig;
+    PhysicsObject& big = rig.body(at(0.f, 10.f, 0.f), Vec3{2.f, 2.f, 2.f}, false);
+    REQUIRE_FALSE(big.set_mass(30.0));
+    big.set_massless(true);
+    engine_core::Brush& brush = rig.game.create<engine_core::Brush>();
+    brush.set_anchored(false);
+    REQUIRE_FALSE(brush.set_transform(at(2.f, 10.f, 0.f)));
+    rig.game.set_parent(brush.id(), workspace_of(rig.game));
+    REQUIRE_FALSE(brush.set_mass(70.0));
+    brush.set_massless(true);
+    weld(rig.game, big.id(), brush.id());
+    // Both ranked massless: the larger roots it, and weighs its Mass alone.
+    const InstanceId root = rig.game.assemblies().root_of(rig.game, brush.id());
+    REQUIRE((root == big.id() || root == brush.id()));
+    const float expected = root == big.id() ? 30.f : 70.f;
+    rig.play();
+    rig.seconds(0.5);
+    REQUIRE(near(rig.physics.body_mass(big.id()), expected, 0.5f));
+    REQUIRE(y_of(big.transform()) < 9.f);
+}
+
+TEST_CASE("AP34 made Massless in play, a root hands the assembly to another, and weighs nothing there",
+          "[assembly][play][massless]") {
+    PhysicsRig rig;
+    rig.floor();
+    PhysicsObject& heavy = rig.body(at(0.f, 0.5f, 0.f), Vec3{1.f, 1.f, 1.f}, false);
+    REQUIRE_FALSE(heavy.set_mass(100.0));
+    PhysicsObject& light = rig.body(at(1.f, 0.5f, 0.f), Vec3{1.f, 1.f, 1.f}, false);
+    REQUIRE_FALSE(light.set_mass(10.0));
+    weld(rig.game, heavy.id(), light.id());
+    rig.play();
+    rig.engine_steps(2);
+    REQUIRE(near(rig.physics.body_mass(heavy.id()), 110.f, 0.5f));
+    heavy.set_massless(true);
+    rig.engine_steps(2);
+    REQUIRE(rig.game.assemblies().root_of(rig.game, heavy.id()) == light.id());
+    REQUIRE(near(rig.physics.body_mass(light.id()), 10.f, 0.5f));
+    // And back: it roots again, with its Mass.
+    heavy.set_massless(false);
+    rig.engine_steps(2);
+    REQUIRE(rig.game.assemblies().root_of(rig.game, light.id()) == heavy.id());
+    REQUIRE(near(rig.physics.body_mass(light.id()), 110.f, 0.5f));
+}
+
+TEST_CASE("AP35 Massless starts false, saves only when on, and comes back at Stop", "[assembly][massless]") {
+    PhysicsRig rig;
+    REQUIRE(engine_core::lua_class_find("PhysicsBase", "Massless") != nullptr);
+    PhysicsObject& box = rig.body(at(0.f, 1.f, 0.f), Vec3{1.f, 1.f, 1.f}, false);
+    REQUIRE_FALSE(box.massless());
+    engine_core::PropertyBag saved;
+    box.save_properties(saved);
+    REQUIRE(engine_core::bag_find(saved, "Massless") == nullptr);
+    box.set_massless(true);
+    saved.clear();
+    box.save_properties(saved);
+    REQUIRE(engine_core::bag_find(saved, "Massless") != nullptr);
+    box.set_massless(false);
+    rig.play();
+    box.set_massless(true);
+    rig.game.stop_simulation();
+    REQUIRE_FALSE(box.massless());
 }

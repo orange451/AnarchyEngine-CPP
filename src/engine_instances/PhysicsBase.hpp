@@ -34,6 +34,11 @@ namespace engine_core {
 // CollisionGroup   string    "Default". Which PhysicsService collision group
 //                            it is in; an unregistered name behaves as Default.
 // Mass             number    50. Below kMinMass, as 0 is, is taken as kMinMass.
+// Massless         boolean   false. True: welded into an assembly it does not
+//                            root, it weighs nothing there, and it ranks as
+//                            massless when the root is chosen. An assembly's
+//                            root always weighs its Mass, so one of Massless
+//                            bodies alone still falls.
 // LinearDamping    number    0, not below 0.
 //
 // Each is a saved registry property, so DataModel saves, loads, undoes, and
@@ -68,6 +73,10 @@ public:
     bool can_collide() const { return can_collide_; }
     const std::string& collision_group() const { return collision_group_; }
     double mass() const { return mass_; }
+    bool massless() const { return massless_; }
+    // Whether, in an assembly it does not root, it weighs nothing and ranks as
+    // massless for the root: Massless. A disabled PlayerController does too.
+    virtual bool rides_massless() const { return massless_; }
     double linear_damping() const { return linear_damping_; }
 
     // The GameObject the body moves, or 0: its parent, when that is a
@@ -84,6 +93,7 @@ public:
     std::optional<std::string> set_can_collide(bool can_collide);
     std::optional<std::string> set_collision_group(const std::string& group);
     std::optional<std::string> set_mass(double mass);
+    void set_massless(bool massless);
     std::optional<std::string> set_linear_damping(double damping);
 
     // The physics world's side. take_dirty returns what writes changed since
@@ -118,6 +128,7 @@ private:
     bool can_collide_ = true;
     std::string collision_group_ = "Default";
     double mass_ = kDefaultMass;
+    bool massless_ = false;
     double linear_damping_ = 0.0;
     std::uint32_t dirty_ = kDirtyAll;
 };

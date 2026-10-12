@@ -2768,9 +2768,14 @@ struct PhysicsWorld::Impl {
             }
             const auto found = bodies.find(member.node);
             if (found != bodies.end() && found->second.compound == assembly.reuse) {
-                // Staying: its shapes are where they were.
-                found->second.compound = assembly.stamp;
-                found->second.compound_root = assembly.root;
+                // Staying: its shapes are where they were. A new root changes
+                // which members ride massless, so their densities are set again.
+                Body& record = found->second;
+                record.compound = assembly.stamp;
+                if (record.compound_root != assembly.root) {
+                    record.compound_root = assembly.root;
+                    set_densities(*object, record);
+                }
                 continue;
             }
             if (found != bodies.end()) {
@@ -2833,6 +2838,25 @@ struct PhysicsWorld::Impl {
                 b3Body_SetAwake(compound.body, true);
             }
             compound.anchored = assembly.anchored;
+        }
+        if (compound.root != assembly.root) {
+            // A new root (one made Massless, or weighing more now): which
+            // members ride massless changes, so their densities are set again.
+            compound.root = assembly.root;
+            b3Body_SetUserData(compound.body, user_data(assembly.root));
+            for (std::uint32_t i = assembly.first; i < assembly.first + assembly.count; ++i) {
+                const auto found = bodies.find(members[i].node);
+                const auto* object = dynamic_cast<const PhysicsBase*>(game.instance(members[i].node));
+                if (found == bodies.end() || found->second.compound != assembly.stamp || object == nullptr) {
+                    continue;
+                }
+                found->second.compound_root = assembly.root;
+                set_densities(*object, found->second);
+            }
+            b3Body_ApplyMassFromShapes(compound.body);
+            if (!compound.anchored) {
+                b3Body_SetAwake(compound.body, true);
+            }
         }
         for (std::uint32_t i = assembly.first; i < assembly.first + assembly.count; ++i) {
             const Assemblies::PlayMember& member = members[i];
@@ -3036,9 +3060,7 @@ struct PhysicsWorld::Impl {
             }
         }
         if ((dirty & PhysicsObject::kDirtyMass) != 0) {
-            for (const b3ShapeId shape : record.shapes) {
-                b3Shape_SetDensity(shape, shape_density(object, record), false);
-            }
+            set_densities(object, record);
             b3Body_ApplyMassFromShapes(record.body);
         }
     }
@@ -3704,7 +3726,7 @@ struct PhysicsWorld::Impl {
                 hulls.push_back(hull);
             }
         }
-        def.density = density(brush, record.volume);
+        def.density = shape_density(brush, record);
         for (b3HullData* hull : hulls) {
             add_shape(record, create_hull(record, def, hull));
             b3DestroyHull(hull);
@@ -3785,7 +3807,7 @@ struct PhysicsWorld::Impl {
         case PhysicsObject::Shape::Sphere: {
             const b3Sphere sphere{placed_point(record, center), size.x * 0.5f};
             record.volume = b3ComputeSphereMass(&sphere, 1.f).mass;
-            def.density = density(object, record.volume);
+            def.density = shape_density(object, record);
             add_shape(record, b3CreateSphereShape(record.body, &def, &sphere));
             break;
         }
@@ -3795,7 +3817,7 @@ struct PhysicsWorld::Impl {
             const b3Capsule capsule{placed_point(record, b3Vec3{center.x, center.y - half, center.z}),
                                     placed_point(record, b3Vec3{center.x, center.y + half, center.z}), radius};
             record.volume = b3ComputeCapsuleMass(&capsule, 1.f).mass;
-            def.density = density(object, record.volume);
+            def.density = shape_density(object, record);
             add_shape(record, b3CreateCapsuleShape(record.body, &def, &capsule));
             break;
         }
@@ -3807,7 +3829,7 @@ struct PhysicsWorld::Impl {
                     record.mesh = mesh;
                     const Vec3 bounds = scaled(bounds_size(mesh_points), record.scale);
                     record.volume = bounds.x * bounds.y * bounds.z;
-                    def.density = density(object, record.volume);
+                    def.density = shape_density(object, record);
                     add_shape(record, b3CreateMeshShape(record.body, &def, mesh, b3Vec3{1.f, 1.f, 1.f}));
                 }
                 break;
@@ -3819,7 +3841,7 @@ struct PhysicsWorld::Impl {
         case PhysicsObject::Shape::Hull:
             if (b3HullData* hull = make_hull(game, object, record.scale, record.center)) {
                 record.volume = b3ComputeHullMass(hull, 1.f).mass;
-                def.density = density(object, record.volume);
+                def.density = shape_density(object, record);
                 // Box3D copies the hull into the shape.
                 add_shape(record, create_hull(record, def, hull));
                 b3DestroyHull(hull);
@@ -3848,7 +3870,7 @@ struct PhysicsWorld::Impl {
                 }
             }
             record.volume = volume;
-            def.density = density(object, record.volume);
+            def.density = shape_density(object, record);
             for (b3HullData* hull : layers) {
                 if (hull != nullptr) {
                     add_shape(record, create_hull(record, def, hull));
@@ -3862,7 +3884,7 @@ struct PhysicsWorld::Impl {
             primitive_points(object.shape(), size, record.center, points);
             if (b3HullData* hull = build_hull(points)) {
                 record.volume = b3ComputeHullMass(hull, 1.f).mass;
-                def.density = density(object, record.volume);
+                def.density = shape_density(object, record);
                 add_shape(record, create_hull(record, def, hull));
                 b3DestroyHull(hull);
             }
@@ -3873,7 +3895,7 @@ struct PhysicsWorld::Impl {
         if (record.shapes.empty()) {
             const b3BoxHull box = b3MakeOffsetBoxHull(size.x * 0.5f, size.y * 0.5f, size.z * 0.5f, center);
             record.volume = size.x * size.y * size.z;
-            def.density = density(object, record.volume);
+            def.density = shape_density(object, record);
             add_shape(record, create_hull(record, def, &box.base));
         }
         b3Body_ApplyMassFromShapes(record.body);
@@ -3883,15 +3905,21 @@ struct PhysicsWorld::Impl {
         return static_cast<float>(object.mass()) / std::max(volume, 1e-9f);
     }
 
-    // A shape's density on its body: density(), but a disabled PlayerController
-    // welded into an assembly it does not root weighs nothing there, so a
-    // driver does not change the car. Alone, or the root, it keeps its Mass:
-    // a dynamic body with none does not fall.
+    // A shape's density on its body: density(), but a body that rides
+    // massless (Massless, or a disabled PlayerController) welded into an
+    // assembly it does not root weighs nothing there, so trim or a driver does
+    // not change the car. Alone, or the root, it keeps its Mass: a dynamic
+    // body with none does not fall.
     static float shape_density(const PhysicsBase& object, const Body& record) {
-        const bool rider = record.compound != 0 && record.compound_root != object.id() &&
-                           dynamic_cast<const PlayerController*>(&object) != nullptr &&
-                           enabled_controller(&object) == nullptr;
+        const bool rider = record.compound != 0 && record.compound_root != object.id() && object.rides_massless();
         return rider ? 0.f : density(object, record.volume);
+    }
+
+    // Each of the record's shapes at shape_density. The caller applies the body's mass.
+    static void set_densities(const PhysicsBase& object, const Body& record) {
+        for (const b3ShapeId shape : record.shapes) {
+            b3Shape_SetDensity(shape, shape_density(object, record), false);
+        }
     }
 
     // The Mesh's points into points, at their own size times scale
@@ -3992,7 +4020,7 @@ struct PhysicsWorld::Impl {
         for (b3HullData* hull : hulls) {
             record.volume += b3ComputeHullMass(hull, 1.f).mass;
         }
-        def.density = density(object, record.volume);
+        def.density = shape_density(object, record);
         for (b3HullData* hull : hulls) {
             // Box3D copies the hull into the shape.
             add_shape(record, create_hull(record, def, hull));
@@ -4064,9 +4092,7 @@ struct PhysicsWorld::Impl {
                 }
             }
             if ((dirty & PhysicsObject::kDirtyMass) != 0) {
-                for (const b3ShapeId shape : record.shapes) {
-                    b3Shape_SetDensity(shape, shape_density(object, record), false);
-                }
+                set_densities(object, record);
                 b3Body_ApplyMassFromShapes(record.body);
             }
         }

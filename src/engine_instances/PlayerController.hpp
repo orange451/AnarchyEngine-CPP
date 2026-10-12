@@ -62,6 +62,8 @@ public:
     bool on_ground() const { return on_ground_ && simulation_running(); }
     bool is_sliding() const { return sliding_ && simulation_running(); }
     bool enabled() const { return enabled_; }
+    // Disabled, it rides as Massless does: a driver does not change the car.
+    bool rides_massless() const override { return massless() || !enabled_; }
 
     // How far the cylinder's bottom stands above the feet: StepHeight, capped
     // so the cylinder is at least kMinSize tall.

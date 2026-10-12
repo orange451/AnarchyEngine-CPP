@@ -543,12 +543,9 @@ bool Assemblies::root_before(const DataModel& game, InstanceId a, InstanceId b) 
     if ((pa != nullptr) != (pb != nullptr)) {
         return pa != nullptr;
     }
-    // A disabled PlayerController rides with no mass (PhysicsWorld): none here either.
-    const auto ranked_mass = [](const PhysicsBase* body) {
-        return dynamic_cast<const PlayerController*>(body) != nullptr && enabled_controller(body) == nullptr
-                   ? 0.0
-                   : body->mass();
-    };
+    // A body that rides massless (Massless, or a disabled PlayerController)
+    // weighs nothing where it does not root (PhysicsWorld): none here either.
+    const auto ranked_mass = [](const PhysicsBase* body) { return body->rides_massless() ? 0.0 : body->mass(); };
     if (pa != nullptr && ranked_mass(pa) != ranked_mass(pb)) {
         return ranked_mass(pa) > ranked_mass(pb);
     }

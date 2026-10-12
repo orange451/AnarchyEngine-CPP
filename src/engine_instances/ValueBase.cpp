@@ -40,6 +40,12 @@ void require_thread(const DataModel& object) {
 
 }  // namespace
 
+const char* IntValue::class_name() const { return "IntValue"; }
+const char* NumberValue::class_name() const { return "NumberValue"; }
+const char* StringValue::class_name() const { return "StringValue"; }
+const char* BoolValue::class_name() const { return "BoolValue"; }
+const char* ObjectValue::class_name() const { return "ObjectValue"; }
+
 std::optional<std::string> IntValue::set_value(double value) {
     require_thread(*this);
     if (!std::isfinite(value)) {

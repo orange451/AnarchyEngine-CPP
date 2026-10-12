@@ -446,6 +446,15 @@ void testInsertInstance() {
     expect(engine_core::lua_create_instance(game, "DataModel") == nullptr, "DataModel is not inserted");
 }
 
+// This program never calls a value's setter, so ValueBase.cpp, which registers
+// Value, is linked only if the classes keep it linked, as the studio needs.
+void testValueClassesRegisterValue() {
+    for (const char* name : {"IntValue", "NumberValue", "StringValue", "BoolValue", "ObjectValue"}) {
+        const engine_core::LuaField* value = engine_core::lua_class_find(name, "Value");
+        expect(value != nullptr && value->saved && value->writable, (std::string(name) + " has a saved, writable Value").c_str());
+    }
+}
+
 }  // namespace
 
 int RunLuauHighlightTests();
@@ -480,6 +489,7 @@ int main() {
         testMatrix4();
         testContextActions();
         testInsertInstance();
+        testValueClassesRegisterValue();
         gFailures += RunLuauHighlightTests();
         gFailures += RunCssHighlightTests();
         gFailures += RunLuauCompleteTests();

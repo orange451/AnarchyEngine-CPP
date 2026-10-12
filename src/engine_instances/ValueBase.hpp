@@ -25,6 +25,8 @@ namespace engine_core {
 //
 // Value is a saved registry property (lua_saved_property), so DataModel saves,
 // loads, undoes, and restores it at Stop, and a change fires Changed.
+// Each class_name is defined in ValueBase.cpp so that file, and its Lua
+// registration, stays linked: nothing else there need be called.
 class ValueBase : public DataModel {
 public:
     ValueBase(DataModel::ChildTag tag, DataModel::State& state, InstanceId id) : DataModel(tag, state, id) {}
@@ -36,7 +38,7 @@ public:
     static constexpr std::int64_t kMaxInt = 9007199254740992;
 
     IntValue(DataModel::ChildTag tag, DataModel::State& state, InstanceId id) : ValueBase(tag, state, id) {}
-    const char* class_name() const override { return "IntValue"; }
+    const char* class_name() const override;
 
     std::int64_t value() const { return value_; }
     // SimulationThread. Returns why it refused the value, changing nothing.
@@ -52,7 +54,7 @@ private:
 class NumberValue final : public ValueBase {
 public:
     NumberValue(DataModel::ChildTag tag, DataModel::State& state, InstanceId id) : ValueBase(tag, state, id) {}
-    const char* class_name() const override { return "NumberValue"; }
+    const char* class_name() const override;
 
     double value() const { return value_; }
     // SimulationThread. Returns why it refused the value, changing nothing.
@@ -68,7 +70,7 @@ private:
 class StringValue final : public ValueBase {
 public:
     StringValue(DataModel::ChildTag tag, DataModel::State& state, InstanceId id) : ValueBase(tag, state, id) {}
-    const char* class_name() const override { return "StringValue"; }
+    const char* class_name() const override;
 
     const std::string& value() const { return value_; }
     // SimulationThread.
@@ -84,7 +86,7 @@ private:
 class BoolValue final : public ValueBase {
 public:
     BoolValue(DataModel::ChildTag tag, DataModel::State& state, InstanceId id) : ValueBase(tag, state, id) {}
-    const char* class_name() const override { return "BoolValue"; }
+    const char* class_name() const override;
 
     bool value() const { return value_; }
     // SimulationThread.
@@ -100,7 +102,7 @@ private:
 class ObjectValue final : public ValueBase {
 public:
     ObjectValue(DataModel::ChildTag tag, DataModel::State& state, InstanceId id) : ValueBase(tag, state, id) {}
-    const char* class_name() const override { return "ObjectValue"; }
+    const char* class_name() const override;
 
     // The instance it names, or nil.
     LuaSlot value() const;

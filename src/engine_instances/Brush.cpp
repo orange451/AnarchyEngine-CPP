@@ -404,7 +404,8 @@ ANARCHY_LUA_REGISTER(register_brush_lua) {
         lua_slider(lua_saved_property("AngularDamping", "number", read_number<Brush, &Brush::angular_damping>,
                                       write_number<Brush, &Brush::set_angular_damping>, "0"),
                    0.0, 1.0),
-        lua_group("Appearance"),
+        // Before the Transform, Physics, and Motion PhysicsBase gives it: a Brush is level geometry first.
+        lua_lead_group("Appearance"),
         lua_saved_property("Color", "Color3", read_color, write_color, "[1,1,1]"),
         lua_slider(lua_saved_property("Transparency", "number", read_number<Brush, &Brush::transparency>,
                                       write_number<Brush, &Brush::set_transparency>, "0"),

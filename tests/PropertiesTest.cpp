@@ -1828,6 +1828,15 @@ void TestClassGroups() {
 
     const std::vector<std::string> brush = GroupedRows(rig, rig.add<engine_core::Brush>("Block"));
     Expect(Has(brush, "Physics:Anchored"), "Brush's Anchored, registered again, stays in Physics");
+    std::vector<std::string> brush_groups;
+    for (const std::string& row : brush) {
+        const std::string group = row.substr(0, row.find(':'));
+        if (brush_groups.empty() || brush_groups.back() != group) {
+            brush_groups.push_back(group);
+        }
+    }
+    Expect(brush_groups == std::vector<std::string>{"Appearance", "Transform", "Physics", "Motion", "Data"},
+           "a Brush leads with Appearance, before the groups PhysicsBase gives it");
     Expect(!Has(brush, "Behavior:GameObject"), "a Brush has no GameObject row");
     const std::vector<std::string> player = GroupedRows(rig, rig.add<engine_core::PlayerController>("Player"));
     Expect(!Has(player, "Behavior:GameObject"), "a PlayerController has no GameObject row");

@@ -111,6 +111,9 @@ struct LuaField {
     const char* group = nullptr;
     // A lua_group marker. register_lua_class reads it and does not keep it.
     bool group_marker = false;
+    // The field's group comes first in Properties, before the groups a base
+    // class names: set by a lua_lead_group marker above it.
+    bool group_leads = false;
     // A service's own signal, found by tag through ScriptRuntime::host_signal
     // (HostSignal); its handlers get whatever values the event carries.
     bool host_signal = false;
@@ -214,6 +217,14 @@ inline LuaField lua_choices(LuaField field, void (*choices)(DataModel& world, st
 // Its default_json is "null", for "".
 inline LuaField lua_json_text(LuaField field) {
     field.json_text = true;
+    return field;
+}
+
+// As lua_group, but its group comes first in Properties, before the groups
+// the class's bases name, as a Brush leads with Appearance.
+inline LuaField lua_lead_group(const char* name) {
+    LuaField field = lua_group(name);
+    field.group_leads = true;
     return field;
 }
 

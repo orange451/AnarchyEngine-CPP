@@ -166,13 +166,16 @@ void register_lua_class(const char* class_name, const char* base, const LuaField
         changed = true;
     }
     const char* group = nullptr;
+    bool leads = false;
     for (int index = 0; fields != nullptr && index < count; ++index) {
         if (fields[index].group_marker) {
             group = fields[index].name;
+            leads = fields[index].group_leads;
             continue;
         }
         LuaField field = fields[index];
         field.group = group;
+        field.group_leads = leads;
         changed = append_unique(record->fields, field) || changed;
         if (!field.method && field.name != nullptr) {
             lua_property_id(field.name);

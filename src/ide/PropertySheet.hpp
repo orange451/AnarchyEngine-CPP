@@ -68,6 +68,8 @@ struct PropertyRow {
     PropertyKind kind = PropertyKind::String;
     // "Instance", the field's registered group (lua_group), or "Data".
     std::string group = "Data";
+    // The group comes before the others (lua_lead_group).
+    bool group_leads = false;
     double slider_min = 0;
     double slider_max = 0;
     const engine_core::EnumType* enum_type = nullptr;

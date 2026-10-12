@@ -377,6 +377,7 @@ PropertySheet read_sheet(DataModel& world, const std::vector<InstanceId>& select
         row.type_name = field.type_name;
         row.kind = kind;
         row.group = instance_rank(row.name) >= 0 ? "Instance" : field.group != nullptr ? field.group : "Data";
+        row.group_leads = row.group != "Instance" && field.group_leads;
         row.writable = field.writable && field.write != nullptr && kind != PropertyKind::ReadOnlyText;
         if (kind == PropertyKind::Number && field.slider()) {
             row.slider_min = field.slider_min;
@@ -432,13 +433,16 @@ PropertySheet read_sheet(DataModel& world, const std::vector<InstanceId>& select
         sheet.rows.push_back(std::move(row));
     }
 
-    // Instance first, then groups in the order the member list first names
-    // them, then Data. Rows in a group keep member order, base fields first.
+    // Instance first, then the groups a class leads with (lua_lead_group),
+    // then the rest in the order the member list first names them, then Data.
+    // Rows in a group keep member order, base fields first.
     std::vector<std::string> order;
-    for (const PropertyRow& row : sheet.rows) {
-        if (row.group != "Instance" && row.group != "Data" &&
-            std::find(order.begin(), order.end(), row.group) == order.end()) {
-            order.push_back(row.group);
+    for (const bool leading : {true, false}) {
+        for (const PropertyRow& row : sheet.rows) {
+            if (row.group_leads == leading && row.group != "Instance" && row.group != "Data" &&
+                std::find(order.begin(), order.end(), row.group) == order.end()) {
+                order.push_back(row.group);
+            }
         }
     }
     const auto rank = [&order](const PropertyRow& row) -> std::size_t {

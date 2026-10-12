@@ -1,3 +1,38 @@
+diff --git a/include/box3d/box3d.h b/include/box3d/box3d.h
+index a48a15d..1dcf9ca 100644
+--- a/include/box3d/box3d.h
++++ b/include/box3d/box3d.h
+@@ -840,6 +840,10 @@ B3_API b3ShapeId b3CreateSphereShape( b3BodyId bodyId, const b3ShapeDef* def, co
+ /// @return the shape id for accessing the shape
+ B3_API b3ShapeId b3CreateCapsuleShape( b3BodyId bodyId, const b3ShapeDef* def, const b3Capsule* capsule );
+ 
++/// Create a cylinder shape and attach it to a body. Its radius and its length must each be at least
++/// B3_LINEAR_SLOP. Contacts are computed immediately. Anarchy Engine.
++B3_API b3ShapeId b3CreateCylinderShape( b3BodyId bodyId, const b3ShapeDef* def, const b3Cylinder* cylinder );
++
+ /// Create a convex hull shape and attach it to a body. The shape definition is fully cloned. Contacts are not created
+ /// until the next time step.
+ /// @return the shape id for accessing the shape
+@@ -988,6 +992,9 @@ B3_API b3Sphere b3Shape_GetSphere( b3ShapeId shapeId );
+ /// Get a copy of the shape's capsule. Asserts the type is correct.
+ B3_API b3Capsule b3Shape_GetCapsule( b3ShapeId shapeId );
+ 
++/// Get a copy of the shape's cylinder. Asserts the type is correct. Anarchy Engine.
++B3_API b3Cylinder b3Shape_GetCylinder( b3ShapeId shapeId );
++
+ /// Get the shape's convex hull. Asserts the type is correct.
+ B3_API const b3HullData* b3Shape_GetHull( b3ShapeId shapeId );
+ 
+@@ -1007,6 +1014,9 @@ B3_API void b3Shape_SetSphere( b3ShapeId shapeId, const b3Sphere* sphere );
+ /// @see b3Body_ApplyMassFromShapes
+ B3_API void b3Shape_SetCapsule( b3ShapeId shapeId, const b3Capsule* capsule );
+ 
++/// Allows you to change a shape to be a cylinder or update the current cylinder. Anarchy Engine.
++B3_API void b3Shape_SetCylinder( b3ShapeId shapeId, const b3Cylinder* cylinder );
++
+ /// Allows you to change a shape to be a hull or update the current hull.
+ /// This does not modify the mass properties.
+ /// @see b3Body_ApplyMassFromShapes
 diff --git a/include/box3d/collision.h b/include/box3d/collision.h
 index cb99349..5777d2e 100644
 --- a/include/box3d/collision.h
@@ -27,10 +62,20 @@ index cb99349..5777d2e 100644
  B3_API void b3CollideSpheres( b3LocalManifold* manifold, int capacity, const b3Sphere* sphereA, const b3Sphere* sphereB,
  							  b3Transform transformBtoA );
 diff --git a/include/box3d/types.h b/include/box3d/types.h
-index fb88971..dbb143d 100644
+index fb88971..66bb3ca 100644
 --- a/include/box3d/types.h
 +++ b/include/box3d/types.h
-@@ -1979,6 +1979,27 @@ typedef struct b3Capsule
+@@ -465,6 +465,9 @@ typedef enum b3ShapeType
+ 	/// A sphere with an offset
+ 	b3_sphereShape,
+ 
++	/// A solid cylinder (Anarchy Engine)
++	b3_cylinderShape,
++
+ 	/// The number of shape types
+ 	b3_shapeTypeCount
+ } b3ShapeType;
+@@ -1979,6 +1982,27 @@ typedef struct b3Capsule
  
  /**@}*/ // capsule
  
@@ -58,3 +103,492 @@ index fb88971..dbb143d 100644
  /**
   * @defgroup hull Convex Hull
   * @brief Convex hull primitive
+diff --git a/src/body.c b/src/body.c
+index 4b96393..9113c68 100644
+--- a/src/body.c
++++ b/src/body.c
+@@ -573,7 +573,7 @@ float b3Body_GetClosestPoint( b3BodyId bodyId, b3Vec3* result, b3Vec3 target )
+ 		shapeId = shape->nextShapeId;
+ 
+ 		b3ShapeType type = shape->type;
+-		if ( type != b3_sphereShape && type != b3_capsuleShape && type != b3_hullShape )
++		if ( type != b3_sphereShape && type != b3_capsuleShape && type != b3_hullShape && type != b3_cylinderShape )
+ 		{
+ 			continue;
+ 		}
+@@ -788,7 +788,7 @@ int b3Body_CollideMover( b3BodyId bodyId, b3BodyPlaneResult* bodyPlanes, int pla
+ 		}
+ 
+ 		b3ShapeType type = shape->type;
+-		if ( type != b3_sphereShape && type != b3_capsuleShape && type != b3_hullShape )
++		if ( type != b3_sphereShape && type != b3_capsuleShape && type != b3_hullShape && type != b3_cylinderShape )
+ 		{
+ 			continue;
+ 		}
+@@ -863,7 +863,7 @@ b3BodyTOIResult b3Body_TimeOfImpactMover( b3BodyId bodyId, b3Pos origin, const b
+ 		}
+ 
+ 		b3ShapeType type = shape->type;
+-		if ( type != b3_sphereShape && type != b3_capsuleShape && type != b3_hullShape )
++		if ( type != b3_sphereShape && type != b3_capsuleShape && type != b3_hullShape && type != b3_cylinderShape )
+ 		{
+ 			continue;
+ 		}
+diff --git a/src/physics_world.c b/src/physics_world.c
+index 8dbc2f7..5484eb4 100644
+--- a/src/physics_world.c
++++ b/src/physics_world.c
+@@ -1328,6 +1328,12 @@ static bool DrawQueryCallback( int proxyId, uint64_t userData, void* context )
+ 					debugShape.capsule = &shape->capsule;
+ 					shape->userShape = world->createDebugShape( &debugShape, world->userDebugShapeContext );
+ 					break;
++				case b3_cylinderShape:
++					// A debug renderer draws its stand-in hull.
++					debugShape.type = b3_hullShape;
++					debugShape.hull = shape->cylinderHull;
++					shape->userShape = world->createDebugShape( &debugShape, world->userDebugShapeContext );
++					break;
+ 				case b3_compoundShape:
+ 					debugShape.compound = shape->compound;
+ 					shape->userShape = world->createDebugShape( &debugShape, world->userDebugShapeContext );
+diff --git a/src/recording.c b/src/recording.c
+index d669813..bc9c4bb 100644
+--- a/src/recording.c
++++ b/src/recording.c
+@@ -253,6 +253,11 @@ void b3RecW_CAPSULE( b3RecBuffer* buf, b3Capsule v )
+ 	b3RecBufAppend( buf, &v, (int)sizeof( b3Capsule ) );
+ }
+ 
++void b3RecW_CYLINDER( b3RecBuffer* buf, b3Cylinder v )
++{
++	b3RecBufAppend( buf, &v, (int)sizeof( b3Cylinder ) );
++}
++
+ void b3RecW_GEOMID( b3RecBuffer* buf, uint32_t v )
+ {
+ 	b3RecW_U32( buf, v );
+diff --git a/src/recording.h b/src/recording.h
+index bcc6608..e281a86 100644
+--- a/src/recording.h
++++ b/src/recording.h
+@@ -171,6 +171,7 @@ typedef b3Matrix3 b3RecCType_MATRIX3;
+ typedef b3AABB b3RecCType_AABB;
+ typedef b3Sphere b3RecCType_SPHERE;
+ typedef b3Capsule b3RecCType_CAPSULE;
++typedef b3Cylinder b3RecCType_CYLINDER;
+ typedef b3QueryFilter b3RecCType_QUERYFILTER;
+ typedef b3ShapeProxy b3RecCType_SHAPEPROXY;
+ // Geometry reference: a plain u32 id into the trailing registry
+@@ -249,6 +250,7 @@ void b3RecW_SHAPEID( b3RecBuffer* buf, b3ShapeId v );
+ void b3RecW_JOINTID( b3RecBuffer* buf, b3JointId v );
+ void b3RecW_SPHERE( b3RecBuffer* buf, b3Sphere v );
+ void b3RecW_CAPSULE( b3RecBuffer* buf, b3Capsule v );
++void b3RecW_CYLINDER( b3RecBuffer* buf, b3Cylinder v );
+ void b3RecW_GEOMID( b3RecBuffer* buf, uint32_t v );
+ void b3RecW_FILTER( b3RecBuffer* buf, b3Filter v );
+ void b3RecW_MATERIAL( b3RecBuffer* buf, b3SurfaceMaterial v );
+diff --git a/src/recording_ops.inl b/src/recording_ops.inl
+index d2c992b..449886f 100644
+--- a/src/recording_ops.inl
++++ b/src/recording_ops.inl
+@@ -236,3 +236,5 @@ B3_REC_OP( 0xF1, StateHash, RET_NONE, ARG( WORLDID, world ) ARG( U64, hash ) )
+ 
+ // Accumulated world bounds over the whole recording, written once at stop.
+ B3_REC_OP( 0xF2, RecordingBounds, RET_NONE, ARG( AABB, bounds ) )
++B3_REC_OP( 0xF3, CreateCylinderShape, RET_SHAPEID, ARG( BODYID, body ) ARG( SHAPEDEF, def ) ARG( CYLINDER, cylinder ) )
++B3_REC_OP( 0xF4, ShapeSetCylinder, RET_NONE, ARG( SHAPEID, shape ) ARG( CYLINDER, cylinder ) )
+diff --git a/src/recording_replay.c b/src/recording_replay.c
+index 9c0247c..9e00d61 100644
+--- a/src/recording_replay.c
++++ b/src/recording_replay.c
+@@ -328,6 +328,13 @@ b3Capsule b3RecR_CAPSULE( b3RecReader* rdr )
+ 	return c;
+ }
+ 
++b3Cylinder b3RecR_CYLINDER( b3RecReader* rdr )
++{
++	b3Cylinder c;
++	b3RecRdrBlob( rdr, &c, (int)sizeof( c ) );
++	return c;
++}
++
+ uint32_t b3RecR_GEOMID( b3RecReader* rdr )
+ {
+ 	return b3RecR_U32( rdr );
+@@ -1007,6 +1014,14 @@ static void b3RecDispatch_CreateCapsuleShape( const b3RecArgs_CreateCapsuleShape
+ 	b3RecCheckShapeId( rdr, gotId, recId );
+ }
+ 
++static void b3RecDispatch_CreateCylinderShape( const b3RecArgs_CreateCylinderShape* a, b3RecReader* rdr )
++{
++	b3ShapeId recId = b3RecR_SHAPEID( rdr );
++	b3BodyId bodyId = b3RecMakeBodyId( rdr, a->body );
++	b3ShapeId gotId = b3CreateCylinderShape( bodyId, &a->def, &a->cylinder );
++	b3RecCheckShapeId( rdr, gotId, recId );
++}
++
+ static void b3RecDispatch_CreateHullShape( const b3RecArgs_CreateHullShape* a, b3RecReader* rdr )
+ {
+ 	b3ShapeId recId = b3RecR_SHAPEID( rdr );
+@@ -1169,6 +1184,11 @@ static void b3RecDispatch_ShapeSetCapsule( const b3RecArgs_ShapeSetCapsule* a, b
+ 	b3Shape_SetCapsule( b3RecMakeShapeId( rdr, a->shape ), &a->capsule );
+ }
+ 
++static void b3RecDispatch_ShapeSetCylinder( const b3RecArgs_ShapeSetCylinder* a, b3RecReader* rdr )
++{
++	b3Shape_SetCylinder( b3RecMakeShapeId( rdr, a->shape ), &a->cylinder );
++}
++
+ static void b3RecDispatch_ShapeSetHull( const b3RecArgs_ShapeSetHull* a, b3RecReader* rdr )
+ {
+ 	uint32_t id = a->geometryId;
+diff --git a/src/sensor.c b/src/sensor.c
+index 056708a..4816f88 100644
+--- a/src/sensor.c
++++ b/src/sensor.c
+@@ -52,6 +52,9 @@ static bool b3OverlapSensor( b3Shape* sensorShape, b3Transform sensorTransform,
+ 		case b3_capsuleShape:
+ 			return b3OverlapCapsule( &sensorShape->capsule, b3Transform_identity, &localProxy );
+ 
++		case b3_cylinderShape:
++			return b3OverlapHull( sensorShape->cylinderHull, b3Transform_identity, &localProxy );
++
+ 		case b3_compoundShape:
+ 			return b3OverlapCompound( sensorShape->compound, b3Transform_identity, &localProxy );
+ 
+diff --git a/src/shape.c b/src/shape.c
+index 951e2c3..88c4d5a 100644
+--- a/src/shape.c
++++ b/src/shape.c
+@@ -42,6 +42,15 @@ static float b3ComputeShapeMargin( b3Shape* shape )
+ 		}
+ 		break;
+ 
++		case b3_cylinderShape:
++		{
++			// The middle to a rim.
++			float halfLength = 0.5f * b3Distance( shape->cylinder.center2, shape->cylinder.center1 );
++			float radius = shape->cylinder.radius;
++			margin = sqrtf( halfLength * halfLength + radius * radius );
++		}
++		break;
++
+ 		case b3_hullShape:
+ 		{
+ 			const b3HullData* hull = shape->hull;
+@@ -115,6 +124,20 @@ static b3Shape* b3CreateShapeInternal( b3World* world, b3Body* body, b3WorldTran
+ 			shape->capsule = *(b3Capsule*)geometry;
+ 			break;
+ 
++		case b3_cylinderShape:
++		{
++			shape->cylinder = *(b3Cylinder*)geometry;
++			b3HullData* standIn = b3MakeCylinderHull( &shape->cylinder );
++			if ( standIn == NULL )
++			{
++				b3FreeId( &world->shapeIdPool, shapeId );
++				shape->id = B3_NULL_INDEX;
++				return NULL;
++			}
++			shape->cylinderHull = b3AddOwnedHullToDatabase( world, standIn );
++		}
++		break;
++
+ 		case b3_compoundShape:
+ 			// Compounds must be a static and not a sensor
+ 			B3_ASSERT( body->type == b3_staticBody );
+@@ -347,6 +370,22 @@ b3ShapeId b3CreateCapsuleShape( b3BodyId bodyId, const b3ShapeDef* def, const b3
+ 	return shapeId;
+ }
+ 
++b3ShapeId b3CreateCylinderShape( b3BodyId bodyId, const b3ShapeDef* def, const b3Cylinder* cylinder )
++{
++	B3_ASSERT( cylinder->radius >= B3_LINEAR_SLOP );
++	B3_ASSERT( b3Distance( cylinder->center1, cylinder->center2 ) >= B3_LINEAR_SLOP );
++	b3ShapeId shapeId = b3CreateShape( bodyId, def, cylinder, b3_cylinderShape, b3Transform_identity, b3Vec3_one, false );
++	if ( shapeId.index1 != 0 )
++	{
++		b3World* world = b3GetUnlockedWorld( bodyId.world0 );
++		if ( world != NULL )
++		{
++			B3_REC_CREATE( world, CreateCylinderShape, shapeId, bodyId, *def, *cylinder );
++		}
++	}
++	return shapeId;
++}
++
+ b3ShapeId b3CreateHullShape( b3BodyId bodyId, const b3ShapeDef* def, const b3HullData* hull )
+ {
+ 	B3_VALIDATE( b3IsValidHull( hull ) );
+@@ -608,6 +647,9 @@ b3AABB b3ComputeShapeAABB( const b3Shape* shape, b3Transform transform )
+ 		case b3_capsuleShape:
+ 			return b3ComputeCapsuleAABB( &shape->capsule, transform );
+ 
++		case b3_cylinderShape:
++			return b3ComputeCylinderAABB( &shape->cylinder, transform );
++
+ 		case b3_compoundShape:
+ 			return b3ComputeCompoundAABB( shape->compound, transform );
+ 
+@@ -663,6 +705,13 @@ b3AABB b3ComputeSweptShapeAABB( const b3Shape* shape, const b3Sweep* sweep, floa
+ 		case b3_capsuleShape:
+ 			return b3ComputeSweptCapsuleAABB( &shape->capsule, xf1, xf2 );
+ 
++		case b3_cylinderShape:
++		{
++			// The stand-in's, grown by how far inside the true surface it lies.
++			b3AABB box = b3ComputeSweptHullAABB( shape->cylinderHull, xf1, xf2 );
++			return b3AABB_Inflate( box, 0.005f * shape->cylinder.radius );
++		}
++
+ 		case b3_hullShape:
+ 			return b3ComputeSweptHullAABB( shape->hull, xf1, xf2 );
+ 
+@@ -681,6 +730,8 @@ b3Vec3 b3GetShapeCentroid( const b3Shape* shape )
+ 	{
+ 		case b3_capsuleShape:
+ 			return b3Lerp( shape->capsule.center1, shape->capsule.center2, 0.5f );
++		case b3_cylinderShape:
++			return b3Lerp( shape->cylinder.center1, shape->cylinder.center2, 0.5f );
+ 		case b3_compoundShape:
+ 		{
+ 			b3AABB aabb = b3ComputeCompoundAABB( shape->compound, b3Transform_identity );
+@@ -714,6 +765,14 @@ float b3GetShapeArea( const b3Shape* shape )
+ 			return 2.0f * b3Length( b3Sub( shape->capsule.center1, shape->capsule.center2 ) ) +
+ 				   2.0f * B3_PI * shape->capsule.radius;
+ 
++		case b3_cylinderShape:
++		{
++			// Its whole surface.
++			float radius = shape->cylinder.radius;
++			float length = b3Distance( shape->cylinder.center1, shape->cylinder.center2 );
++			return 2.0f * B3_PI * radius * ( length + radius );
++		}
++
+ 		case b3_hullShape:
+ 			return shape->hull->surfaceArea;
+ 
+@@ -740,6 +799,18 @@ float b3GetShapeProjectedArea( const b3Shape* shape, b3Vec3 planeNormal )
+ 			return sphereArea + cylinderArea;
+ 		}
+ 
++		case b3_cylinderShape:
++		{
++			// The caps' disc foreshortened, plus the side's rectangle.
++			float radius = shape->cylinder.radius;
++			b3Vec3 axis = b3Sub( shape->cylinder.center2, shape->cylinder.center1 );
++			float length = b3Length( axis );
++			b3Vec3 unit = length > 0.0f ? b3MulSV( 1.0f / length, axis ) : b3Vec3_axisY;
++			float capArea = B3_PI * radius * radius * b3AbsFloat( b3Dot( unit, planeNormal ) );
++			float sideArea = 2.0f * radius * length * b3Length( b3Cross( unit, planeNormal ) );
++			return capArea + sideArea;
++		}
++
+ 		case b3_hullShape:
+ 			return b3ComputeHullProjectedArea( shape->hull, planeNormal );
+ 
+@@ -758,6 +829,9 @@ b3MassData b3ComputeShapeMass( const b3Shape* shape )
+ 		case b3_capsuleShape:
+ 			return b3ComputeCapsuleMass( &shape->capsule, shape->density );
+ 
++		case b3_cylinderShape:
++			return b3ComputeCylinderMass( &shape->cylinder, shape->density );
++
+ 		case b3_hullShape:
+ 			return b3ComputeHullMass( shape->hull, shape->density );
+ 
+@@ -786,6 +860,10 @@ b3ShapeExtent b3ComputeShapeExtent( const b3Shape* shape, b3Vec3 localCenter )
+ 		}
+ 		break;
+ 
++		case b3_cylinderShape:
++			extent = b3ComputeHullExtent( shape->cylinderHull, localCenter );
++			break;
++
+ 		case b3_compoundShape:
+ 		{
+ 			// This is shouldn't be needed but here for completeness
+@@ -843,6 +921,9 @@ b3CastOutput b3RayCastShape( const b3Shape* shape, b3Transform transform, const
+ 		case b3_capsuleShape:
+ 			output = b3RayCastCapsule( &shape->capsule, &localInput );
+ 			break;
++		case b3_cylinderShape:
++			output = b3RayCastCylinder( &shape->cylinder, &localInput );
++			break;
+ 		case b3_compoundShape:
+ 			output = b3RayCastCompound( shape->compound, &localInput );
+ 			break;
+@@ -888,6 +969,10 @@ b3CastOutput b3ShapeCastShape( const b3Shape* shape, b3Transform transform, cons
+ 			output = b3ShapeCastCapsule( &shape->capsule, &localInput );
+ 			break;
+ 
++		case b3_cylinderShape:
++			output = b3ShapeCastHull( shape->cylinderHull, &localInput );
++			break;
++
+ 		case b3_compoundShape:
+ 			output = b3ShapeCastCompound( shape->compound, &localInput );
+ 			break;
+@@ -924,6 +1009,9 @@ bool b3OverlapShape( const b3Shape* shape, b3Transform transform, const b3ShapeP
+ 		case b3_capsuleShape:
+ 			return b3OverlapCapsule( &shape->capsule, transform, proxy );
+ 
++		case b3_cylinderShape:
++			return b3OverlapHull( shape->cylinderHull, transform, proxy );
++
+ 		case b3_compoundShape:
+ 			return b3OverlapCompound( shape->compound, transform, proxy );
+ 
+@@ -965,6 +1053,10 @@ int b3CollideMover( b3PlaneResult* planes, int planeCapacity, const b3Shape* sha
+ 			planeCount = b3CollideMoverAndCapsule( planes, &shape->capsule, &localMover );
+ 			break;
+ 
++		case b3_cylinderShape:
++			planeCount = b3CollideMoverAndHull( planes, shape->cylinderHull, &localMover );
++			break;
++
+ 		case b3_compoundShape:
+ 			planeCount = b3CollideMoverAndCompound( planes, planeCapacity, shape->compound, &localMover );
+ 			break;
+@@ -1032,6 +1124,11 @@ static void b3DestroyShapeAllocationForShapeChange( b3World* world, b3Shape* sha
+ 			shape->hull = NULL;
+ 			break;
+ 
++		case b3_cylinderShape:
++			b3RemoveHullFromDatabase( world, shape->cylinderHull );
++			shape->cylinderHull = NULL;
++			break;
++
+ 		default:
+ 			break;
+ 	}
+@@ -1065,6 +1162,12 @@ b3ShapeProxy b3MakeShapeProxy( const b3Shape* shape )
+ 		case b3_capsuleShape:
+ 			return (b3ShapeProxy){ &shape->capsule.center1, 2, shape->capsule.radius };
+ 
++		case b3_cylinderShape:
++		{
++			const b3HullData* hull = shape->cylinderHull;
++			return ( b3ShapeProxy ){ b3GetHullPoints( hull ), hull->vertexCount, 0.0f };
++		}
++
+ 		case b3_sphereShape:
+ 			return (b3ShapeProxy){ &shape->sphere.center, 1, shape->sphere.radius };
+ 
+@@ -1525,6 +1628,14 @@ b3Capsule b3Shape_GetCapsule( b3ShapeId shapeId )
+ 	return shape->capsule;
+ }
+ 
++b3Cylinder b3Shape_GetCylinder( b3ShapeId shapeId )
++{
++	b3World* world = b3GetWorld( shapeId.world0 );
++	b3Shape* shape = b3GetShape( world, shapeId );
++	B3_ASSERT( shape->type == b3_cylinderShape );
++	return shape->cylinder;
++}
++
+ const b3HullData* b3Shape_GetHull( b3ShapeId shapeId )
+ {
+ 	b3World* world = b3GetWorld( shapeId.world0 );
+@@ -1605,6 +1716,41 @@ void b3Shape_SetCapsule( b3ShapeId shapeId, const b3Capsule* capsule )
+ 	world->locked = false;
+ }
+ 
++void b3Shape_SetCylinder( b3ShapeId shapeId, const b3Cylinder* cylinder )
++{
++	b3World* world = b3GetUnlockedWorld( shapeId.world0 );
++	if ( world == NULL )
++	{
++		return;
++	}
++
++	b3HullData* standIn = b3MakeCylinderHull( cylinder );
++	if ( standIn == NULL )
++	{
++		return;
++	}
++
++	B3_REC( world, ShapeSetCylinder, shapeId, *cylinder );
++
++	world->locked = true;
++
++	b3Shape* shape = b3GetShape( world, shapeId );
++
++	b3DestroyShapeAllocationForShapeChange( world, shape );
++
++	shape->cylinder = *cylinder;
++	shape->cylinderHull = b3AddOwnedHullToDatabase( world, standIn );
++	shape->type = b3_cylinderShape;
++	shape->aabbMargin = b3ComputeShapeMargin( shape );
++
++	// need to wake bodies so they can react to the shape change
++	bool wakeBodies = true;
++	bool destroyProxy = true;
++	b3ResetProxy( world, shape, wakeBodies, destroyProxy );
++
++	world->locked = false;
++}
++
+ void b3Shape_SetHull( b3ShapeId shapeId, const b3HullData* hull )
+ {
+ 	B3_VALIDATE( b3IsValidHull( hull ) );
+diff --git a/src/shape.h b/src/shape.h
+index 91e8eef..2abf23a 100644
+--- a/src/shape.h
++++ b/src/shape.h
+@@ -61,6 +61,14 @@ typedef struct b3Shape
+ 		b3Mesh mesh;
+ 		const b3HeightFieldData* heightField;
+ 		const b3CompoundData* compound;
++
++		// A cylinder, and the stand-in hull its queries use (b3MakeCylinderHull),
++		// in the world's hull database.
++		struct
++		{
++			b3Cylinder cylinder;
++			const b3HullData* cylinderHull;
++		};
+ 	};
+ 
+ } b3Shape;
+diff --git a/src/world_snapshot.c b/src/world_snapshot.c
+index c3f0271..99a9836 100644
+--- a/src/world_snapshot.c
++++ b/src/world_snapshot.c
+@@ -576,6 +576,10 @@ static void b3SerShapes( b3RecBuffer* buf, b3World* world, b3Recording* rec )
+ 				b3SnapW_I32( buf, (int)b3_capsuleShape );
+ 				b3SnapW_Bytes( buf, &src->capsule, sizeof( b3Capsule ) );
+ 				break;
++			case b3_cylinderShape:
++				b3SnapW_I32( buf, (int)b3_cylinderShape );
++				b3SnapW_Bytes( buf, &src->cylinder, sizeof( b3Cylinder ) );
++				break;
+ 			case b3_hullShape:
+ 			{
+ 				b3SnapW_I32( buf, (int)b3_hullShape );
+@@ -718,6 +722,13 @@ static void b3DesShapes( b3SnapReader* r, b3World* world, b3RecReader* rdr )
+ 			case b3_capsuleShape:
+ 				b3SnapR_Bytes( r, &dst->capsule, sizeof( b3Capsule ) );
+ 				break;
++			case b3_cylinderShape:
++			{
++				b3SnapR_Bytes( r, &dst->cylinder, sizeof( b3Cylinder ) );
++				b3HullData* standIn = b3MakeCylinderHull( &dst->cylinder );
++				dst->cylinderHull = standIn != NULL ? b3AddOwnedHullToDatabase( world, standIn ) : NULL;
++				break;
++			}
+ 			case b3_hullShape:
+ 			{
+ 				uint32_t gid = b3SnapR_U32( r );
+@@ -972,6 +983,11 @@ static void b3FreeLiveSimElements( b3World* world )
+ 			b3RemoveHullFromDatabase( world, s->hull );
+ 			s->hull = NULL;
+ 		}
++		if ( s->type == b3_cylinderShape && s->cylinderHull != NULL )
++		{
++			b3RemoveHullFromDatabase( world, s->cylinderHull );
++			s->cylinderHull = NULL;
++		}
+ 		// name / userData / userShape are host-owned; do not free
+ 	}
+ 

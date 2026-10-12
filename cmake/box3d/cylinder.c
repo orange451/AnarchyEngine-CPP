@@ -926,3 +926,186 @@ void b3CollideTriangleAndCylinder( b3LocalManifold* manifold, int capacity, cons
 	b3SinglePoint( manifold, normal, output.pointA, surfaceB, separation );
 	manifold->feature = b3TriangleFeatureAt( v1, v2, v3, output.pointA );
 }
+
+void b3CollideCylinders( b3LocalManifold* manifold, int capacity, const b3Cylinder* cylinderA, const b3HullData* standInA,
+						 const b3Cylinder* cylinderB, const b3HullData* standInB, b3Transform transformBtoA,
+						 b3SATCache* cache )
+{
+	manifold->pointCount = 0;
+	if ( capacity < 2 )
+	{
+		return;
+	}
+
+	b3CylinderCore coreA = b3MakeCylinderCore( cylinderA );
+	b3CylinderCore coreB = b3MakeCylinderCore( cylinderB );
+	b3DistanceOutput output =
+		b3SupportDistance( b3CylinderCoreSupport, &coreA, b3CylinderCoreSupport, &coreB, transformBtoA );
+	float separation = output.distance - coreA.margin - coreB.margin;
+	float speculative = B3_SPECULATIVE_DISTANCE;
+	if ( separation > speculative )
+	{
+		return;
+	}
+
+	if ( output.distance < 100.0f * FLT_EPSILON )
+	{
+		// The cores overlap: Box3D's hulls answer, the stand-ins in the cylinders' places.
+		b3CollideHulls( manifold, capacity, standInA, standInB, transformBtoA, cache );
+		return;
+	}
+
+	b3Vec3 normal = output.normal;
+	b3CylinderFrame frameA = b3MakeCylinderFrame( cylinderA );
+	b3Cylinder placedB = { b3TransformPoint( transformBtoA, cylinderB->center1 ),
+						   b3TransformPoint( transformBtoA, cylinderB->center2 ), cylinderB->radius };
+	b3CylinderFrame frameB = b3MakeCylinderFrame( &placedB );
+	float aAlong = b3Dot( normal, frameA.axis );
+	float bAlong = b3Dot( normal, frameB.axis );
+	float axesDot = b3Dot( frameA.axis, frameB.axis );
+
+	if ( b3AbsFloat( aAlong ) < b3_cylinderSideSin && b3AbsFloat( bAlong ) < b3_cylinderSideSin && b3AbsFloat( axesDot ) > 0.998f )
+	{
+		// Side by side and parallel: a line contact where they overlap along A's axis.
+		b3Vec3 radial = b3Normalize( b3MulSub( normal, aAlong, frameA.axis ) );
+		b3Vec3 b1 = b3MulSub( placedB.center1, frameB.radius, radial );
+		b3Vec3 b2 = b3MulSub( placedB.center2, frameB.radius, radial );
+		float t1 = b3Dot( b3Sub( b1, frameA.center ), frameA.axis );
+		float t2 = b3Dot( b3Sub( b2, frameA.center ), frameA.axis );
+		float lo = b3ClampFloat( b3MinFloat( t1, t2 ), -frameA.halfHeight, frameA.halfHeight );
+		float hi = b3ClampFloat( b3MaxFloat( t1, t2 ), -frameA.halfHeight, frameA.halfHeight );
+		if ( hi - lo > B3_LINEAR_SLOP )
+		{
+			float ends[2] = { lo, hi };
+			int count = 0;
+			for ( int i = 0; i < 2; ++i )
+			{
+				b3Vec3 onB = b3Lerp( b1, b2, ( ends[i] - t1 ) / ( t2 - t1 ) );
+				b3Vec3 onA = b3MulAdd( b3MulAdd( frameA.center, ends[i], frameA.axis ), frameA.radius, radial );
+				float pointSeparation = b3Dot( b3Sub( onB, onA ), radial );
+				if ( pointSeparation > speculative )
+				{
+					continue;
+				}
+				b3LocalManifoldPoint* mp = manifold->points + count;
+				mp->point = b3Lerp( onA, onB, 0.5f );
+				mp->separation = pointSeparation;
+				mp->pair = b3MakeFeaturePair( b3_featureShapeA, i, b3_featureShapeB, i );
+				count += 1;
+			}
+			if ( count > 0 )
+			{
+				manifold->normal = radial;
+				manifold->pointCount = count;
+				return;
+			}
+		}
+	}
+
+	if ( b3AbsFloat( aAlong ) >= b3_cylinderCapCos )
+	{
+		// A's cap faces B: B's side line or cap, kept over A's cap.
+		float sign = aAlong > 0.0f ? 1.0f : -1.0f;
+		b3Vec3 capNormal = b3MulSV( sign, frameA.axis );
+		b3Vec3 capCenter = b3MulAdd( frameA.center, sign * frameA.halfHeight, frameA.axis );
+		b3ClipVertex feature[B3_CYLINDER_CAP_POINTS];
+		b3Vec3 towardA = b3InvRotateVector( transformBtoA.q, b3Neg( capNormal ) );
+		int count = b3CylinderFeatureVertices( feature, cylinderB, towardA, transformBtoA, b3_featureShapeB,
+											   b3_featureShapeA, sign > 0.0f ? 1 : 0 );
+		b3ClipVertex kept[B3_CYLINDER_CAP_POINTS];
+		int keptCount = 0;
+		if ( count == 2 )
+		{
+			float s0, s1;
+			if ( b3ClipSegmentToDisc( &s0, &s1, feature[0].position, feature[1].position, capCenter, capNormal, frameA.radius ) )
+			{
+				kept[0] = feature[0];
+				kept[1] = feature[1];
+				kept[0].position = b3Lerp( feature[0].position, feature[1].position, s0 );
+				kept[1].position = b3Lerp( feature[0].position, feature[1].position, s1 );
+				keptCount = 2;
+			}
+		}
+		else
+		{
+			for ( int i = 0; i < count; ++i )
+			{
+				b3Vec3 offset = b3Sub( feature[i].position, capCenter );
+				b3Vec3 across = b3MulSub( offset, b3Dot( offset, capNormal ), capNormal );
+				if ( b3Dot( across, across ) <= frameA.radius * frameA.radius )
+				{
+					kept[keptCount++] = feature[i];
+				}
+			}
+		}
+
+		int written = 0;
+		for ( int i = 0; i < keptCount; ++i )
+		{
+			float pointSeparation = b3Dot( b3Sub( kept[i].position, capCenter ), capNormal );
+			if ( pointSeparation <= speculative )
+			{
+				kept[written] = kept[i];
+				kept[written].separation = pointSeparation;
+				written += 1;
+			}
+		}
+
+		written = b3ReducePoints( kept, written, capacity, capNormal );
+		if ( written > 0 )
+		{
+			manifold->normal = capNormal;
+			manifold->pointCount = written;
+			for ( int i = 0; i < written; ++i )
+			{
+				b3LocalManifoldPoint* mp = manifold->points + i;
+				mp->point = b3MulSub( kept[i].position, 0.5f * kept[i].separation, capNormal );
+				mp->separation = kept[i].separation;
+				mp->pair = kept[i].pair;
+			}
+			return;
+		}
+	}
+
+	if ( b3AbsFloat( bAlong ) >= b3_cylinderCapCos && b3AbsFloat( aAlong ) < b3_cylinderSideSin )
+	{
+		// B's cap faces A's side: A's side line, kept over B's cap.
+		float signB = bAlong < 0.0f ? 1.0f : -1.0f;
+		b3Vec3 capOut = b3MulSV( signB, frameB.axis );
+		b3Vec3 capCenter = b3MulAdd( frameB.center, signB * frameB.halfHeight, frameB.axis );
+		b3Vec3 radial = b3Normalize( b3MulSub( normal, aAlong, frameA.axis ) );
+		b3Vec3 a1 = b3MulAdd( b3MulSub( frameA.center, frameA.halfHeight, frameA.axis ), frameA.radius, radial );
+		b3Vec3 a2 = b3MulAdd( b3MulAdd( frameA.center, frameA.halfHeight, frameA.axis ), frameA.radius, radial );
+		float s0, s1;
+		if ( b3ClipSegmentToDisc( &s0, &s1, a1, a2, capCenter, capOut, frameB.radius ) )
+		{
+			float fractions[2] = { s0, s1 };
+			int count = 0;
+			for ( int i = 0; i < 2; ++i )
+			{
+				b3Vec3 onA = b3Lerp( a1, a2, fractions[i] );
+				float pointSeparation = b3Dot( b3Sub( onA, capCenter ), capOut );
+				if ( pointSeparation > speculative )
+				{
+					continue;
+				}
+				b3LocalManifoldPoint* mp = manifold->points + count;
+				mp->point = b3MulSub( onA, 0.5f * pointSeparation, capOut );
+				mp->separation = pointSeparation;
+				mp->pair = b3MakeFeaturePair( b3_featureShapeA, i, b3_featureShapeB, signB > 0.0f ? 35 : 34 );
+				count += 1;
+			}
+			if ( count > 0 )
+			{
+				manifold->normal = b3Neg( capOut );
+				manifold->pointCount = count;
+				return;
+			}
+		}
+	}
+
+	// Otherwise one point, the true surfaces' nearest.
+	b3Vec3 surfaceA = b3MulAdd( output.pointA, coreA.margin, normal );
+	b3Vec3 surfaceB = b3MulSub( output.pointB, coreB.margin, normal );
+	b3SinglePoint( manifold, normal, surfaceA, surfaceB, separation );
+}

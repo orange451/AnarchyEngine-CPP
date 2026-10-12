@@ -338,3 +338,35 @@ TEST_CASE("CY23 a cylinder on its side on one triangle: two points, the triangle
     REQUIRE(near(m.points[1].separation, -0.005f, 1e-5f));
     b3DestroyHull(standIn);
 }
+
+TEST_CASE("CY26 a log on a log, side by side and parallel: two points along their line", "[cylinder]") {
+    // Both along Z, B on top of A, 0.005 into it.
+    const b3Cylinder log{v3(0.f, 0.f, -1.f), v3(0.f, 0.f, 1.f), 0.5f};
+    b3HullData* standIn = b3MakeCylinderHull(&log);
+    b3LocalManifoldPoint points[4];
+    b3LocalManifold m{};
+    m.points = points;
+    b3SATCache cache{};
+    b3CollideCylinders(&m, 4, &log, standIn, &log, standIn, b3Transform{v3(0.f, 0.995f, 0.f), b3Quat_identity}, &cache);
+    REQUIRE(m.pointCount == 2);
+    REQUIRE(near(m.normal.y, 1.f, 1e-5f));
+    REQUIRE(near(m.points[0].separation, -0.005f, 1e-5f));
+    REQUIRE(near(m.points[1].separation, -0.005f, 1e-5f));
+    b3DestroyHull(standIn);
+}
+
+TEST_CASE("CY27 a drum on a drum, cap on cap: four points, normal up", "[cylinder]") {
+    const b3Cylinder drum = upright(0.5f, 1.f);
+    b3HullData* standIn = b3MakeCylinderHull(&drum);
+    b3LocalManifoldPoint points[4];
+    b3LocalManifold m{};
+    m.points = points;
+    b3SATCache cache{};
+    b3CollideCylinders(&m, 4, &drum, standIn, &drum, standIn, b3Transform{v3(0.1f, 1.995f, 0.f), b3Quat_identity}, &cache);
+    REQUIRE(m.pointCount == 4);
+    REQUIRE(near(m.normal.y, 1.f, 1e-5f));
+    for (int i = 0; i < 4; ++i) {
+        REQUIRE(near(m.points[i].separation, -0.005f, 1e-5f));
+    }
+    b3DestroyHull(standIn);
+}

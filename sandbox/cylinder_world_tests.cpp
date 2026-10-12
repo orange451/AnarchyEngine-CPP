@@ -476,3 +476,26 @@ TEST_CASE("CY25 a cylinder lying on a mesh does not creep, and sleeps", "[cylind
     }
     b3DestroyMesh(mesh);
 }
+
+TEST_CASE("CY28 drums stacked three high and a pyramid of three logs hold for 10 seconds", "[cylinder]") {
+    World world;
+    world.floor(1.f);
+    // Three drums, each radius 0.5 and 1 tall, cap on cap.
+    std::vector<b3BodyId> drums;
+    for (int i = 0; i < 3; ++i) {
+        drums.push_back(world.cylinder(b3_dynamicBody, v3(0.f, 0.5f + static_cast<float>(i), 0.f), b3Quat_identity, 0.5f,
+                                       0.5f, 1.f));
+    }
+    // A pyramid of logs along Z at x = 5: two side by side, one in the groove above.
+    const b3BodyId left = world.cylinder(b3_dynamicBody, v3(4.5f, 0.5f, 0.f), on_side(), 0.5f, 1.f, 1.f);
+    const b3BodyId right = world.cylinder(b3_dynamicBody, v3(5.5f, 0.5f, 0.f), on_side(), 0.5f, 1.f, 1.f);
+    const b3BodyId top = world.cylinder(b3_dynamicBody, v3(5.f, 0.5f + std::sqrt(0.75f), 0.f), on_side(), 0.5f, 1.f, 1.f);
+    world.seconds(1.f);
+    const b3Vec3 drumBefore = position_of(drums[2]);
+    const float topBefore = position_of(top).y;
+    world.seconds(10.f);
+    REQUIRE(b3Distance(drumBefore, position_of(drums[2])) < 1e-3f);
+    REQUIRE(topBefore - position_of(top).y < 0.01f);
+    REQUIRE(std::fabs(position_of(left).x - 4.5f) < 0.05f);
+    REQUIRE(std::fabs(position_of(right).x - 5.5f) < 0.05f);
+}

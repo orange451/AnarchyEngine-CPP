@@ -51,8 +51,8 @@ across the tread without changing the rolling radius.
 | Box3D changes | Our own new file, `cmake/box3d/cylinder.c`, plus one patch to Box3D's files, applied when Box3D is fetched. The pin stays a clean upstream commit. |
 | Shape | `b3Cylinder { center1, center2, radius }`: the centres of its two caps, and its radius. Shaped like `b3Capsule`. |
 | Pairs | Cylinder against sphere, capsule, hull, mesh (one triangle at a time), and cylinder. Not against a compound or a height field: the engine makes neither. |
-| Contact | Exact. A separation search on the exact cylinder gives the normal and depth. Contact points come from the cylinder's feature facing the other shape (§3). |
-| Queries | Ray casts are exact. Overlaps, shape casts, closest points, time of impact, and sensors use a stand-in point cloud of 2 rings × 32 points, since Box3D's distance code takes only points plus a radius (§4). |
+| Contact | Exact on the side and caps. A separation search on the cylinder's core (the cylinder shrunk by a small margin, as a Box3D capsule is a segment plus a radius) gives the normal and depth. Contact points come from the cylinder's feature facing the other shape (§3). |
+| Queries | Ray casts are exact. Overlaps, shape casts, closest points, the mover, time of impact, and sensors use a stand-in: a 32-sided hull (`b3CreateCylinder`, its 2 rings × 32 points) kept with the shape, so Box3D's own hull code answers them (§4). |
 | Engine use | A Cylinder PhysicsObject makes one `b3_cylinderShape`. Under non-uniform scale across its round axes it would be elliptical, which a true cylinder cannot be, so it stays the layered hulls. |
 | Users | Nothing changes in Lua or Properties. Shape = Cylinder just collides correctly. |
 | Not in scope | A true Cone; the PlayerController's cylinder (it never rolls; its hull and ground probe stay); a cylinder as a Box3D compound child or against a height field; exact distance code for queries; Box3D's own debug draw (the engine draws outlines itself); sending the change upstream (welcome later, not required). |
@@ -92,6 +92,11 @@ New API, declared in `collision.h` and `box3d.h` (patch), defined in
 
 A cylinder is not sphere-swept: its proxy radius and contact radius are 0.
 
+The table's `b3MakeCylinderProxy` is `b3MakeCylinderHull(cylinder)` instead:
+the stand-in hull (§4), which the shape keeps beside its `b3Cylinder`
+(`shape->cylinderHull`, in the world's hull database). `b3SupportDistance`
+(§3.1) is added to `distance.c` (patch) and declared in `collision.h`.
+
 ## 2. Plumbing in Box3D (patch)
 
 Every place that switches on a shape's type handles the cylinder:
@@ -104,9 +109,9 @@ Every place that switches on a shape's type handles the cylinder:
 | `world_snapshot.c`, `recording.c`, `recording_ops.inl`, `recording_replay.c` | Save and load a cylinder's bytes, and record and replay `CreateCylinderShape` and `ShapeSetCylinder`, as for a capsule. |
 | `physics_world.c`, `sensor.c` | Their few type switches. |
 
-Box3D's own debug draw draws a cylinder's two rim circles and four side lines
-with `DrawSegmentFcn`. The engine does not use Box3D's debug draw; this only
-keeps Box3D from asserting.
+Box3D's debug-shape hook (`createDebugShape`) is handed a cylinder as its
+stand-in hull, so a debug renderer draws a 32-sided prism. The engine does not
+use Box3D's debug draw; this only keeps Box3D complete.
 
 ### Patch mechanics
 
@@ -131,19 +136,27 @@ pair.
 
 ### 3.1 Normal and depth
 
-- **Separated:** GJK with the cylinder's exact support function
-  (`support(d) = centre ± halfHeight·axis + radius·unit(d − (d·axis)·axis)`,
-  the cap chosen by the sign of `d·axis`), warm-started from the contact's
-  simplex cache. The normal points between the closest points.
-- **Overlapping:** EPA on the same support functions, seeded with GJK's
-  final simplex, capped at 64 iterations, stopping when the normal changes by
-  less than 1e-4 relative. Deterministic for the same input.
-- **Shortcuts:** against a sphere, a closest point on the solid cylinder.
-  Against a capsule, closest points between its segment and the cylinder.
-  Against a hull, a face of the hull is tried first, as Box3D's hull pairs do:
-  when the deepest hull face's normal is the separating axis, it is the normal
-  directly, with no EPA. That is exact, and it is the common case of a wheel
-  on flat ground.
+- **The core:** the cylinder shrunk by a margin on every side,
+  `margin = min(B3_SPECULATIVE_DISTANCE, ¼ · min(radius, halfHeight))` (0.02
+  units for any wheel-sized cylinder). The true shape is the core grown by the
+  margin: its side and caps are exact, and its rims are rounded by the margin.
+  Box3D treats a capsule the same way (a segment plus a radius).
+- **GJK on support functions:** `b3SupportDistance` (§1) runs Box3D's own
+  simplex solver with support functions instead of point clouds. The core's
+  support is `centre ± (halfHeight − margin)·axis + (radius − margin)·unit(d −
+  (d·axis)·axis)`, the cap chosen by the sign of `d·axis`. The other shape's
+  core is its points (a hull, a triangle, a capsule's segment), or another
+  cylinder's core. The distance between cores, less both margins and any
+  capsule radius, is the separation; the normal points between the closest
+  points. It stays exact and smooth while the shapes overlap by less than the
+  margin, which covers resting and rolling contact.
+- **Deeper overlap** (the cores themselves overlap: a body spawned inside
+  another, a fast impact) falls back to Box3D's own pair functions, with the
+  cylinder's stand-in hull (§4) in its place: `b3CollideHulls`,
+  `b3CollideHullAndCapsule`, `b3CollideTriangleAndHull`. Contact is faceted
+  only then, and only until the bodies push apart.
+- **A sphere** needs no search: the closest point on the solid cylinder, exact
+  at any depth.
 
 ### 3.2 The cylinder's feature
 
@@ -194,10 +207,13 @@ shapes, so this is the wheel-on-terrain path.
 
 ## 4. Queries
 
-Box3D's distance, shape cast, overlap, time-of-impact, and sensor code take a
-shape as `b3ShapeProxy`: points plus a radius. The cylinder's proxy is 2 rings
-of 32 points on its caps' rims. That is a 32-sided prism, at most
-`radius·(1 − cos(π/32))` (0.5 % of the radius) inside the true surface.
+Box3D's distance, shape cast, overlap, mover, time-of-impact, and sensor code
+take a shape as `b3ShapeProxy` (points plus a radius) or as a hull. A cylinder
+shape keeps a stand-in hull, `b3CreateCylinder` with 32 sides placed on its
+axis, in the world's hull database: its 64 points are the proxy, and its faces
+let `b3ShapeCastHull`, `b3OverlapHull`, and `b3CollideMoverAndHull` answer for
+it. The stand-in is at most `radius·(1 − cos(π/32))` (0.5 % of the radius)
+inside the true surface.
 
 Using the proxy for these queries is acceptable because none of them makes
 the rolling contact:
@@ -292,10 +308,9 @@ Sandbox tests (Catch2, `sandbox/`), in Debug and Release.
   its side swaps the cap polygon for the side line. The 10° threshold and the
   cap's fixed rim samples keep the deepest point steady across the switch;
   tests 8 and 9 watch for jitter there.
-- **EPA in deep overlap:** EPA can be slow or imprecise when shapes overlap a
-  lot (a cylinder spawned inside a box). It is capped at 64 iterations and
-  falls back to the best normal so far, so it is never stuck. Normal contact
-  is shallow and goes through the shortcuts.
+- **Deep overlap:** past the margin, contact is the stand-in hull's, faceted
+  like today's polygon, until the bodies push apart. Resting and rolling
+  contact never go that deep.
 - **Pin bumps:** every Box3D update means reapplying the patch to about ten
   Box3D files. `cylinder.c` is ours and moves untouched. If Box3D gains its
   own cylinder upstream, we move to it and drop the patch.

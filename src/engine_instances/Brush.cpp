@@ -8,6 +8,8 @@
 #include <atomic>
 #include <cmath>
 #include <iterator>
+#include <mutex>
+#include <unordered_map>
 
 namespace engine_core {
 
@@ -165,17 +167,74 @@ bool same_points(const std::vector<brush::Face>& a, const std::vector<brush::Fac
 
 }  // namespace
 
+namespace {
+
+// A built solid as a Brush keeps it: its faces, its shape, and the faces'
+// JSON. Immutable once made, so Brushes and threads share it.
+struct Solid {
+    std::vector<brush::Face> faces;
+    brush::Shape shape;
+    std::string json;
+};
+
+// Solids by faces JSON: the JSON each was built from, and its own. A clone,
+// paste, undo, Stop, or load of faces some Brush has already built takes the
+// solid from here instead of parsing and building them again (a car of 12
+// Brushes cloned in about 1.3 ms each before). Any thread.
+class SolidCache {
+public:
+    std::shared_ptr<const Solid> find(const std::string& json) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        const auto found = solids_.find(json);
+        return found != solids_.end() ? found->second : nullptr;
+    }
+
+    void put(const std::string& json, std::shared_ptr<const Solid> solid) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        // Bounded: a place with more distinct solids than this rebuilds some, as before.
+        if (solids_.size() >= kMaxSolids && solids_.count(json) == 0) {
+            solids_.clear();
+        }
+        solids_[json] = std::move(solid);
+    }
+
+private:
+    static constexpr std::size_t kMaxSolids = 2048;
+    std::mutex mutex_;
+    std::unordered_map<std::string, std::shared_ptr<const Solid>> solids_;
+};
+
+SolidCache& solids() {
+    static SolidCache cache;
+    return cache;
+}
+
+// A new Brush's box, built once for every Brush there will be.
+std::shared_ptr<const Solid> default_solid() {
+    static const std::shared_ptr<const Solid> box = [] {
+        const double size = Brush::kDefaultSize;
+        brush::Built built = brush::build(brush::make_box({size, size, size}));
+        auto solid = std::make_shared<Solid>();
+        solid->json = brush::faces_to_json(built.faces);
+        solid->faces = std::move(built.faces);
+        solid->shape = std::move(built.shape);
+        return std::shared_ptr<const Solid>(std::move(solid));
+    }();
+    return box;
+}
+
+}  // namespace
+
 Brush::Brush(DataModel::ChildTag tag, DataModel::State& state, InstanceId id) : PhysicsBase(tag, state, id) {
     default_anchored(true);
     reset_faces();
 }
 
 void Brush::reset_faces() {
-    const double size = kDefaultSize;
-    brush::Built built = brush::build(brush::make_box({size, size, size}));
-    faces_ = std::move(built.faces);
-    shape_ = std::move(built.shape);
-    faces_json_ = brush::faces_to_json(faces_);
+    const std::shared_ptr<const Solid> box = default_solid();
+    faces_ = box->faces;
+    shape_ = box->shape;
+    faces_json_ = box->json;
     mesh_.reset();
     revision_ = brush::next_revision();
     shape_revision_ = revision_;
@@ -194,6 +253,9 @@ void Brush::keep(brush::Built built, std::string json) {
     faces_ = std::move(built.faces);
     shape_ = std::move(built.shape);
     faces_json_ = std::move(json);
+    if (solids().find(faces_json_) == nullptr) {
+        solids().put(faces_json_, std::make_shared<const Solid>(Solid{faces_, shape_, faces_json_}));
+    }
     mesh_.reset();
     revision_ = brush::next_revision();
     if (reshaped) {
@@ -254,13 +316,29 @@ std::optional<std::string> Brush::set_faces_json(const std::string& json) {
     if (json == faces_json_) {
         return std::nullopt;
     }
+    // Faces some Brush has built already: taken as built.
+    if (const std::shared_ptr<const Solid> solid = solids().find(json)) {
+        if (solid->json == faces_json_) {
+            return std::nullopt;
+        }
+        brush::Built built;
+        built.faces = solid->faces;
+        built.shape = solid->shape;
+        keep(std::move(built), solid->json);
+        return std::nullopt;
+    }
     std::string error;
     std::optional<std::vector<brush::Face>> faces = brush::faces_from_json(json, error);
     if (!faces) {
         return "Faces: " + error;
     }
     // Saved and undone faces are taken where they are, so the Transform beside them stays right.
-    return keep_as_is(brush::build(std::move(*faces)));
+    brush::Built built = brush::build(std::move(*faces));
+    if (built.ok()) {
+        // Under the JSON it came from too, which may list faces the build dropped.
+        solids().put(json, std::make_shared<const Solid>(Solid{built.faces, built.shape, brush::faces_to_json(built.faces)}));
+    }
+    return keep_as_is(std::move(built));
 }
 
 std::optional<std::string> Brush::set_angular_velocity(Vec3 velocity) {

@@ -121,6 +121,8 @@ struct Built {
 // nothing"), or when the faces do not enclose a solid ("the faces do not close
 // a solid"). Faces whose planes cut nothing are dropped from the result.
 Built build(std::vector<Face> faces);
+// How many times build has run in this process, from any thread. For tests.
+std::uint64_t build_count();
 
 // Edits. Each builds the result, so a refusal leaves the caller's faces as they
 // were. Face indices start at 0 here.

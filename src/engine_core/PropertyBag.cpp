@@ -18,8 +18,15 @@ bool member_less(const JsonValue::Member& member, std::string_view key) { return
 // Floating-point to_chars and from_chars came late to some standard libraries:
 // libc++ added to_chars for double in 14 and from_chars in 20, and Xcode 13
 // has neither. Without them, numbers take the older way below, which P23
-// checks charconv against byte for byte.
-#if defined(__cpp_lib_to_chars)
+// checks charconv against byte for byte. MSVC's library has the shortest
+// to_chars and the from_chars used here from VS 2019 16.3 (_MSC_VER 1923),
+// but defines __cpp_lib_to_chars only from 16.4, with the precision forms
+// this file does not use; the older way costs about 10 us a number (P23b).
+#if defined(__cpp_lib_to_chars) || (defined(_MSC_VER) && _MSC_VER >= 1923)
+#define ANARCHY_CHARCONV 1
+#endif
+
+#if defined(ANARCHY_CHARCONV)
 
 // The whole of `text` as one number. from_chars ignores the locale, where
 // strtod follows LC_NUMERIC, which may use a comma.
@@ -633,6 +640,14 @@ JsonValue JsonValue::number(double value) {
     // One zero on disk.
     out.number_ = value == 0.0 ? 0.0 : value;
     return out;
+}
+
+bool json_numbers_use_charconv() {
+#if defined(ANARCHY_CHARCONV)
+    return true;
+#else
+    return false;
+#endif
 }
 
 JsonValue JsonValue::number_from_float(float value) {

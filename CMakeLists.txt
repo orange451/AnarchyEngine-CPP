@@ -1070,6 +1070,7 @@ add_executable(sandbox
     sandbox/collision_group_tests.cpp
     sandbox/collision_group_lua_tests.cpp
     sandbox/collision_group_save_tests.cpp
+    sandbox/spawn_bench_tests.cpp
     sandbox/no_collision_tests.cpp
     sandbox/touch_tests.cpp
     sandbox/constraint_lines_tests.cpp

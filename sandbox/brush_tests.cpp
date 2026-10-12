@@ -5,6 +5,7 @@
 #include "Brush.hpp"
 #include "BrushVisuals.hpp"
 #include "GameObject.hpp"
+#include "InstanceFile.hpp"
 #include "MeshShapes.hpp"
 #include "PhysicsWorld.hpp"
 #include "PluginUi.hpp"
@@ -549,4 +550,32 @@ TEST_CASE("BT1 the Brushes tool turns on during play; Play and Stop each turn it
     rig.frames(1);
     REQUIRE_FALSE(brushes_lit(rig));
     REQUIRE(rig.runtime.plugin_ui().active() == 0);
+}
+
+TEST_CASE("BC1 a cloned Brush takes its source's built solid, and the two stay apart", "[brush][clone]") {
+    SimRole role;
+    Game game;
+    Brush& source = add_brush(game);
+    REQUIRE_FALSE(source.set_faces(brush::make_box({2.0, 3.0, 4.0})));
+    // Built once already: a clone, or a second Brush loading the same faces, builds nothing.
+    std::uint64_t before = brush::build_count();
+    const InstanceId copy = clone_tree(game, source.id());
+    REQUIRE(copy != 0);
+    REQUIRE(brush::build_count() == before);
+    auto* cloned = dynamic_cast<Brush*>(game.instance(copy));
+    REQUIRE(cloned != nullptr);
+    REQUIRE(cloned->faces_json() == source.faces_json());
+    REQUIRE(cloned->shape().vertices.size() == source.shape().vertices.size());
+    REQUIRE(cloned->shape_revision() != source.shape_revision());
+    Brush& loaded = add_brush(game);
+    REQUIRE_FALSE(loaded.set_faces_json(source.faces_json()));
+    REQUIRE(brush::build_count() == before);
+    // Editing the copy leaves the source alone.
+    REQUIRE_FALSE(cloned->set_faces(brush::make_box({1.0, 1.0, 1.0})));
+    REQUIRE(cloned->faces_json() != source.faces_json());
+    REQUIRE(source.shape().max.y > 1.4);
+    // Faces no Brush has built are built.
+    before = brush::build_count();
+    REQUIRE_FALSE(loaded.set_faces_json(brush::faces_to_json(brush::make_box({5.0, 5.0, 5.0}))));
+    REQUIRE(brush::build_count() == before + 1);
 }

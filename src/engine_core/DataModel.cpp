@@ -7,6 +7,9 @@
 
 #include <algorithm>
 #include <iterator>
+#include <memory>
+#include <mutex>
+#include <unordered_map>
 
 namespace engine_core {
 
@@ -2249,14 +2252,26 @@ void DataModel::erase_extra_property(InstanceId id, std::string_view key) {
 
 namespace {
 
-// A saved registry property's default, as its class registered it.
-JsonValue saved_default(const LuaField& field) {
-    JsonValue value;
-    std::string message;
-    if (field.default_json == nullptr || !parse_json(field.default_json, value, message)) {
+// A saved registry property's default, as its class registered it. Parsed
+// once per default: every save and copy compares each property with it, and a
+// Brush's Faces default is a whole box. Any thread.
+const JsonValue& saved_default(const LuaField& field) {
+    static std::mutex mutex;
+    static std::unordered_map<const char*, std::unique_ptr<const JsonValue>> parsed;
+    if (field.default_json == nullptr) {
         contract_fail("a saved property has no default");
     }
-    return value;
+    std::lock_guard<std::mutex> lock(mutex);
+    std::unique_ptr<const JsonValue>& slot = parsed[field.default_json];
+    if (slot == nullptr) {
+        auto value = std::make_unique<JsonValue>();
+        std::string message;
+        if (!parse_json(field.default_json, *value, message)) {
+            contract_fail("a saved property has no default");
+        }
+        slot = std::move(value);
+    }
+    return *slot;
 }
 
 // Its value now, as a project file holds it. A read never changes the object.

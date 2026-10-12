@@ -1,6 +1,7 @@
 #include "brush/BrushGeometry.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstddef>
 #include <limits>
@@ -413,7 +414,14 @@ Face face_from_plane(DVec3 normal, DVec3 point) {
     return face;
 }
 
+namespace {
+std::atomic<std::uint64_t> g_builds{0};
+}  // namespace
+
+std::uint64_t build_count() { return g_builds.load(std::memory_order_relaxed); }
+
 Built build(std::vector<Face> faces) {
+    g_builds.fetch_add(1, std::memory_order_relaxed);
     Built built;
     std::vector<Plane> planes;
     planes.reserve(faces.size());

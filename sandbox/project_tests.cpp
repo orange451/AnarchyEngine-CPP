@@ -2735,6 +2735,15 @@ std::string reference_shortest(T value, int max_precision) {
 
 }  // namespace
 
+TEST_CASE("P23b MSVC builds write numbers with charconv, not the snprintf search", "[P23][project]") {
+#if defined(_MSC_VER)
+    // The search takes about 10 us a float; a car's Clone spent 2 ms in it.
+    REQUIRE(engine_core::json_numbers_use_charconv());
+#else
+    SUCCEED("charconv depends on the standard library here");
+#endif
+}
+
 TEST_CASE("P23 json numbers are the shortest form that reads back", "[P23][project]") {
     using engine_core::JsonValue;
     REQUIRE(engine_core::format_json_number(123.0) == "123");

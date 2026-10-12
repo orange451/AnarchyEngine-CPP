@@ -88,5 +88,8 @@ std::string compact_json(const JsonValue& value);
 // One formatter for every number written to disk. Integers print without a
 // fraction. Others use the shortest decimal that reads back to the same double.
 std::string format_json_number(double value);
+// Whether numbers are written and read with <charconv>, rather than the slow
+// snprintf search kept for standard libraries without it. For tests.
+bool json_numbers_use_charconv();
 
 }  // namespace engine_core

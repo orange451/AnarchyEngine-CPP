@@ -52,13 +52,14 @@ constexpr int kHullVertices = 64;
 constexpr int kHullVerticesRetry = 32;
 // How near two corners of a Custom's triangles are to be joined as one.
 constexpr float kWeldTolerance = 1e-4f;
-// The sides around a Cylinder or a Cone, as Box3D builds no round hull. A
-// Cylinder of n sides has 6n half-edges, and a hull keeps at most 128.
+// The sides around a Cone, and around an elliptical Cylinder (scaled unevenly
+// across X and Z), as Box3D builds no round hull. A prism of n sides has 3n
+// edges, and a hull keeps at most 128.
 constexpr int kRoundSides = 16;
-// A Cylinder PhysicsObject's shape: this many such hulls, each turned a
-// further share of a side about its axis, so the wheel they make together
-// rolls as one of kCylinderLayers * kRoundSides sides (a 0.5 radius lifts
-// under a millimetre a side, where 16 sides lift ten).
+// An elliptical Cylinder PhysicsObject's shape: this many such hulls, each
+// turned a further share of a side about its axis, so together they roll as
+// one of kCylinderLayers * kRoundSides sides. A round one is a true cylinder
+// (b3_cylinderShape, cmake/box3d/cylinder.c).
 constexpr int kCylinderLayers = 4;
 // A PlayerController's ground probe: a flat ring of points kProbeWidth of
 // Radius across, cast down from kProbeSkin above the cylinder's bottom. A
@@ -3848,8 +3849,23 @@ struct PhysicsWorld::Impl {
             }
             break;
         case PhysicsObject::Shape::Cylinder: {
-            // Box3D's only round shapes are a sphere and a capsule: layered
-            // hulls (kCylinderLayers), sharing Mass by their summed volume.
+            // A true cylinder (b3_cylinderShape), round across X and Z. Scaled
+            // unevenly across those it would be elliptical, which one cannot
+            // be, and below Box3D's linear slop Box3D refuses one: layered
+            // hulls then, as before.
+            const float radius = size.x * 0.5f;
+            const bool round = std::fabs(record.scale.x - record.scale.z) <=
+                               1e-4f * std::max({std::fabs(record.scale.x), std::fabs(record.scale.z), 1.f});
+            if (round && radius >= B3_LINEAR_SLOP && size.y >= B3_LINEAR_SLOP) {
+                const float half = size.y * 0.5f;
+                const b3Cylinder cylinder{placed_point(record, b3Vec3{center.x, center.y - half, center.z}),
+                                          placed_point(record, b3Vec3{center.x, center.y + half, center.z}), radius};
+                record.volume = b3ComputeCylinderMass(&cylinder, 1.f).mass;
+                def.density = shape_density(object, record);
+                add_shape(record, b3CreateCylinderShape(record.body, &def, &cylinder));
+                break;
+            }
+            // Layered hulls (kCylinderLayers), sharing Mass by their summed volume.
             primitive_points(object.shape(), size, record.center, points);
             b3HullData* layers[kCylinderLayers] = {};
             float volume = 0.f;
@@ -4584,6 +4600,23 @@ void PhysicsWorld::collision_outline(const PhysicsObject& object, Vec3 center, c
         return;
     }
     case PhysicsObject::Shape::Cylinder:
+        if (std::fabs(scale.x - scale.z) <= 1e-4f * std::max({std::fabs(scale.x), std::fabs(scale.z), 1.f}) &&
+            size.x * 0.5f >= B3_LINEAR_SLOP && size.y >= B3_LINEAR_SLOP) {
+            // As make_shape builds it: a true cylinder, two rims and four side lines along Y.
+            const float radius = size.x * 0.5f;
+            const float half = size.y * 0.5f;
+            const Vec3 top{center.x, center.y + half, center.z};
+            const Vec3 bottom{center.x, center.y - half, center.z};
+            add_arc(lines, top, x, z, radius, 0.f, 2.f * kPi);
+            add_arc(lines, bottom, x, z, radius, 0.f, 2.f * kPi);
+            for (const Vec3& side : {Vec3{radius, 0.f, 0.f}, Vec3{-radius, 0.f, 0.f}, Vec3{0.f, 0.f, radius},
+                                     Vec3{0.f, 0.f, -radius}}) {
+                add_line(lines, Vec3{bottom.x + side.x, bottom.y, bottom.z + side.z},
+                         Vec3{top.x + side.x, top.y, top.z + side.z});
+            }
+            return;
+        }
+        [[fallthrough]];
     case PhysicsObject::Shape::Cone:
     case PhysicsObject::Shape::Wedge: {
         std::vector<b3Vec3> points;

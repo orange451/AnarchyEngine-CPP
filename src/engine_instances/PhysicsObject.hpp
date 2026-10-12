@@ -19,7 +19,9 @@ namespace engine_core {
 //                            stays as written. Box: its
 //                            extents. Sphere: diameter X. Capsule: diameter X,
 //                            height Y, along Y. Cylinder: diameter X,
-//                            height Y, along Y. Cone: base diameter X at
+//                            height Y, along Y; it collides as a true
+//                            cylinder, or as layered hulls when scaled
+//                            unevenly across X and Z. Cone: base diameter X at
 //                            the bottom, height Y to its tip. Wedge: Size's
 //                            box halved by a slope from its bottom front
 //                            (-Z) edge up to its top back (+Z) edge. Hull

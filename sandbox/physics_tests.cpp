@@ -583,11 +583,11 @@ TEST_CASE("P17 a collision outline traces what the body collides as, in the body
         REQUIRE(hull.size() == lines.size());
     }
 
-    SECTION("a Cylinder is sixteen sides around Y at half of Size's X, Size's Y tall") {
+    SECTION("a Cylinder is a true cylinder around Y at half of Size's X, Size's Y tall") {
         REQUIRE_FALSE(body.set_shape(static_cast<int>(PhysicsObject::Shape::Cylinder)));
         engine_core::PhysicsWorld::collision_outline(body, Vec3{}, no_points, no_triangles, lines);
-        // Sixteen edges around each cap and sixteen between them.
-        REQUIRE(lines.size() == 2 * 48);
+        // Two round rims (32 segments each) and four side lines between them.
+        REQUIRE(lines.size() == 2 * (32 + 32 + 4));
         for (const Vec3& p : lines) {
             REQUIRE(near(std::sqrt(p.x * p.x + p.z * p.z), 1.f, 1e-4f));
             REQUIRE(near(std::fabs(p.y), 2.f, 1e-4f));
@@ -1869,8 +1869,108 @@ TEST_CASE("P52 a Cylinder rolls smoothly: its centre stays level as it rolls on 
         high = std::max(high, y_of(wheel.transform()));
     }
     INFO(low << " .. " << high);
-    // One 16-sided hull bounced it 37 mm; layered, it stays within a few
-    // (Box3D's hull contacts, not the facets: a sphere's stays flat).
-    REQUIRE(high - low < 0.008f);
+    // A true cylinder (b3_cylinderShape): level to a tenth of a millimetre.
+    REQUIRE(high - low < 1e-4f);
     REQUIRE(z_of(wheel.transform()) > -6.f);
+}
+
+TEST_CASE("P53 a Cylinder is one true cylinder: it weighs its Mass, and a ray meets its round side",
+          "[physics][cylinder]") {
+    PhysicsRig rig;
+    // A log lying along X, anchored: radius 0.5, 2 long.
+    const Matrix4 lying = engine_core::matrix4_multiply(
+        at(0.f, 0.f, 0.f), engine_core::matrix4_axis_angle(Vec3{0.f, 0.f, 1.f}, 3.14159265358979 / 2.0));
+    PhysicsObject& log = rig.body(lying, Vec3{1.f, 2.f, 1.f}, true);
+    REQUIRE_FALSE(log.set_shape(static_cast<int>(PhysicsObject::Shape::Cylinder)));
+    PhysicsObject& wheel = rig.body(at(5.f, 5.f, 0.f), Vec3{1.f, 0.5f, 1.f}, false);
+    REQUIRE_FALSE(wheel.set_shape(static_cast<int>(PhysicsObject::Shape::Cylinder)));
+    REQUIRE_FALSE(wheel.set_mass(7.0));
+    rig.play();
+    rig.steps(1);
+    REQUIRE(rig.physics.shape_count(log.id()) == 1);
+    REQUIRE(rig.physics.shape_count(wheel.id()) == 1);
+    REQUIRE(near(rig.physics.body_mass(wheel.id()), 7.f, 1e-3f));
+    // Straight down at z = 0.1: the round side, not a polygon's flat.
+    const auto hit = rig.physics.raycast(rig.game, Vec3{0.3f, 3.f, 0.1f}, Vec3{0.f, -5.f, 0.f}, engine_core::RayFilter{});
+    REQUIRE(hit);
+    REQUIRE(hit->instance == log.id());
+    REQUIRE(near(hit->position.y, std::sqrt(0.25f - 0.01f), 1e-5f));
+}
+
+TEST_CASE("P54 a Cylinder scaled unevenly across X and Z stays layered hulls; evenly, one cylinder again",
+          "[physics][cylinder]") {
+    PhysicsRig rig;
+    GameObject& part = create_part(rig.game);
+    Matrix4 stretched = at(0.f, 5.f, 0.f);
+    stretched.m[0] = 2.f;  // X twice Z: an ellipse across
+    part.set_transform(stretched);
+    PhysicsObject& body = rig.body(engine_core::matrix4_identity(), Vec3{1.f, 1.f, 1.f}, false, part.id());
+    REQUIRE_FALSE(body.set_shape(static_cast<int>(PhysicsObject::Shape::Cylinder)));
+    rig.sync_steps(1);
+    REQUIRE(rig.physics.shape_count(body.id()) == 4);
+    stretched.m[10] = 2.f;  // Z too: round again
+    part.set_transform(stretched);
+    rig.sync_steps(1);
+    REQUIRE(rig.physics.shape_count(body.id()) == 1);
+}
+
+TEST_CASE("P55 a PlayerController stands and walks along a lying Cylinder", "[physics][cylinder]") {
+    PhysicsRig rig;
+    // A log, radius 1, lying along X, anchored, its top at y = 1.
+    const Matrix4 lying = engine_core::matrix4_multiply(
+        at(0.f, 0.f, 0.f), engine_core::matrix4_axis_angle(Vec3{0.f, 0.f, 1.f}, 3.14159265358979 / 2.0));
+    PhysicsObject& log = rig.body(lying, Vec3{2.f, 20.f, 2.f}, true);
+    REQUIRE_FALSE(log.set_shape(static_cast<int>(PhysicsObject::Shape::Cylinder)));
+    PlayerController& player = rig.controller(at(-3.f, 1.5f, 0.f));
+    REQUIRE_FALSE(player.set_friction(0.0));
+    rig.play();
+    rig.seconds(1.0);
+    REQUIRE(player.on_ground());
+    REQUIRE(near(y_of(player.transform()), 1.f, 0.05f));
+    REQUIRE_FALSE(player.set_velocity(Vec3{3.f, 0.f, 0.f}));
+    rig.seconds(1.0);
+    REQUIRE(x_of(player.transform()) > -1.f);
+    REQUIRE(player.on_ground());
+}
+
+TEST_CASE("P56 a CanCollide-off Cylinder is a sensor", "[physics][cylinder]") {
+    PhysicsRig rig;
+    PhysicsObject& zone = rig.body(at(0.f, 0.f, 0.f), Vec3{2.f, 2.f, 2.f}, true);
+    REQUIRE_FALSE(zone.set_shape(static_cast<int>(PhysicsObject::Shape::Cylinder)));
+    REQUIRE_FALSE(zone.set_can_collide(false));
+    rig.sync_steps(1);
+    REQUIRE(rig.physics.shape_count(zone.id()) == 1);
+    REQUIRE(rig.physics.shapes_are_sensors(zone.id()));
+}
+
+TEST_CASE("P57 a fast Cylinder does not tunnel through a thin wall", "[physics][cylinder]") {
+    PhysicsRig rig;
+    rig.body(at(5.f, 0.f, 0.f), Vec3{0.05f, 4.f, 4.f}, true);
+    PhysicsObject& slug = rig.body(at(0.f, 0.f, 0.f), Vec3{0.4f, 0.4f, 0.4f}, false);
+    REQUIRE_FALSE(slug.set_shape(static_cast<int>(PhysicsObject::Shape::Cylinder)));
+    REQUIRE_FALSE(slug.set_velocity(Vec3{300.f, 0.f, 0.f}));
+    rig.play();
+    rig.seconds(0.2);
+    REQUIRE(x_of(slug.transform()) < 5.f);
+}
+
+TEST_CASE("P58 a tiny Cylinder, or one under a GameObject scaled to almost nothing, does not crash",
+          "[physics][cylinder]") {
+    PhysicsRig rig;
+    rig.floor();
+    PhysicsObject& tiny = rig.body(at(0.f, 1.f, 0.f), Vec3{0.01f, 0.01f, 0.01f}, false);
+    REQUIRE_FALSE(tiny.set_shape(static_cast<int>(PhysicsObject::Shape::Cylinder)));
+    GameObject& part = create_part(rig.game);
+    Matrix4 shrunk = at(2.f, 1.f, 0.f);
+    shrunk.m[0] = shrunk.m[5] = shrunk.m[10] = 0.001f;
+    part.set_transform(shrunk);
+    PhysicsObject& speck = rig.body(engine_core::matrix4_identity(), Vec3{1.f, 1.f, 1.f}, false, part.id());
+    REQUIRE_FALSE(speck.set_shape(static_cast<int>(PhysicsObject::Shape::Cylinder)));
+    rig.play();
+    rig.seconds(1.0);
+    REQUIRE(rig.physics.shape_count(tiny.id()) >= 1);
+    REQUIRE(rig.physics.shape_count(speck.id()) >= 1);
+    REQUIRE(std::isfinite(y_of(tiny.transform())));
+    REQUIRE(std::isfinite(y_of(speck.transform())));
+    REQUIRE(y_of(tiny.transform()) < 1.f);
 }

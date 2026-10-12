@@ -478,6 +478,31 @@ if(NOT box3d_POPULATED)
     FetchContent_Populate(box3d)
 endif()
 set(BOX3D_SOURCE_DIR "${box3d_SOURCE_DIR}")
+# The cylinder shape (docs/superpowers/specs/2026-10-12-cylinder-shape-design.md)
+# patches Box3D's own files; cmake/box3d/cylinder.c is ours. The patch goes in
+# once: when it already reverses cleanly it is in place and left alone. One that
+# does not apply means the pin moved, and configuring stops rather than build
+# Box3D without it.
+set(BOX3D_PATCH "${CMAKE_CURRENT_SOURCE_DIR}/cmake/box3d/cylinder.patch")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${BOX3D_PATCH}")
+find_package(Git REQUIRED)
+execute_process(
+    COMMAND "${GIT_EXECUTABLE}" apply --reverse --check "${BOX3D_PATCH}"
+    WORKING_DIRECTORY "${BOX3D_SOURCE_DIR}"
+    RESULT_VARIABLE box3d_patch_in_place
+    OUTPUT_QUIET ERROR_QUIET)
+if(NOT box3d_patch_in_place EQUAL 0)
+    execute_process(
+        COMMAND "${GIT_EXECUTABLE}" apply "${BOX3D_PATCH}"
+        WORKING_DIRECTORY "${BOX3D_SOURCE_DIR}"
+        RESULT_VARIABLE box3d_patch_failed
+        ERROR_VARIABLE box3d_patch_error)
+    if(NOT box3d_patch_failed EQUAL 0)
+        message(FATAL_ERROR "cmake/box3d/cylinder.patch does not apply to Box3D in ${BOX3D_SOURCE_DIR}: "
+                            "${box3d_patch_error}")
+    endif()
+    message(STATUS "Box3D: applied cmake/box3d/cylinder.patch")
+endif()
 add_subdirectory(cmake/box3d "${CMAKE_BINARY_DIR}/box3d")
 
 # zstd compresses a Terrain's .avox chunks: BSD-licensed C by Meta, pinned by
@@ -1080,6 +1105,7 @@ add_executable(sandbox
     sandbox/event_args_tests.cpp
     sandbox/core_tests.cpp
     sandbox/archivable_tests.cpp
+    sandbox/cylinder_shape_tests.cpp
     sandbox/dragger_tests.cpp
     sandbox/move_tool_tests.cpp
     sandbox/terrain_tool_tests.cpp
@@ -1109,6 +1135,8 @@ add_executable(sandbox
 target_link_libraries(sandbox PRIVATE studio_core Catch2::Catch2WithMain)
 # The dense views tests check flecs state the engine keeps private.
 target_link_libraries(sandbox PRIVATE flecs)
+# The cylinder tests call Box3D directly (cmake/box3d/cylinder.c).
+target_link_libraries(sandbox PRIVATE box3d)
 target_compile_definitions(sandbox PRIVATE ANARCHY_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 target_compile_features(sandbox PRIVATE cxx_std_17)
 if(ENGINE_CORE_TSAN AND NOT MSVC)

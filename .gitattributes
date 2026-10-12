@@ -1,0 +1,2 @@
+# git apply needs the Box3D patch exactly as git diff wrote it: no CRLF.
+cmake/box3d/cylinder.patch -text

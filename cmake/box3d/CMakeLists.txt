@@ -4,7 +4,8 @@
 # one C11 feature Box3D uses that it lacks.
 file(GLOB BOX3D_SOURCES CONFIGURE_DEPENDS "${BOX3D_SOURCE_DIR}/src/*.c")
 
-add_library(box3d STATIC ${BOX3D_SOURCES})
+# cylinder.c is the engine's own: a true cylinder shape (cylinder.patch wires it in).
+add_library(box3d STATIC ${BOX3D_SOURCES} "${CMAKE_CURRENT_SOURCE_DIR}/cylinder.c")
 # PUBLIC is SYSTEM, so the engine's warnings do not report on Box3D's headers.
 target_include_directories(box3d SYSTEM PUBLIC "${BOX3D_SOURCE_DIR}/include")
 target_include_directories(box3d PRIVATE "${BOX3D_SOURCE_DIR}/src")

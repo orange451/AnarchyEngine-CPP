@@ -1,0 +1,60 @@
+diff --git a/include/box3d/collision.h b/include/box3d/collision.h
+index cb99349..5777d2e 100644
+--- a/include/box3d/collision.h
++++ b/include/box3d/collision.h
+@@ -615,6 +615,23 @@ B3_API b3TOIOutput b3TimeOfImpact( const b3TOIInput* input );
+  * @{
+  */
+ 
++/// The sides of a cylinder's stand-in hull (b3MakeCylinderHull). Anarchy Engine.
++#define B3_CYLINDER_HULL_SIDES 32
++
++/// Compute mass properties of a cylinder. Anarchy Engine.
++B3_API b3MassData b3ComputeCylinderMass( const b3Cylinder* shape, float density );
++
++/// Compute the bounding box of a transformed cylinder. Anarchy Engine.
++B3_API b3AABB b3ComputeCylinderAABB( const b3Cylinder* shape, b3Transform transform );
++
++/// Ray cast versus cylinder in local space. A ray starting inside reports a hit at its origin with zero
++/// fraction and zero normal, as b3RayCastCapsule does. Anarchy Engine.
++B3_API b3CastOutput b3RayCastCylinder( const b3Cylinder* shape, const b3RayCastInput* input );
++
++/// The cylinder as a hull of B3_CYLINDER_HULL_SIDES sides, its points on the true surface: the stand-in a
++/// cylinder shape's queries use. NULL if Box3D builds none. Destroy it with b3DestroyHull. Anarchy Engine.
++B3_API b3HullData* b3MakeCylinderHull( const b3Cylinder* shape );
++
+ /// Collide two spheres.
+ B3_API void b3CollideSpheres( b3LocalManifold* manifold, int capacity, const b3Sphere* sphereA, const b3Sphere* sphereB,
+ 							  b3Transform transformBtoA );
+diff --git a/include/box3d/types.h b/include/box3d/types.h
+index fb88971..dbb143d 100644
+--- a/include/box3d/types.h
++++ b/include/box3d/types.h
+@@ -1979,6 +1979,27 @@ typedef struct b3Capsule
+ 
+ /**@}*/ // capsule
+ 
++/**
++ * @defgroup cylinder Cylinder
++ * @brief Cylinder primitive (Anarchy Engine)
++ * @{
++ */
++
++/// A solid cylinder: two flat caps joined by a round side.
++typedef struct b3Cylinder
++{
++	/// Local center of the first cap
++	b3Vec3 center1;
++
++	/// Local center of the second cap
++	b3Vec3 center2;
++
++	/// The radius of the caps
++	float radius;
++} b3Cylinder;
++
++/**@}*/ // cylinder
++
+ /**
+  * @defgroup hull Convex Hull
+  * @brief Convex hull primitive

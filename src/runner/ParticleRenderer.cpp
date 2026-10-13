@@ -79,6 +79,7 @@ bool ParticleRenderer::create() {
     u_.facingAxis = at("uFacingAxis");
     u_.velocityStretch = at("uVelocityStretch");
     u_.grid = at("uGrid");
+    u_.flipY = at("uFlipY");
     u_.texture = at("uTexture");
     u_.hasTexture = at("uHasTexture");
     u_.sceneDepth = at("uSceneDepth");
@@ -155,11 +156,12 @@ void ParticleRenderer::destroy() {
         depthCopy_ = 0;
     }
     depthWidth_ = depthHeight_ = 0;
+    depthComplete_ = false;
 }
 
 bool ParticleRenderer::ensureDepthCopy(int width, int height) {
     if (depthCopy_ != 0 && depthWidth_ == width && depthHeight_ == height) {
-        return true;
+        return depthComplete_;
     }
     if (depthFbo_ == 0) {
         glGenFramebuffers(1, &depthFbo_);
@@ -181,6 +183,7 @@ bool ParticleRenderer::ensureDepthCopy(int width, int height) {
     const bool complete = glCheckFramebufferStatus(RT_GL_FRAMEBUFFER) == RT_GL_FRAMEBUFFER_COMPLETE;
     depthWidth_ = width;
     depthHeight_ = height;
+    depthComplete_ = complete;
     return complete;
 }
 
@@ -191,6 +194,7 @@ bool ParticleRenderer::draw(const ParticleBatch* batches, int count, const Parti
     }
     // The soft edges read a copy of the depth the see-through target writes against.
     const bool copied = ensureDepthCopy(frame.targetWidth, frame.targetHeight);
+    lastSoft_ = copied;
     if (copied) {
         glBindFramebuffer(RT_GL_READ_FRAMEBUFFER, readFramebuffer);
         glBindFramebuffer(RT_GL_DRAW_FRAMEBUFFER, depthFbo_);
@@ -202,8 +206,8 @@ bool ParticleRenderer::draw(const ParticleBatch* batches, int count, const Parti
     order_.resize(static_cast<std::size_t>(count));
     std::iota(order_.begin(), order_.end(), 0);
     std::stable_sort(order_.begin(), order_.end(), [&](int a, int b) {
-        const ParticleDraw& da = *batches[a].draw;
-        const ParticleDraw& db = *batches[b].draw;
+        const ParticleDraw& da = batches[a].draw;
+        const ParticleDraw& db = batches[b].draw;
         if (da.draw_order != db.draw_order) {
             return da.draw_order < db.draw_order;
         }
@@ -240,7 +244,7 @@ bool ParticleRenderer::draw(const ParticleBatch* batches, int count, const Parti
     glBindBuffer(GL_ARRAY_BUFFER, instances_);
     for (int index : order_) {
         const ParticleBatch& batch = batches[index];
-        const ParticleDraw& d = *batch.draw;
+        const ParticleDraw& d = batch.draw;
         if (!d.particles || d.particles->empty() || !in_view(d, frame.view, frame.projection)) {
             continue;
         }
@@ -249,6 +253,7 @@ bool ParticleRenderer::draw(const ParticleBatch* batches, int count, const Parti
         glActiveTexture(GL_TEXTURE0 + kUnitTexture);
         glBindTexture(GL_TEXTURE_2D, batch.texture);
         glUniform1i(u_.hasTexture, batch.texture != 0 ? 1 : 0);
+        glUniform1i(u_.flipY, d.texture_flip_y ? 1 : 0);
         glUniform1i(u_.facing, static_cast<int>(d.facing));
         glUniform3f(u_.facingAxis, d.facing_axis.x, d.facing_axis.y, d.facing_axis.z);
         glUniform1f(u_.velocityStretch, d.velocity_stretch);

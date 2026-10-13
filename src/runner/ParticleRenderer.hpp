@@ -7,9 +7,10 @@
 namespace runner {
 
 // One emitter to draw: its particles, and its texture as a GL name (0 draws
-// the built-in round dot).
+// the built-in round dot). A copy, so it outlives the snapshot it came from;
+// the particle list itself is shared.
 struct ParticleBatch {
-    const engine_core::ParticleDraw* draw = nullptr;
+    engine_core::ParticleDraw draw;
     unsigned texture = 0;
 };
 
@@ -48,6 +49,8 @@ public:
     // again. Leaves blending and depth state as it found them: depth test on,
     // depth writes off, blending on.
     bool draw(const ParticleBatch* batches, int count, const ParticleFrame& frame, unsigned readFramebuffer);
+    // Whether the last draw had the depth copy its soft edges read.
+    bool lastDrawSoft() const { return lastSoft_; }
 
 private:
     bool ensureDepthCopy(int width, int height);
@@ -61,10 +64,12 @@ private:
     unsigned depthFbo_ = 0;
     int depthWidth_ = 0;
     int depthHeight_ = 0;
+    bool depthComplete_ = false;
+    bool lastSoft_ = false;
     std::vector<int> order_;
     struct Uniforms {
         int view = -1, projection = -1, inverseProjection = -1, cameraPosition = -1, cameraRight = -1,
-            cameraUp = -1, facing = -1, facingAxis = -1, velocityStretch = -1, grid = -1, texture = -1,
+            cameraUp = -1, facing = -1, facingAxis = -1, velocityStretch = -1, grid = -1, flipY = -1, texture = -1,
             hasTexture = -1, sceneDepth = -1, targetSize = -1, softEdge = -1, brightness = -1,
             lightInfluence = -1, blend = -1, ambient = -1, lightCount = -1, lightPositionRadius = -1,
             lightColorIntensity = -1, lightDirection = -1, lightCone = -1;

@@ -985,7 +985,7 @@ void GameView::collectParticles(const engine_core::VisualSnapshot& snapshot) {
                 texture = 0;   // the dot, not a grey square, until it loads
             }
         }
-        particleBatches_.push_back(ParticleBatch{&draw, texture});
+        particleBatches_.push_back(ParticleBatch{draw, texture});
     }
     renderer_.setParticles(particleBatches_.data(), static_cast<int>(particleBatches_.size()));
 }

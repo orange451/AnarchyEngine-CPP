@@ -19,6 +19,7 @@ uniform int uFacing;            // 0 Camera, 1 CameraUpright, 2 Velocity, 3 Worl
 uniform vec3 uFacingAxis;       // world, unit
 uniform float uVelocityStretch;
 uniform vec2 uGrid;             // flipbook columns, rows
+uniform bool uFlipY;            // the Texture's FlipY
 
 out vec2 vUv;        // within the flipbook cell
 out vec2 vCorner;    // -1 .. 1 across the quad, for the built-in dot
@@ -66,6 +67,8 @@ void main() {
     vCorner = aCorner * 2.0;
     float column = mod(iFrame, uGrid.x);
     float row = floor(iFrame / uGrid.x);
-    // Rows count down from the top of the sheet.
-    vUv = (vec2(column, row) + vec2(aCorner.x + 0.5, 0.5 - aCorner.y)) / uGrid;
+    // Frames run from the sheet's top row down, each the right way up. A
+    // Texture's image has its top row at v 1, unless FlipY puts it at v 0.
+    vec2 sheet = (vec2(column, row) + vec2(aCorner.x + 0.5, 0.5 - aCorner.y)) / uGrid;
+    vUv = uFlipY ? sheet : vec2(sheet.x, 1.0 - sheet.y);
 }

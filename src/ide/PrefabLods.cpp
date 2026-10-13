@@ -1,6 +1,7 @@
 #include "PrefabLods.hpp"
 
 #include "AssetInstances.hpp"
+#include "Folder.hpp"
 #include "ScopedRecording.hpp"
 
 #include <algorithm>
@@ -159,6 +160,56 @@ std::optional<std::string> run_set_lod_texture(engine_core::DataModel& world, en
         slot.id = texture;
     }
     return live->set_reference(engine_core::LodLayer::kTextureReference, slot);
+}
+
+std::optional<std::string> run_set_lod_card(engine_core::DataModel& world, engine_core::InstanceId layer,
+                                            const std::string& path, float width, float height) {
+    ScopedRecording step(world, "Bake Billboard");
+    engine_core::LodLayer* live = live_layer(world, layer);
+    if (live == nullptr) {
+        return std::string(kGone);
+    }
+    const engine_core::InstanceId textures = world.service("Textures");
+    if (textures == 0) {
+        return std::string("This place has no Textures to keep the card in");
+    }
+    // The cards' folder in Textures, made the first time.
+    engine_core::InstanceId folder = world.find_first_child(textures, "Billboards");
+    if (folder != 0 && dynamic_cast<engine_core::Folder*>(world.instance(folder)) == nullptr) {
+        folder = 0;
+    }
+    if (world.room_left() < 2) {
+        return std::string(engine_core::InstanceCapacityError(world.instance_capacity()).what());
+    }
+    if (folder == 0) {
+        engine_core::Folder& made = world.create<engine_core::Folder>();
+        world.set_name(made.id(), unique_child_name(world, textures, "Billboards"));
+        world.set_parent(made.id(), textures);
+        folder = made.id();
+    }
+    // The layer's own card when it shows one from there; else a new one.
+    engine_core::Texture* texture = nullptr;
+    const engine_core::LuaSlot current = live->reference(engine_core::LodLayer::kTextureReference);
+    if (current.kind == engine_core::LuaSlot::Kind::Instance && world.alive(current.id) &&
+        world.parent(current.id) == folder) {
+        texture = dynamic_cast<engine_core::Texture*>(world.instance(current.id));
+    }
+    if (texture == nullptr) {
+        engine_core::Texture& made = world.create<engine_core::Texture>();
+        world.set_name(made.id(), unique_child_name(world, folder, world.name(world.parent(layer)) + " Card"));
+        world.set_parent(made.id(), folder);
+        texture = &made;
+    }
+    if (std::optional<std::string> error = texture->set_path(path)) {
+        return error;
+    }
+    engine_core::LuaSlot slot;
+    slot.kind = engine_core::LuaSlot::Kind::Instance;
+    slot.id = texture->id();
+    if (std::optional<std::string> error = live->set_reference(engine_core::LodLayer::kTextureReference, slot)) {
+        return error;
+    }
+    return live->set_size({width, height});
 }
 
 std::optional<std::string> run_set_lod_size(engine_core::DataModel& world, engine_core::InstanceId layer, float width,

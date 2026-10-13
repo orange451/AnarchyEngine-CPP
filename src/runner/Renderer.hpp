@@ -134,7 +134,7 @@ struct MeshDraw {
     float lodFar = std::numeric_limits<float>::infinity();
     // A billboard (LodKind::Billboard): mesh is MeshCache::billboardQuad, and
     // model the row's with the billboard's width and height in its axes. The
-    // instance a frame draws is turned about model's up axis to face the camera.
+    // vertex shader turns it about model's up axis to face the camera.
     bool billboard = false;
     // A billboard's width and height in units, before the row's Scale.
     float billboardSize[2] = {0.f, 0.f};
@@ -461,6 +461,11 @@ public:
     // there is nothing to read.
     bool read(double x, double y, double width, double height, double sceneWidth, double sceneHeight,
               ViewPixels& out) const;
+    // The last draw's G-buffer albedo: its opaque surfaces as their Materials
+    // and textures color them, before any light. RGB as sRGB, alpha 255 where
+    // a surface was drawn and 0 elsewhere, top row first, at the draw's size
+    // in pixels. False when there is none. Leaves the framebuffer binding.
+    bool readAlbedo(ViewPixels& out) const;
     // Also deletes the look textures terrainLookTexture made.
     void shutdown();
     // terrain's look table as a GL texture for MeshDraw::terrainLook: made
@@ -626,6 +631,8 @@ private:
         int blurRadius = -1;
         int occlusionEnabled = -1;
         int occlusionIntensity = -1;
+        // geometry.vert's billboards (MeshDraw::billboard).
+        int billboard = -1;
         // DynamicSky (procedural_sky.glsl).
         int face = -1;
         int sunDirection = -1;

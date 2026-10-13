@@ -34,6 +34,9 @@ struct PrefabEditorHost {
     // texture 0 clears it.
     std::function<void(engine_core::InstanceId layer, engine_core::InstanceId texture)> set_lod_texture;
     std::function<void(engine_core::InstanceId layer, float width, float height)> set_lod_size;
+    // Makes the card baked for layer, saved at path under the resources
+    // folder, its Texture and Size (run_set_lod_card).
+    std::function<void(engine_core::InstanceId layer, std::string path, float width, float height)> set_lod_card;
     // Points model's part at target, or at nothing when target is 0.
     std::function<void(engine_core::InstanceId model, ModelPart part, engine_core::InstanceId target)> set_part;
     std::function<void(engine_core::InstanceId id, std::string name)> rename;
@@ -44,6 +47,7 @@ struct PrefabEditorHost {
 };
 
 class AssetPicker;
+class BillboardBaker;
 
 // Edits one Prefab: its Models, and the Mesh and Material each one pairs.
 //
@@ -74,9 +78,11 @@ class AssetPicker;
 // typed in place, and what it draws from there on. Model swaps in its own
 // Models, cards as above with their own New Model tile; Billboard draws a
 // Texture on a card turned to face the camera, its slot picked or dropped
-// on like a Model's, with its width and height; None draws nothing. Add LOD
-// adds one farther out. A click on a layer's card selects it, and Delete
-// removes it with its Models. Every change is one undo step.
+// on like a Model's, with its width and height, or baked: Bake card draws
+// the Prefab's own Models onto a card, saves it in the resources folder, and
+// makes it the layer's Texture and Size. None draws nothing. Add LOD adds one
+// farther out. A click on a layer's card selects it, and Delete removes it
+// with its Models. Every change is one undo step.
 class IdePrefabEditor : public IdePane {
 public:
     IdePrefabEditor(engine_core::DataModel& world, engine_core::InstanceId prefab, PrefabEditorHost host = {});
@@ -95,6 +101,11 @@ public:
     void addLod();
     // Opens a Billboard layer's Texture picker.
     void openTexturePicker(engine_core::InstanceId layer);
+    // Bakes a card for a Billboard layer from its Prefab's Models, the next
+    // time the editor paints (it needs GL). What Bake card does.
+    void bakeCard(engine_core::InstanceId layer);
+    // The layer a bake is waiting to draw, or 0.
+    engine_core::InstanceId baking() const { return baking_; }
     // Opens model's picker for part. guided chains to the Material picker after a Mesh pick.
     void openPicker(engine_core::InstanceId model, ModelPart part, bool guided = false);
     void closePicker();
@@ -128,10 +139,14 @@ public:
     // axis 0 is the width, 1 the height.
     jadefx::TextField* lodSizeField(engine_core::InstanceId layer, int axis) const;
     jadefx::Node* lodNewModelTile(engine_core::InstanceId layer) const;
+    jadefx::Node* lodBakeButton(engine_core::InstanceId layer) const;
 
 protected:
     void layoutChildren() override;
     void handleKey(jadefx::KeyEvent& event) override;
+    // Draws a waiting bake: GL is current while the pane paints.
+    void renderContent(jadefx::UiRenderer& renderer, float opacity) override;
+    void sceneChanged(jadefx::Scene* previous) override;
 
 private:
     struct Card;
@@ -155,6 +170,10 @@ private:
     void clicked_lod(engine_core::InstanceId layer, const jadefx::MouseEvent& event);
     // Scrolls the page just enough to show node.
     void reveal(const jadefx::Node& node);
+    // Draws, saves, and hands on the card baking_ waits for, or tries again next paint.
+    void bake_pending();
+    // Ends the bake, saying why when there is a why.
+    void end_bake(const std::string& why);
     void show_header();
     void show_selection();
     void clicked_card(engine_core::InstanceId model, const jadefx::MouseEvent& event);
@@ -222,6 +241,12 @@ private:
     engine_core::InstanceId reveal_lod_ = 0;
     // Frames spent waiting for that card.
     int reveal_waited_ = 0;
+    // A Bake card waiting for the next paint, and the paints it has waited for textures.
+    engine_core::InstanceId baking_ = 0;
+    int bake_waits_ = 0;
+    // False when a bake ended while painting, until the cards show it.
+    bool bake_shown_ = true;
+    std::unique_ptr<BillboardBaker> baker_;
     // A picker to open once the card it belongs to is on screen.
     struct PendingPicker {
         engine_core::InstanceId model = 0;

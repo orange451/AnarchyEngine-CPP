@@ -65,4 +65,17 @@ std::string EncodePng(const ViewPixels& pixels) {
     return png;
 }
 
+std::string EncodePngWithAlpha(const ViewPixels& pixels) {
+    if (pixels.empty() || pixels.rgba.size() < static_cast<std::size_t>(pixels.width) * pixels.height * 4) {
+        return {};
+    }
+    std::string png;
+    stbi_write_png_to_func(
+        [](void* context, void* data, int size) {
+            static_cast<std::string*>(context)->append(static_cast<const char*>(data), static_cast<std::size_t>(size));
+        },
+        &png, pixels.width, pixels.height, 4, pixels.rgba.data(), pixels.width * 4);
+    return png;
+}
+
 }  // namespace runner

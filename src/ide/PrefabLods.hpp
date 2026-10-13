@@ -65,5 +65,12 @@ std::optional<std::string> run_set_lod_texture(engine_core::DataModel& world, en
                                                engine_core::InstanceId texture);
 std::optional<std::string> run_set_lod_size(engine_core::DataModel& world, engine_core::InstanceId layer, float width,
                                             float height);
+// A card baked for layer (BillboardBaker), saved at path under the resources
+// folder, as layer's Texture and Size, width by height units. The Texture is
+// layer's own when it already shows a card from Assets' Textures/Billboards
+// folder, else a new one there, named after the Prefab; its Path becomes
+// path. One undo step.
+std::optional<std::string> run_set_lod_card(engine_core::DataModel& world, engine_core::InstanceId layer,
+                                            const std::string& path, float width, float height);
 
 }  // namespace ide

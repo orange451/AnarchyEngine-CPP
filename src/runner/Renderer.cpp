@@ -318,6 +318,7 @@ bool Renderer::buildProgram(Program& program, const char* name, const char* vert
     program.occlusionEnabled = at("uOcclusionEnabled");
     program.occlusionIntensity = at("uOcclusionIntensity");
     program.face = at("uFace");
+    program.billboard = at("uBillboard");
     program.sunDirection = at("uSunDirection");
     program.moonDirection = at("uMoonDirection");
     program.starFrame = at("uStarFrame");
@@ -1924,6 +1925,7 @@ void Renderer::bindMaterial(const Program& program, const MeshDraw& draw) {
     glUniform1f(program.normalMapEnabled, draw.normalTexture != 0 ? 1.f : 0.f);
     glUniform1f(program.emissiveMapEnabled, draw.emissiveTexture != 0 ? 1.f : 0.f);
     glUniform1f(program.transparency, std::clamp(draw.transparency, 0.f, 1.f));
+    glUniform1i(program.billboard, draw.billboard ? 1 : 0);
 }
 
 void Renderer::prepareSky() {
@@ -2884,6 +2886,36 @@ bool Renderer::fxaaPass() {
     }
     DrawFullscreen(emptyVao_);
     return true;
+}
+
+bool Renderer::readAlbedo(ViewPixels& out) const {
+    out = ViewPixels{};
+    if (albedoTexture_ == 0 || targetWidth_ <= 0 || targetHeight_ <= 0) {
+        return false;
+    }
+    GLint previous = 0;
+    glGetIntegerv(RT_GL_FRAMEBUFFER_BINDING, &previous);
+    GLuint framebuffer = 0;
+    glGenFramebuffers(1, &framebuffer);
+    glBindFramebuffer(RT_GL_FRAMEBUFFER, framebuffer);
+    glFramebufferTexture2D(RT_GL_FRAMEBUFFER, RT_GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, albedoTexture_, 0);
+    const bool complete = glCheckFramebufferStatus(RT_GL_FRAMEBUFFER) == RT_GL_FRAMEBUFFER_COMPLETE;
+    if (complete) {
+        const std::size_t row = static_cast<std::size_t>(targetWidth_) * 4;
+        // RGBA rows are whole words, so the default pack alignment of 4 adds no padding.
+        std::vector<unsigned char> bottomUp(row * static_cast<std::size_t>(targetHeight_));
+        glReadPixels(0, 0, targetWidth_, targetHeight_, GL_RGBA, GL_UNSIGNED_BYTE, bottomUp.data());
+        out.width = targetWidth_;
+        out.height = targetHeight_;
+        out.rgba.resize(bottomUp.size());
+        for (int y = 0; y < targetHeight_; ++y) {
+            std::copy_n(bottomUp.data() + row * static_cast<std::size_t>(targetHeight_ - 1 - y), row,
+                        out.rgba.data() + row * static_cast<std::size_t>(y));
+        }
+    }
+    glBindFramebuffer(RT_GL_FRAMEBUFFER, static_cast<GLuint>(previous));
+    glDeleteFramebuffers(1, &framebuffer);
+    return complete;
 }
 
 bool Renderer::read(double x, double y, double width, double height, double sceneWidth, double sceneHeight,

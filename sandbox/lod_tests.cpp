@@ -291,7 +291,8 @@ TEST_CASE("LOD5 a banded draw is seen and casts only while the camera is in its 
     REQUIRE(castersOf(drawn) == std::vector<int>{1, 2});
 }
 
-TEST_CASE("LOD6 a billboard's instance turns about its up axis to face the camera, keeping its size", "[lod]") {
+TEST_CASE("LOD6 a billboard's instance carries its row's card as it is, for the vertex shader to turn",
+          "[lod]") {
     // A 4 by 8 card at (10, 0, 0) (MakeRowDraw's axes), seen from above and to its side.
     engine_core::Matrix4 card = engine_core::matrix4_translation(10.f, 0.f, 0.f);
     card.m[0] = 4.f;
@@ -309,14 +310,14 @@ TEST_CASE("LOD6 a billboard's instance turns about its up axis to face the camer
     runner::DrawBatches out;
     runner::BuildBatches(&item, visible, view, out);
     REQUIRE(out.instances.size() == 1);
+    // Its model as the row made it: geometry.vert turns it (SceneRenderCheck draws that).
     const float* m = out.instances[0].model;
-    // Its face (+Z) points level at the camera, -X; its width runs across, its height stays up.
-    REQUIRE(Near(m[8], -1.f));
-    REQUIRE(Near(m[9], 0.f));
-    REQUIRE(Near(m[10], 0.f));
-    REQUIRE(Near(m[0], 0.f));
-    REQUIRE(Near(m[2], 4.f));
-    REQUIRE(Near(m[5], 8.f));
-    REQUIRE(m[12] == 10.f);
+    for (int i = 0; i < 16; ++i) {
+        REQUIRE(m[i] == card.m[i]);
+    }
+    // No normal matrix: the shader's normal faces the camera.
+    for (const float value : out.instances[0].normal) {
+        REQUIRE(value == 0.f);
+    }
     REQUIRE_FALSE(out.runs[0].mirrored);
 }

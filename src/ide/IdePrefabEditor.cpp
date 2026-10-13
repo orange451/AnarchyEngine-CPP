@@ -3,6 +3,7 @@
 
 #include "AssetInstances.hpp"
 #include "AssetPicker.hpp"
+#include "BillboardBaker.hpp"
 #include "DataModelLock.hpp"
 #include "IdeIcons.hpp"
 #include "PropertySheet.hpp"
@@ -13,7 +14,10 @@
 #include <cctype>
 #include <cmath>
 #include <cstdlib>
+#include <filesystem>
+#include <fstream>
 #include <iterator>
+#include <system_error>
 #include <utility>
 
 namespace ide {
@@ -32,6 +36,8 @@ constexpr double kTileHeight = 228;
 
 // Frames a picker waits for its card to be laid out and scrolled into view.
 constexpr int kPickerWaitFrames = 30;
+// Paints a bake waits for the Prefab's textures to load before it gives up.
+constexpr int kBakeWaits = 600;
 
 constexpr const char* kEditorRules = R"CSS(
 .prefab-editor {
@@ -679,10 +685,11 @@ struct IdePrefabEditor::LodCard {
     // Model: its Models' cards, and its New Model tile.
     std::shared_ptr<jadefx::FlowPane> grid;
     std::shared_ptr<jadefx::Node> new_tile;
-    // Billboard: its Texture, and its width and height.
+    // Billboard: its Texture, its width and height, and Bake card.
     std::shared_ptr<jadefx::HBox> billboard;
     SlotWidgets texture;
     std::shared_ptr<NumberField> size[2];
+    std::shared_ptr<jadefx::Button> bake;
     // None.
     std::shared_ptr<jadefx::Label> none;
     // Set by a control inside the card, so the click it bubbles to the card does nothing more.
@@ -919,6 +926,10 @@ void IdePrefabEditor::layoutChildren() {
 }
 
 void IdePrefabEditor::refresh() {
+    if (!bake_shown_) {
+        bake_shown_ = true;
+        sync_cards();
+    }
     const std::uint64_t tree = world_.tree_revision();
     // Taken before the read, so a change made while reading reads again next frame.
     const bool edited = edited_.take();
@@ -1218,6 +1229,19 @@ std::shared_ptr<IdePrefabEditor::LodCard> IdePrefabEditor::make_lod_card(const L
     size_row->getChildren().add(field_word("units"));
     size->getChildren().add(size_row);
     card->billboard->getChildren().add(size);
+    // Bake card: the Prefab's own Models drawn onto the card, its texture and size.
+    auto bake = jadefx::make<jadefx::VBox>();
+    bake->getClassList().add("pe-section");
+    bake->getChildren().add(text_label("FROM ITS MODELS", "pe-slot-label"));
+    card->bake = jadefx::make<jadefx::Button>("Bake card");
+    card->bake->getClassList().add("pe-secondary");
+    card->bake->setElementId("pe-lod-bake:" + std::to_string(id));
+    card->bake->setOnAction([this, id](jadefx::ActionEvent&) { bakeCard(id); });
+    jadefx::Tooltip::install(card->bake.get(),
+                             jadefx::make<jadefx::Tooltip>("Draw this Prefab's Models onto a card, and use it as this "
+                                                           "LOD's texture and size"));
+    bake->getChildren().add(card->bake);
+    card->billboard->getChildren().add(bake);
     accept_texture_drops(*card->billboard, id);
 
     // None: what it saves.
@@ -1271,6 +1295,8 @@ void IdePrefabEditor::fill_lod_card(LodCard& card, const LodView& view, std::vec
         show_slot(card.texture, "Texture.png", "texture", "Texture", view.texture);
         card.size[0]->show(view.width);
         card.size[1]->show(view.height);
+        card.bake->setText(baking_ == view.id ? "Baking..." : "Bake card");
+        card.bake->setDisable(baking_ != 0 || !host_.set_lod_card);
         body = card.billboard;
         break;
     case engine_core::LodKind::None:
@@ -1550,6 +1576,116 @@ void IdePrefabEditor::addLod() {
     closePicker();
     pending_lod_ = std::make_shared<InsertResult>();
     host_.add_lod(prefab_, pending_lod_);
+}
+
+void IdePrefabEditor::bakeCard(engine_core::InstanceId layer) {
+    const LodView* view = lod_view(layer);
+    if (view == nullptr || view->kind != engine_core::LodKind::Billboard || baking_ != 0 || !host_.set_lod_card) {
+        return;
+    }
+    baking_ = layer;
+    bake_waits_ = 0;
+    // The button says it is baking; the next paint draws it.
+    sync_cards();
+}
+
+void IdePrefabEditor::end_bake(const std::string& why) {
+    baking_ = 0;
+    bake_waits_ = 0;
+    if (!why.empty() && host_.notice) {
+        host_.notice(why);
+    }
+    // Called while painting: the cards show it at the next layout.
+    bake_shown_ = false;
+    markLayoutDirty(LayoutDirt::Arrange);
+}
+
+void IdePrefabEditor::renderContent(jadefx::UiRenderer& renderer, float opacity) {
+    IdePane::renderContent(renderer, opacity);
+    if (baking_ != 0) {
+        bake_pending();
+    }
+}
+
+void IdePrefabEditor::sceneChanged(jadefx::Scene* previous) {
+    IdePane::sceneChanged(previous);
+    // Leaving a live scene releases the baker's GL objects while the context
+    // that made them is current; the next bake makes them again. Scene
+    // teardown runs after JadeFX destroyed the context.
+    if (previous == nullptr || previous->isTearingDown() || getScene() == previous || !baker_) {
+        return;
+    }
+    baker_->release();
+}
+
+void IdePrefabEditor::bake_pending() {
+    engine_core::VisualPrefab prefab;
+    engine_core::Vec3 low{};
+    engine_core::Vec3 high{};
+    bool boxed = false;
+    std::filesystem::path root;
+    std::string name;
+    {
+        engine_core::DataModelLock lock(world_, engine_core::DataModelLock::Read, kFrameLockWait);
+        if (!lock.owns()) {
+            return;
+        }
+        const engine_core::InstanceId owner = world_.alive(baking_) ? world_.parent(baking_) : 0;
+        const auto* holder = dynamic_cast<const engine_core::Prefab*>(world_.instance(owner));
+        if (holder == nullptr) {
+            end_bake("That LOD no longer exists");
+            return;
+        }
+        engine_core::InstanceId cached = owner;
+        engine_core::fill_visual_prefab(world_, world_.guid(owner), cached, prefab);
+        boxed = holder->bounds(low, high);
+        root = world_.resources_root();
+        name = world_.name(owner);
+    }
+    if (!boxed || prefab.meshes.empty() || !(card_frame(low, high).height > 0.f)) {
+        end_bake("A card is drawn from the Prefab's Models: give it one with a Mesh first");
+        return;
+    }
+    if (root.empty()) {
+        end_bake("Save the place first: its card is kept in the resources folder");
+        return;
+    }
+    if (!baker_) {
+        baker_ = std::make_unique<BillboardBaker>();
+    }
+    baker_->setRoot(root);
+    runner::ViewPixels card;
+    if (!baker_->bake(prefab, low, high, card)) {
+        // A texture still loads: drawn whole on a later paint.
+        if (++bake_waits_ > kBakeWaits) {
+            end_bake("No card was baked: the Prefab's textures did not load, or the GPU would not draw it");
+        }
+        markLayoutDirty(LayoutDirt::Arrange);
+        return;
+    }
+    if (card.empty()) {
+        end_bake("The card could not be drawn");
+        return;
+    }
+    const std::string png = runner::EncodePngWithAlpha(card);
+    const std::string path = card_file(name, png);
+    const std::filesystem::path file = root / std::filesystem::u8path(path);
+    std::error_code error;
+    std::filesystem::create_directories(file.parent_path(), error);
+    {
+        std::ofstream out(file, std::ios::binary);
+        out << png;
+        if (!out) {
+            end_bake("The card could not be saved to " + file.u8string());
+            return;
+        }
+    }
+    // The card as drawn: its height, and as wide as its pixels make it.
+    const float height = card_frame(low, high).height;
+    const float width = height * static_cast<float>(card.width) / static_cast<float>(card.height);
+    const engine_core::InstanceId layer = baking_;
+    end_bake("");
+    host_.set_lod_card(layer, path, width, height);
 }
 
 void IdePrefabEditor::openTexturePicker(engine_core::InstanceId layer) {
@@ -1964,6 +2100,13 @@ jadefx::Node* IdePrefabEditor::lodTextureSlot(engine_core::InstanceId layer) con
 jadefx::TextField* IdePrefabEditor::lodSizeField(engine_core::InstanceId layer, int axis) const {
     const LodCard* card = lod_card(layer);
     return card != nullptr && (axis == 0 || axis == 1) ? card->size[axis].get() : nullptr;
+}
+
+jadefx::Node* IdePrefabEditor::lodBakeButton(engine_core::InstanceId layer) const {
+    const LodCard* card = lod_card(layer);
+    const LodView* view = lod_view(layer);
+    return card != nullptr && view != nullptr && view->kind == engine_core::LodKind::Billboard ? card->bake.get()
+                                                                                               : nullptr;
 }
 
 jadefx::Node* IdePrefabEditor::lodNewModelTile(engine_core::InstanceId layer) const {

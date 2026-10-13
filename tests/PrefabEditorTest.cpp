@@ -1,3 +1,4 @@
+#include "ide/BillboardBaker.hpp"
 #include "ide/IdePrefabEditor.hpp"
 #include "ide/PrefabLods.hpp"
 #include "ide/PrefabModels.hpp"
@@ -124,6 +125,9 @@ struct Rig {
         };
         host.set_lod_size = [this, said](InstanceId layer, float width, float height) {
             said(ide::run_set_lod_size(game, layer, width, height));
+        };
+        host.set_lod_card = [this, said](InstanceId layer, std::string path, float width, float height) {
+            said(ide::run_set_lod_card(game, layer, path, width, height));
         };
         editor = jadefx::make<ide::IdePrefabEditor>(game, crate, std::move(host));
         editor->setPrefWidthRatio(1);
@@ -542,6 +546,78 @@ void lod_section() {
            "Delete removes the selected LOD");
 }
 
+// A baked card: a Texture in Textures/Billboards with the card's Path, and
+// the card's size, in one undo step; baked again, the same Texture.
+void lod_card_bake() {
+    Rig rig;
+    engine_core::Game& game = rig.game;
+    std::string error;
+    const InstanceId layer = ide::run_add_lod(game, rig.crate, error);
+    Expect(!ide::run_set_lod_kind(game, layer, LodKind::Billboard), "a billboard to bake for");
+    Expect(!ide::run_set_lod_card(game, layer, "textures/billboards/Crate.00000001.png", 2.f, 3.f), "a card is set");
+    ide::LodView card = ide::read_lods(game, rig.crate)[0];
+    Expect(card.texture.id != 0 && card.texture.where == "Textures/Billboards" && card.texture.name == "Crate Card",
+           "its Texture is new, in Textures/Billboards, named after the Prefab");
+    const auto* texture = dynamic_cast<const engine_core::Texture*>(game.instance(card.texture.id));
+    Expect(texture != nullptr && texture->path() == "textures/billboards/Crate.00000001.png", "its Path is the card's");
+    Expect(card.width == 2.f && card.height == 3.f, "the layer takes the card's size");
+    game.history().undo();
+    card = ide::read_lods(game, rig.crate)[0];
+    Expect(card.texture.id == 0 && card.width == 4.f &&
+               game.find_first_child(game.service("Textures"), "Billboards") == 0,
+           "one undo takes back the Texture, its folder, and the size");
+    game.history().redo();
+    const InstanceId first = ide::read_lods(game, rig.crate)[0].texture.id;
+    Expect(!ide::run_set_lod_card(game, layer, "textures/billboards/Crate.00000002.png", 2.5f, 3.f), "baked again");
+    card = ide::read_lods(game, rig.crate)[0];
+    texture = dynamic_cast<const engine_core::Texture*>(game.instance(card.texture.id));
+    Expect(card.texture.id == first && texture != nullptr && texture->path() == "textures/billboards/Crate.00000002.png",
+           "baked again, the same Texture takes the new card");
+
+    // The button: a Billboard's card has it, and a click waits for the next paint to draw.
+    rig.frames(2);
+    Expect(rig.editor->lodBakeButton(layer) != nullptr, "a billboard's card has Bake card");
+    rig.click(rig.editor->lodBakeButton(layer));
+    Expect(rig.editor->baking() == layer, "Bake card waits to draw at the next paint");
+}
+
+// The card's frame, its pixels shrunk with their color carried into the clear ones, and its file.
+void card_pixels() {
+    const ide::CardFrame frame = ide::card_frame({-1.f, -0.5f, -3.f}, {2.f, 6.f, 1.f});
+    Expect(frame.width == 6.f && frame.height == 6.f, "a card is twice the widest reach wide, from the origin up");
+    // Six by two: an opaque red block, a block with one opaque blue pixel, and a clear block.
+    runner::ViewPixels render;
+    render.width = 6;
+    render.height = 2;
+    render.rgba.assign(6 * 2 * 4, 0);
+    const auto put = [&](int x, int y, unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
+        unsigned char* p = render.rgba.data() + (static_cast<std::size_t>(y) * 6 + static_cast<std::size_t>(x)) * 4;
+        p[0] = r;
+        p[1] = g;
+        p[2] = b;
+        p[3] = a;
+    };
+    for (int y = 0; y < 2; ++y) {
+        put(0, y, 200, 0, 0, 255);
+        put(1, y, 200, 0, 0, 255);
+    }
+    put(3, 1, 0, 0, 200, 255);
+    const runner::ViewPixels small = ide::shrink_card(render);
+    Expect(small.width == 3 && small.height == 1, "shrunk to half");
+    if (small.rgba.size() == 12) {
+        Expect(small.rgba[0] == 200 && small.rgba[3] == 255, "a drawn block keeps its color, whole");
+        Expect(small.rgba[6] == 200 && small.rgba[7] == 64, "a part-drawn block keeps the drawn color, a quarter there");
+        Expect(small.rgba[11] == 0 && small.rgba[10] == 200, "a clear block carries its nearest drawn color");
+    }
+    const std::string named = ide::card_file("Oak Tree/1", "bytes");
+    Expect(named.rfind("textures/billboards/Oak_Tree_1.", 0) == 0 && named.size() > 4 &&
+               named.compare(named.size() - 4, 4, ".png") == 0,
+           "a card's file is in textures/billboards, named after its Prefab");
+    Expect(ide::card_file("Oak", "bytes") == ide::card_file("Oak", "bytes") &&
+               ide::card_file("Oak", "bytes") != ide::card_file("Oak", "other bytes"),
+           "the same card is the same file; a different card, another");
+}
+
 }  // namespace
 
 // A long Model or asset name ends in an ellipsis inside its card.
@@ -588,6 +664,8 @@ int main() {
     long_names_fit();
     lod_logic();
     lod_section();
+    lod_card_bake();
+    card_pixels();
     if (gFailures != 0) {
         std::fprintf(stderr, "%d failed\n", gFailures);
         return 1;

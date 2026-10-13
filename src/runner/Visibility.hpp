@@ -51,8 +51,8 @@ struct DrawItem {
     // camera to model's origin. Outside it, it is neither seen nor casts.
     float lodNear = 0.f;
     float lodFar = std::numeric_limits<float>::infinity();
-    // A billboard (MeshDraw::billboard): each frame's instance is turned
-    // about model's up axis to face the camera.
+    // A billboard (MeshDraw::billboard): its instance carries model as it is,
+    // which the vertex shader turns to face the camera, and no normal matrix.
     bool billboard = false;
 };
 

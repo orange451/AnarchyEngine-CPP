@@ -51,9 +51,9 @@ const anarchy::amesh::GpuMesh* MeshCache::billboardQuad() {
             vertex.p[0] = corner[0];
             vertex.p[1] = corner[1];
             vertex.n[2] = 1.f;
-            // A texture's first row is v 0: the top of the quad.
+            // An image loads bottom row first, as OpenGL takes it: v 1 is its top row.
             vertex.uv[0] = corner[0] + 0.5f;
-            vertex.uv[1] = 1.f - corner[1];
+            vertex.uv[1] = corner[1];
             vertex.t[0] = 1.f;
             data.vertices.push_back(vertex);
         }

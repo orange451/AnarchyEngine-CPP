@@ -7,6 +7,7 @@
 #include "DynamicSky.hpp"
 #include "Skeleton.hpp"
 #include "ParticleWorld.hpp"
+#include "SharedRows.hpp"
 #include "TerrainWorld.hpp"
 #include "types.hpp"
 
@@ -315,10 +316,14 @@ struct SnapshotOverride {
     Matrix4 transform = matrix4_identity();
 };
 
+// The snapshot's rows: copies share chunks of rows, so publishing and
+// handing a frame to the UI copy pointers, not rows (SharedRows).
+using VisualRows = SharedRows<VisualInstance>;
+
 struct VisualSnapshot {
     std::uint64_t frame = 0;
     Matrix4 camera = matrix4_identity();
-    std::vector<VisualInstance> instances;
+    VisualRows instances;
     // Indexed by VisualInstance::prefab. Entry 0 is always empty.
     std::vector<VisualPrefab> prefabs;
     VisualLighting lighting;
@@ -365,6 +370,8 @@ public:
     SnapshotPump(const SnapshotPump&) = delete;
     SnapshotPump& operator=(const SnapshotPump&) = delete;
 
+    // A starting size for the rows; they grow past it as a place grows.
+    static constexpr std::size_t kInitialRows = 16384;
     void reserve(std::size_t instances);
 
     void begin_prerender_window(DataModel& game);
@@ -405,7 +412,8 @@ private:
         std::uint32_t rows = 0;
     };
 
-    VisualInstance* base_find(InstanceId id);
+    // id's row position in base_, or -1.
+    int base_position(InstanceId id) const;
     void erase_base(InstanceId id);
     void apply_live(DataModel& game, const Invalidation& change);
     void resync(DataModel& game);
@@ -448,6 +456,14 @@ private:
     VisualSnapshot base_{};
     VisualSnapshot buffers_[2]{};
     int front_ = 0;
+    // The rows whose Prefab has a skeleton, by id, as resolve_poses last found
+    // them, and the rows whose Prefab changed since. Only these are looked at,
+    // however many other rows there are; every row is looked at again only
+    // after a resync or when a Prefab gains or loses its skeleton.
+    std::vector<InstanceId> posed_ids_;
+    std::vector<InstanceId> pose_touched_;
+    std::vector<bool> prefab_skinned_;
+    bool poses_dirty_ = true;
     std::uint64_t next_frame_ = 1;
     std::atomic<std::uint64_t> published_frame_{0};
     std::vector<SnapshotOverride> overrides_;

@@ -21,7 +21,7 @@ InstanceId build_copy(DataModel& world, const CopiedNode& node, InstanceId paren
         }
     };
     if (world.room_left() == 0) {
-        refuse(InstanceCapacityError().what());
+        refuse(InstanceCapacityError(world.instance_capacity()).what());
         return 0;
     }
     DataModel* made = lua_create_instance(world, node.class_name.c_str());

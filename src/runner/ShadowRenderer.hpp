@@ -2,6 +2,7 @@
 
 #include "InstanceBuffer.hpp"
 #include "ShadowPlanner.hpp"
+#include "Visibility.hpp"
 
 #include <cstdint>
 #include <utility>
@@ -57,6 +58,10 @@ public:
     // The frame's DrawItems, one per MeshDraw, whose boneBase each caster row
     // takes; null casts every mesh unposed. Set before draw and drawSun.
     void setDrawItems(const DrawItem* items) { items_ = items; }
+    // Which meshes changed since the last frame's (Renderer::findVisible's
+    // changed draws), or all of them. Kept until draw reads them, so a frame
+    // that draws no shadows loses nothing.
+    void noteDraws(bool all, const std::vector<DrawRange>& changed);
     // How the light pass reads key's map: kNone before it has one, or once
     // the driver has refused to draw shadow maps.
     ShadowLookup lookup(std::uint64_t key) const;
@@ -97,9 +102,16 @@ private:
     bool drawCasters(const engine_core::Matrix4& viewProjection, int first, int end, bool& asked);
 
     ShadowPlanner planner_;
-    // What draw handed the planner, and the MeshDraw each came from.
-    std::vector<ShadowCaster> casters_;
-    std::vector<int> casterMeshes_;
+    // What the planner reads of each mesh, kept from frame to frame and made
+    // again only for the meshes that changed: caster i is mesh i, and one
+    // that casts nothing has fingerprint 0. Its bounds are draw's spheres.
+    std::vector<std::uint64_t> casterOwners_;
+    std::vector<std::uint64_t> casterFingerprints_;
+    CasterView casterView_;
+    const MeshDraw* castersMeshes_ = nullptr;
+    // What noteDraws said since draw last made the casters.
+    bool castersAll_ = true;
+    std::vector<DrawRange> castersChanged_;
     // Not owned: setDrawItems'.
     const DrawItem* items_ = nullptr;
     // The casters of every tile or cascade drawn this frame, as instanced runs.

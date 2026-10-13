@@ -23,6 +23,20 @@
 
 namespace {
 
+// The first 100,000 slots' ids in their first life (generation 1), in slot
+// order: what these scans walk. Built with make_instance_id, so it holds for
+// any id layout (a raw count from 1 only reached slots while the slot was the
+// id's low 16 bits).
+std::vector<engine_core::InstanceId> first_life_ids(const engine_core::DataModel&) {
+    std::vector<engine_core::InstanceId> ids;
+    ids.reserve(100000);
+    for (std::uint32_t slot = 0; slot < 100000; ++slot) {
+        ids.push_back(engine_core::make_instance_id(1, slot));
+    }
+    return ids;
+}
+
+
 using engine_core::InstanceId;
 
 ide::PluginFile terrain_tool_file() {
@@ -97,7 +111,7 @@ struct TerrainToolRig {
     // The text of each Label and Button the pane shows: it and every GUI above it Visible.
     std::vector<std::string> shown() {
         std::vector<std::string> out;
-        for (InstanceId id = 1; id < 100000; ++id) {
+        for (const InstanceId id : first_life_ids(rig.game)) {
             const auto* item = dynamic_cast<const engine_core::GuiValues*>(rig.game.instance(id));
             if ((dynamic_cast<const engine_core::Label*>(item) == nullptr &&
                  dynamic_cast<const engine_core::Button*>(item) == nullptr) ||
@@ -124,7 +138,7 @@ struct TerrainToolRig {
     }
     // Presses the pane's Button with this text, as a click on it does.
     void press(const std::string& text) {
-        for (InstanceId id = 1; id < 100000; ++id) {
+        for (const InstanceId id : first_life_ids(rig.game)) {
             const auto* button = dynamic_cast<const engine_core::Button*>(rig.game.instance(id));
             if (button != nullptr && button->text(engine_core::GuiProperty::Text) == text) {
                 rig.game.fire_event(id, engine_core::kGuiAction);
@@ -136,7 +150,7 @@ struct TerrainToolRig {
     }
     // Moves the Slider beside the pane's label that starts with row, such as "Grid", as a drag does.
     void slide(const std::string& row, double value) {
-        for (InstanceId id = 1; id < 100000; ++id) {
+        for (const InstanceId id : first_life_ids(rig.game)) {
             const auto* label = dynamic_cast<const engine_core::Label*>(rig.game.instance(id));
             if (label == nullptr || label->text(engine_core::GuiProperty::Text).rfind(row, 0) != 0) {
                 continue;
@@ -155,7 +169,7 @@ struct TerrainToolRig {
         FAIL("no Slider beside " << row);
     }
     bool pane_open() {
-        for (InstanceId id = 1; id < 100000; ++id) {
+        for (const InstanceId id : first_life_ids(rig.game)) {
             if (const auto* widget = dynamic_cast<const engine_core::DockWidget*>(rig.game.instance(id))) {
                 return widget->enabled();
             }
@@ -349,7 +363,7 @@ TEST_CASE("TB5 the pane steps the size and names the Terrain", "[TB5]") {
     TerrainToolRig tools;
     tools.click("Grow");
     std::vector<std::string> texts;
-    for (InstanceId id = 1; id < 100000; ++id) {
+    for (const InstanceId id : first_life_ids(tools.rig.game)) {
         if (const auto* label = dynamic_cast<const engine_core::Label*>(tools.rig.game.instance(id))) {
             texts.push_back(label->text(engine_core::GuiProperty::Text));
         }

@@ -12,6 +12,7 @@
 #include "TextureCache.hpp"
 #include "ViewportRenderer.hpp"
 #include "Renderer.hpp"
+#include "SceneDraws.hpp"
 #include "types.hpp"
 
 #include <atomic>
@@ -222,6 +223,10 @@ private:
     // colors, then one draw per row and mesh at that row's Transform.
     std::vector<std::vector<MeshDraw>> prefabMeshes_;
     std::vector<MeshDraw> meshDraws_;
+    // The rows' draws at the front of meshDraws_, kept from frame to frame,
+    // and which of them the last collectMeshes wrote.
+    RowDrawCache rowDraws_;
+    std::vector<DrawRange> rowDrawsWritten_;
     // Per frame: each enabled PointLight, SpotLight, and DirectionalLight in the snapshot.
     std::vector<LightDraw> lightDraws_;
     // The session game. The runner keeps it alive for this view.
@@ -239,6 +244,9 @@ private:
     // The Cameras in Workspace, in tree order, as of the last walk.
     std::vector<CameraChoice> cameras_;
     std::vector<CameraChoice> cameraScratch_;
+    // The tree_revision and world cameras_ was read at; walked again when either moves.
+    std::uint64_t camerasRevision_ = ~std::uint64_t{0};
+    const engine_core::DataModel* camerasGame_ = nullptr;
     // The link. cameraId_ is its Camera while that is in Workspace, else 0.
     std::string cameraGuid_;
     engine_core::InstanceId cameraId_ = 0;

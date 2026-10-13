@@ -1574,7 +1574,7 @@ TEST_CASE("N6 the root Changed signal is not the first instance", "[N6]") {
     engine_core::Game game;
     // The first slot holds Workspace, the first scene service Game makes.
     const engine_core::InstanceId first = workspace_of(game);
-    REQUIRE((first & 0xffffu) == 0);
+    REQUIRE(engine_core::id_slot(first) == 0);
     REQUIRE(first != game.id());
     engine_core::GameObject& part = game.create<engine_core::GameObject>();
     game.set_parent(part.id(), first);
@@ -1767,7 +1767,7 @@ TEST_CASE("N3 place restore reverts play and drops session instances", "[N3]") {
     const engine_core::InstanceId recycled_id = recycled.id();
     REQUIRE(recycled_id != sibling_id);
     // A captured instance's slot waits for Stop, so play does not reuse it.
-    REQUIRE((recycled_id & 0xffffu) != (sibling_id & 0xffffu));
+    REQUIRE(engine_core::id_slot(recycled_id) != engine_core::id_slot(sibling_id));
     game.set_name(recycled_id, "Recycled");
     game.set_parent(recycled_id, workspace_of(game));
 
@@ -4670,6 +4670,8 @@ struct StudioContracts {
 TEST_CASE("S47 a full place is a script error in the studio, not an abort", "[S47]") {
     StudioContracts studio;
     ScriptRig rig;
+    // The old cap, so the 20,000 creates below still run out of room.
+    rig.game.set_instance_capacity(16384);
     add_script(rig.game, "Flood", R"(
         local ok, message = pcall(function()
             for _ = 1, 20000 do
@@ -4695,6 +4697,8 @@ TEST_CASE("S48 creating past the instance cap throws and changes nothing", "[S48
     StudioContracts studio;
     SimRole role;
     engine_core::Game game;
+    // A lowered capacity behaves as the cap does, without making a million instances.
+    game.set_instance_capacity(16384);
     std::vector<engine_core::InstanceId> made;
     while (game.room_left() > 0) {
         made.push_back(game.create<engine_core::Folder>().id());
@@ -4784,6 +4788,8 @@ TEST_CASE("S50 undo and redo reach a change watch", "[S50]") {
 
 TEST_CASE("S46 Instance.new past the instance cap is a script error, not an abort", "[S46]") {
     ScriptRig rig;
+    // The old cap, so the 20,000 creates below still run out of room.
+    rig.game.set_instance_capacity(16384);
     add_script(rig.game, "Flood", R"(
         _G.made = 0
         local ok, message = pcall(function()

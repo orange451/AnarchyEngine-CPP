@@ -16,6 +16,7 @@
 #include "LuaApi.hpp"
 #include "Ring.hpp"
 #include "Script.hpp"
+#include "StableArray.hpp"
 #include "ScriptAnalysis.hpp"
 #include "SelectionService.hpp"
 #include "TaskScheduler.hpp"
@@ -70,15 +71,28 @@ inline const PropertyBag& empty_bag() {
 using namespace datamodel_detail;
 
 struct DataModel::InstancePool {
+    // Objects live in chunks of this many, allocated as the pool grows, so an
+    // object never moves and memory follows what the place holds, not the cap.
+    static constexpr std::size_t kChunk = 256;
+
     const void* key = nullptr;
     std::size_t stride = 0;
     std::size_t align = 0;
     std::size_t count = 0;
-    std::byte* memory = nullptr;
+    std::vector<std::byte*> chunks;
     std::vector<DataModel*> objects;
     std::vector<std::uint32_t> free;
     DataModel* (*construct)(void*, DataModel::ChildTag, DataModel::State&, InstanceId) = nullptr;
     void (*destroy)(DataModel*) = nullptr;
+
+    // Where storage's object lives, allocating its chunk the first time.
+    void* memory_for(std::uint32_t storage) {
+        const std::size_t chunk = storage / kChunk;
+        while (chunks.size() <= chunk) {
+            chunks.push_back(static_cast<std::byte*>(::operator new(stride * kChunk, std::align_val_t(align))));
+        }
+        return chunks[chunk] + (storage % kChunk) * stride;
+    }
 
     ~InstancePool() {
         for (DataModel* object : objects) {
@@ -86,8 +100,8 @@ struct DataModel::InstancePool {
                 destroy(object);
             }
         }
-        if (memory != nullptr) {
-            ::operator delete(memory, stride * DataModel::kMaxInstances, std::align_val_t(align));
+        for (std::byte* chunk : chunks) {
+            ::operator delete(chunk, stride * kChunk, std::align_val_t(align));
         }
     }
 };
@@ -179,8 +193,11 @@ struct DataModel::State {
     std::size_t command_tail = 0;
     std::size_t command_size = 0;
 
-    std::vector<Slot> slots;
+    // A Slot never moves: code may hold a Slot& while another instance is made.
+    StableArray<Slot> slots;
     std::vector<std::uint32_t> free_list;
+    // How many instances this place may hold (DataModel::set_instance_capacity).
+    std::size_t capacity = DataModel::kMaxInstances;
     // Declared before the pools so their destructors still see history.
     // Members are destroyed in reverse order.
     std::unique_ptr<ChangeHistoryService> history;
@@ -198,7 +215,8 @@ struct DataModel::State {
     EventQueue events;
     std::vector<std::unique_ptr<InstanceSignals>> bags;
     // Id 0 is the root and has no slot. bags[0] belongs to the first created
-    // instance, whose id is (generation << 16) | 0 and generation starts at 1.
+    // instance, whose id is make_instance_id(1, 0): generation starts at 1.
+    // Grows on demand (DataModel::signals).
     std::unique_ptr<InstanceSignals> root_signals;
     std::vector<InstanceId> walk;
     // Ids gathered for Heartbeat. Separate from walk, which ancestry mutates.

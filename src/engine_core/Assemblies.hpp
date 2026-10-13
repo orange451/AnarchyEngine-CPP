@@ -68,6 +68,11 @@ public:
     };
 
     Assemblies();
+    // Per-slot tables cover this many slots; DataModel grows them as it
+    // issues new slots (ensure_slots), never while an operation here runs.
+    static constexpr std::size_t kSlotStep = 16384;
+    std::size_t slot_capacity() const { return slot_capacity_; }
+    void ensure_slots(std::size_t slots);
     Assemblies(const Assemblies&) = delete;
     Assemblies& operator=(const Assemblies&) = delete;
 
@@ -314,6 +319,7 @@ private:
     bool built_running_ = false;
 
     // Per slot, valid while seen_[slot] holds the id the build saw there.
+    std::size_t slot_capacity_ = 0;
     std::vector<InstanceId> seen_;
     std::vector<InstanceId> node_;
     std::vector<std::int32_t> group_;

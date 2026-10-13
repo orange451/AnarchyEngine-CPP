@@ -3,6 +3,7 @@
 #include "types.hpp"
 
 #include <cstddef>
+#include <algorithm>
 #include <vector>
 
 namespace engine_core {
@@ -49,8 +50,19 @@ public:
 private:
     void unqueue(const Invalidation& item) {
         if (item.fields == VisualField::Transform && !queued_.empty()) {
-            queued_[id_slot(item.id)] = 0;
+            const std::uint32_t slot = id_slot(item.id);
+            if (slot < queued_.size()) {
+                queued_[slot] = 0;
+            }
         }
+    }
+
+    // The per-slot entry, growing the table to reach slot.
+    std::size_t& queued_slot(std::uint32_t slot) {
+        if (slot >= queued_.size()) {
+            queued_.resize(std::max<std::size_t>(std::size_t{slot} + 1, queued_.size() * 2), 0);
+        }
+        return queued_[slot];
     }
 
     std::vector<Invalidation> items_;

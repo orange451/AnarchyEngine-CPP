@@ -46,7 +46,26 @@ struct CascadeFit {
     float texelWorld = 0.f;
     // The near plane's depth in lightView before any pull: the sphere's nearest point to the sun.
     float nearDepth = 0.f;
+    // The box in lightView, which viewProjection's planes bound: x and y, and
+    // depth (down -Z) from nearPlane (with any pull) to farPlane. A sphere is
+    // inside the frustum exactly when it is inside this box.
+    float left = 0.f;
+    float right = 0.f;
+    float bottom = 0.f;
+    float top = 0.f;
+    float nearPlane = 0.f;
+    float farPlane = 0.f;
 };
+
+// The view every cascade of a sun shining along shineDirection is drawn
+// from (FitCascade's lightView): a rotation only.
+engine_core::Matrix4 CascadeLightView(engine_core::Vec3 shineDirection);
+
+// SphereInFrustum(MakeFrustum(box.viewProjection), sphere, ignoreNear) for a
+// sphere already turned into box.lightView: center (x, y) and depth down -Z.
+// The box's sides are the frustum's planes, so this compares instead of
+// taking six dot products.
+bool SphereInCascadeBox(const CascadeFit& box, float x, float y, float depth, float radius, bool ignoreNear = false);
 
 // An orthographic map size texels square around sphere, looking down
 // shineDirection. Its center is floored to whole texels in a view that only

@@ -42,6 +42,9 @@ namespace runner {
 // One uploaded AMESH at a GameObject's Transform (column-major, world space),
 // shaded by its Material: the diffuse texture times color times the mesh's
 // vertex colors, lit by the scene's lights.
+// A field added here goes in SameDraw (SceneDraws.cpp) too: a scene view keeps
+// its rows' draws from frame to frame, and draws them again when a template
+// draw is no longer the same.
 struct MeshDraw {
     const anarchy::amesh::GpuMesh* mesh = nullptr;
     engine_core::Matrix4 model = engine_core::matrix4_identity();
@@ -435,6 +438,11 @@ public:
     // empty pane.
     bool draw(double x, double y, double width, double height, double sceneWidth, double sceneHeight,
               const MeshDraw* meshes, int meshCount, const LightDraw* lights = nullptr, int lightCount = 0);
+    // Before a draw: of the meshes it is given, the first stable are the
+    // ones the last draw was given, in the same places and unchanged, except
+    // those in written. Without this before a draw, every mesh is new to it.
+    // The renderer then works out again only what it keeps of the others.
+    void noteDrawChanges(std::size_t stable, const std::vector<DrawRange>& written);
     // Reads back what draw just drew for the same pane, top row first. Only
     // the part inside the framebuffer and the current scissor. False when
     // there is nothing to read.
@@ -981,6 +989,22 @@ private:
     BonePalette bonePalette_;
     BoneTexture boneTexture_;
     std::vector<DrawItem> drawItems_;
+    // Per piece of changed draws in findVisible: the posed ones found.
+    std::vector<std::vector<int>> posedBlocks_;
+    // The drawable posed draws, ascending, whose bones findVisible packs each frame.
+    std::vector<int> posedDraws_;
+    std::vector<int> posedScratch_;
+    // What noteDrawChanges said since findVisible last made the items: the
+    // least stable count, and every range written. drawsNoted_: a note came
+    // for the next draw; drawsChained_: every draw since findVisible last
+    // ran had one, so the items kept are good but for the notes.
+    std::size_t notedStable_ = 0;
+    std::vector<DrawRange> notedWritten_;
+    bool drawsNoted_ = false;
+    bool drawsChained_ = false;
+    // The meshes drawItems_ point into, and this frame's changed draws.
+    const MeshDraw* itemsMeshes_ = nullptr;
+    std::vector<DrawRange> changedDraws_;
     VisibilityResult visibility_;
     bool culling_ = true;
     RenderStats stats_;

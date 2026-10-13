@@ -57,6 +57,7 @@ set(STUDIO_CORE_SOURCES
     src/runner/Visibility.cpp
     src/runner/TerrainSelection.cpp
     src/runner/DrawBatches.cpp
+    src/runner/ParallelBlocks.cpp
     src/runner/BonePalette.cpp
     src/runner/GamePack.cpp
     src/ide/AssetBrowser.cpp
@@ -878,6 +879,7 @@ add_executable(studio-tests
     tests/UiFrameProfileTest.cpp
     tests/PluginsTest.cpp
     tests/GuiTreeTest.cpp
+    tests/SceneDrawsTest.cpp
 )
 target_link_libraries(studio-tests PRIVATE studio)
 
@@ -1072,6 +1074,8 @@ add_executable(sandbox
     sandbox/scene_services_tests.cpp
     sandbox/game_services_tests.cpp
     sandbox/dense_views_tests.cpp
+    sandbox/instance_scale_tests.cpp
+    sandbox/project_bench_tests.cpp
     sandbox/prefab_render_tests.cpp
     sandbox/mesh_shapes_tests.cpp
     sandbox/mesh_editor_tests.cpp
@@ -1120,6 +1124,7 @@ add_executable(sandbox
     sandbox/shadow_planner_tests.cpp
     sandbox/visibility_tests.cpp
     sandbox/draw_batches_tests.cpp
+    sandbox/parallel_render_tests.cpp
     sandbox/event_args_tests.cpp
     sandbox/core_tests.cpp
     sandbox/archivable_tests.cpp

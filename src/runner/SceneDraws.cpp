@@ -1,9 +1,11 @@
 #include "SceneDraws.hpp"
 
 #include "Matrix4.hpp"
+#include "ParallelBlocks.hpp"
 #include "amesh.hpp"
 
 #include <algorithm>
+#include <cstring>
 
 namespace runner {
 
@@ -85,41 +87,226 @@ bool LightDrawFor(const engine_core::VisualInstance& row, LightDraw& out) {
     return true;
 }
 
-void AppendRowDraws(const engine_core::VisualInstance& row, const std::vector<MeshDraw>& templates,
-                    std::vector<MeshDraw>& out) {
-    // The GameObject's Color tints each Material's, per instance, and its opacity multiplies each Material's.
-    const float opacity = 1.f - row.transparency;
-    // Its Scale grows the Prefab about the GameObject's origin: each axis, not the position.
+namespace {
+
+// Its Scale grows the Prefab about the GameObject's origin: each axis, not the position.
+engine_core::Matrix4 ScaledWorld(const engine_core::VisualInstance& row) {
     engine_core::Matrix4 scaled = row.world;
     for (int column = 0; column < 3; ++column) {
         for (int axis = 0; axis < 3; ++axis) {
             scaled.m[column * 4 + axis] *= row.scale;
         }
     }
+    return scaled;
+}
+
+// draw, a copy of one of the row's templates, made the row's: placed, tinted, faded, and posed.
+void MakeRowDraw(const engine_core::VisualInstance& row, const engine_core::Matrix4& scaled, float opacity,
+                 MeshDraw& draw) {
+    draw.model = scaled;
+    draw.owner = row.id;
+    draw.tint[0] = row.color.r;
+    draw.tint[1] = row.color.g;
+    draw.tint[2] = row.color.b;
+    draw.transparency = 1.f - (1.f - std::clamp(draw.transparency, 0.f, 1.f)) * opacity;
+    // A Model on the Prefab's skeleton moves with the row's pose, which
+    // the caller keeps alive through the frame.
+    if (draw.skinned && row.pose != nullptr && !row.pose->palette.empty()) {
+        draw.bones = row.pose->palette.data();
+        draw.boneCount = static_cast<int>(row.pose->palette.size() / 12);
+        draw.poseRevision = row.pose->revision;
+        const float* low = draw.mesh->bounds_min();
+        const float* high = draw.mesh->bounds_max();
+        const float poseLow[3] = {row.pose->low.x, row.pose->low.y, row.pose->low.z};
+        const float poseHigh[3] = {row.pose->high.x, row.pose->high.y, row.pose->high.z};
+        for (int axis = 0; axis < 3; ++axis) {
+            draw.poseMin[axis] = std::min(low[axis], poseLow[axis]);
+            draw.poseMax[axis] = std::max(high[axis], poseHigh[axis]);
+        }
+    }
+}
+
+}  // namespace
+
+void AppendRowDraws(const engine_core::VisualInstance& row, const std::vector<MeshDraw>& templates,
+                    std::vector<MeshDraw>& out) {
+    // The GameObject's Color tints each Material's, per instance, and its opacity multiplies each Material's.
+    const float opacity = 1.f - row.transparency;
+    const engine_core::Matrix4 scaled = ScaledWorld(row);
     for (const MeshDraw& model : templates) {
-        MeshDraw& draw = out.emplace_back(model);
-        draw.model = scaled;
-        draw.owner = row.id;
-        draw.tint[0] = row.color.r;
-        draw.tint[1] = row.color.g;
-        draw.tint[2] = row.color.b;
-        draw.transparency = 1.f - (1.f - std::clamp(draw.transparency, 0.f, 1.f)) * opacity;
-        // A Model on the Prefab's skeleton moves with the row's pose, which
-        // the caller keeps alive through the frame.
-        if (draw.skinned && row.pose != nullptr && !row.pose->palette.empty()) {
-            draw.bones = row.pose->palette.data();
-            draw.boneCount = static_cast<int>(row.pose->palette.size() / 12);
-            draw.poseRevision = row.pose->revision;
-            const float* low = draw.mesh->bounds_min();
-            const float* high = draw.mesh->bounds_max();
-            const float poseLow[3] = {row.pose->low.x, row.pose->low.y, row.pose->low.z};
-            const float poseHigh[3] = {row.pose->high.x, row.pose->high.y, row.pose->high.z};
-            for (int axis = 0; axis < 3; ++axis) {
-                draw.poseMin[axis] = std::min(low[axis], poseLow[axis]);
-                draw.poseMax[axis] = std::max(high[axis], poseHigh[axis]);
+        MakeRowDraw(row, scaled, opacity, out.emplace_back(model));
+    }
+}
+
+MeshDraw* WriteRowDraws(const engine_core::VisualInstance& row, const std::vector<MeshDraw>& templates,
+                        MeshDraw* out) {
+    const float opacity = 1.f - row.transparency;
+    const engine_core::Matrix4 scaled = ScaledWorld(row);
+    for (const MeshDraw& model : templates) {
+        *out = model;
+        MakeRowDraw(row, scaled, opacity, *out);
+        ++out;
+    }
+    return out;
+}
+
+namespace {
+
+template <typename T>
+bool SameBits(const T& a, const T& b) {
+    return std::memcmp(&a, &b, sizeof(T)) == 0;
+}
+
+std::uint64_t GenerationOf(const MeshDraw& draw) { return draw.mesh != nullptr ? draw.mesh->generation() : 0; }
+
+// now against the templates kept, with their meshes' generations then. Only
+// now's meshes are read: a kept one may be gone, but one that is the same
+// pointer as now's is now's.
+bool SameTemplates(const std::vector<std::vector<MeshDraw>>& now, const std::vector<std::vector<MeshDraw>>& kept,
+                   const std::vector<std::vector<std::uint64_t>>& generations) {
+    if (now.size() != kept.size()) {
+        return false;
+    }
+    for (std::size_t prefab = 0; prefab < now.size(); ++prefab) {
+        if (!std::equal(now[prefab].begin(), now[prefab].end(), kept[prefab].begin(), kept[prefab].end(), SameDraw)) {
+            return false;
+        }
+        for (std::size_t m = 0; m < now[prefab].size(); ++m) {
+            if (GenerationOf(now[prefab][m]) != generations[prefab][m]) {
+                return false;
             }
         }
     }
+    return true;
+}
+
+// Chunks of rows RowDrawCache gives each worker thread at a time.
+constexpr std::size_t kChunkGrain = 16;
+
+}  // namespace
+
+bool SameDraw(const MeshDraw& a, const MeshDraw& b) {
+    return a.mesh == b.mesh && SameBits(a.model, b.model) && a.texture == b.texture && SameBits(a.color, b.color) &&
+           a.normalTexture == b.normalTexture && a.roughnessTexture == b.roughnessTexture &&
+           a.metalnessTexture == b.metalnessTexture && a.emissiveTexture == b.emissiveTexture &&
+           SameBits(a.emissive, b.emissive) && SameBits(a.metalness, b.metalness) &&
+           SameBits(a.roughness, b.roughness) && SameBits(a.reflectivity, b.reflectivity) &&
+           SameBits(a.transparency, b.transparency) && a.owner == b.owner && SameBits(a.tint, b.tint) &&
+           a.slot == b.slot && a.terrainLook == b.terrainLook && SameBits(a.terrainFade, b.terrainFade) &&
+           a.terrainFadeIn == b.terrainFadeIn && a.terrainLevel == b.terrainLevel && a.shadowOnly == b.shadowOnly &&
+           a.lod == b.lod && a.castsShadow == b.castsShadow && a.terrainSurfaceA == b.terrainSurfaceA &&
+           a.terrainSurfaceB == b.terrainSurfaceB && a.terrainSurfaceC == b.terrainSurfaceC &&
+           a.terrainLayerCount == b.terrainLayerCount && a.skinned == b.skinned && a.bones == b.bones &&
+           a.poseRevision == b.poseRevision && a.boneCount == b.boneCount && SameBits(a.poseMin, b.poseMin) &&
+           SameBits(a.poseMax, b.poseMax);
+}
+
+void RowDrawCache::update(const engine_core::VisualRows& rows, const std::vector<std::vector<MeshDraw>>& templates,
+                          std::vector<MeshDraw>& draws, std::vector<LightDraw>& lights,
+                          std::vector<DrawRange>& written) {
+    constexpr std::size_t kRows = engine_core::VisualRows::kChunkRows;
+    written.clear();
+    // New templates draw every row again; so does a draws vector that lost what was left in it.
+    const bool sameTemplates = SameTemplates(templates, templates_, generations_);
+    if (!sameTemplates) {
+        templates_ = templates;
+        generations_.resize(templates.size());
+        for (std::size_t prefab = 0; prefab < templates.size(); ++prefab) {
+            generations_[prefab].resize(templates[prefab].size());
+            for (std::size_t m = 0; m < templates[prefab].size(); ++m) {
+                generations_[prefab][m] = GenerationOf(templates[prefab][m]);
+            }
+        }
+    }
+    const bool keep = sameTemplates && draws.size() >= drawn_;
+    const std::size_t chunkCount = rows.chunk_count();
+    const std::size_t prefabCount = templates.size();
+    chunks_.resize(chunkCount);
+    recount_.clear();
+    for (std::size_t k = 0; k < chunkCount; ++k) {
+        if (!keep || chunks_[k].rows.get() != rows.chunk(k)) {
+            recount_.push_back(k);
+        }
+    }
+    // Each changed chunk's draws counted, and its lights found.
+    ParallelBlocks(recount_.size(), kChunkGrain, [&](std::size_t, std::size_t begin, std::size_t end) {
+        for (std::size_t i = begin; i < end; ++i) {
+            const std::size_t k = recount_[i];
+            Chunk& chunk = chunks_[k];
+            chunk.lights.clear();
+            std::size_t count = 0;
+            const std::size_t rowEnd = std::min(rows.size(), (k + 1) * kRows);
+            for (std::size_t index = k * kRows; index < rowEnd; ++index) {
+                const engine_core::VisualInstance& row = rows[index];
+                if (!row.alive) {
+                    continue;
+                }
+                LightDraw light;
+                if (LightDrawFor(row, light)) {
+                    chunk.lights.push_back(light);
+                }
+                if (row.prefab != 0 && row.prefab < prefabCount) {
+                    count += templates[row.prefab].size();
+                }
+            }
+            chunk.count = count;
+        }
+    });
+    // Where each chunk's draws go now. A kept chunk that moved, behind one
+    // whose count changed, is written again at its new place.
+    rewrite_.clear();
+    std::size_t at = 0;
+    std::size_t next = 0;
+    for (std::size_t k = 0; k < chunkCount; ++k) {
+        Chunk& chunk = chunks_[k];
+        const bool counted = next < recount_.size() && recount_[next] == k;
+        if (counted) {
+            ++next;
+        }
+        if (counted || chunk.first != at) {
+            rewrite_.push_back(k);
+        }
+        chunk.first = at;
+        at += chunk.count;
+    }
+    draws.resize(at);
+    ParallelBlocks(rewrite_.size(), kChunkGrain, [&](std::size_t, std::size_t begin, std::size_t end) {
+        for (std::size_t i = begin; i < end; ++i) {
+            const std::size_t k = rewrite_[i];
+            MeshDraw* out = draws.data() + chunks_[k].first;
+            const std::size_t rowEnd = std::min(rows.size(), (k + 1) * kRows);
+            for (std::size_t index = k * kRows; index < rowEnd; ++index) {
+                const engine_core::VisualInstance& row = rows[index];
+                if (!row.alive || row.prefab == 0 || row.prefab >= prefabCount) {
+                    continue;
+                }
+                out = WriteRowDraws(row, templates[row.prefab], out);
+            }
+        }
+    });
+    for (const std::size_t k : rewrite_) {
+        Chunk& chunk = chunks_[k];
+        chunk.rows = rows.shared_chunk(k);
+        if (chunk.count == 0) {
+            continue;
+        }
+        if (!written.empty() && written.back().first + written.back().count == chunk.first) {
+            written.back().count += chunk.count;
+        } else {
+            written.push_back(DrawRange{chunk.first, chunk.count});
+        }
+    }
+    for (const Chunk& chunk : chunks_) {
+        lights.insert(lights.end(), chunk.lights.begin(), chunk.lights.end());
+    }
+    drawn_ = at;
+}
+
+void RowDrawCache::clear() {
+    chunks_.clear();
+    templates_.clear();
+    generations_.clear();
+    drawn_ = 0;
 }
 
 void AppendBrushDraws(const std::vector<engine_core::VisualBrushDraw>& brushes, MeshCache& meshes,

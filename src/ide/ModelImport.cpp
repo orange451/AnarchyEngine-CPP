@@ -1036,7 +1036,7 @@ engine_core::InstanceId build_model_assets(engine_core::DataModel& world, const 
     const std::size_t needed =
         model.textures.size() + model.materials.size() + model.meshes.size() * 2 + model.animations.size() + 5;
     if (world.room_left() < needed) {
-        error = engine_core::InstanceCapacityError().what();
+        error = engine_core::InstanceCapacityError(world.instance_capacity()).what();
         return 0;
     }
 

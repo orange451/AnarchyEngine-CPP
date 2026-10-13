@@ -58,6 +58,7 @@ int RunProfilerPlayerKeyTests();
 int RunProfilerColorTests();
 int RunUiFrameProfileTests();
 int RunPluginsTests();
+int RunSceneDrawsTests();
 int RunGuiTreeTests(ide::IdeLayout& layout);
 
 // R10: the studio's default layout builds, and its docks hold the explorers,
@@ -1142,6 +1143,7 @@ int main() {
     failures += RunProfilerPlayerKeyTests();
     failures += RunProfilerColorTests();
     failures += RunUiFrameProfileTests();
+    failures += RunSceneDrawsTests();
 
     // The layout is kept in layout.json in the config folder, and the next
     // studio docks the windows that way again.

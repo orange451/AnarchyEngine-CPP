@@ -82,7 +82,7 @@ engine_core::InstanceId insert_instance(engine_core::DataModel& world, const std
         return 0;
     }
     if (world.room_left() == 0) {
-        error = engine_core::InstanceCapacityError().what();
+        error = engine_core::InstanceCapacityError(world.instance_capacity()).what();
         return 0;
     }
     if (!engine_core::lua_creatable_known(class_name.c_str())) {
@@ -113,7 +113,7 @@ engine_core::InstanceId add_prefab_instance(engine_core::DataModel& world, engin
         return 0;
     }
     if (world.room_left() == 0) {
-        error = engine_core::InstanceCapacityError().what();
+        error = engine_core::InstanceCapacityError(world.instance_capacity()).what();
         return 0;
     }
     engine_core::GameObject& object = world.create<engine_core::GameObject>();

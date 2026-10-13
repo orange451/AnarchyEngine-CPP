@@ -389,3 +389,57 @@ TEST_CASE("BONE14 an Attachment inside a hand's Bone holds as the hand does: apa
     REQUIRE_FALSE(root.set_offset(spin_z()));
     REQUIRE(near_matrix(held.transform(), palm_frame()));
 }
+
+TEST_CASE("BONE15 poses reach skinned rows among many plain ones, through Prefab changes, joins and removals",
+          "[bone][scale]") {
+    Rig rig;
+    Drawn drawn;
+    engine_core::Prefab& arm = rig.prefab({rig.mesh("meshes/arm.amesh").id()});
+    engine_core::Prefab& box = rig.prefab({rig.mesh("meshes/box.amesh").id()});
+    std::vector<engine_core::InstanceId> plain;
+    for (int i = 0; i < 500; ++i) {
+        engine_core::GameObject& part = create_part(rig.game);
+        REQUIRE_FALSE(part.set_prefab(id_slot(box.id())));
+        plain.push_back(part.id());
+    }
+    engine_core::GameObject& first = create_part(rig.game);
+    REQUIRE_FALSE(first.set_prefab(id_slot(arm.id())));
+    drawn.frame(rig.game);
+    REQUIRE(drawn.pump.find(first.id())->pose != nullptr);
+
+    // Only the pose changes: the row still gets the new one.
+    const auto before = drawn.pump.find(first.id())->pose;
+    engine_core::Bone& hand = add_bone(rig.game, first.id(), "Hand");
+    REQUIRE_FALSE(hand.set_offset(spin_z()));
+    drawn.frame(rig.game);
+    REQUIRE(drawn.pump.find(first.id())->pose != before);
+
+    // A skinned row that joins later is posed.
+    engine_core::GameObject& second = create_part(rig.game);
+    REQUIRE_FALSE(second.set_prefab(id_slot(arm.id())));
+    drawn.frame(rig.game);
+    REQUIRE(drawn.pump.find(second.id())->pose != nullptr);
+
+    // A row whose Prefab has no skeleton any more drops its pose; one whose
+    // new Prefab has one is posed.
+    REQUIRE_FALSE(first.set_prefab(id_slot(box.id())));
+    REQUIRE_FALSE(rig.game.game_object(plain[7])->set_prefab(id_slot(arm.id())));
+    drawn.frame(rig.game);
+    REQUIRE(drawn.pump.find(first.id())->pose == nullptr);
+    REQUIRE(drawn.pump.find(plain[7])->pose != nullptr);
+
+    // A removal moves rows around; the posed ones keep following their poses.
+    rig.game.destroy(second.id());
+    drawn.frame(rig.game);
+    REQUIRE(drawn.pump.find(second.id()) == nullptr);
+    const auto held = drawn.pump.find(plain[7])->pose;
+    engine_core::Bone& other_hand = add_bone(rig.game, plain[7], "Hand");
+    REQUIRE_FALSE(other_hand.set_offset(spin_z()));
+    drawn.frame(rig.game);
+    REQUIRE(drawn.pump.find(plain[7])->pose != held);
+    for (const engine_core::InstanceId id : plain) {
+        if (id != plain[7]) {
+            REQUIRE(drawn.pump.find(id)->pose == nullptr);
+        }
+    }
+}

@@ -2638,7 +2638,12 @@ TEST_CASE("P19 a project with more instances than a place holds is an error, not
     TempDir dir;
     write_bare_project(dir.path);
     Project project = Project::load(dir.path);
-    for (std::size_t i = 0; i <= DataModel::kMaxInstances; ++i) {
+    // A lowered limit makes the same check without writing a million files.
+    struct LimitGuard {
+        explicit LimitGuard(std::size_t limit) { Project::set_instance_limit(limit); }
+        ~LimitGuard() { Project::set_instance_limit(DataModel::kMaxInstances); }
+    } guard(2000);
+    for (std::size_t i = 0; i <= Project::instance_limit(); ++i) {
         const std::string guid = "p" + std::to_string(i);
         std::ofstream out(dir.path / "src" / kWorkspace / ("Part." + guid + ".json"), std::ios::binary);
         out << meta("DataModel", guid.c_str(), "Part");
@@ -2658,6 +2663,7 @@ TEST_CASE("D14 changes from disk that need more room than the place has left are
     project.save();
     // Unparented instances take slots without being part of the place.
     game.history().set_enabled(false);
+    game.set_instance_capacity(16384);
     while (game.room_left() > 2) {
         game.create();
     }
@@ -2690,6 +2696,7 @@ TEST_CASE("D15 changes from disk that do not fit settle none of the choices", "[
     REQUIRE(rows.size() == 1);
 
     game.history().set_enabled(false);
+    game.set_instance_capacity(16384);
     while (game.room_left() > 2) {
         game.create();
     }
@@ -2778,4 +2785,100 @@ TEST_CASE("P23 json numbers are the shortest form that reads back", "[P23][proje
     REQUIRE(parsed.items()[2].as_number() == 1e300);
     REQUIRE_FALSE(engine_core::parse_json("[1e999]", parsed, error));
     REQUIRE_FALSE(engine_core::parse_json("[1.5.2]", parsed, error));
+}
+
+// Disk stamps: a check skips the full compare only when the disk provably
+// still matches the base. These pin the cases a stamp alone could miss.
+
+TEST_CASE("DS1 an outside edit right after a save is found, even with the same size and time", "[DS1][disk][project]") {
+    SimRole role;
+    TempDir dir;
+    Project project = Project::create(dir.path);
+    DataModel& game = project.datamodel();
+    const InstanceId part = add_part(game, workspace_of(game), "Part").id();
+    game.game_object(part)->set_transform(engine_core::matrix4_translation(1.f, 2.f, 3.f));
+    project.save();
+    const fs::path file = dir.path / leaf(game, part);
+    const fs::file_time_type saved_at = fs::last_write_time(file);
+    // Same length, one digit changed, and the clock put back: only the bytes differ.
+    std::string bytes = read_file(file);
+    const std::size_t at = bytes.find("1, 2, 3");
+    REQUIRE(at != std::string::npos);
+    bytes[at] = '7';
+    write_file(file, bytes);
+    fs::last_write_time(file, saved_at);
+    const engine_core::DiskScan scan = project.scan_disk();
+    REQUIRE(scan.has_disk_changes);
+    const engine_core::DiskScan applied = project.apply_disk();
+    REQUIRE(applied.loaded.size() == 1);
+    REQUIRE(game.game_object(part)->transform().m[12] == 7.f);
+}
+
+TEST_CASE("DS2 a file added or removed outside is found", "[DS2][disk][project]") {
+    SimRole role;
+    TempDir dir;
+    Project project = Project::create(dir.path);
+    DataModel& game = project.datamodel();
+    const InstanceId part = add_part(game, workspace_of(game), "Part").id();
+    project.save();
+    REQUIRE_FALSE(project.scan_disk().has_disk_changes);
+    write_file(dir.path / "src" / kWorkspace / "New.n1.json", meta("DataModel", "n1", "New"));
+    REQUIRE(project.scan_disk().has_disk_changes);
+    project.apply_disk();
+    REQUIRE(game.find_guid("n1").has_value());
+    fs::remove(dir.path / leaf(game, part));
+    REQUIRE(project.scan_disk().has_disk_changes);
+    project.apply_disk();
+    REQUIRE_FALSE(game.alive(part));
+}
+
+TEST_CASE("DS3 after the disk's changes load, the next checks find nothing", "[DS3][disk][project]") {
+    SimRole role;
+    TempDir dir;
+    Project project = Project::create(dir.path);
+    DataModel& game = project.datamodel();
+    const InstanceId part = add_part(game, workspace_of(game), "Part").id();
+    project.save();
+    edit_key(dir.path / leaf(game, part), "Transform", translated(0.f, 5.f, 0.f));
+    REQUIRE(project.apply_disk().loaded.size() == 1);
+    for (int i = 0; i < 3; ++i) {
+        const engine_core::DiskScan again = project.apply_disk();
+        REQUIRE(again.loaded.empty());
+        REQUIRE(again.conflicts.empty());
+        REQUIRE_FALSE(again.has_disk_changes);
+        REQUIRE_FALSE(project.scan_disk().has_disk_changes);
+    }
+}
+
+TEST_CASE("DS4 a row stays listed on every check until it is settled", "[DS4][disk][project]") {
+    SimRole role;
+    TempDir dir;
+    Project project = Project::create(dir.path);
+    DataModel& game = project.datamodel();
+    const InstanceId part = add_part(game, workspace_of(game), "Part").id();
+    project.save();
+    game.game_object(part)->set_transform(engine_core::matrix4_translation(1.f, 0.f, 0.f));
+    edit_key(dir.path / leaf(game, part), "Transform", translated(0.f, 0.f, 1.f));
+    for (int i = 0; i < 3; ++i) {
+        REQUIRE(project.scan_disk().conflicts.size() == 1);
+        REQUIRE(project.apply_disk().conflicts.size() == 1);
+    }
+}
+
+TEST_CASE("DS5 a save that started out of sync does not hide an outside edit it did not write", "[DS5][disk][project]") {
+    SimRole role;
+    TempDir dir;
+    Project project = Project::create(dir.path);
+    DataModel& game = project.datamodel();
+    const InstanceId a = add_part(game, workspace_of(game), "A").id();
+    const InstanceId b = add_part(game, workspace_of(game), "B").id();
+    project.save();
+    // The disk changes A; the studio changes only B and saves without a check first.
+    edit_key(dir.path / leaf(game, a), "Transform", translated(0.f, 9.f, 0.f));
+    game.game_object(b)->set_transform(engine_core::matrix4_translation(4.f, 0.f, 0.f));
+    project.save();
+    const engine_core::DiskScan scan = project.scan_disk();
+    REQUIRE(scan.has_disk_changes);
+    project.apply_disk();
+    REQUIRE(game.game_object(a)->transform().m[13] == 9.f);
 }

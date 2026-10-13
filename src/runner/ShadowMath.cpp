@@ -73,7 +73,7 @@ CascadeFit FitCascade(const Sphere& sphere, Vec3 shineDirection, int size, float
     const float half = texel * static_cast<float>(size) * 0.5f;
     // Turned toward the light about the world's origin and never moved, so a
     // whole texel in this view is a whole texel in the world.
-    const Matrix4 view = LookAtView({0.f, 0.f, 0.f}, shineDirection, {0.f, 1.f, 0.f});
+    const Matrix4 view = CascadeLightView(shineDirection);
     const Vec3 center = engine_core::matrix4_point(view, sphere.center);
     const float x = std::floor(center.x / texel) * texel;
     const float y = std::floor(center.y / texel) * texel;
@@ -86,7 +86,24 @@ CascadeFit FitCascade(const Sphere& sphere, Vec3 shineDirection, int size, float
     fit.lightView = view;
     fit.texelWorld = texel;
     fit.nearDepth = nearDepth;
+    fit.left = x - half;
+    fit.right = x + half;
+    fit.bottom = y - half;
+    fit.top = y + half;
+    fit.nearPlane = nearDepth - std::max(pullNear, 0.f);
+    fit.farPlane = -center.z + sphere.radius;
     return fit;
+}
+
+Matrix4 CascadeLightView(Vec3 shineDirection) {
+    return LookAtView({0.f, 0.f, 0.f}, shineDirection, {0.f, 1.f, 0.f});
+}
+
+bool SphereInCascadeBox(const CascadeFit& box, float x, float y, float depth, float radius, bool ignoreNear) {
+    // In SphereInFrustum's plane order: left, right, bottom, top, far, near.
+    return x - box.left >= -radius && box.right - x >= -radius && y - box.bottom >= -radius &&
+           box.top - y >= -radius && box.farPlane - depth >= -radius &&
+           (ignoreNear || depth - box.nearPlane >= -radius);
 }
 
 float ShadowNear(float radius) { return std::max(radius * kShadowNearPart, 1e-4f); }

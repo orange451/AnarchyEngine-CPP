@@ -174,10 +174,28 @@ struct CascadeShadow {
 // whether or not this frame's cap let it draw); then a light that has lost
 // the cap kMaxShadowWait frames running; then the rest, biggest look first,
 // up to the frame's texel budget.
+// What the planner reads of each caster, in arrays side by side, so a frame
+// with hundreds of thousands of casters reads a few bytes of each. Element i
+// of each array is caster i's. A caster whose fingerprint is 0 casts nothing.
+struct CasterView {
+    std::size_t count = 0;
+    const Sphere* bounds = nullptr;
+    const std::uint64_t* owners = nullptr;
+    // ShadowCasterFingerprint's, or 0.
+    const std::uint64_t* fingerprints = nullptr;
+};
+
+// What a light's or a cascade's map folds in for caster: which geometry,
+// which upload of it, how it is posed, and where. Never 0.
+std::uint64_t ShadowCasterFingerprint(const ShadowCaster& caster);
+
 class ShadowPlanner {
 public:
+    // The casters as a CasterView of their own.
     ShadowPlan plan(const std::vector<ShadowRequest>& requests, const std::vector<ShadowCaster>& casters,
                     const CameraView& camera, const ShadowSettings& settings);
+    ShadowPlan planView(const std::vector<ShadowRequest>& requests, const CasterView& casters,
+                        const CameraView& camera, const ShadowSettings& settings);
     // Once plan's draws are drawn: they become what find returns, each
     // drawn face now matching the committed map (a dirty face left undrawn
     // does not, until it too is drawn), the light's redraw wait reset to 0,
@@ -210,10 +228,19 @@ public:
     // Forgets every map and the atlas, as when the settings or the context change.
     void clear();
 
+    // Casters planCascades gives each worker thread at a time.
+    static constexpr std::size_t kCascadeGrain = 8192;
+
     // The sun's cascades to draw this frame: none when nothing they are fitted
     // to or cast from changed since the last committed ones, or with no sun.
+    // Blocks of grain casters run on worker threads; the plan is the same
+    // whatever the grain.
     std::vector<CascadeDraw> planCascades(const SunRequest* sun, const std::vector<ShadowCaster>& casters,
-                                          const CameraView& camera, const ShadowSettings& settings);
+                                          const CameraView& camera, const ShadowSettings& settings,
+                                          std::size_t grain = kCascadeGrain);
+    std::vector<CascadeDraw> planCascadesView(const SunRequest* sun, const CasterView& casters,
+                                              const CameraView& camera, const ShadowSettings& settings,
+                                              std::size_t grain = kCascadeGrain);
     void commitCascades();
     // The cascades as last drawn, or null with none.
     const CascadeShadow* cascades() const { return cascadeReady_ ? &cascade_ : nullptr; }
@@ -296,9 +323,31 @@ private:
     CascadeShadow pendingCascade_;
     std::uint64_t pendingCascadeHash_ = 0;
     bool cascadePending_ = false;
-    // Scratch kept between calls: each caster's fingerprint, and the casters inside each cascade.
-    std::vector<std::uint64_t> casterHashes_;
+    // Scratch kept between calls: each caster turned toward the sun, and the casters inside each cascade.
+    struct LitCaster {
+        float x = 0.f;
+        float y = 0.f;
+        // Down the shine, as the cascade boxes measure depth.
+        float depth = 0.f;
+        float radius = 0.f;
+    };
+    std::vector<LitCaster> lit_;
     std::vector<int> cascadeCasters_[kMaxCascades];
+    // Per block of casters while planCascades runs blocks on worker threads:
+    // how far each cascade pulls toward the sun, and the casters inside each
+    // cascade with their fingerprints, joined in block order.
+    struct CascadeBlock {
+        float pull[kMaxCascades] = {};
+        std::vector<int> inside[kMaxCascades];
+        std::vector<std::uint64_t> hashes[kMaxCascades];
+    };
+    std::vector<CascadeBlock> cascadeBlocks_;
+    // A vector of casters made a CasterView: its arrays.
+    const CasterView& viewOf(const std::vector<ShadowCaster>& casters);
+    std::vector<Sphere> viewBounds_;
+    std::vector<std::uint64_t> viewOwners_;
+    std::vector<std::uint64_t> viewFingerprints_;
+    CasterView view_;
 };
 
 }  // namespace runner

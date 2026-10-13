@@ -157,60 +157,70 @@ InstanceId claim_winner(const DataModel& game, const InstanceId* candidates, std
     return best;
 }
 
-Assemblies::Assemblies() {
-    const std::size_t slots = DataModel::kMaxInstances;
-    seen_.assign(slots, 0);
-    node_.assign(slots, 0);
-    group_.assign(slots, -1);
-    flags_.assign(slots, 0);
-    active_.assign(slots, 0);
-    claimant_.assign(slots, 0);
-    uf_.assign(slots, 0);
-    rigid_uf_.assign(slots, 0);
-    anchor_.assign(slots, 0);
-    node_pos_.assign(slots, -1);
-    rigid_node_.assign(slots, 0);
-    scratch_index_.assign(slots, -1);
-    touched_.reserve(slots);
-    bodies_.reserve(slots);
-    constraints_.reserve(slots);
-    contested_.reserve(slots);
-    candidates_.reserve(slots);
-    edges_.reserve(slots);
-    rigid_order_.reserve(slots);
-    no_collide_.reserve(slots);
-    joints_.reserve(slots);
-    nodes_.reserve(slots);
-    groups_.reserve(slots);
-    group_nodes_.reserve(slots);
-    rigid_.reserve(slots);
-    bone_.reserve(slots);
-    adj_start_.reserve(slots + 1);
-    adj_cursor_.reserve(slots);
-    adj_.reserve(2 * slots);
-    hops_.reserve(slots);
-    rigid_hops_.reserve(slots);
-    queue_.reserve(slots);
-    live_scratch_.reserve(slots);
-    dangling_id_.assign(slots, 0);
-    dangling_mask_.assign(slots, 0);
-    dangling_epoch_.assign(slots, 0);
-    follow_mark_.assign(slots, 0);
-    play_.reserve(slots);
-    play_members_.reserve(slots);
-    play_losers_.reserve(slots);
-    play_seen_.assign(slots, 0);
-    play_index_.assign(slots, -1);
-    play_member_index_.assign(slots, -1);
-    play_touched_.reserve(slots);
-    play_rigid_.reserve(slots);
-    old_play_.reserve(slots);
-    old_members_.reserve(slots);
-    side_.reserve(slots);
-    side_mark_.assign(slots, 0);
-    side_movers_.reserve(slots);
-    follow_marked_.reserve(slots);
-    carry_stack_.reserve(slots);
+Assemblies::Assemblies() { ensure_slots(kSlotStep); }
+
+void Assemblies::ensure_slots(std::size_t slots) {
+    if (slots <= slot_capacity_) {
+        return;
+    }
+    // Whole steps, so a growing place resizes rarely. Per-slot tables take
+    // their defaults for the new slots; the work lists are reserved to the
+    // same size, so no operation reallocates them while it runs, as when
+    // they were sized for the whole instance cap.
+    const std::size_t want = (slots + kSlotStep - 1) / kSlotStep * kSlotStep;
+    slot_capacity_ = want;
+    seen_.resize(want, 0);
+    node_.resize(want, 0);
+    group_.resize(want, -1);
+    flags_.resize(want, 0);
+    active_.resize(want, 0);
+    claimant_.resize(want, 0);
+    uf_.resize(want, 0);
+    rigid_uf_.resize(want, 0);
+    anchor_.resize(want, 0);
+    node_pos_.resize(want, -1);
+    rigid_node_.resize(want, 0);
+    scratch_index_.resize(want, -1);
+    touched_.reserve(want);
+    bodies_.reserve(want);
+    constraints_.reserve(want);
+    contested_.reserve(want);
+    candidates_.reserve(want);
+    edges_.reserve(want);
+    rigid_order_.reserve(want);
+    no_collide_.reserve(want);
+    joints_.reserve(want);
+    nodes_.reserve(want);
+    groups_.reserve(want);
+    group_nodes_.reserve(want);
+    rigid_.reserve(want);
+    bone_.reserve(want);
+    adj_start_.reserve(want + 1);
+    adj_cursor_.reserve(want);
+    adj_.reserve(2 * want);
+    hops_.reserve(want);
+    rigid_hops_.reserve(want);
+    queue_.reserve(want);
+    live_scratch_.reserve(want);
+    dangling_id_.resize(want, 0);
+    dangling_mask_.resize(want, 0);
+    dangling_epoch_.resize(want, 0);
+    follow_mark_.resize(want, 0);
+    play_.reserve(want);
+    play_members_.reserve(want);
+    play_losers_.reserve(want);
+    play_seen_.resize(want, 0);
+    play_index_.resize(want, -1);
+    play_member_index_.resize(want, -1);
+    play_touched_.reserve(want);
+    play_rigid_.reserve(want);
+    old_play_.reserve(want);
+    old_members_.reserve(want);
+    side_.reserve(want);
+    side_mark_.resize(want, 0);
+    side_movers_.reserve(want);
+    follow_marked_.reserve(want);
+    carry_stack_.reserve(want);
 }
 
 void Assemblies::refresh(const DataModel& game) {

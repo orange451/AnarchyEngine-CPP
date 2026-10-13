@@ -4,7 +4,9 @@ namespace engine_core {
 
 void InvalidationQueue::reserve(std::size_t capacity) {
     items_.assign(capacity, Invalidation{});
-    queued_.assign(std::size_t{1} << 16, 0);
+    // Grows with the highest slot pushed (queued_slot), so a large place
+    // pays for its slots only.
+    queued_.assign(std::size_t{1} << 14, 0);
     head_ = 0;
     tail_ = 0;
     size_ = 0;
@@ -14,7 +16,7 @@ void InvalidationQueue::reserve(std::size_t capacity) {
 void InvalidationQueue::push(Invalidation item) {
     const bool transform_only = item.fields == VisualField::Transform && !queued_.empty();
     if (transform_only) {
-        const std::size_t waiting = queued_[id_slot(item.id)];
+        const std::size_t waiting = queued_slot(id_slot(item.id));
         if (waiting != 0 && items_[waiting - 1].id == item.id && items_[waiting - 1].origin == item.origin) {
             return;
         }
@@ -24,7 +26,7 @@ void InvalidationQueue::push(Invalidation item) {
         return;
     }
     if (transform_only) {
-        queued_[id_slot(item.id)] = tail_ + 1;
+        queued_slot(id_slot(item.id)) = tail_ + 1;
     }
     items_[tail_] = item;
     tail_ = (tail_ + 1) % items_.size();

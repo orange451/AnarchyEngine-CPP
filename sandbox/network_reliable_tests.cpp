@@ -252,3 +252,21 @@ TEST_CASE("N37c a one-fragment block and an empty last fragment are refused", "[
     empty.boolean(false);
     REQUIRE_FALSE(channel.validate(BitReader(buffer.data(), empty.bytes_written())));
 }
+
+TEST_CASE("N37d blocks queued behind one another all arrive, in order, within the receiver's budget", "[network][reliable]") {
+    Side a, b;
+    std::vector<std::vector<std::uint8_t>> sent;
+    sent.push_back(message(11, 5u << 20));
+    sent.push_back(message(12, 5u << 20));
+    sent.push_back(message(13, 10));
+    sent.push_back(message(14, 5u << 20));
+    sent.push_back(message(15, 20));
+    for (const auto& m : sent) REQUIRE(a.channel.send(m.data(), m.size()));
+    for (int tick = 0; tick < 60 * 600 && b.received.size() < sent.size(); ++tick) {
+        const double now = tick / 60.0;
+        b.take(a.build(now, 0.05));
+        a.learn_acks(b, now);
+    }
+    REQUIRE(b.received.size() == sent.size());
+    for (std::size_t i = 0; i < sent.size(); ++i) REQUIRE(b.received[i] == sent[i]);
+}

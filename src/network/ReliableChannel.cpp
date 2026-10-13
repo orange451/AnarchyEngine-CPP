@@ -40,6 +40,10 @@ std::size_t ReliableChannel::bytes_due(double now, double rtt) const {
             if (due(out.last_send, now, rtt)) total += entry_bits(false, out.length) / 8;
             continue;
         }
+        // A block is sent only once every message before it is acked: the receiver
+        // has then delivered them all, so this block is the one it always accepts
+        // and an honest sender stays inside its reassembly budget.
+        if (out.id != oldest_unacked_) continue;
         for (std::uint16_t f = 0; f < out.fragment_count; ++f) {
             if (out.fragment_acked[f] || !due(out.fragment_last_send[f], now, rtt)) continue;
             total += entry_bits(true, std::min(kFragmentBytes, out.length - f * kFragmentBytes)) / 8;
@@ -67,6 +71,7 @@ void ReliableChannel::write(BitWriter& writer, double now, double rtt, SentPacke
             packet.refs[packet.ref_count++] = MessageRef{out.id, kWholeMessage};
             continue;
         }
+        if (out.id != oldest_unacked_) continue;   // see bytes_due
         for (std::uint16_t f = 0; f < out.fragment_count; ++f) {
             if (out.fragment_acked[f] || !due(out.fragment_last_send[f], now, rtt)) continue;
             if (packet.ref_count >= kMaxRefsPerPacket) break;

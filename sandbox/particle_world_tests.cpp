@@ -301,3 +301,52 @@ TEST_CASE("PW10 Engine steps particles each frame: stopped, playing, and frozen 
     }
     REQUIRE(e.particle_count() == frozen);
 }
+
+#include "Camera.hpp"
+
+TEST_CASE("PW11 over ParticleBudget, far emitters spawn fewer first; live particles are never culled",
+          "[particle-world]") {
+    ParticleRig rig;
+    auto* workspace = dynamic_cast<Workspace*>(rig.game.instance(workspace_of(rig.game)));
+    REQUIRE_FALSE(workspace->set_particle_budget(90).has_value());
+    Camera& camera = rig.game.create<Camera>();
+    rig.game.set_parent(camera.id(), workspace_of(rig.game));
+    REQUIRE_FALSE(camera.set_pv_transform(matrix4_translation(0.f, 0.f, -10.f)).has_value());
+    REQUIRE(workspace->set_current_camera(camera.id()));
+    Attachment& near_point = rig.attachment_at(0.f, 0.f, 0.f);
+    Attachment& far_point = rig.attachment_at(0.f, 0.f, 500.f);
+    ParticleEmitter& near_emitter = rig.emitter(near_point.id(), "Near");
+    ParticleEmitter& far_emitter = rig.emitter(far_point.id(), "Far");
+    for (ParticleEmitter* e : {&near_emitter, &far_emitter}) {
+        REQUIRE_FALSE(e->set_rate(NumberCurve::constant(1000.f)).has_value());
+        REQUIRE_FALSE(e->set_lifetime(NumberCurve::constant(100.f)).has_value());
+    }
+    rig.steps(30);
+    REQUIRE(rig.world.live_total() <= 90);
+    REQUIRE(rig.world.live_total() >= 80);
+    REQUIRE(near_emitter.particle_count() > far_emitter.particle_count());
+
+    REQUIRE_FALSE(workspace->set_particle_budget(10).has_value());
+    const int before = near_emitter.particle_count() + far_emitter.particle_count();
+    rig.steps(1);
+    REQUIRE(near_emitter.particle_count() + far_emitter.particle_count() == before);   // nothing killed
+}
+
+TEST_CASE("PW12 huge rates, tiny lifetimes, and zero budgets stay bounded", "[particle-world]") {
+    ParticleRig rig;
+    ParticleEmitter& e = rig.emitter(workspace_of(rig.game));
+    REQUIRE_FALSE(e.set_rate(NumberCurve::constant(1e9f)).has_value());
+    REQUIRE_FALSE(e.set_lifetime(NumberCurve::constant(1e-6f)).has_value());
+    rig.steps(3);
+    REQUIRE(e.particle_count() <= 1000);
+    REQUIRE_FALSE(e.set_max_particles(0).has_value());
+    rig.steps(1);
+    REQUIRE(e.particle_count() == 0);
+    auto* workspace = dynamic_cast<Workspace*>(rig.game.instance(workspace_of(rig.game)));
+    REQUIRE_FALSE(workspace->set_particle_budget(0).has_value());
+    REQUIRE_FALSE(e.set_max_particles(1000).has_value());
+    REQUIRE_FALSE(e.set_playing(false).has_value());
+    e.request_emit(500);
+    rig.steps(1);
+    REQUIRE(e.particle_count() == 0);
+}

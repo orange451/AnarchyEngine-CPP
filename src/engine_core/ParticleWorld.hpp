@@ -65,11 +65,13 @@ public:
 private:
     struct Entry;
     struct Colliders;
+    struct Pending;
 
     std::unordered_map<InstanceId, std::unique_ptr<Entry>> emitters_;
     std::unique_ptr<Colliders> colliders_;
     std::vector<ParticleDraw> draws_;
     std::vector<InstanceId> ids_;
+    std::vector<Pending> pending_;
     std::uint64_t pass_ = 0;
     std::uint64_t generation_ = ~0ull;
     std::size_t live_total_ = 0;

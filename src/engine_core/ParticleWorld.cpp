@@ -211,6 +211,18 @@ ParticleWorld::~ParticleWorld() = default;
 
 int ParticleWorld::rays_last_step() const { return colliders_->rays; }
 
+// One emitter this step: where it is, how many it asks for, and how many it gets.
+struct ParticleWorld::Pending {
+    InstanceId id = 0;
+    ParticleEmitter* emitter = nullptr;
+    Entry* entry = nullptr;
+    EmitterFrame frame;
+    int emits = 0;
+    int want = 0;
+    int allowance = 0;
+    float distance2 = 0.f;
+};
+
 void ParticleWorld::step(DataModel& game, double dt) {
     if (generation_ != game.world_generation()) {
         emitters_.clear();   // a Stop: everything play spawned goes
@@ -220,8 +232,10 @@ void ParticleWorld::step(DataModel& game, double dt) {
     game.particle_emitters(ids_);
     const Vec3 eye = camera_position(game);
     const float step_dt = static_cast<float>(std::max(0.0, dt));
-    draws_.clear();
-    live_total_ = 0;
+
+    // Pass 1: settings, where each emitter is, and what it wants to spawn.
+    pending_.clear();
+    std::size_t live = 0;
     for (InstanceId id : ids_) {
         auto* e = dynamic_cast<ParticleEmitter*>(game.instance(id));
         if (e == nullptr) {
@@ -250,31 +264,77 @@ void ParticleWorld::step(DataModel& game, double dt) {
         Matrix4 shape_frame;
         Vec3 half;
         emitter_extent(game, parent, shape_frame, half);
-        EmitterFrame frame;
-        frame.current = shape_frame;
-        frame.previous = entry.seen ? entry.last_frame : shape_frame;
-        frame.half = half;
-        frame.inherited = inherited_velocity(game, parent, matrix4_position(shape_frame));
-        frame.dt = step_dt;
+        Pending p;
+        p.id = id;
+        p.emitter = e;
+        p.entry = &entry;
+        p.frame.current = shape_frame;
+        p.frame.previous = entry.seen ? entry.last_frame : shape_frame;
+        p.frame.half = half;
+        p.frame.inherited = inherited_velocity(game, parent, matrix4_position(shape_frame));
+        p.frame.dt = step_dt;
         if (restart && e->prewarm() && e->looping()) {
-            entry.sim.prewarm(frame);
+            entry.sim.prewarm(p.frame);
         }
-        entry.sim.step(frame, e->playing(), e->take_emit_requests(), INT_MAX, nullptr);
-        entry.last_frame = shape_frame;
+        p.emits = e->take_emit_requests();
+        p.want = entry.sim.wanted_spawns(step_dt, e->playing(), p.emits);
+        p.allowance = p.want;
+        const Vec3 to_eye = particles::sub(matrix4_position(shape_frame), eye);
+        p.distance2 = particles::dot(to_eye, to_eye);
+        live += entry.sim.count();
+        pending_.push_back(p);
+    }
+
+    // The budget: over it, the farthest emitters give up their spawns first.
+    // Live particles are never removed.
+    const auto* workspace = dynamic_cast<const Workspace*>(game.instance(game.service("Workspace")));
+    const long long budget = workspace != nullptr ? workspace->particle_budget() : Workspace::kDefaultParticleBudget;
+    long long wanted = 0;
+    for (const Pending& p : pending_) {
+        wanted += p.want;
+    }
+    long long over = static_cast<long long>(live) + wanted - budget;
+    if (over > 0) {
+        std::vector<std::size_t> order(pending_.size());
+        for (std::size_t i = 0; i < order.size(); ++i) {
+            order[i] = i;
+        }
+        std::stable_sort(order.begin(), order.end(),
+                         [this](std::size_t a, std::size_t b) { return pending_[a].distance2 > pending_[b].distance2; });
+        for (std::size_t i : order) {
+            if (over <= 0) {
+                break;
+            }
+            const long long cut = std::min<long long>(over, pending_[i].allowance);
+            pending_[i].allowance -= static_cast<int>(cut);
+            over -= cut;
+        }
+    }
+
+    // Pass 2: step, store what scripts read, fire Finished, and pack draws.
+    draws_.clear();
+    live_total_ = 0;
+    for (Pending& p : pending_) {
+        ParticleEmitter& e = *p.emitter;
+        Entry& entry = *p.entry;
+        // An Emit that cannot fit is dropped, not carried.
+        const int emits = std::min(p.emits, p.allowance);
+        entry.sim.step(p.frame, e.playing(), emits, p.allowance, nullptr);
+        entry.last_frame = p.frame.current;
         entry.seen = true;
         if (entry.sim.take_cycle_ended()) {
-            e->store_finished_cycle();
+            e.store_finished_cycle();
             entry.finished_pending = true;
         }
         const int count = static_cast<int>(entry.sim.count());
-        e->store_particle_count(count);
+        e.store_particle_count(count);
         if (entry.finished_pending && count == 0) {
             entry.finished_pending = false;
-            game.fire_event(id, "Finished", {});
+            game.fire_event(p.id, "Finished", {});
         }
         live_total_ += entry.sim.count();
         if (count > 0) {
-            draws_.push_back(make_draw(game, *e, entry.sim, shape_frame, eye));
+            draws_.push_back(make_draw(game, e, entry.sim, p.frame.current, eye));
         }
     }
     // Gone, moved into a ViewportPane, or out of Workspace: dropped now.

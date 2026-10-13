@@ -51,23 +51,21 @@ end
 -- 2. One shared Material per albedo.
 local matFolder = folder(assets.Materials, "Vegetation")
 local shared, nMaterials = {}, 0
+-- Reruns update the existing Materials in place.
 for key, files in pairs(TEX) do
-	local m = Instance.new("Material", matFolder)
-	m.Name = key
+	local m = matFolder:FindFirstChild(key)
+	if m == nil then
+		m = Instance.new("Material", matFolder)
+		m.Name = key
+	end
 	m.DiffuseTexture = tex(files.Color)
 	m.NormalTexture = tex(files.Normal)
-	m.Metalness = 0
-	if string.sub(key, 1, 5) == "Leaf_" then
-		m.Roughness = 0.85
-	else
-		m.Roughness = 0.9
-		if files.Roughness then
-			m.RoughnessTexture = tex(files.Roughness)
-		end
-		if files.Metalness then
-			m.MetalnessTexture = tex(files.Metalness)
-		end
-	end
+	-- A spec channel that varies is a texture; a nearly flat one is the scalar value
+	-- (prepare_textures.py). With a texture the scalar is 1 so the map reads unscaled.
+	m.RoughnessTexture = tex(files.Roughness)
+	m.Roughness = files.Roughness and 1 or (files.RoughnessValue or 0.5)
+	m.MetalnessTexture = tex(files.Metalness)
+	m.Metalness = files.Metalness and 1 or (files.MetalnessValue or 0)
 	shared[key] = m
 	nMaterials += 1
 end
@@ -84,7 +82,7 @@ local familyFolder = {
 local meshRoot = folder(assets.Meshes, "Vegetation")
 local nModels, nFolders = 0, 0
 for name, _ in pairs(ASSET_MATS) do
-	local prefab = assets.Prefabs:FindFirstChild(name)
+	local prefab = assets.Prefabs:FindFirstChild(name) or familyFolder[FAMILY[name]]:FindFirstChild(name)
 	if prefab == nil or prefab.ClassName ~= "Prefab" then
 		error("prefab missing: " .. name)
 	end

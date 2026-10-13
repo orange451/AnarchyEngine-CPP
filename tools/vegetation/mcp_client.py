@@ -4,6 +4,7 @@ Wire format (src/ide/McpServer.cpp): POST /mcp with a bearer token; replies are
 plain JSON {"result": ...} or {"error": ...}. tools/call results carry content
 text, an optional structuredContent object, and isError.
 """
+import base64
 import json
 import os
 import shutil
@@ -59,6 +60,16 @@ class Studio:
         if result.get("isError"):
             raise McpError(f"{tool}: {text}")
         return result.get("structuredContent") or {"text": text}
+
+    def screenshot(self, max_size: int = 1600) -> bytes:
+        """PNG bytes of the Scene View. The server moves the image into a content item."""
+        result = self._rpc("tools/call", {"name": "screenshot", "arguments": {"max_size": max_size}})
+        if result.get("isError"):
+            raise McpError("screenshot: " + "".join(c.get("text", "") for c in result.get("content", [])))
+        for item in result.get("content", []):
+            if item.get("type") == "image":
+                return base64.b64decode(item["data"])
+        raise McpError("screenshot: no image in the result")
 
     def lua(self, source: str) -> list:
         """Runs Luau in the studio's console VM; returns the printed lines' text."""

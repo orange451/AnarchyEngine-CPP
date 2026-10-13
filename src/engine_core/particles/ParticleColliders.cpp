@@ -57,26 +57,64 @@ void WorldCollider::prepare(DataModel& game, TerrainCollider& terrain, const std
     group_ = collision_group;
     budget_ = ray_budget;
     cast_ = rays_cast;
+    share_ = ray_budget != nullptr ? static_cast<std::size_t>(std::max(0, *ray_budget)) : 0;
+}
+
+void PlaneCache::begin(std::size_t count) { planes_.resize(count); }
+
+void PlaneCache::set(std::size_t slot, Vec3 normal, float offset) {
+    if (slot >= planes_.size()) {
+        planes_.resize(slot + 1);
+    }
+    planes_[slot] = Plane{normal, offset, true};
+}
+
+void PlaneCache::clear(std::size_t slot) {
+    if (slot < planes_.size()) {
+        planes_[slot].valid = false;
+    }
+}
+
+std::optional<Vec3> PlaneCache::crossing(std::size_t slot, Vec3 from, Vec3 to) const {
+    if (slot >= planes_.size() || !planes_[slot].valid) {
+        return std::nullopt;
+    }
+    const Plane& plane = planes_[slot];
+    const float before = dot(plane.normal, from) - plane.offset;
+    const float after = dot(plane.normal, to) - plane.offset;
+    if (before >= 0.f && after < 0.f) {
+        const float f = before / (before - after);
+        return add(from, scale(sub(to, from), f));
+    }
+    return std::nullopt;
+}
+
+Vec3 PlaneCache::normal(std::size_t slot) const { return slot < planes_.size() ? planes_[slot].normal : Vec3{0.f, 1.f, 0.f}; }
+
+void PlaneCache::moved(std::size_t from, std::size_t to) {
+    if (from < planes_.size() && to < planes_.size()) {
+        planes_[to] = planes_[from];
+        // The slot it left goes to a newborn, which has hit nothing yet.
+        planes_[from].valid = false;
+    }
 }
 
 void WorldCollider::begin(std::size_t count) {
-    planes_.resize(count);
+    planes_.begin(count);
     count_ = count;
-    cursor_ = count > 0 ? (cursor_ + kWindow) % count : 0;
+    cursor_ = count > 0 ? (cursor_ + share_) % count : 0;
+    // Steps until a particle's turn comes again, and one more.
+    reach_ = share_ > 0 ? static_cast<float>((count + share_ - 1) / share_ + 1) : 1.f;
 }
 
 std::optional<ParticleHit> WorldCollider::test(std::size_t slot, Vec3 from, Vec3 to) {
     if (std::optional<ParticleHit> ground = terrain_->test(slot, from, to)) {
         return ground;
     }
-    if (slot >= planes_.size()) {
-        planes_.resize(slot + 1);
-    }
-    Plane& plane = planes_[slot];
     // In this step's window, and rays left: cast one.
     const std::size_t place = count_ > 0 ? (slot + count_ - cursor_) % count_ : 0;
     PhysicsWorld* physics = game_->physics();
-    if (physics != nullptr && *budget_ > 0 && place < kWindow) {
+    if (physics != nullptr && *budget_ > 0 && place < share_) {
         --*budget_;
         ++*cast_;
         RayFilter filter;
@@ -85,32 +123,25 @@ std::optional<ParticleHit> WorldCollider::test(std::size_t slot, Vec3 from, Vec3
         if (!(dot(along, along) > 0.f)) {
             return std::nullopt;
         }
-        const std::optional<RayHit> hit = physics->raycast(*game_, from, along, filter);
+        // Looks ahead to the particle's next turn, so its plane is known before it gets there.
+        const std::optional<RayHit> hit = physics->raycast(*game_, from, scale(along, reach_), filter);
         if (!hit) {
-            plane.valid = false;
+            planes_.clear(slot);
             return std::nullopt;
         }
-        plane.normal = normalize(hit->normal);
-        plane.offset = dot(plane.normal, hit->position);
-        plane.valid = true;
-        return ParticleHit{hit->position, plane.normal};
-    }
-    if (!plane.valid) {
+        const Vec3 normal = normalize(hit->normal);
+        planes_.set(slot, normal, dot(normal, hit->position));
+        if (hit->distance <= length(along)) {
+            return ParticleHit{hit->position, normal};
+        }
         return std::nullopt;
     }
-    const float before = dot(plane.normal, from) - plane.offset;
-    const float after = dot(plane.normal, to) - plane.offset;
-    if (before >= 0.f && after < 0.f) {
-        const float f = before / (before - after);
-        return ParticleHit{add(from, scale(sub(to, from), f)), plane.normal};
+    if (const std::optional<Vec3> point = planes_.crossing(slot, from, to)) {
+        return ParticleHit{*point, planes_.normal(slot)};
     }
     return std::nullopt;
 }
 
-void WorldCollider::moved(std::size_t from, std::size_t to) {
-    if (from < planes_.size() && to < planes_.size()) {
-        planes_[to] = planes_[from];
-    }
-}
+void WorldCollider::moved(std::size_t from, std::size_t to) { planes_.moved(from, to); }
 
 }  // namespace engine_core::particles

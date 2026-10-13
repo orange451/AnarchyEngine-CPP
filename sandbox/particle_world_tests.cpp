@@ -98,6 +98,8 @@ TEST_CASE("PW2 a one-shot sets Playing false at its cycle's end and fires Finish
     REQUIRE_FALSE(e.set_looping(false).has_value());
     REQUIRE_FALSE(e.set_duration(0.5).has_value());
     REQUIRE_FALSE(e.set_lifetime(NumberCurve::constant(0.5f)).has_value());
+    rig.game.capture_place();
+    rig.game.start_simulation();   // a one-shot ends only in play; stopped, it previews again
     rig.run(R"(
         _G.finished = 0
         _G.playing = nil
@@ -461,4 +463,66 @@ TEST_CASE("PW15 the render snapshot carries each drawn emitter's particles by po
     pump.prepare_copy(rig.game);
     pump.publish();
     REQUIRE(pump.front().particles.empty());
+}
+
+#include "particles/ParticleColliders.hpp"
+
+TEST_CASE("PW16 an edit-mode one-shot replays and never saves Playing false", "[particle-world]") {
+    ParticleRig rig;
+    ParticleEmitter& e = rig.emitter(workspace_of(rig.game));
+    REQUIRE_FALSE(e.set_looping(false).has_value());
+    REQUIRE_FALSE(e.set_duration(0.3).has_value());
+    REQUIRE_FALSE(e.set_lifetime(NumberCurve::constant(0.2f)).has_value());
+    REQUIRE_FALSE(rig.game.simulation_running());
+    rig.steps(60);   // a second: the cycle ended and its particles died, more than once
+    REQUIRE(e.playing());
+    rig.steps(5);
+    REQUIRE(e.particle_count() > 0);   // the preview runs again
+    PropertyBag saved;
+    e.save_properties(saved);
+    REQUIRE(bag_find(saved, "Playing") == nullptr);
+}
+
+TEST_CASE("PW17 a particle's hit plane goes with it when another dies, never to a newborn", "[particle-world]") {
+    particles::PlaneCache planes;
+    planes.begin(3);
+    planes.set(2, Vec3{0.f, 1.f, 0.f}, 0.f);
+    REQUIRE(planes.crossing(2, Vec3{0.f, 1.f, 0.f}, Vec3{0.f, -1.f, 0.f}).has_value());
+    planes.moved(2, 0);   // slot 0 died; the particle in slot 2 moves there
+    REQUIRE(planes.crossing(0, Vec3{0.f, 1.f, 0.f}, Vec3{0.f, -1.f, 0.f}).has_value());
+    planes.begin(3);      // a newborn takes slot 2 again
+    REQUIRE_FALSE(planes.crossing(2, Vec3{0.f, 1.f, 0.f}, Vec3{0.f, -1.f, 0.f}).has_value());
+}
+
+TEST_CASE("PW18 the ray budget is shared, so every World emitter collides", "[particle-world]") {
+    ParticleRig rig;
+    for (int i = 0; i < 2; ++i) {
+        Brush& floor = rig.game.create<Brush>();   // a 4-unit box with its top at y = 2
+        rig.game.set_parent(floor.id(), workspace_of(rig.game));
+        floor.set_anchored(true);
+        REQUIRE_FALSE(floor.set_transform(matrix4_translation(i * 20.f, 0.f, 0.f)).has_value());
+    }
+    std::vector<ParticleEmitter*> emitters;
+    for (int i = 0; i < 2; ++i) {
+        Attachment& above = rig.attachment_at(i * 20.f, 8.f, 0.f);
+        ParticleEmitter& e = rig.emitter(above.id(), i == 0 ? "A" : "B");
+        REQUIRE_FALSE(e.set_emit_speed(NumberCurve::constant(0.f)).has_value());
+        REQUIRE_FALSE(e.set_acceleration(Vec3{0.f, -40.f, 0.f}).has_value());
+        REQUIRE_FALSE(e.set_lifetime(NumberCurve::constant(10.f)).has_value());
+        REQUIRE_FALSE(e.set_max_particles(2000).has_value());
+        REQUIRE_FALSE(e.set_collision(static_cast<int>(ParticleCollision::World)).has_value());
+        REQUIRE_FALSE(e.set_collision_response(static_cast<int>(ParticleCollisionResponse::Stick)).has_value());
+        REQUIRE_FALSE(e.set_playing(false).has_value());
+        e.request_emit(1500);
+        emitters.push_back(&e);
+    }
+    rig.steps(120);
+    for (const auto& draw : rig.world.draws()) {
+        int fell_through = 0;
+        for (const auto& p : *draw.particles) {
+            fell_through += p.position[1] < 1.f ? 1 : 0;
+        }
+        INFO("emitter " << draw.emitter);
+        REQUIRE(fell_through == 0);
+    }
 }

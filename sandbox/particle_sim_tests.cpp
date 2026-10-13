@@ -377,7 +377,33 @@ TEST_CASE("SIM15 prewarm fills a looping emitter as if one cycle had run", "[par
     EmitterSim sim;
     sim.configure(s);
     sim.restart(0);
-    sim.prewarm(still(0.f));
+    sim.prewarm(still(0.f), kAll);
     REQUIRE(sim.count() == 20);
+    REQUIRE(sim.cycle_time() == 0.f);
+}
+
+TEST_CASE("SIM16 a huge burst Count never overflows: wants stay positive and spawns bounded", "[particle-sim]") {
+    ParticleSettings s = basic();
+    s.rate = table(NumberCurve::constant(0.f));
+    s.bursts = {{0.f, table(NumberCurve::constant(1e10f))}};
+    s.max_particles = 100;
+    EmitterSim sim;
+    sim.configure(s);
+    sim.restart(0);
+    REQUIRE(sim.wanted_spawns(0.1f, true, 0) > 0);
+    sim.step(still(0.1f), true, 0, kAll, nullptr);
+    REQUIRE(sim.count() == 100);
+}
+
+TEST_CASE("SIM17 prewarm keeps to its allowance and to a bounded number of steps", "[particle-sim]") {
+    ParticleSettings s = basic();
+    s.rate = table(NumberCurve::constant(1e9f));
+    s.max_particles = 100000000;
+    s.duration = 1e6f;
+    EmitterSim sim;
+    sim.configure(s);
+    sim.restart(0);
+    sim.prewarm(still(0.f), 500);
+    REQUIRE(sim.count() <= 500);
     REQUIRE(sim.cycle_time() == 0.f);
 }

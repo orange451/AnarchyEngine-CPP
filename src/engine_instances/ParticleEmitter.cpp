@@ -398,6 +398,14 @@ std::optional<std::string> ParticleEmitter::set_flipbook_grid(Vec2 value) {
 
 std::optional<std::string> ParticleEmitter::set_color(ColorCurve value) {
     require_thread(*this);
+    for (const auto* keys : {&value.keys_a(), &value.keys_b()}) {
+        for (const ColorKey& key : *keys) {
+            if (!std::isfinite(key.time) || !std::isfinite(key.color.r) || !std::isfinite(key.color.g) ||
+                !std::isfinite(key.color.b) || !std::isfinite(key.transparency)) {
+                return std::string("Color must be finite");
+            }
+        }
+    }
     if (color_ == value) {
         return std::nullopt;
     }

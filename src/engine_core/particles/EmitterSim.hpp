@@ -110,8 +110,8 @@ public:
     void step(const EmitterFrame& frame, bool playing, int pending_emits, int allowance, ParticleCollider* collider);
     void clear();
     // A looping emitter's state one cycle in, at 1/30 s steps, without
-    // collision; then its cycle starts again.
-    void prewarm(const EmitterFrame& frame);
+    // collision, spawning at most allowance; then its cycle starts again.
+    void prewarm(const EmitterFrame& frame, int allowance);
 
     std::size_t count() const { return age_.size(); }
     float cycle_time() const { return cycle_time_; }

@@ -20,8 +20,10 @@ constexpr double kMostSpawns = 1.0e7;
 
 Vec3 direction_in(const Matrix4& m, Vec3 d) { return normalize(matrix4_vector(m, d)); }
 
+// Clamped before the cast, so a huge Count cannot overflow.
 int burst_count(const CurveTable& count, float pick) {
-    return static_cast<int>(std::max(0.f, count.sample(0.f, pick)) + 0.5f);
+    const double n = std::floor(std::max(0.0, static_cast<double>(count.sample(0.f, pick))) + 0.5);
+    return static_cast<int>(std::min(n, kMostSpawns));
 }
 
 }  // namespace
@@ -276,13 +278,19 @@ void EmitterSim::clear() {
     stuck_.clear();
 }
 
-void EmitterSim::prewarm(const EmitterFrame& frame) {
+void EmitterSim::prewarm(const EmitterFrame& frame, int allowance) {
+    // A minute of simulated time at most, whatever the Duration.
+    constexpr int kMostSteps = 30 * 60;
     EmitterFrame step_frame = frame;
     step_frame.previous = frame.current;
     step_frame.dt = 1.f / 30.f;
-    const int steps = static_cast<int>(std::ceil(s_.duration * 30.f - 1e-3f));
+    const double wanted = std::ceil(static_cast<double>(s_.duration) * 30.0 - 1e-3);
+    const int steps = static_cast<int>(std::min(wanted, double{kMostSteps}));
+    int left = std::max(0, allowance);
     for (int i = 0; i < steps; ++i) {
-        step(step_frame, true, 0, INT_MAX, nullptr);
+        const std::size_t before = count();
+        step(step_frame, true, 0, left, nullptr);
+        left -= static_cast<int>(count() > before ? count() - before : 0);
     }
     cycle_time_ = 0.f;
     next_burst_ = 0;

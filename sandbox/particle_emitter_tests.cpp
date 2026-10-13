@@ -191,3 +191,14 @@ TEST_CASE("PE5 Bursts save as a JSON array, undo, and refuse bad rows", "[partic
     REQUIRE(copy.load_property("Bursts", *bag_find(again, "Bursts"), why));
     REQUIRE(copy.bursts() == e.bursts());
 }
+
+TEST_CASE("PE6 a Color that is not finite is refused", "[particles]") {
+    SimRole role;
+    Game game;
+    ParticleEmitter& e = add_emitter(game, workspace_of(game));
+    REQUIRE(reason(e.set_color(ColorCurve::constant(ColorRgb{1.f, 1.f, 1.f, 1.f}, std::nanf("")))) ==
+            "Color must be finite");
+    REQUIRE(reason(e.set_color(ColorCurve::between(ColorRgb{INFINITY, 0.f, 0.f, 1.f}, 0.f, ColorRgb{}, 0.f))) ==
+            "Color must be finite");
+    REQUIRE(e.color() == ColorCurve::constant(ColorRgb{1.f, 1.f, 1.f, 1.f}, 0.f));
+}

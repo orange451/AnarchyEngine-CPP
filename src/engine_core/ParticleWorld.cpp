@@ -31,6 +31,8 @@ struct ParticleWorld::Entry {
     bool seen = false;
     std::uint64_t pass = 0;
     bool finished_pending = false;   // a one-shot ended; Finished fires once its last particle dies
+    bool replay_pending = false;     // stopped: a one-shot ended, and replays once its last particle dies
+    int ray_budget = 0;              // its share of this step's World rays
     particles::WorldCollider world;   // its ray turns and hit planes, for World collision
 };
 
@@ -39,7 +41,6 @@ struct ParticleWorld::Entry {
 struct ParticleWorld::Colliders {
     particles::TerrainCollider terrain;
     bool terrain_ready = false;
-    int budget = 0;
     int rays = 0;
 
     particles::TerrainCollider& ground(DataModel& game) {
@@ -247,9 +248,13 @@ void ParticleWorld::step(DataModel& game, double dt) {
     const Vec3 eye = camera_position(game);
     const float step_dt = static_cast<float>(std::max(0.0, dt));
 
+    const auto* workspace = dynamic_cast<const Workspace*>(game.instance(game.service("Workspace")));
+    const long long budget = workspace != nullptr ? workspace->particle_budget() : Workspace::kDefaultParticleBudget;
+
     // Pass 1: settings, where each emitter is, and what it wants to spawn.
     pending_.clear();
     std::size_t live = 0;
+    int world_emitters = 0;
     for (InstanceId id : ids_) {
         auto* e = dynamic_cast<ParticleEmitter*>(game.instance(id));
         if (e == nullptr) {
@@ -288,21 +293,21 @@ void ParticleWorld::step(DataModel& game, double dt) {
         p.frame.inherited = inherited_velocity(game, parent, matrix4_position(shape_frame));
         p.frame.dt = step_dt;
         if (restart && e->prewarm() && e->looping()) {
-            entry.sim.prewarm(p.frame);
+            const long long room = std::clamp<long long>(budget - static_cast<long long>(live), 0, INT_MAX);
+            entry.sim.prewarm(p.frame, static_cast<int>(room));
         }
         p.emits = e->take_emit_requests();
         p.want = entry.sim.wanted_spawns(step_dt, e->playing(), p.emits);
         p.allowance = p.want;
         const Vec3 to_eye = particles::sub(matrix4_position(shape_frame), eye);
         p.distance2 = particles::dot(to_eye, to_eye);
+        world_emitters += e->collision() == ParticleCollision::World ? 1 : 0;
         live += entry.sim.count();
         pending_.push_back(p);
     }
 
     // The budget: over it, the farthest emitters give up their spawns first.
     // Live particles are never removed.
-    const auto* workspace = dynamic_cast<const Workspace*>(game.instance(game.service("Workspace")));
-    const long long budget = workspace != nullptr ? workspace->particle_budget() : Workspace::kDefaultParticleBudget;
     long long wanted = 0;
     for (const Pending& p : pending_) {
         wanted += p.want;
@@ -329,7 +334,8 @@ void ParticleWorld::step(DataModel& game, double dt) {
     draws_.clear();
     live_total_ = 0;
     colliders_->terrain_ready = false;
-    colliders_->budget = kRaysPerStep;
+    // Every World emitter gets an even share of the rays, so none starves another.
+    const int ray_share = world_emitters > 0 ? std::max(1, kRaysPerStep / world_emitters) : 0;
     colliders_->rays = 0;
     for (Pending& p : pending_) {
         ParticleEmitter& e = *p.emitter;
@@ -340,7 +346,8 @@ void ParticleWorld::step(DataModel& game, double dt) {
         if (e.collision() == ParticleCollision::Terrain) {
             collider = &colliders_->ground(game);
         } else if (e.collision() == ParticleCollision::World) {
-            entry.world.prepare(game, colliders_->ground(game), e.collision_group(), &colliders_->budget,
+            entry.ray_budget = ray_share;
+            entry.world.prepare(game, colliders_->ground(game), e.collision_group(), &entry.ray_budget,
                                 &colliders_->rays);
             collider = &entry.world;
         }
@@ -348,11 +355,21 @@ void ParticleWorld::step(DataModel& game, double dt) {
         entry.last_frame = p.frame.current;
         entry.seen = true;
         if (entry.sim.take_cycle_ended()) {
-            e.store_finished_cycle();
-            entry.finished_pending = true;
+            if (game.simulation_running()) {
+                e.store_finished_cycle();
+                entry.finished_pending = true;
+            } else {
+                // Stopped, a one-shot previews again rather than saving Playing false.
+                entry.replay_pending = true;
+            }
         }
         const int count = static_cast<int>(entry.sim.count());
         e.store_particle_count(count);
+        if (entry.replay_pending && count == 0) {
+            entry.replay_pending = false;
+            seed_counter_ += 0x6d2b79f5u;
+            entry.sim.restart(seed_counter_);
+        }
         if (entry.finished_pending && count == 0) {
             entry.finished_pending = false;
             game.fire_event(p.id, "Finished", {});

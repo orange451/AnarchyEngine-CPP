@@ -285,6 +285,14 @@ private:
     // constraint's ends. And each selected constraint's pivots, as of the last read.
     std::vector<engine_core::InstanceId> outlined_;
     std::vector<engine_core::ConstraintPivots> constraintPivots_;
+    // The selected ParticleEmitters' shapes, outlined with the tool lines.
+    struct EmitterOutline {
+        engine_core::ParticleShape shape = engine_core::ParticleShape::Point;
+        float arc = 360.f;
+        engine_core::Matrix4 frame{};
+        engine_core::Vec3 half{};
+    };
+    std::vector<EmitterOutline> emitterOutlines_;
     // Per frame: the outlines in world space, as Renderer::setOutlines takes them.
     std::vector<float> outlinePoints_;
     // The camera followCamera last followed, which the handles are sized for.

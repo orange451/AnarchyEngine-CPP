@@ -17,6 +17,9 @@
 #include "PhysicsObject.hpp"
 #include "PlayerController.hpp"
 #include "PhysicsWorld.hpp"
+#include "ParticleEmitter.hpp"
+#include "ParticleWorld.hpp"
+#include "particles/ParticleShapeLines.hpp"
 #include "SelectionService.hpp"
 #include "ScriptAnalysis.hpp"
 #include "Runner.hpp"
@@ -723,6 +726,17 @@ void GameView::readSelectedBodies() {
     }
     outlined_.assign(selected_.begin(), selected_.end());
     constraintPivots_.clear();
+    emitterOutlines_.clear();
+    for (const engine_core::InstanceId id : selected_) {
+        const auto* emitter = dynamic_cast<const engine_core::ParticleEmitter*>(game_->instance(id));
+        if (emitter == nullptr || !game_->in_workspace(id)) {
+            continue;
+        }
+        EmitterOutline& outline = emitterOutlines_.emplace_back();
+        outline.shape = emitter->shape();
+        outline.arc = static_cast<float>(emitter->arc());
+        engine_core::emitter_extent(*game_, game_->parent(id), outline.frame, outline.half);
+    }
     for (const engine_core::InstanceId id : selected_) {
         const auto* constraint = dynamic_cast<const engine_core::Constraint*>(game_->instance(id));
         if (constraint == nullptr || !game_->in_workspace(id)) {
@@ -926,6 +940,10 @@ void GameView::collectOutlines(const engine_core::VisualSnapshot& snapshot) {
         for (const engine_core::ConstraintPivots& pivots : constraintPivots_) {
             engine_core::constraint_lines(pivots, view, toolLines_);
         }
+    }
+    for (const EmitterOutline& outline : emitterOutlines_) {
+        engine_core::particles::particle_shape_lines(outline.shape, outline.arc, outline.frame, outline.half,
+                                                     toolLines_);
     }
     renderer_.setToolLines(toolLines_.data(), static_cast<int>(toolLines_.size() / 7));
     renderer_.setOutlines(outlinePoints_.data(), static_cast<int>(outlinePoints_.size() / 3));

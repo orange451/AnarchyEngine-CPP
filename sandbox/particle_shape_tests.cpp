@@ -129,3 +129,39 @@ TEST_CASE("PS6 rotate turns a vector about an axis", "[particle-shapes]") {
     REQUIRE(r.x == Catch::Approx(0.f).margin(1e-5));
     REQUIRE(r.z == Catch::Approx(-1.f).margin(1e-5));
 }
+
+#include "Matrix4.hpp"
+#include "particles/ParticleShapeLines.hpp"
+
+#include <vector>
+
+TEST_CASE("PS7 shape lines: a box has 12 edges and every shape's points lie on it", "[particle-shapes]") {
+    std::vector<float> out;
+    particle_shape_lines(ParticleShape::Box, 360.f, matrix4_identity(), kHalf, out);
+    REQUIRE(out.size() == 12 * 2 * 7);
+    for (std::size_t i = 0; i < out.size(); i += 7) {
+        REQUIRE(inside_box(Vec3{out[i], out[i + 1], out[i + 2]}));
+        REQUIRE(out[i + 6] == 1.f);   // opaque
+    }
+    out.clear();
+    particle_shape_lines(ParticleShape::Disc, 360.f, matrix4_translation(0.f, 5.f, 0.f), Vec3{2.f, 0.f, 3.f}, out);
+    REQUIRE(!out.empty());
+    for (std::size_t i = 0; i < out.size(); i += 7) {
+        REQUIRE(out[i + 1] == Catch::Approx(5.f));
+        REQUIRE((out[i] * out[i]) / 4.f + (out[i + 2] * out[i + 2]) / 9.f == Catch::Approx(1.f).margin(1e-3));
+    }
+    for (ParticleShape shape : {ParticleShape::Sphere, ParticleShape::Hemisphere, ParticleShape::Cylinder,
+                                ParticleShape::Cone}) {
+        out.clear();
+        particle_shape_lines(shape, 180.f, matrix4_identity(), kHalf, out);
+        REQUIRE(!out.empty());
+        REQUIRE(out.size() % 14 == 0);
+        for (std::size_t i = 0; i < out.size(); i += 7) {
+            REQUIRE(inside_box(Vec3{out[i], out[i + 1], out[i + 2]}, 1e-3f));
+        }
+    }
+    // A point, or a parent with no size, draws a small cross.
+    out.clear();
+    particle_shape_lines(ParticleShape::Box, 360.f, matrix4_identity(), Vec3{}, out);
+    REQUIRE(out.size() == 3 * 2 * 7);
+}

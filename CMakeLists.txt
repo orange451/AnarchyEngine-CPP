@@ -662,6 +662,7 @@ add_library(engine_core STATIC
     src/engine_core/particles/EmitterSim.cpp
     src/engine_core/ParticleWorld.cpp
     src/engine_core/particles/ParticleColliders.cpp
+    src/engine_core/particles/ParticleShapeLines.cpp
     src/engine_core/InstanceRef.cpp
     src/engine_core/LuaReflect.cpp
     src/engine_core/ScriptBindings.cpp

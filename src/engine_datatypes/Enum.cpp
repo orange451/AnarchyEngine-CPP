@@ -279,6 +279,25 @@ const EnumType kShadingModelType{"ShadingModel", kShadingModels, count_of(kShadi
 const EnumEntry kAssetTypes[] = {{"Material", 0}, {"Prefab", 1}, {"Texture", 2}, {"Mesh", 3}, {"Sound", 4}, {"Model", 5}};
 const EnumType kAssetTypeType{"AssetType", kAssetTypes, count_of(kAssetTypes)};
 
+// A ParticleEmitter's Shape, EmitFrom, Collision, CollisionResponse,
+// TextureMode, Facing, and BlendMode.
+const EnumEntry kParticleShapes[] = {{"Point", 0},     {"Box", 1},  {"Sphere", 2}, {"Hemisphere", 3},
+                                     {"Cylinder", 4}, {"Cone", 5}, {"Disc", 6}};
+const EnumType kParticleShapeType{"ParticleShape", kParticleShapes, count_of(kParticleShapes)};
+const EnumEntry kParticleEmitFroms[] = {{"Volume", 0}, {"Surface", 1}, {"Edge", 2}};
+const EnumType kParticleEmitFromType{"ParticleEmitFrom", kParticleEmitFroms, count_of(kParticleEmitFroms)};
+const EnumEntry kParticleCollisions[] = {{"None", 0}, {"Terrain", 1}, {"World", 2}};
+const EnumType kParticleCollisionType{"ParticleCollision", kParticleCollisions, count_of(kParticleCollisions)};
+const EnumEntry kParticleCollisionResponses[] = {{"Bounce", 0}, {"Stick", 1}, {"Die", 2}};
+const EnumType kParticleCollisionResponseType{"ParticleCollisionResponse", kParticleCollisionResponses,
+                                              count_of(kParticleCollisionResponses)};
+const EnumEntry kParticleTextureModes[] = {{"Static", 0}, {"Flipbook", 1}};
+const EnumType kParticleTextureModeType{"ParticleTextureMode", kParticleTextureModes, count_of(kParticleTextureModes)};
+const EnumEntry kParticleFacings[] = {{"Camera", 0}, {"CameraUpright", 1}, {"Velocity", 2}, {"World", 3}};
+const EnumType kParticleFacingType{"ParticleFacing", kParticleFacings, count_of(kParticleFacings)};
+const EnumEntry kParticleBlendModes[] = {{"Normal", 0}, {"Additive", 1}, {"Multiply", 2}};
+const EnumType kParticleBlendModeType{"ParticleBlendMode", kParticleBlendModes, count_of(kParticleBlendModes)};
+
 const EnumType* const kTypes[] = {&kNormalIdType,       &kAxisType,          &kRotationOrderType,
                                   &kKeyCodeType,        &kUserInputTypeType, &kUserInputStateType,
                                   &kMouseBehaviorType,  &kPhysicsShapeType,  &kRollOffModeType,
@@ -287,7 +306,10 @@ const EnumType* const kTypes[] = {&kNormalIdType,       &kAxisType,          &kR
                                   &kRaycastFilterTypeType, &kTextureSizeType, &kTextureStreamingType,
                                   &kToneMappingModeType, &kShadingModelType, &kAssetTypeType,
                                   &kTransformModeType, &kEasingStyleType, &kEasingDirectionType,
-                                  &kCollisionFilterTypeType};
+                                  &kCollisionFilterTypeType,
+                                  &kParticleShapeType, &kParticleEmitFromType, &kParticleCollisionType,
+                                  &kParticleCollisionResponseType, &kParticleTextureModeType, &kParticleFacingType,
+                                  &kParticleBlendModeType};
 
 int enum_item_index(lua_State* state) {
     auto* item = static_cast<EnumItemUd*>(luaL_checkudata(state, 1, kEnumItemMeta));
@@ -366,6 +388,13 @@ const EnumType& roll_off_mode_enum() { return kRollOffModeType; }
 
 const EnumType& gui_alignment_enum() { return kGuiAlignmentType; }
 const EnumType& transform_space_enum() { return kTransformSpaceType; }
+const EnumType& particle_shape_enum() { return kParticleShapeType; }
+const EnumType& particle_emit_from_enum() { return kParticleEmitFromType; }
+const EnumType& particle_collision_enum() { return kParticleCollisionType; }
+const EnumType& particle_collision_response_enum() { return kParticleCollisionResponseType; }
+const EnumType& particle_texture_mode_enum() { return kParticleTextureModeType; }
+const EnumType& particle_facing_enum() { return kParticleFacingType; }
+const EnumType& particle_blend_mode_enum() { return kParticleBlendModeType; }
 const EnumType& raycast_filter_type_enum() { return kRaycastFilterTypeType; }
 const EnumType& collision_filter_type_enum() { return kCollisionFilterTypeType; }
 const EnumType& dragger_handle_enum() { return kDraggerHandleType; }

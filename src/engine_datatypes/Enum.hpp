@@ -43,6 +43,28 @@ const EnumType& gui_alignment_enum();
 const EnumType& transform_space_enum();
 // transform_space_enum's items, by value.
 enum class TransformSpace { World = 0, Local = 1 };
+
+// ParticleEmitter.Shape: where particles are born.
+const EnumType& particle_shape_enum();
+enum class ParticleShape { Point = 0, Box = 1, Sphere = 2, Hemisphere = 3, Cylinder = 4, Cone = 5, Disc = 6 };
+// ParticleEmitter.EmitFrom: inside the shape, on its skin, or along its outline.
+const EnumType& particle_emit_from_enum();
+enum class ParticleEmitFrom { Volume = 0, Surface = 1, Edge = 2 };
+// ParticleEmitter.Collision: what particles hit.
+const EnumType& particle_collision_enum();
+enum class ParticleCollision { None = 0, Terrain = 1, World = 2 };
+// ParticleEmitter.CollisionResponse: what a particle does when it hits.
+const EnumType& particle_collision_response_enum();
+enum class ParticleCollisionResponse { Bounce = 0, Stick = 1, Die = 2 };
+// ParticleEmitter.TextureMode: one image, or a sprite sheet.
+const EnumType& particle_texture_mode_enum();
+enum class ParticleTextureMode { Static = 0, Flipbook = 1 };
+// ParticleEmitter.Facing: which way a particle's quad points.
+const EnumType& particle_facing_enum();
+enum class ParticleFacing { Camera = 0, CameraUpright = 1, Velocity = 2, World = 3 };
+// ParticleEmitter.BlendMode: how particles mix with what is behind them.
+const EnumType& particle_blend_mode_enum();
+enum class ParticleBlendMode { Normal = 0, Additive = 1, Multiply = 2 };
 // Exclude 0, Include 1. RaycastParams.FilterType.
 const EnumType& raycast_filter_type_enum();
 // raycast_filter_type_enum's items, by value.

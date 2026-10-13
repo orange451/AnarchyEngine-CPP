@@ -261,6 +261,17 @@ void expectChunkError(runner::Runner& runner, const char* source, const char* ne
 }
 
 // Roblox's Color3: constructors, channels, conversions, and a Color property taking one.
+void testParticleEnums() {
+    runner::Runner runner;
+    runner.start();
+    expectPrinted(runner,
+                  "print(Enum.ParticleShape.Cone.Value, Enum.ParticleBlendMode.Multiply.Name, "
+                  "Enum.ParticleFacing.World.Value, Enum.ParticleEmitFrom.Edge.Value, Enum.ParticleCollision.World.Value, "
+                  "Enum.ParticleCollisionResponse.Die.Value, Enum.ParticleTextureMode.Flipbook.Value)",
+                  "5\tMultiply\t3\t2\t2\t2\t1", "particle enums are registered");
+    runner.stop();
+}
+
 void testCurves() {
     runner::Runner runner;
     runner.start();
@@ -521,6 +532,7 @@ int main() {
         testRunner();
         testColor3();
         testCurves();
+        testParticleEnums();
         testMatrix4();
         testContextActions();
         testInsertInstance();

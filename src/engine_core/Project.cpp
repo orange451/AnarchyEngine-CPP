@@ -40,6 +40,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cctype>
 #include <cstring>
 #include <fstream>
@@ -50,6 +51,7 @@
 #include <sstream>
 #include <system_error>
 #include <tuple>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -759,14 +761,29 @@ private:
             node.children = std::move(sorted);
             return;
         }
+        // Each listed GUID takes the first child with that GUID not taken yet,
+        // in sorted order. Found through a map, not a scan per listed GUID: a
+        // folder of 100,000 children would cost billions of compares.
+        std::unordered_map<std::string_view, std::vector<std::size_t>> by_guid;
+        by_guid.reserve(sorted.size());
+        for (std::size_t child : sorted) {
+            by_guid[nodes_[child].guid].push_back(child);
+        }
+        std::unordered_map<std::string_view, std::size_t> taken;
         std::vector<std::size_t> ordered;
+        ordered.reserve(sorted.size());
         std::unordered_set<std::size_t> used;
+        used.reserve(sorted.size());
         for (const std::string& guid : node.order) {
-            for (std::size_t child : sorted) {
-                if (nodes_[child].guid == guid && used.insert(child).second) {
-                    ordered.push_back(child);
-                    break;
-                }
+            const auto found = by_guid.find(guid);
+            if (found == by_guid.end()) {
+                continue;
+            }
+            std::size_t& next = taken[found->first];
+            if (next < found->second.size()) {
+                const std::size_t child = found->second[next++];
+                used.insert(child);
+                ordered.push_back(child);
             }
         }
         for (std::size_t child : sorted) {
@@ -1446,6 +1463,9 @@ void Project::read_into_game(const fs::path& root, bool replace) {
     ignore_texture_cache(root);
     src_ = layout.src;
     resources_ = layout.resources;
+    // Before the read: a file that changes during it then differs from this
+    // stamp, so the next check compares it rather than missing it.
+    const std::optional<DiskStamp> read_stamp = disk_stamp();
     const std::vector<PlanNode> plan = PlanReader(root, layout).read();
     // Replace builds a scratch place first. Its instances are each file as its
     // class stores it: the base a disk scan and a save compare against.
@@ -1497,6 +1517,7 @@ void Project::read_into_game(const fs::path& root, bool replace) {
     if (made) {
         game_->mark_authored_dirty(0);
     }
+    synced_stamp_ = read_stamp;
     publish_resources_root();
 }
 
@@ -1642,7 +1663,7 @@ InstanceId Project::add_default_light(DataModel& game) {
 std::vector<SaveConflict> Project::outside_changes(const std::vector<AuthoredNode>& tree,
                                                    const std::map<std::string, Files>& next,
                                                    const std::map<std::string, std::vector<std::string>>& claims,
-                                                   std::set<std::string>& left_gone) const {
+                                                   std::set<std::string>& left_gone, bool in_sync) const {
     const std::vector<std::size_t> parent = parents_of(tree);
     // A place to read a changed file back into, as its class stores it; made
     // the first time a file needs it.
@@ -1707,7 +1728,12 @@ std::vector<SaveConflict> Project::outside_changes(const std::vector<AuthoredNod
     // Left gone: GUID -> its first missing file.
     std::map<std::string, std::string> gone_paths;
     std::error_code error;
-    for (const auto& [guid, base] : files_) {
+    // In sync, every base file is on disk with its base bytes: none is gone,
+    // none was edited, so this loop could find nothing. It stats and reads
+    // every file, which is most of a save's time in a large place.
+    static const std::unordered_map<std::string, Files> kNoFiles;
+    const std::unordered_map<std::string, Files>& checked = in_sync ? kNoFiles : files_;
+    for (const auto& [guid, base] : checked) {
         const auto planned = next.find(guid);
         const bool removed = planned == next.end();
         // A file's bytes matter only where the save rewrites or deletes it. A
@@ -2375,11 +2401,131 @@ Project::Comparison Project::compare_disk() const {
     return out;
 }
 
+std::optional<Project::DiskStamp> Project::disk_stamp() const {
+    // splitmix64: spreads each file's fields so a sum of files stays a digest.
+    const auto mix = [](std::uint64_t x) {
+        x += 0x9e3779b97f4a7c15ull;
+        x = (x ^ (x >> 30)) * 0xbf58476d1ce4e5b9ull;
+        x = (x ^ (x >> 27)) * 0x94d049bb133111ebull;
+        return x ^ (x >> 31);
+    };
+    DiskStamp stamp;
+    std::uint64_t files = 0;
+    // A write after this is racy: the file's clock may still read the same.
+    const fs::file_time_type racy_from =
+        fs::file_time_type::clock::now() - std::chrono::seconds(kRacySeconds);
+    const auto add = [&](const fs::directory_entry& entry, std::string name) {
+        std::error_code error;
+        const std::uintmax_t size = entry.file_size(error);
+        if (error) {
+            return false;
+        }
+        const fs::file_time_type written = entry.last_write_time(error);
+        if (error) {
+            return false;
+        }
+        std::replace(name.begin(), name.end(), '\\', '/');
+        std::uint64_t h = std::hash<std::string>{}(name);
+        h = mix(h ^ mix(static_cast<std::uint64_t>(size)));
+        h = mix(h ^ static_cast<std::uint64_t>(written.time_since_epoch().count()));
+        stamp.digest += h;
+        ++files;
+        if (written >= racy_from) {
+            stamp.racy.push_back(std::move(name));
+        }
+        return true;
+    };
+    std::error_code error;
+    const fs::path project_json = root_ / "project.json";
+    if (fs::is_regular_file(project_json, error) && !add(fs::directory_entry(project_json, error), "project.json")) {
+        return std::nullopt;
+    }
+    const fs::path top = disk_path(root_, src_);
+    if (fs::is_directory(top, error)) {
+        for (fs::recursive_directory_iterator it(top, error), end; it != end; it.increment(error)) {
+            if (error) {
+                return std::nullopt;
+            }
+            std::error_code kind;
+            if (it->is_regular_file(kind) && !add(*it, utf8_path(it->path().lexically_relative(root_)))) {
+                return std::nullopt;
+            }
+        }
+        if (error) {
+            return std::nullopt;
+        }
+    }
+    stamp.digest = mix(stamp.digest + mix(files));
+    std::sort(stamp.racy.begin(), stamp.racy.end());
+    return stamp;
+}
+
+bool Project::disk_matches_base() const {
+    if (!synced_stamp_) {
+        return false;
+    }
+    const std::optional<DiskStamp> now = disk_stamp();
+    if (!now || now->digest != synced_stamp_->digest) {
+        return false;
+    }
+    // A racy file's stamp proves nothing: it must hold the base's bytes.
+    // project.json and any file the base does not know take the full compare.
+    if (!synced_stamp_->racy.empty()) {
+        std::unordered_map<std::string_view, const std::string*> base_bytes;
+        for (const auto& [guid, files] : files_) {
+            base_bytes.emplace(files.props_path, &files.props_bytes);
+            if (files.has_source) {
+                base_bytes.emplace(files.source_path, &files.source_bytes);
+            }
+        }
+        for (const std::string& path : synced_stamp_->racy) {
+            const auto known = base_bytes.find(path);
+            if (known == base_bytes.end()) {
+                return false;
+            }
+            std::string bytes;
+            try {
+                bytes = read_file(disk_path(root_, path));
+            } catch (const std::exception&) {
+                return false;
+            }
+            if (bytes != *known->second) {
+                return false;
+            }
+        }
+        // Proven; and once the clock has moved past them they are no longer racy.
+        if (now->racy.size() < synced_stamp_->racy.size()) {
+            synced_stamp_ = now;
+        }
+    }
+    return true;
+}
+
+void Project::mark_synced(const std::optional<DiskStamp>& taken) const {
+    synced_stamp_.reset();
+    if (!taken) {
+        return;
+    }
+    const std::optional<DiskStamp> now = disk_stamp();
+    if (now && now->digest == taken->digest) {
+        synced_stamp_ = taken;
+    }
+}
+
 DiskScan Project::scan_disk() const {
+    // Nothing on disk changed since the base matched it: no changes, no rows.
+    if (disk_matches_base()) {
+        return DiskScan{};
+    }
+    const std::optional<DiskStamp> before = disk_stamp();
     Comparison compared = compare_disk();
     DiskScan out;
     out.conflicts = std::move(compared.rows);
     out.has_disk_changes = !compared.actions.empty();
+    // The disk read just now holds nothing the base lacks: the base matches it.
+    if (!out.has_disk_changes && out.conflicts.empty()) {
+        mark_synced(before);
+    }
     return out;
 }
 
@@ -2389,6 +2535,13 @@ DiskScan Project::apply_disk(const std::vector<DiskChoice>& choices) {
     if (world.simulation_running()) {
         fail("changes from disk load in edit mode; stop the test first");
     }
+    // Nothing on disk changed since the base matched it, and nothing was
+    // chosen: there is nothing to load or settle. (Choices name rows, which
+    // only a disk that changed has; they always take the full path.)
+    if (choices.empty() && disk_matches_base()) {
+        return DiskScan{};
+    }
+    const std::optional<DiskStamp> before = disk_stamp();
     Comparison compared = compare_disk();
     DiskScan out;
     std::vector<const SaveConflict*> studio_side;
@@ -2444,6 +2597,12 @@ DiskScan Project::apply_disk(const std::vector<DiskChoice>& choices) {
     refresh_base(compared, after);
     out.conflicts = std::move(after.rows);
     out.has_disk_changes = !after.actions.empty();
+    // In sync when nothing is left to load or ask about and the disk did not
+    // change while this ran; otherwise the next check compares in full.
+    synced_stamp_.reset();
+    if (!out.has_disk_changes && out.conflicts.empty()) {
+        mark_synced(before);
+    }
     return out;
 }
 
@@ -2809,6 +2968,12 @@ void Project::refresh_base(const Comparison& before, const Comparison& after) {
 void Project::save_tree(bool full, const std::vector<SaveConflict>& overwrite) {
     DataModel& world = *game_;
     const bool playing = world.simulation_running();
+    // A full save writes a fresh tree; any other save keeps the disk in sync
+    // only if it was in sync before. A file the disk changed and this save
+    // does not touch must still be found by the next check.
+    // Proven before anything is written: the disk still matches the base.
+    const bool in_sync = disk_matches_base();
+    const bool keeps_sync = full || in_sync;
     // What MeshEditors hold and their files do not yet: saved with the place.
     if (!playing) {
         world.mesh_editors().write_all(world, false);
@@ -2855,9 +3020,20 @@ void Project::save_tree(bool full, const std::vector<SaveConflict>& overwrite) {
 
     // A file changed on disk since the last load or save stops a guarded save
     // here, before anything is written.
-    const std::map<std::string, std::vector<std::string>> claims = guid_claims(root_, layout.src);
+    // claims are read from disk: a walk of every file. In sync, only a folder
+    // the save moves or deletes can strand a file the base does not know, so
+    // without one the walk is skipped and claims stay empty.
+    const bool folder_leaves = std::any_of(files_.begin(), files_.end(), [&next](const auto& entry) {
+        if (own_folder(entry.second.props_path).empty()) {
+            return false;
+        }
+        const auto planned = next.find(entry.first);
+        return planned == next.end() || planned->second.props_path != entry.second.props_path;
+    });
+    const std::map<std::string, std::vector<std::string>> claims =
+        !in_sync || folder_leaves ? guid_claims(root_, layout.src) : std::map<std::string, std::vector<std::string>>{};
     std::set<std::string> left_gone;
-    std::vector<SaveConflict> conflicts = outside_changes(tree, next, claims, left_gone);
+    std::vector<SaveConflict> conflicts = outside_changes(tree, next, claims, left_gone, in_sync);
     // Only the conflicts overwrite lists are written over. Any other, as a file
     // that changed after that list was made, stops the save.
     const bool listed = std::all_of(conflicts.begin(), conflicts.end(), [&overwrite](const SaveConflict& conflict) {
@@ -2988,13 +3164,23 @@ void Project::save_tree(bool full, const std::vector<SaveConflict>& overwrite) {
             }
             const auto old = files_.find(guid);
             const bool had = old != files_.end();
-            place(had ? old->second.props_path : std::string(), had ? old->second.props_bytes : std::string(), had,
-                  files.props_path, files.props_bytes);
+            // In sync, a file the base has at the same path with the same bytes
+            // is already on disk as written: placing it would only stat it.
+            const bool props_settled = in_sync && had && old->second.props_path == files.props_path &&
+                                       old->second.props_bytes == files.props_bytes;
+            if (!props_settled) {
+                place(had ? old->second.props_path : std::string(), had ? old->second.props_bytes : std::string(),
+                      had, files.props_path, files.props_bytes);
+            }
             if (files.has_source) {
                 const bool had_source = had && old->second.has_source;
-                place(had_source ? old->second.source_path : std::string(),
-                      had_source ? old->second.source_bytes : std::string(), had_source, files.source_path,
-                      files.source_bytes);
+                const bool source_settled = in_sync && had_source && old->second.source_path == files.source_path &&
+                                            old->second.source_bytes == files.source_bytes;
+                if (!source_settled) {
+                    place(had_source ? old->second.source_path : std::string(),
+                          had_source ? old->second.source_bytes : std::string(), had_source, files.source_path,
+                          files.source_bytes);
+                }
             }
         }
         // Overwrite: a GUID the save wrote over a conflict keeps only the files it
@@ -3080,6 +3266,8 @@ void Project::save_tree(bool full, const std::vector<SaveConflict>& overwrite) {
     std::sort(report.moved.begin(), report.moved.end());
     std::sort(report.removed.begin(), report.removed.end());
     last_save_ = std::move(report);
+    // The base is what was just written: in sync, if the disk was before.
+    synced_stamp_ = keeps_sync ? disk_stamp() : std::nullopt;
 }
 
 }  // namespace engine_core

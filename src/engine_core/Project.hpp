@@ -235,14 +235,43 @@ private:
     // since the last load or save, and files it does not know inside a folder
     // it moves or deletes, sorted by path. A GUID whose files are all gone while
     // the studio left it alone goes in left_gone instead: the save leaves it
-    // gone. claims is every src/ file by the GUID in its name.
+    // gone. claims is every src/ file by the GUID in its name. in_sync: the
+    // disk is proven to match the base (disk_matches_base), so every base
+    // file is present with its base bytes and only files the base does not
+    // know can matter.
     std::vector<SaveConflict> outside_changes(const std::vector<AuthoredNode>& tree,
                                               const std::map<std::string, Files>& next,
                                               const std::map<std::string, std::vector<std::string>>& claims,
-                                              std::set<std::string>& left_gone) const;
+                                              std::set<std::string>& left_gone, bool in_sync) const;
     // Base, disk, and studio side by side, and what differs. Defined in Project.cpp.
     struct Comparison;
     Comparison compare_disk() const;
+
+    // Every file under the tree root, and project.json, reduced to a digest
+    // of each path, size and modified time (order does not matter). A file
+    // modified within kRacySeconds of the walk is "racy": the clock may not
+    // have moved between two writes, so its stamp cannot prove it unchanged
+    // (git's racy-clean problem); racy files are checked by their bytes.
+    struct DiskStamp {
+        std::uint64_t digest = 0;
+        // Paths relative to root, with '/'.
+        std::vector<std::string> racy;
+    };
+    static constexpr int kRacySeconds = 2;
+    // nullopt when the tree cannot be read. Reads directory entries only.
+    std::optional<DiskStamp> disk_stamp() const;
+    // The stamp as of the last moment the base matched the disk (a load, a
+    // save that started in sync, an apply that left nothing pending). While
+    // the disk still has it, nothing on disk changed: a disk check has
+    // nothing to load and no row to ask about, so it skips the full compare,
+    // which reads and rebuilds every file.
+    mutable std::optional<DiskStamp> synced_stamp_;
+    // True when the disk still matches synced_stamp_: same digest, and every
+    // racy file holds the bytes the base has for it.
+    bool disk_matches_base() const;
+    // Marks the base in sync with the disk as stamped by taken, when the
+    // disk still has that stamp; otherwise leaves it out of sync.
+    void mark_synced(const std::optional<DiskStamp>& taken) const;
     // The studio's side of a row: the base takes the disk's value there.
     void settle(const Comparison& compared, const SaveConflict& conflict);
     // The changes only the disk made, and the disk's side of chosen rows.

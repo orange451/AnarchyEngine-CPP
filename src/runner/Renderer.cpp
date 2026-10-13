@@ -22,6 +22,7 @@
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -318,6 +319,7 @@ bool Renderer::buildProgram(Program& program, const char* name, const char* vert
     program.occlusionEnabled = at("uOcclusionEnabled");
     program.occlusionIntensity = at("uOcclusionIntensity");
     program.face = at("uFace");
+    program.billboard = at("uBillboard");
     program.sunDirection = at("uSunDirection");
     program.moonDirection = at("uMoonDirection");
     program.starFrame = at("uStarFrame");
@@ -1924,6 +1926,7 @@ void Renderer::bindMaterial(const Program& program, const MeshDraw& draw) {
     glUniform1f(program.normalMapEnabled, draw.normalTexture != 0 ? 1.f : 0.f);
     glUniform1f(program.emissiveMapEnabled, draw.emissiveTexture != 0 ? 1.f : 0.f);
     glUniform1f(program.transparency, std::clamp(draw.transparency, 0.f, 1.f));
+    glUniform1i(program.billboard, draw.billboard ? 1 : 0);
 }
 
 void Renderer::prepareSky() {
@@ -2107,6 +2110,9 @@ void Renderer::findVisible(const MeshDraw* meshes, int count, const CameraView& 
                 item.model = &draw.model;
                 item.transparency = draw.transparency;
                 item.lod = draw.lod;
+                item.lodNear = draw.lodNear;
+                item.lodFar = draw.lodFar;
+                item.billboard = draw.billboard;
                 // As the passes have always skipped: no mesh, not uploaded, or wholly see-through.
                 item.drawable = draw.mesh != nullptr && draw.mesh->valid() &&
                                 (draw.terrainLook != 0 || !(draw.transparency >= 1.f));
@@ -2191,6 +2197,8 @@ bool Renderer::shadowPass(const MeshDraw* meshes, int count, const CameraView& c
     if (shadowRequests_.empty() && !hasSunShadow_) {
         return true;
     }
+    // What is outside its LOD band casts nothing, as it is not drawn.
+    shadows_.setHidden(visibility_.outOfBand.empty() ? nullptr : visibility_.outOfBand.data());
     if (!shadows_.draw(shadowRequests_, meshes, count, visibility_.spheres.data(), camera, shadowSettings_)) {
         return false;
     }
@@ -2878,6 +2886,70 @@ bool Renderer::fxaaPass() {
         fxaaValid_ = true;
     }
     DrawFullscreen(emptyVao_);
+    return true;
+}
+
+bool Renderer::readGBuffer(GBufferPixels& out) const {
+    out = GBufferPixels{};
+    if (albedoTexture_ == 0 || normalTexture_ == 0 || materialTexture_ == 0 || emissiveTexture_ == 0 ||
+        targetWidth_ <= 0 || targetHeight_ <= 0) {
+        return false;
+    }
+    const int width = targetWidth_;
+    const int height = targetHeight_;
+    const std::size_t pixels = static_cast<std::size_t>(width) * static_cast<std::size_t>(height);
+    GLint previous = 0;
+    glGetIntegerv(RT_GL_FRAMEBUFFER_BINDING, &previous);
+    GLuint framebuffer = 0;
+    glGenFramebuffers(1, &framebuffer);
+    glBindFramebuffer(RT_GL_FRAMEBUFFER, framebuffer);
+    // texture's RGBA as type, top row first. RGBA rows are whole words, so
+    // the default pack alignment of 4 adds no padding.
+    const auto read = [&](unsigned texture, GLenum type, auto& into) {
+        glFramebufferTexture2D(RT_GL_FRAMEBUFFER, RT_GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, 0);
+        if (glCheckFramebufferStatus(RT_GL_FRAMEBUFFER) != RT_GL_FRAMEBUFFER_COMPLETE) {
+            return false;
+        }
+        using Value = typename std::decay_t<decltype(into)>::value_type;
+        std::vector<Value> bottomUp(pixels * 4);
+        glReadPixels(0, 0, width, height, GL_RGBA, type, bottomUp.data());
+        into.resize(pixels * 4);
+        const std::size_t row = static_cast<std::size_t>(width) * 4;
+        for (int y = 0; y < height; ++y) {
+            std::copy_n(bottomUp.data() + row * static_cast<std::size_t>(height - 1 - y), row,
+                        into.data() + row * static_cast<std::size_t>(y));
+        }
+        return true;
+    };
+    std::vector<float> normals;
+    std::vector<float> glow;
+    const bool complete = read(albedoTexture_, GL_UNSIGNED_BYTE, out.albedo) && read(normalTexture_, GL_FLOAT, normals) &&
+                          read(materialTexture_, GL_UNSIGNED_BYTE, out.material) && read(emissiveTexture_, GL_FLOAT, glow);
+    glBindFramebuffer(RT_GL_FRAMEBUFFER, static_cast<GLuint>(previous));
+    glDeleteFramebuffers(1, &framebuffer);
+    if (!complete) {
+        out = GBufferPixels{};
+        return false;
+    }
+    out.width = width;
+    out.height = height;
+    out.normal.resize(pixels * 3);
+    out.emissive.resize(pixels * 3);
+    for (std::size_t i = 0; i < pixels; ++i) {
+        // gbuffer.glsl's decodeNormal: off the octahedron and back to unit length.
+        float x = normals[i * 4] * 2.f - 1.f;
+        float y = normals[i * 4 + 1] * 2.f - 1.f;
+        const float z = 1.f - std::abs(x) - std::abs(y);
+        const float t = std::clamp(-z, 0.f, 1.f);
+        x += x >= 0.f ? -t : t;
+        y += y >= 0.f ? -t : t;
+        const float length = std::sqrt(x * x + y * y + z * z);
+        const float scale = length > 0.f ? 1.f / length : 0.f;
+        out.normal[i * 3] = x * scale;
+        out.normal[i * 3 + 1] = y * scale;
+        out.normal[i * 3 + 2] = z * scale;
+        std::copy_n(glow.data() + i * 4, 3, out.emissive.data() + i * 3);
+    }
     return true;
 }
 

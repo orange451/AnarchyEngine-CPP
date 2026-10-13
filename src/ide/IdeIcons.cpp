@@ -40,6 +40,10 @@ const char* IconFileOverride(const std::string& class_name) {
     if (class_name == "Prefab") {
         return "ModelAlt.png";
     }
+    // A stack of layers, for what a Prefab draws farther out.
+    if (class_name == "LodLayer") {
+        return "layers-stack.png";
+    }
     if (class_name == "DynamicSky") {
         return "icon-sky.png";
     }

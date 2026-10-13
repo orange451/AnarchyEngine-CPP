@@ -50,15 +50,25 @@ void NormalizeRanges(std::vector<DrawRange>& ranges) {
 
 namespace {
 
-void BoundItem(const DrawItem& item, Sphere& sphere, std::uint16_t& traits) {
+void BoundItem(const DrawItem& item, Sphere& sphere, std::uint16_t& traits, VisibilityResult::Band& band) {
     if (!item.drawable) {
         sphere = Sphere{};
         traits = 0;
         return;
     }
     sphere = WorldBounds(*item.model, item.boundsMin, item.boundsMax);
+    const bool banded = item.lodNear > 0.f || item.lodFar < std::numeric_limits<float>::infinity();
     traits = static_cast<std::uint16_t>(kTraitDrawable | (item.shadowOnly ? kTraitShadowOnly : 0) |
-                                        (item.transparency > 0.f ? kTraitTransparent : 0) | (item.lod << 8));
+                                        (item.transparency > 0.f ? kTraitTransparent : 0) |
+                                        (banded ? kTraitBanded : 0) | (item.lod << 8));
+    if (banded) {
+        const float* origin = item.model->m + 12;
+        band.x = origin[0];
+        band.y = origin[1];
+        band.z = origin[2];
+        band.nearSquared = item.lodNear * item.lodNear;
+        band.farSquared = item.lodFar * item.lodFar;
+    }
 }
 
 }  // namespace
@@ -68,9 +78,11 @@ void UpdateDrawBounds(const DrawItem* items, int count, bool all, const std::vec
     const auto total = static_cast<std::size_t>(std::max(count, 0));
     out.spheres.resize(total);
     out.traits.resize(total);
+    out.bands.resize(total);
+    out.outOfBand.resize(total);
     const auto bound = [&](std::size_t begin, std::size_t end) {
         for (std::size_t index = begin; index < end; ++index) {
-            BoundItem(items[index], out.spheres[index], out.traits[index]);
+            BoundItem(items[index], out.spheres[index], out.traits[index], out.bands[index]);
         }
     };
     if (all) {
@@ -93,6 +105,8 @@ void CullDraws(int count, const CameraView& camera, bool cull, VisibilityResult&
     out.opaque.clear();
     out.transparent.clear();
     out.culled = 0;
+    out.outOfBand.resize(total);
+    const float* eye = camera.world.m + 12;
     const Frustum frustum = MakeFrustum(camera.viewProjection);
     const float halfFov = camera.fovYDegrees * 0.5f * 0.01745329252f;
     const float tanHalfFov = std::tan(halfFov);
@@ -111,6 +125,20 @@ void CullDraws(int count, const CameraView& camera, bool cull, VisibilityResult&
         int culled = 0;
         for (std::size_t index = begin; index < end; ++index) {
             const std::uint16_t traits = out.traits[index];
+            // Outside its band, whether or not culling is on: neither seen nor casting.
+            std::uint8_t& outside = out.outOfBand[index];
+            outside = 0;
+            if ((traits & kTraitBanded) != 0) {
+                const VisibilityResult::Band& band = out.bands[index];
+                const float dx = band.x - eye[0];
+                const float dy = band.y - eye[1];
+                const float dz = band.z - eye[2];
+                const float squared = dx * dx + dy * dy + dz * dz;
+                if (squared < band.nearSquared || !(squared < band.farSquared)) {
+                    outside = 1;
+                    continue;
+                }
+            }
             if ((traits & kTraitDrawable) == 0 || (traits & kTraitShadowOnly) != 0) {
                 continue;
             }

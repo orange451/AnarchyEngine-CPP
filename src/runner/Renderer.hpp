@@ -19,6 +19,7 @@
 #include "types.hpp"
 
 #include <cstdint>
+#include <limits>
 #include <initializer_list>
 #include <memory>
 #include <optional>
@@ -125,6 +126,18 @@ struct MeshDraw {
     // in place of the mesh's box.
     float poseMin[3] = {0.f, 0.f, 0.f};
     float poseMax[3] = {0.f, 0.f, 0.f};
+    // The distance band it draws in: from lodNear up to lodFar, in units from
+    // the camera to its row's origin (model's translation). A Prefab's base
+    // layer starts at 0 and its last layer runs forever (LodLayer); anything
+    // else is never banded.
+    float lodNear = 0.f;
+    float lodFar = std::numeric_limits<float>::infinity();
+    // A billboard (LodKind::Billboard): mesh is MeshCache::billboardQuad, and
+    // model the row's with the billboard's width and height in its axes. The
+    // vertex shader turns it about model's up axis to face the camera.
+    bool billboard = false;
+    // A billboard's width and height in units, before the row's Scale.
+    float billboardSize[2] = {0.f, 0.f};
 };
 
 // A Terrain's look table: a 256 x 4 GL_RGBA32F texture, GL_NEAREST, from
@@ -332,6 +345,23 @@ struct SceneLighting {
     SceneOcclusion occlusion;
 };
 
+// A draw's G-buffer read back (Renderer::readGBuffer): what its opaque
+// surfaces are before any light, each top row first, width by height pixels.
+struct GBufferPixels {
+    int width = 0;
+    int height = 0;
+    // RGB as sRGB, alpha 255 where a surface was drawn and 0 elsewhere: 4 a pixel.
+    std::vector<unsigned char> albedo;
+    // The view-space unit normal: 3 a pixel.
+    std::vector<float> normal;
+    // Metalness, roughness, reflectivity, each 0 to 255, then 255: 4 a pixel.
+    std::vector<unsigned char> material;
+    // The glow, linear and unbounded: 3 a pixel.
+    std::vector<float> emissive;
+
+    bool empty() const { return width <= 0 || height <= 0; }
+};
+
 // Draws meshes seen from the camera, through the legacy AnarchyEngine
 // pipeline (engine/gl): first the shadow maps of the lights that cast them
 // (ShadowRenderer), then a G-buffer of each opaque surface's albedo, normal,
@@ -448,6 +478,9 @@ public:
     // there is nothing to read.
     bool read(double x, double y, double width, double height, double sceneWidth, double sceneHeight,
               ViewPixels& out) const;
+    // The last draw's G-buffer, at its size in pixels. False when there is
+    // none. Leaves the framebuffer binding as it was.
+    bool readGBuffer(GBufferPixels& out) const;
     // Also deletes the look textures terrainLookTexture made.
     void shutdown();
     // terrain's look table as a GL texture for MeshDraw::terrainLook: made
@@ -613,6 +646,8 @@ private:
         int blurRadius = -1;
         int occlusionEnabled = -1;
         int occlusionIntensity = -1;
+        // geometry.vert's billboards (MeshDraw::billboard).
+        int billboard = -1;
         // DynamicSky (procedural_sky.glsl).
         int face = -1;
         int sunDirection = -1;

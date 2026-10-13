@@ -5,6 +5,7 @@
 #include "DenseIdSet.hpp"
 #include "DraggerMath.hpp"
 #include "DynamicSky.hpp"
+#include "Enum.hpp"
 #include "Skeleton.hpp"
 #include "ParticleWorld.hpp"
 #include "SharedRows.hpp"
@@ -257,6 +258,20 @@ struct VisualBrushDraw {
     InstanceId owner = 0;
 };
 
+// One of a Prefab's LodLayers as drawn: from distance on, up to the next
+// one's, instead of the Prefab's own Models.
+struct VisualLod {
+    float distance = 0.f;
+    LodKind kind = LodKind::Model;
+    // Model: one per Model of the layer, in child order, as VisualPrefab::meshes.
+    std::vector<VisualMesh> meshes;
+    // Billboard: its Material, as a Model's fills a VisualMesh (its mesh
+    // fields unused: the card is a quad), and its Size in units.
+    VisualMesh card;
+    float width = 0.f;
+    float height = 0.f;
+};
+
 // What one Prefab draws, found again at every Prepare, so an edit to its
 // Models or their Meshes shows on the next frame.
 struct VisualPrefab {
@@ -266,6 +281,8 @@ struct VisualPrefab {
     std::vector<VisualMesh> meshes;
     // The skeleton its GameObjects pose (prefab_skeleton), or null.
     std::shared_ptr<const Skeleton> skeleton;
+    // Its LodLayers, nearest first (two at one distance in child order).
+    std::vector<VisualLod> lods;
 };
 
 // One ViewportPane's world as drawn. Immutable once published, and the same

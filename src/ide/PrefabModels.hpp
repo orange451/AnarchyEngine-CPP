@@ -48,8 +48,15 @@ struct ModelView {
 const char* model_status_text(ModelStatus status);
 
 // The callers of these hold the world's read lock.
-// prefab's Models in sibling order. Empty when prefab is not a live Prefab.
-std::vector<ModelView> read_models(const engine_core::DataModel& world, engine_core::InstanceId prefab);
+// holder's Models in sibling order: a Prefab's own, or a LodLayer's. Empty
+// when holder is neither.
+std::vector<ModelView> read_models(const engine_core::DataModel& world, engine_core::InstanceId holder);
+// What a reference slot holds, its folder named from category down.
+PartView read_asset_part(const engine_core::DataModel& world, const engine_core::LuaSlot& slot,
+                         const char* category);
+// base, or "base 2", "base 3", and on, whichever no child of parent but skip has.
+std::string unique_child_name(const engine_core::DataModel& world, engine_core::InstanceId parent,
+                              const std::string& base, engine_core::InstanceId skip = 0);
 // Every Mesh, or every Material, under its Assets category, by name, ignoring case.
 std::vector<AssetChoice> part_choices(const engine_core::DataModel& world, ModelPart part);
 // Of the dragged ids, the first live Mesh and the first live Material, 0 for none.
@@ -61,10 +68,11 @@ struct DraggedParts {
 DraggedParts dragged_parts(const engine_core::DataModel& world, const std::vector<engine_core::InstanceId>& ids);
 
 // These run on the simulation thread, inside the caller's undo recording.
-// A new Model last in prefab, holding mesh and material when they are not 0.
-// It is named after its Mesh, or "Model", with a number when a sibling has
-// that name. 0, with error set, when prefab is gone or the place is full.
-engine_core::InstanceId add_model(engine_core::DataModel& world, engine_core::InstanceId prefab,
+// A new Model last in holder (a Prefab, or one of its LodLayers), holding
+// mesh and material when they are not 0. It is named after its Mesh, or
+// "Model", with a number when a sibling has that name. 0, with error set,
+// when holder is gone or the place is full.
+engine_core::InstanceId add_model(engine_core::DataModel& world, engine_core::InstanceId holder,
                                   engine_core::InstanceId mesh, engine_core::InstanceId material, std::string& error);
 // Points model's part at target, or at nothing when target is 0. A Model
 // still named as add_model named it takes a new Mesh's name. Why it was

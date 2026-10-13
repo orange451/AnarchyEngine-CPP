@@ -44,12 +44,29 @@ bool same_brushes(const std::vector<VisualBrushDraw>& a, const std::vector<Visua
     return true;
 }
 
-bool same_prefab(const VisualPrefab& a, const VisualPrefab& b) {
-    if (a.skeleton != b.skeleton || a.meshes.size() != b.meshes.size()) {
+bool same_meshes(const std::vector<VisualMesh>& a, const std::vector<VisualMesh>& b) {
+    if (a.size() != b.size()) {
         return false;
     }
-    for (std::size_t i = 0; i < a.meshes.size(); ++i) {
-        if (!same_mesh(a.meshes[i], b.meshes[i])) {
+    for (std::size_t i = 0; i < a.size(); ++i) {
+        if (!same_mesh(a[i], b[i])) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool same_lod(const VisualLod& a, const VisualLod& b) {
+    return a.distance == b.distance && a.kind == b.kind && same_meshes(a.meshes, b.meshes) &&
+           same_mesh(a.card, b.card) && a.width == b.width && a.height == b.height;
+}
+
+bool same_prefab(const VisualPrefab& a, const VisualPrefab& b) {
+    if (a.skeleton != b.skeleton || !same_meshes(a.meshes, b.meshes) || a.lods.size() != b.lods.size()) {
+        return false;
+    }
+    for (std::size_t i = 0; i < a.lods.size(); ++i) {
+        if (!same_lod(a.lods[i], b.lods[i])) {
             return false;
         }
     }

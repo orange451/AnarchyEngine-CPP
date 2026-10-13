@@ -8,6 +8,7 @@
 #include "TerrainTextures.hpp"
 #include "TerrainWorld.hpp"
 #include "amesh.hpp"
+#include "ide/BillboardBaker.hpp"
 #include "ide/MaterialBall.hpp"
 #include "runner/MeshCache.hpp"
 #include "runner/RenderMath.hpp"
@@ -2225,6 +2226,161 @@ void CheckKeptDraws(const GpuMesh* cube) {
     kept.shutdown();
 }
 
+void CheckBillboardUpright() {
+    // A billboard stands up: its texture's top row draws at the top of the
+    // card, seen from the side, as the card turns to the camera.
+    constexpr int kSize = 96;
+    OffscreenTarget target(kSize, kSize);
+    Expect(target.complete(), "billboard: an offscreen target");
+    if (!target.complete()) {
+        return;
+    }
+    // Red over blue, uploaded bottom row first, as TextureCache uploads an image.
+    std::vector<unsigned char> texels;
+    for (int row = 0; row < 4; ++row) {
+        const bool top = row >= 2;
+        for (int column = 0; column < 4; ++column) {
+            texels.push_back(static_cast<unsigned char>(top ? 230 : 20));
+            texels.push_back(20);
+            texels.push_back(static_cast<unsigned char>(top ? 20 : 230));
+            texels.push_back(255);
+        }
+    }
+    unsigned texture = 0;
+    glGenTextures(1, &texture);
+    glBindTexture(runner::GL_TEXTURE_2D, texture);
+    glTexImage2D(runner::GL_TEXTURE_2D, 0, static_cast<runner::GLint>(runner::GL_RGBA8), 4, 4, 0, runner::GL_RGBA,
+                 runner::GL_UNSIGNED_BYTE, texels.data());
+    glTexParameteri(runner::GL_TEXTURE_2D, runner::GL_TEXTURE_MIN_FILTER, static_cast<runner::GLint>(runner::RT_GL_NEAREST));
+    glTexParameteri(runner::GL_TEXTURE_2D, runner::GL_TEXTURE_MAG_FILTER, static_cast<runner::GLint>(runner::RT_GL_NEAREST));
+    glBindTexture(runner::GL_TEXTURE_2D, 0);
+
+    runner::MeshCache meshes;
+    runner::MeshDraw card;
+    card.mesh = meshes.billboardQuad();
+    Expect(card.mesh != nullptr, "billboard: the quad uploads");
+    // 4 wide and 8 tall at the origin, as MakeRowDraw makes a row's card.
+    card.model = engine_core::matrix4_identity();
+    card.model.m[0] = 4.f;
+    card.model.m[5] = 8.f;
+    card.billboard = true;
+    card.billboardSize[0] = 4.f;
+    card.billboardSize[1] = 8.f;
+    card.texture = texture;
+    card.castsShadow = false;
+    runner::LightDraw sun;
+    sun.kind = runner::LightDraw::Kind::Directional;
+    sun.direction[0] = -0.2f;
+    sun.direction[1] = -0.4f;
+    sun.direction[2] = -1.f;
+    sun.intensity = 2.f;
+    sun.id = 41;
+    runner::Renderer renderer;
+    Expect(renderer.initialize(), "billboard: the renderer builds");
+    renderer.setCamera(engine_core::matrix4_look_at({6.f, 4.f, 20.f}, {0.f, 4.f, 0.f}, {0.f, 1.f, 0.f}), 60.f);
+    runner::ViewPixels shot;
+    const bool drawn = card.mesh != nullptr && target.shoot(renderer, {card}, sun, shot);
+    Expect(drawn, "billboard: drawn");
+    if (drawn) {
+        // Read back top row first: the card spans about rows 32 to 64 around the middle.
+        const auto at = [&](int x, int y) {
+            const std::size_t i = (static_cast<std::size_t>(y) * static_cast<std::size_t>(shot.width) +
+                                   static_cast<std::size_t>(x)) *
+                                  4;
+            return Pixel{shot.rgba[i], shot.rgba[i + 1], shot.rgba[i + 2]};
+        };
+        const Pixel upper = at(kSize / 2, kSize / 2 - 10);
+        const Pixel lower = at(kSize / 2, kSize / 2 + 10);
+        Expect(upper.r > upper.b + 40, "billboard: the texture's top is the card's top (" + Text(upper) + ")");
+        Expect(lower.b > lower.r + 40, "billboard: the texture's bottom is the card's bottom (" + Text(lower) + ")");
+    }
+    // From straight along the card's own side: unturned, it would be edge on and draw nothing.
+    renderer.setCamera(engine_core::matrix4_look_at({20.f, 4.f, 0.f}, {0.f, 4.f, 0.f}, {0.f, 1.f, 0.f}), 60.f);
+    runner::ViewPixels side;
+    if (card.mesh != nullptr && target.shoot(renderer, {card}, sun, side)) {
+        const std::size_t i = (static_cast<std::size_t>(kSize / 2 - 10) * static_cast<std::size_t>(side.width) +
+                               static_cast<std::size_t>(kSize / 2)) *
+                              4;
+        const Pixel upper{side.rgba[i], side.rgba[i + 1], side.rgba[i + 2]};
+        Expect(upper.r > upper.b + 40, "billboard: it turns to face a camera at its side (" + Text(upper) + ")");
+    } else {
+        Expect(false, "billboard: drawn from its side");
+    }
+    renderer.shutdown();
+    glDeleteTextures(1, &texture);
+}
+
+void CheckBillboardBake() {
+    // A Prefab of one red box, 1 wide, 3 tall and 2 deep, standing on its
+    // origin: its card is 2 wide (twice its farthest reach, in Z) and 3 tall.
+    auto box = std::make_shared<Data>(Cube());
+    for (Vertex& vertex : box->vertices) {
+        vertex.p[1] = (vertex.p[1] + 0.5f) * 3.f;
+        vertex.p[2] *= 2.f;
+    }
+    compute_aabb(*box);
+    engine_core::VisualPrefab prefab;
+    engine_core::VisualMesh mesh;
+    mesh.session = box;
+    mesh.mesh = 7;
+    mesh.revision = 1;
+    mesh.color = {0.9f, 0.1f, 0.1f, 1.f};
+    mesh.roughness = 0.7f;
+    mesh.metalness = 0.f;
+    prefab.meshes.push_back(mesh);
+    ide::BillboardBaker baker(64);
+    ide::CardMaps maps;
+    bool done = false;
+    for (int pass = 0; pass < 10 && !done; ++pass) {
+        done = baker.bake(prefab, {-0.5f, 0.f, -1.f}, {0.5f, 3.f, 1.f}, maps);
+    }
+    const runner::ViewPixels& card = maps.color;
+    Expect(done && !card.empty(), "bake: a card is drawn");
+    if (card.empty()) {
+        return;
+    }
+    Expect(card.width == 43 && card.height == 64,
+           "bake: 64 pixels tall, as wide as its frame (" + std::to_string(card.width) + " by " +
+               std::to_string(card.height) + ")");
+    const auto at = [&](int x, int y) {
+        const unsigned char* p =
+            card.rgba.data() + (static_cast<std::size_t>(y) * static_cast<std::size_t>(card.width) + static_cast<std::size_t>(x)) * 4;
+        return std::pair<Pixel, int>{Pixel{p[0], p[1], p[2]}, p[3]};
+    };
+    const auto middle = at(card.width / 2, card.height / 2);
+    Expect(middle.second == 255, "bake: the box covers the card's middle");
+    Expect(middle.first.r > 180 && middle.first.g < 80 && middle.first.b < 80,
+           "bake: in its Material's color, before any light (" + Text(middle.first) + ")");
+    const auto beside = at(2, card.height / 2);
+    Expect(beside.second == 0, "bake: clear beside it, where only its depth reaches");
+    Expect(beside.first.r > 180, "bake: a clear pixel carries the nearest drawn color (" + Text(beside.first) + ")");
+    Expect(at(card.width / 2, card.height - 1).second > 0 && at(card.width / 2, 0).second > 0,
+           "bake: it stands on the card's bottom edge and reaches its top");
+    // Its other maps, from the same draw: the front face points straight out
+    // of the card, and its Material's numbers are the same everywhere.
+    const std::size_t middle_at =
+        (static_cast<std::size_t>(card.height / 2) * static_cast<std::size_t>(card.width) + static_cast<std::size_t>(card.width / 2)) * 4;
+    const unsigned char* normal = maps.normal.rgba.data() + middle_at;
+    Expect(std::abs(normal[0] - 128) <= 3 && std::abs(normal[1] - 128) <= 3 && normal[2] >= 250,
+           "bake: its normal map points straight out of the card (" + std::to_string(normal[0]) + "," +
+               std::to_string(normal[1]) + "," + std::to_string(normal[2]) + ")");
+    Expect(std::abs(maps.roughness.rgba[middle_at] - 179) <= 2 && maps.metalness.rgba[middle_at] == 0,
+           "bake: its roughness and metalness maps hold its Material's (" +
+               std::to_string(maps.roughness.rgba[middle_at]) + ")");
+    // Saved, the uniform numbers stand in for maps, and a flat card has no normal map.
+    const std::filesystem::path root = std::filesystem::temp_directory_path() / "anarchy-bake-check";
+    ide::CardFiles files;
+    std::string why;
+    Expect(ide::save_card(maps, root, "Box", files, why), "bake: its maps save (" + why + ")");
+    Expect(!files.color.empty() && files.normal.empty() && files.roughness_map.empty() && files.metalness_map.empty() &&
+               files.emissive.empty() && std::abs(files.roughness - 0.7f) < 0.02f && files.metalness == 0.f,
+           "bake: one roughness and one metalness are numbers, and a flat front needs no normal map");
+    Expect(std::filesystem::exists(root / std::filesystem::u8path(files.color)), "bake: its color map is on disk");
+    std::error_code ignored;
+    std::filesystem::remove_all(root, ignored);
+    baker.release();
+}
+
 void CheckParticleDepthCopy() {
     runner::ParticleRenderer pass;
     Expect(pass.create(), "the particle pass builds");
@@ -2341,6 +2497,8 @@ int main(int argc, char** argv) {
         CheckParticles(renderer, cube, kSize, fbWidth, fbHeight);
         CheckParticleDepthCopy();
         CheckKeptDraws(cube);
+        CheckBillboardUpright();
+        CheckBillboardBake();
 
         // The cube at the origin, under the camera a Renderer starts with, fills the middle of the pane.
         runner::MeshDraw draw{cube, engine_core::matrix4_identity()};

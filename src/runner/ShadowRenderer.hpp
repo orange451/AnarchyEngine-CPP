@@ -58,6 +58,9 @@ public:
     // The frame's DrawItems, one per MeshDraw, whose boneBase each caster row
     // takes; null casts every mesh unposed. Set before draw and drawSun.
     void setDrawItems(const DrawItem* items) { items_ = items; }
+    // One per mesh, nonzero for one that casts nothing this frame
+    // (VisibilityResult::outOfBand), or null. Set before draw and drawSun.
+    void setHidden(const std::uint8_t* hidden) { hidden_ = hidden; }
     // Which meshes changed since the last frame's (Renderer::findVisible's
     // changed draws), or all of them. Kept until draw reads them, so a frame
     // that draws no shadows loses nothing.
@@ -114,6 +117,8 @@ private:
     std::vector<DrawRange> castersChanged_;
     // Not owned: setDrawItems'.
     const DrawItem* items_ = nullptr;
+    // Not owned: setHidden's.
+    const std::uint8_t* hidden_ = nullptr;
     // The casters of every tile or cascade drawn this frame, as instanced runs.
     struct CasterRun {
         const anarchy::amesh::GpuMesh* mesh = nullptr;

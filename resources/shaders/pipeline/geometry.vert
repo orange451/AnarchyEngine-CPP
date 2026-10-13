@@ -22,6 +22,9 @@ layout (location = 15) in float aBoneBase;
 
 uniform mat4 uView;
 uniform mat4 uProjection;
+// 1 while drawing billboards (runner::MeshDraw::billboard): each instance's
+// card is turned about its up axis to face the camera.
+uniform int uBillboard;
 // Three RGBA32F texels a bone, the first three rows of its skinning matrix,
 // 1024 texels to a row (runner::BoneTexture).
 uniform sampler2D uBones;
@@ -57,7 +60,36 @@ mat4 skin() {
     return total > 0.0 ? blended / total : mat4(1.0);
 }
 
+// A billboard's corner: the card stands on aModel's origin along its up axis
+// (the second column, as long as the card is tall), turned about it until it
+// faces the camera, as wide as the first column. Its normal faces the camera.
+void billboard() {
+    vec3 origin = aModel[3].xyz;
+    vec3 upAxis = aModel[1].xyz;
+    float height = length(upAxis);
+    vec3 up = height > 0.0 ? upAxis / height : vec3(0.0, 1.0, 0.0);
+    // The camera's position: the view only turns and moves.
+    vec3 eye = -(transpose(mat3(uView)) * uView[3].xyz);
+    vec3 toward = eye - origin;
+    toward -= up * dot(toward, up);
+    float across = length(toward);
+    // Straight above or below, it keeps its own facing.
+    vec3 forward = across > 1e-6 ? toward / across : normalize(aModel[2].xyz);
+    vec3 right = cross(up, forward);
+    vec3 world = origin + right * (aPosition.x * length(aModel[0].xyz)) + upAxis * aPosition.y;
+    vec4 viewPosition = uView * vec4(world, 1.0);
+    vViewNormal = mat3(uView) * forward;
+    vViewPosition = viewPosition.xyz;
+    vUv = aUv;
+    vColor = aColor * vec4(aTint, 1.0);
+    gl_Position = uProjection * viewPosition;
+}
+
 void main() {
+    if (uBillboard != 0) {
+        billboard();
+        return;
+    }
     mat4 skinning = skin();
     vec4 viewPosition = uView * (aModel * (skinning * vec4(aPosition, 1.0)));
     // The view has no scale, so its rotation carries normals on.

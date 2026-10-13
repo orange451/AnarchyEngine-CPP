@@ -26,6 +26,8 @@ namespace {
 // A few of those rebuilds are cheap. Past this many edits in one frame, the
 // rows are rewritten while the view is detached and rebuilt once.
 constexpr std::size_t kInPlaceEdits = 8;
+// Frames a reveal waits for the rows above a selected instance to be read.
+constexpr int kRevealTries = 3;
 
 // A second click on the same row, at least this long after the first, renames it.
 constexpr double kSlowClickSeconds = 0.5;
@@ -207,10 +209,11 @@ void IdeExplorer::Snapshot::clear() {
     children.clear();
     labels.clear();
     classes.clear();
+    closed.clear();
 }
 
 bool IdeExplorer::Snapshot::same_shape(const Snapshot& other) const {
-    return ids == other.ids && child_counts == other.child_counts && labels == other.labels;
+    return ids == other.ids && child_counts == other.child_counts && labels == other.labels && closed == other.closed;
 }
 
 IdeExplorer::IdeExplorer(engine_core::DataModel& root, std::string name, ExplorerHost host)
@@ -611,19 +614,27 @@ void IdeExplorer::pull_selection(bool rows_changed) {
     if (changed) {
         std::vector<engine_core::InstanceId> ids = root_.selection().get(selection_seen_);
         if (ids != selected_) {
-            // Set from somewhere else: a script, or the other explorer. Open
-            // the branches above each newly selected row so it can be seen.
+            // Set from somewhere else: a script, the view, or the other
+            // explorer. Open the branches above each newly selected row so it
+            // can be seen, reading the ones not read yet.
+            std::vector<engine_core::InstanceId> unread;
             for (engine_core::InstanceId id : ids) {
                 if (is_selected(id)) {
                     continue;
                 }
                 jadefx::TreeItem* row = existing_row(id);
+                if (row == nullptr) {
+                    unread.push_back(id);
+                }
                 for (jadefx::TreeItem* up = row != nullptr ? row->getParent() : nullptr; up != nullptr;
                      up = up->getParent()) {
                     if (!up->isExpanded()) {
                         up->setExpanded(true);
                     }
                 }
+            }
+            if (!unread.empty()) {
+                open_above(unread);
             }
             selected_ = std::move(ids);
         }
@@ -831,6 +842,11 @@ void IdeExplorer::poll_filter() {
         }
     }
     const bool ending = !filter_.empty() && next.empty();
+    // A filter reads every row, and no filter only the open ones: starting or
+    // ending one reads the tree again.
+    if (filter_.empty() != next.empty()) {
+        read_ok_ = false;
+    }
     filter_ = next;
     filter_dirty_ = true;
     if (!ending) {
@@ -890,9 +906,11 @@ bool IdeExplorer::reveal_selection() {
 
 void IdeExplorer::open_selection() {
     reveal_id_ = 0;
+    std::vector<engine_core::InstanceId> unread;
     for (engine_core::InstanceId id : selected_) {
         jadefx::TreeItem* row = shown_row(id);
         if (row == nullptr) {
+            unread.push_back(id);
             continue;
         }
         for (jadefx::TreeItem* up = row->getParent(); up != nullptr; up = up->getParent()) {
@@ -905,6 +923,52 @@ void IdeExplorer::open_selection() {
             reveal_id_ = id;
         }
     }
+    // A selected instance under rows never read: open the branches above it,
+    // and reveal again once the next read has made its row.
+    if (!unread.empty() && reveal_tries_ < kRevealTries) {
+        ++reveal_tries_;
+        open_above(unread);
+        reveal_wanted_ = true;
+        return;
+    }
+    reveal_tries_ = 0;
+}
+
+void IdeExplorer::open_above(const std::vector<engine_core::InstanceId>& ids) {
+    engine_core::DataModelLock lock(root_, engine_core::DataModelLock::Read, kFrameLockWait);
+    if (!lock.owns()) {
+        return;
+    }
+    for (engine_core::InstanceId id : ids) {
+        if (!root_.alive(id)) {
+            continue;
+        }
+        for (engine_core::InstanceId up = root_.parent(id);
+             up != 0 && up != engine_core::DataModel::kNoParent && up != root_.id(); up = root_.parent(up)) {
+            if (jadefx::TreeItem* row = existing_row(up)) {
+                if (!row->isExpanded()) {
+                    row->setExpanded(true);
+                }
+            } else {
+                open_ids_.insert(up);
+            }
+        }
+    }
+    open_changed_ = true;
+}
+
+bool IdeExplorer::reads_children(engine_core::InstanceId id, const engine_core::DataModel* object) const {
+    if (!filter_.empty() || id == root_.id()) {
+        return true;
+    }
+    if (const jadefx::TreeItem* row = existing_row(id)) {
+        return row->isExpanded();
+    }
+    // Workspace holds what the place shows, so its row starts open.
+    if (object != nullptr && object->class_name() != nullptr && std::string_view(object->class_name()) == "Workspace") {
+        return true;
+    }
+    return open_ids_.count(id) != 0;
 }
 
 void IdeExplorer::place_reveal() {
@@ -952,6 +1016,7 @@ bool IdeExplorer::sync() {
         committed_.ids = scratch_.ids;
         committed_.child_counts = scratch_.child_counts;
         committed_.labels = scratch_.labels;
+        committed_.closed = scratch_.closed;
         changed = true;
     }
     if (pending) {
@@ -962,8 +1027,10 @@ bool IdeExplorer::sync() {
 
 bool IdeExplorer::capture() {
     // Names and the hierarchy move the revision under the write lock, so an
-    // unmoved revision means scratch_ still matches the tree.
-    if (read_ok_ && root_.tree_revision() == read_revision_) {
+    // unmoved revision means scratch_ still matches the tree, unless a row
+    // opened or closed. A filter reads every row, open or not.
+    const bool reopened = open_changed_ && filter_.empty();
+    if (read_ok_ && root_.tree_revision() == read_revision_ && !reopened) {
         return false;
     }
     read_ok_ = false;
@@ -972,6 +1039,7 @@ bool IdeExplorer::capture() {
         if (!lock.owns()) {
             return false;
         }
+        open_changed_ = false;
         read_revision_ = root_.tree_revision();
         read_hierarchy(scratch_);
         read_ok_ = true;
@@ -1009,9 +1077,21 @@ void IdeExplorer::read_hierarchy(Snapshot& snap) {
 
         const std::uint32_t begin = static_cast<std::uint32_t>(snap.children.size());
         std::uint32_t count = 0;
+        bool closed = false;
         // Current node is not in ids yet (about to be recorded) and not in pending (just popped).
         const std::size_t cap = engine_core::DataModel::kMaxInstances + 1;
-        if (!root_gone) {
+        const engine_core::DataModel* self = id == root_.id() ? &root_ : root_.instance(id);
+        if (!root_gone && !reads_children(id, self)) {
+            // Closed: its children are not read, only whether it has one to show.
+            for (engine_core::InstanceId child = root_.first_child(id); child != 0;
+                 child = root_.next_sibling(child)) {
+                const engine_core::DataModel* object = root_.instance(child);
+                if (object == nullptr || !object->hidden_in_explorer()) {
+                    closed = true;
+                    break;
+                }
+            }
+        } else if (!root_gone) {
             for (engine_core::InstanceId child = root_.first_child(id); child != 0;
                  child = root_.next_sibling(child)) {
                 if (seen_.find(child) != seen_.end()) {
@@ -1037,6 +1117,7 @@ void IdeExplorer::read_hierarchy(Snapshot& snap) {
         snap.child_begins.push_back(begin);
         snap.labels.push_back(std::move(label));
         snap.classes.push_back(std::move(type_name));
+        snap.closed.push_back(closed ? 1 : 0);
 
         for (std::uint32_t i = count; i-- > 0;) {
             pending_.push_back(snap.children[begin + i]);
@@ -1122,6 +1203,7 @@ void IdeExplorer::filter_rows() {
         filtered_.child_begins.push_back(begin);
         filtered_.labels.push_back(all.labels[i]);
         filtered_.classes.push_back(all.classes[i]);
+        filtered_.closed.push_back(all.closed[i]);
     }
 }
 
@@ -1309,6 +1391,21 @@ void IdeExplorer::set_children(jadefx::TreeItem& item, std::uint32_t begin, std:
     }
 }
 
+void IdeExplorer::set_placeholder(jadefx::TreeItem& item, engine_core::InstanceId id) {
+    std::shared_ptr<jadefx::TreeItem>& holder = placeholders_[id];
+    if (!holder) {
+        holder = jadefx::make<jadefx::TreeItem>(std::string());
+    }
+    auto& kids = item.getChildren();
+    if (kids.size() == 1 && kids[0].get() == holder.get()) {
+        return;
+    }
+    while (!kids.empty()) {
+        kids.removeAt(kids.size() - 1);
+    }
+    kids.add(holder);
+}
+
 void IdeExplorer::apply(bool batch) {
     const Snapshot& snap = shown();
     if (snap.ids.empty()) {
@@ -1329,6 +1426,13 @@ void IdeExplorer::apply(bool batch) {
         if (!row) {
             row = jadefx::make<jadefx::TreeItem>(snap.labels[i]);
             item_ids_[row.get()] = snap.ids[i];
+            // Opening or closing a row reads the rows under it again.
+            row->setOnExpanded([this](jadefx::TreeItem&) { open_changed_ = true; });
+            row->setOnCollapsed([this](jadefx::TreeItem&) { open_changed_ = true; });
+            // Open when it was dropped open, or a selection below it opened it.
+            if (open_ids_.erase(snap.ids[i]) != 0) {
+                row->setExpanded(true);
+            }
             if (i < snap.classes.size()) {
                 // An asset shows its detailed icon, such as a Texture's image, when its class has one.
                 std::shared_ptr<jadefx::Node> detailed = engine_core::is_asset_class(snap.classes[i])
@@ -1354,7 +1458,11 @@ void IdeExplorer::apply(bool batch) {
         if (parent == nullptr) {
             continue;
         }
-        set_children(*parent, snap.child_begins[i], snap.child_counts[i], batch);
+        if (i < snap.closed.size() && snap.closed[i] != 0) {
+            set_placeholder(*parent, snap.ids[i]);
+        } else {
+            set_children(*parent, snap.child_begins[i], snap.child_counts[i], batch);
+        }
     }
 
     std::vector<engine_core::InstanceId> stale;
@@ -1369,7 +1477,12 @@ void IdeExplorer::apply(bool batch) {
             continue;
         }
         const std::shared_ptr<jadefx::TreeItem> row = found->second;
+        placeholders_.erase(id);
         if (row) {
+            // Dropped open, as when its parent closed: open again when it is read again.
+            if (row->isExpanded()) {
+                open_ids_.insert(id);
+            }
             item_ids_.erase(row.get());
             if (jadefx::TreeItem* parent = row->getParent()) {
                 parent->getChildren().removeIf(

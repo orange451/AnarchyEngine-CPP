@@ -3,6 +3,7 @@
 #include "DataModel.hpp"
 #include "Enum.hpp"
 #include "InstanceRef.hpp"
+#include "Vector2.hpp"
 #include "amesh.hpp"
 
 #include <array>
@@ -385,7 +386,45 @@ protected:
     const ReferenceSpec* reference_specs(std::size_t& count) const override;
 };
 
-// A template made of Models, its only children. Edit, its primary action, opens it in a Prefab editor.
+// What a Prefab draws from Distance on, instead of its own Models (the base
+// layer), up to the next LodLayer's Distance: Distance from the camera to the
+// GameObject's origin, in units, not scaled by its Scale. Kind Model draws the
+// layer's own Models; Billboard, a quad of Texture standing on the origin, Size
+// wide and tall (times the Scale), turned about its up axis to face the camera;
+// None, nothing. Lives only in a Prefab, and holds only Models, which draw and
+// nothing else: bounds, skeleton, and collision read the base layer.
+class LodLayer : public ReferenceAsset {
+public:
+    // reference() index: a Billboard's Material, which its card is drawn with.
+    static constexpr std::size_t kMaterialReference = 0;
+    static constexpr double kDefaultDistance = 100.0;
+    static constexpr Vec2 kDefaultSize{4.f, 8.f};
+
+    using ReferenceAsset::ReferenceAsset;
+    const char* class_name() const override;
+
+    double distance() const { return distance_; }
+    LodKind kind() const { return kind_; }
+    Vec2 size() const { return size_; }
+    // SimulationThread. Distance is a finite number >= 0; Kind an Enum.LodKind
+    // value; Size two finite numbers > 0. A refused value changes nothing and
+    // says why.
+    std::optional<std::string> set_distance(double value);
+    std::optional<std::string> set_kind(int value);
+    std::optional<std::string> set_size(Vec2 value);
+
+protected:
+    const ReferenceSpec* reference_specs(std::size_t& count) const override;
+    void on_reuse() override;
+
+private:
+    double distance_ = kDefaultDistance;
+    LodKind kind_ = LodKind::Model;
+    Vec2 size_ = kDefaultSize;
+};
+
+// A template made of Models, its base layer, and LodLayers that take over from
+// it with distance. Edit, its primary action, opens it in a Prefab editor.
 class Prefab : public DataModel {
 public:
     Prefab(DataModel::ChildTag tag, DataModel::State& state, InstanceId id) : DataModel(tag, state, id) {}

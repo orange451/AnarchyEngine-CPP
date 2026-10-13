@@ -1,5 +1,6 @@
 #include "ide/IdePrefabEditor.hpp"
 #include "ide/IdeTheme.hpp"
+#include "ide/PrefabLods.hpp"
 #include "runner/ViewCapture.hpp"
 #include "runner/gl.hpp"
 
@@ -25,13 +26,15 @@
 // The Prefab editor alone in a window, over a sample Prefab, saved as PNGs: a
 // look by hand at what it draws.
 //   prefab-demo <out-dir> <theme>
-// writes <out-dir>/<theme>-prefab.png, -selected.png, -picker.png, -search.png, and -empty.png.
+// writes <out-dir>/<theme>-prefab.png, -selected.png, -picker.png, -search.png, -empty.png,
+// -lods.png and -lods-selected.png, a Prefab with a LOD of each kind, and
+// -cards.png, a Prefab with no Models of its own, only a billboard and then nothing.
 namespace {
 
 using engine_core::InstanceId;
 
 constexpr int kWidth = 960;
-constexpr int kHeight = 560;
+constexpr int kHeight = 860;
 constexpr int kSettleFrames = 5;
 
 template <typename T>
@@ -86,6 +89,24 @@ private:
             }
         };
         host.notice = [](std::string text) { std::printf("notice: %s\n", text.c_str()); };
+        host.add_lod = [this](InstanceId prefab, std::shared_ptr<ide::InsertResult> result) {
+            std::string error;
+            result->id = ide::run_add_lod(game_, prefab, error);
+            result->error = error;
+            result->done = true;
+        };
+        host.set_lod_distance = [this](InstanceId layer, double distance) {
+            ide::run_set_lod_distance(game_, layer, distance);
+        };
+        host.set_lod_kind = [this](InstanceId layer, engine_core::LodKind kind) {
+            ide::run_set_lod_kind(game_, layer, kind);
+        };
+        host.set_lod_material = [this](InstanceId layer, InstanceId material) {
+            ide::run_set_lod_material(game_, layer, material);
+        };
+        host.set_lod_size = [this](InstanceId layer, float width, float height) {
+            ide::run_set_lod_size(game_, layer, width, height);
+        };
         return host;
     }
 
@@ -116,6 +137,37 @@ private:
         lid_ = ide::add_model(game_, crate_, lid_mesh_, 0, error);
         handle_ = ide::add_model(game_, crate_, 0, 0, error);
         empty_ = Add<engine_core::Prefab>(game_, "Barrel", game_.service("Prefabs"));
+
+        // A tree drawn whole up close, a low Model from 120 units, a card from 300, and nothing past 800.
+        const InstanceId pine_mesh = Add<engine_core::Mesh>(game_, "Pine", meshes);
+        const InstanceId low_mesh = Add<engine_core::Mesh>(game_, "PineLow", meshes);
+        const InstanceId needles = Add<engine_core::Material>(game_, "Needles", materials);
+        const InstanceId card = Add<engine_core::Material>(game_, "PineCard", materials);
+        pine_ = Add<engine_core::Prefab>(game_, "Pine", game_.service("Prefabs"));
+        ide::add_model(game_, pine_, pine_mesh, needles, error);
+        const InstanceId low = ide::run_add_lod(game_, pine_, error);
+        game_.set_name(low, "Low");
+        ide::run_set_lod_distance(game_, low, 120.0);
+        ide::add_model(game_, low, low_mesh, needles, error);
+        card_ = ide::run_add_lod(game_, pine_, error);
+        game_.set_name(card_, "Card");
+        ide::run_set_lod_distance(game_, card_, 300.0);
+        ide::run_set_lod_kind(game_, card_, engine_core::LodKind::Billboard);
+        ide::run_set_lod_material(game_, card_, card);
+        ide::run_set_lod_size(game_, card_, 6.f, 14.f);
+        const InstanceId gone = ide::run_add_lod(game_, pine_, error);
+        game_.set_name(gone, "Far");
+        ide::run_set_lod_distance(game_, gone, 800.0);
+        ide::run_set_lod_kind(game_, gone, engine_core::LodKind::None);
+
+        bush_ = Add<engine_core::Prefab>(game_, "Bush", game_.service("Prefabs"));
+        const InstanceId bush_card = ide::run_add_lod(game_, bush_, error);
+        ide::run_set_lod_distance(game_, bush_card, 0.0);
+        ide::run_set_lod_kind(game_, bush_card, engine_core::LodKind::Billboard);
+        ide::run_set_lod_material(game_, bush_card, card);
+        const InstanceId bush_gone = ide::run_add_lod(game_, bush_, error);
+        ide::run_set_lod_distance(game_, bush_gone, 250.0);
+        ide::run_set_lod_kind(game_, bush_gone, engine_core::LodKind::None);
     }
 
     struct Shot {
@@ -139,6 +191,9 @@ private:
              }},
             {"material", crate_, {body_}, [this] { editor_->openPicker(body_, ide::ModelPart::Material); }},
             {"empty", empty_, {}, nullptr},
+            {"lods", pine_, {}, nullptr},
+            {"lods-selected", pine_, {card_}, nullptr},
+            {"cards", bush_, {}, nullptr},
         };
     }
 
@@ -199,6 +254,9 @@ private:
     InstanceId rock_ = 0;
     InstanceId lid_mesh_ = 0;
     InstanceId wood_ = 0;
+    InstanceId pine_ = 0;
+    InstanceId card_ = 0;
+    InstanceId bush_ = 0;
     std::size_t shot_ = 0;
     int settled_ = 0;
 };

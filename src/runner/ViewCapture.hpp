@@ -20,5 +20,7 @@ ViewPixels FitWithin(const ViewPixels& pixels, int max_size);
 
 // pixels as a PNG file's bytes, without alpha. Empty when there are no pixels.
 std::string EncodePng(const ViewPixels& pixels);
+// The same, keeping alpha.
+std::string EncodePngWithAlpha(const ViewPixels& pixels);
 
 }  // namespace runner

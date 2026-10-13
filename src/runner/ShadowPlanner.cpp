@@ -97,6 +97,11 @@ void FitTiles(std::vector<int>& sizes, const std::vector<int>& tiles, const std:
     }
 }
 
+// Whether caster c casts nothing this frame: no fingerprint, or hidden.
+bool CastsNothing(const CasterView& casters, std::size_t c) {
+    return casters.fingerprints[c] == 0 || (casters.hidden != nullptr && casters.hidden[c] != 0);
+}
+
 }  // namespace
 
 int TileSizeFor(float reach, int previous, int paneHeight, const ShadowSettings& settings) {
@@ -385,7 +390,7 @@ ShadowPlan ShadowPlanner::planView(const std::vector<ShadowRequest>& requests, c
         hash.add(record.size);
         const Sphere reachSphere{request.position, request.radius};
         for (std::size_t c = 0; c < casters.count; ++c) {
-            if (casters.fingerprints[c] == 0 || !SpheresTouch(reachSphere, casters.bounds[c]) ||
+            if (CastsNothing(casters, c) || !SpheresTouch(reachSphere, casters.bounds[c]) ||
                 (request.owner != 0 && casters.owners[c] == request.owner)) {
                 continue;
             }
@@ -500,7 +505,7 @@ ShadowPlan ShadowPlanner::planView(const std::vector<ShadowRequest>& requests, c
             draw.viewProjection = matrices[face];
             const Frustum tileView = MakeFrustum(matrices[face]);
             for (std::size_t c = 0; c < casters.count; ++c) {
-                if (casters.fingerprints[c] == 0 || (request.owner != 0 && casters.owners[c] == request.owner)) {
+                if (CastsNothing(casters, c) || (request.owner != 0 && casters.owners[c] == request.owner)) {
                     continue;
                 }
                 if (SphereInFrustum(tileView, casters.bounds[c])) {
@@ -590,7 +595,7 @@ std::vector<CascadeDraw> ShadowPlanner::planCascadesView(const SunRequest* sun, 
     };
     // The sun's own meshes cast nothing for it, nor does what casts nothing at all.
     const auto own = [&](std::size_t c) {
-        return casters.fingerprints[c] == 0 || (sun->owner != 0 && casters.owners[c] == sun->owner);
+        return CastsNothing(casters, c) || (sun->owner != 0 && casters.owners[c] == sun->owner);
     };
     Sphere slices[kMaxCascades];
     CascadeFit boxes[kMaxCascades];

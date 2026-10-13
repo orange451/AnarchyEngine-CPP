@@ -62,7 +62,10 @@ struct LinearTint {
 InstanceData MakeInstance(const DrawItem& item, LinearTint& linear) {
     InstanceData data{};
     std::copy(item.model->m, item.model->m + 16, data.model);
-    NormalMatrix(*item.model, data.normal);
+    // A billboard's normal is the vertex shader's, which faces the camera.
+    if (!item.billboard) {
+        NormalMatrix(*item.model, data.normal);
+    }
     const float* tint = linear.of(item.tint);
     std::copy(tint, tint + 3, data.tint);
     data.boneBase = static_cast<float>(item.boneBase);
@@ -128,7 +131,8 @@ void BuildBatches(const DrawItem* items, const VisibilityResult& visible, const 
             const VisibleDraw& draw = visible.opaque[i];
             const DrawItem& item = items[draw.index];
             DrawBatches::Entry& entry = order[i];
-            entry.key = BatchKey(item.slot, draw.lod, Mirrored(*item.model));
+            // A billboard is turned to face the camera whatever its model: never mirrored.
+            entry.key = BatchKey(item.slot, draw.lod, Mirrored(*item.model) && !item.billboard);
             entry.depth = item.terrain && item.boundsMin != nullptr && item.boundsMax != nullptr
                               ? BoundsViewDepth(view, item)
                               : ViewDepth(view, *item.model);
@@ -188,7 +192,7 @@ void BuildBatches(const DrawItem* items, const VisibilityResult& visible, const 
         run.count = 1;
         run.draw = entry.index;
         run.lod = entry.lod;
-        run.mirrored = Mirrored(*items[entry.index].model);
+        run.mirrored = Mirrored(*items[entry.index].model) && !items[entry.index].billboard;
         out.runs.push_back(run);
     }
     WriteInstances(items, order, out.instances.data() + opaqueCount, grain);

@@ -250,7 +250,7 @@ bool ShadowRenderer::draw(const std::vector<ShadowRequest>& requests, const Mesh
         castersAll_ = false;
         castersChanged_.clear();
         castersMeshes_ = meshes;
-        casterView_ = CasterView{total, spheres, casterOwners_.data(), casterFingerprints_.data()};
+        casterView_ = CasterView{total, spheres, casterOwners_.data(), casterFingerprints_.data(), hidden_};
     }
 
     ShadowPlan plan = planner_.planView(requests, casterView_, camera, settings);

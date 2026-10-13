@@ -685,6 +685,86 @@ TEST_CASE("load errors", "[project]") {
     }
 }
 
+namespace {
+
+// Why loading dir failed, or empty when it loaded.
+std::string load_failure(const fs::path& dir) {
+    try {
+        Project::load(dir);
+    } catch (const ProjectError& error) {
+        return error.what();
+    }
+    return std::string();
+}
+
+// 300 GameObjects in Workspace, P000 to P299, so the files are read by many threads.
+void write_parts(const fs::path& root) {
+    for (int i = 0; i < 300; ++i) {
+        char name[8];
+        std::snprintf(name, sizeof name, "P%03d", i);
+        const std::string guid = std::string("p") + (name + 1);
+        write_file(root / "src" / kWorkspace / (std::string(name) + "." + guid + ".json"),
+                   meta("GameObject", guid.c_str(), name));
+    }
+}
+
+}  // namespace
+
+TEST_CASE("load errors name the first problem in the walk, however many files are read at once", "[project]") {
+    SimRole role;
+    SECTION("a damaged file before a folder with no init.json") {
+        TempDir dir;
+        write_bare_project(dir.path);
+        write_parts(dir.path);
+        write_file(dir.path / "src" / kWorkspace / "P150.p150.json", meta("GameObject", "zzz", "P150"));
+        write_file(dir.path / "src" / kWorkspace / "Z.zzz9" / "Part.q1.json", meta("GameObject", "q1", "Part"));
+        const std::string failure = load_failure(dir.path);
+        INFO(failure);
+        REQUIRE(failure.find("P150.p150.json") != std::string::npos);
+        REQUIRE(failure.find("does not match") != std::string::npos);
+    }
+    SECTION("a folder with no init.json before a damaged file") {
+        TempDir dir;
+        write_bare_project(dir.path);
+        write_parts(dir.path);
+        write_file(dir.path / "src" / kWorkspace / "P150.p150.json", meta("GameObject", "zzz", "P150"));
+        write_file(dir.path / "src" / kWorkspace / "A.aaa9" / "Part.q1.json", meta("GameObject", "q1", "Part"));
+        const std::string failure = load_failure(dir.path);
+        INFO(failure);
+        REQUIRE(failure.find("needs init.json") != std::string::npos);
+    }
+    SECTION("two files with one GUID name the first one found as its holder") {
+        TempDir dir;
+        write_bare_project(dir.path);
+        write_parts(dir.path);
+        write_file(dir.path / "src" / kWorkspace / "Q.p007.json", meta("GameObject", "p007", "Q"));
+        const std::string failure = load_failure(dir.path);
+        INFO(failure);
+        REQUIRE(failure.find("p007") != std::string::npos);
+        REQUIRE(failure.find("P007.p007.json") < failure.find("Q.p007.json"));
+    }
+    SECTION("past the instance limit, after every file before it reads") {
+        TempDir dir;
+        write_bare_project(dir.path);
+        write_parts(dir.path);
+        struct Limit {
+            Limit() { Project::set_instance_limit(100); }
+            ~Limit() { Project::set_instance_limit(DataModel::kMaxInstances); }
+        } limit;
+        const std::string failure = load_failure(dir.path);
+        INFO(failure);
+        REQUIRE(failure.find("holds more than 100 instances") != std::string::npos);
+    }
+    SECTION("all 300 read") {
+        TempDir dir;
+        write_bare_project(dir.path);
+        write_parts(dir.path);
+        Project project = Project::load(dir.path);
+        REQUIRE(project.datamodel().find_first_child(workspace_of(project.datamodel()), "P299") != 0);
+        REQUIRE(project.datamodel().get_children(workspace_of(project.datamodel())).size() >= 300);
+    }
+}
+
 TEST_CASE("folders: first child, folder rename, script with children, undo of a delete", "[project]") {
     SimRole role;
     TempDir dir;

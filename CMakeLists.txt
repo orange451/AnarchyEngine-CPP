@@ -127,6 +127,7 @@ set(STUDIO_SOURCES
     src/ide/ThumbnailLoader.cpp
     src/ide/MaterialPreviews.cpp
     src/ide/MaterialBall.cpp
+    src/ide/BillboardBaker.cpp
     src/ide/IdeIcons.cpp
     src/ide/IdePrefabEditor.cpp
     src/ide/IdeTerrainEditor.cpp
@@ -134,6 +135,7 @@ set(STUDIO_SOURCES
     src/ide/CurveEditor.cpp
     src/ide/IdeCollisionGroups.cpp
     src/ide/PrefabModels.cpp
+    src/ide/PrefabLods.cpp
     src/ide/TerrainMaterials.cpp
     src/ide/AssetChoices.cpp
     src/ide/AssetPicker.cpp
@@ -978,6 +980,17 @@ add_executable(prefab-demo
 )
 target_link_libraries(prefab-demo PRIVATE studio)
 
+# By hand, not ctest: billboard-bake project Vegetation/Trees 150 bakes a card
+# for each Prefab there and saves the project. Run it on a copy.
+add_executable(billboard-bake
+    tests/BillboardBakeTool.cpp
+)
+target_link_libraries(billboard-bake PRIVATE studio)
+if(WIN32)
+    # Paths of 260 characters or more, as the studio opens them.
+    target_sources(billboard-bake PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/resources/windows/anarchy.manifest")
+endif()
+
 # AMESH without GL: round trips, the writer's encoding, and the reader's
 # rejections. GpuMesh is built with AE_MESH_NO_GL, so its calls do nothing.
 add_executable(amesh-tests
@@ -1125,6 +1138,8 @@ add_executable(sandbox
     sandbox/visibility_tests.cpp
     sandbox/draw_batches_tests.cpp
     sandbox/parallel_render_tests.cpp
+    sandbox/lod_tests.cpp
+    sandbox/guid_index_tests.cpp
     sandbox/event_args_tests.cpp
     sandbox/core_tests.cpp
     sandbox/archivable_tests.cpp

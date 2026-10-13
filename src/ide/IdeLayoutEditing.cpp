@@ -791,6 +791,45 @@ PrefabEditorHost IdeLayout::prefab_editor_host() {
                 }
             });
     };
+    host.add_lod = [this](engine_core::InstanceId prefab, std::shared_ptr<InsertResult> result) {
+        runner_.simulation().on_simulation([prefab, result](engine_core::DataModel& world) {
+            std::string error;
+            const engine_core::InstanceId made = run_add_lod(world, prefab, error);
+            if (result) {
+                result->id.store(made, std::memory_order_relaxed);
+                result->error = std::move(error);
+                result->done.store(true, std::memory_order_release);
+            }
+        });
+    };
+    // Each LOD write is its own run_* step; a refused one says why.
+    const auto lod_write = [this](std::function<std::optional<std::string>(engine_core::DataModel&)> write) {
+        runner_.simulation().on_simulation(
+            [this, alive = std::weak_ptr<int>(alive_), write = std::move(write)](engine_core::DataModel& world) {
+                if (std::optional<std::string> error = write(world)) {
+                    toast_later(this, alive, std::move(*error));
+                }
+            });
+    };
+    host.set_lod_distance = [lod_write](engine_core::InstanceId layer, double distance) {
+        lod_write([layer, distance](engine_core::DataModel& world) { return run_set_lod_distance(world, layer, distance); });
+    };
+    host.set_lod_kind = [lod_write](engine_core::InstanceId layer, engine_core::LodKind kind) {
+        lod_write([layer, kind](engine_core::DataModel& world) { return run_set_lod_kind(world, layer, kind); });
+    };
+    host.set_lod_material = [lod_write](engine_core::InstanceId layer, engine_core::InstanceId material) {
+        lod_write([layer, material](engine_core::DataModel& world) { return run_set_lod_material(world, layer, material); });
+    };
+    host.set_lod_size = [lod_write](engine_core::InstanceId layer, float width, float height) {
+        lod_write([layer, width, height](engine_core::DataModel& world) {
+            return run_set_lod_size(world, layer, width, height);
+        });
+    };
+    host.set_lod_card = [lod_write](engine_core::InstanceId layer, CardFiles files) {
+        lod_write([layer, files = std::move(files)](engine_core::DataModel& world) {
+            return run_set_lod_card(world, layer, files);
+        });
+    };
     host.rename = [this](engine_core::InstanceId id, std::string name) { rename(id, std::move(name)); };
     host.remove = [this](const std::vector<engine_core::InstanceId>& ids) { delete_instances(ids); };
     host.notice = [this](std::string text) { show_toast(std::move(text)); };

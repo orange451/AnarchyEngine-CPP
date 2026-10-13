@@ -41,7 +41,34 @@ void MeshCache::setRoot(const std::filesystem::path& root) {
     root_ = root;
 }
 
+const anarchy::amesh::GpuMesh* MeshCache::billboardQuad() {
+    if (!quad_.tried) {
+        anarchy::amesh::Data data;
+        // Counter-clockwise from the bottom left, seen from +Z.
+        const float corners[4][2] = {{-0.5f, 0.f}, {0.5f, 0.f}, {0.5f, 1.f}, {-0.5f, 1.f}};
+        for (const auto& corner : corners) {
+            anarchy::amesh::Vertex vertex;
+            vertex.p[0] = corner[0];
+            vertex.p[1] = corner[1];
+            vertex.n[2] = 1.f;
+            // An image loads bottom row first, as OpenGL takes it: v 1 is its top row.
+            vertex.uv[0] = corner[0] + 0.5f;
+            vertex.uv[1] = corner[1];
+            vertex.t[0] = 1.f;
+            data.vertices.push_back(vertex);
+        }
+        data.indices = {0, 1, 2, 0, 2, 3};
+        data.lods.push_back(anarchy::amesh::LodRange{0, 2});
+        anarchy::amesh::compute_aabb(data);
+        uploadOnce(quad_, data, 1, false, "The billboard quad could not be drawn: ");
+    }
+    quad_.asked = true;
+    return quad_.mesh.valid() ? &quad_.mesh : nullptr;
+}
+
 void MeshCache::clear() {
+    quad_.mesh.destroy();
+    quad_ = SessionEntry{};
     for (auto& [path, entry] : entries_) {
         entry.mesh.destroy();
     }

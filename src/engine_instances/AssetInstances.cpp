@@ -581,6 +581,7 @@ void Animation::on_reuse() {
 
 const char* Material::class_name() const { return "Material"; }
 const char* Model::class_name() const { return "Model"; }
+const char* LodLayer::class_name() const { return "LodLayer"; }
 const char* Prefab::class_name() const { return "Prefab"; }
 
 void Prefab::context_actions(std::vector<ContextAction>& out) const {
@@ -637,6 +638,10 @@ constexpr ReferenceSpec kModelRefs[] = {
     {"Material", "Material"},
 };
 
+constexpr ReferenceSpec kLodLayerRefs[] = {
+    {"Material", "Material"},
+};
+
 static_assert(std::size(kMaterialRefs) <= ReferenceAsset::kMaxReferences);
 static_assert(std::size(kModelRefs) <= ReferenceAsset::kMaxReferences);
 
@@ -650,6 +655,11 @@ const ReferenceSpec* Material::reference_specs(std::size_t& count) const {
 const ReferenceSpec* Model::reference_specs(std::size_t& count) const {
     count = std::size(kModelRefs);
     return kModelRefs;
+}
+
+const ReferenceSpec* LodLayer::reference_specs(std::size_t& count) const {
+    count = std::size(kLodLayerRefs);
+    return kLodLayerRefs;
 }
 
 LuaSlot ReferenceAsset::reference(std::size_t index) const {
@@ -783,6 +793,81 @@ std::optional<std::string> Material::set_color3(const char* property, ColorRgb& 
 std::optional<std::string> Material::set_color(ColorRgb color) { return set_color3("Color", color_, color); }
 
 std::optional<std::string> Material::set_emissive(ColorRgb color) { return set_color3("Emissive", emissive_, color); }
+
+namespace {
+
+LuaSlot lod_kind_slot(LodKind kind) {
+    LuaSlot slot;
+    slot.kind = LuaSlot::Kind::Enum;
+    slot.enum_type = &lod_kind_enum();
+    slot.number = static_cast<int>(kind);
+    return slot;
+}
+
+LuaSlot lod_size_slot(Vec2 size) {
+    LuaSlot slot;
+    slot.kind = LuaSlot::Kind::Vec2;
+    slot.vec = Vec3{size.x, size.y, 0.f};
+    return slot;
+}
+
+}  // namespace
+
+std::optional<std::string> LodLayer::set_distance(double value) {
+    if (!on_gameplay_thread()) {
+        contract_fail("asset setters run on SimulationThread");
+    }
+    if (!std::isfinite(value) || value < 0.0) {
+        return std::string("Distance must be a number of units, 0 or more");
+    }
+    if (distance_ == value) {
+        return std::nullopt;
+    }
+    const double previous = distance_;
+    distance_ = value;
+    note_property_change("Distance", number_slot(previous), number_slot(value));
+    return std::nullopt;
+}
+
+std::optional<std::string> LodLayer::set_kind(int value) {
+    if (!on_gameplay_thread()) {
+        contract_fail("asset setters run on SimulationThread");
+    }
+    if (enum_item_name(lod_kind_enum(), value) == nullptr) {
+        return std::string("Kind must be an Enum.LodKind");
+    }
+    const LodKind next = static_cast<LodKind>(value);
+    if (next == kind_) {
+        return std::nullopt;
+    }
+    const LodKind previous = kind_;
+    kind_ = next;
+    note_property_change("Kind", lod_kind_slot(previous), lod_kind_slot(next));
+    return std::nullopt;
+}
+
+std::optional<std::string> LodLayer::set_size(Vec2 value) {
+    if (!on_gameplay_thread()) {
+        contract_fail("asset setters run on SimulationThread");
+    }
+    if (!std::isfinite(value.x) || !std::isfinite(value.y) || value.x <= 0.f || value.y <= 0.f) {
+        return std::string("Size must be a width and a height in units, each more than 0");
+    }
+    if (size_.x == value.x && size_.y == value.y) {
+        return std::nullopt;
+    }
+    const Vec2 previous = size_;
+    size_ = value;
+    note_property_change("Size", lod_size_slot(previous), lod_size_slot(value));
+    return std::nullopt;
+}
+
+void LodLayer::on_reuse() {
+    ReferenceAsset::on_reuse();
+    distance_ = kDefaultDistance;
+    kind_ = LodKind::Model;
+    size_ = kDefaultSize;
+}
 
 void Material::on_reuse() {
     ReferenceAsset::on_reuse();
@@ -959,6 +1044,75 @@ bool write_reference(DataModel&, DataModel& object, LuaSlot& in) {
 
 Material* material_of(DataModel& object) { return dynamic_cast<Material*>(&object); }
 
+LodLayer* lod_layer_of(DataModel& object) { return dynamic_cast<LodLayer*>(&object); }
+
+bool read_lod_distance(DataModel&, DataModel& object, LuaSlot& out) {
+    const LodLayer* layer = lod_layer_of(object);
+    if (layer == nullptr) {
+        return false;
+    }
+    out = number_slot(layer->distance());
+    return true;
+}
+
+bool write_lod_distance(DataModel&, DataModel& object, LuaSlot& in) {
+    LodLayer* layer = lod_layer_of(object);
+    if (layer == nullptr) {
+        return false;
+    }
+    if (std::optional<std::string> error = layer->set_distance(in.number)) {
+        in.error = std::move(*error);
+        return false;
+    }
+    return true;
+}
+
+bool read_lod_kind(DataModel&, DataModel& object, LuaSlot& out) {
+    const LodLayer* layer = lod_layer_of(object);
+    if (layer == nullptr) {
+        return false;
+    }
+    out = lod_kind_slot(layer->kind());
+    return true;
+}
+
+bool write_lod_kind(DataModel&, DataModel& object, LuaSlot& in) {
+    LodLayer* layer = lod_layer_of(object);
+    if (layer == nullptr) {
+        return false;
+    }
+    if (in.kind != LuaSlot::Kind::Enum || in.enum_type != &lod_kind_enum()) {
+        in.error = "Kind must be an Enum.LodKind";
+        return false;
+    }
+    if (std::optional<std::string> error = layer->set_kind(static_cast<int>(in.number))) {
+        in.error = std::move(*error);
+        return false;
+    }
+    return true;
+}
+
+bool read_lod_size(DataModel&, DataModel& object, LuaSlot& out) {
+    const LodLayer* layer = lod_layer_of(object);
+    if (layer == nullptr) {
+        return false;
+    }
+    out = lod_size_slot(layer->size());
+    return true;
+}
+
+bool write_lod_size(DataModel&, DataModel& object, LuaSlot& in) {
+    LodLayer* layer = lod_layer_of(object);
+    if (layer == nullptr) {
+        return false;
+    }
+    if (std::optional<std::string> error = layer->set_size(Vec2{in.vec.x, in.vec.y})) {
+        in.error = std::move(*error);
+        return false;
+    }
+    return true;
+}
+
 template <double (Material::*Get)() const>
 bool read_material_number(DataModel&, DataModel& object, LuaSlot& out) {
     const Material* material = material_of(object);
@@ -1099,6 +1253,19 @@ ANARCHY_LUA_REGISTER(register_asset_instances_lua) {
         lua_saved_property("Material", "Material?", read_reference<1>, write_reference<1>, "null"),
     };
     register_lua_class("Model", "ReferenceAsset", model_fields, 2);
+    static const std::string lod_distance = write_json(JsonValue::number(LodLayer::kDefaultDistance));
+    static const std::string lod_size = write_json(JsonValue::array(
+        {JsonValue::number(LodLayer::kDefaultSize.x), JsonValue::number(LodLayer::kDefaultSize.y)}));
+    const LuaField lod_layer_fields[] = {
+        lua_saved_property("Distance", "number", read_lod_distance, write_lod_distance, lod_distance.c_str()),
+        lua_saved_enum("Kind", lod_kind_enum(), read_lod_kind, write_lod_kind, "\"Model\""),
+        lua_shown_when(lua_saved_property("Material", "Material?", read_reference<0>, write_reference<0>, "null"),
+                       "Kind", {static_cast<int>(LodKind::Billboard)}),
+        lua_shown_when(lua_saved_property("Size", "Vector2", read_lod_size, write_lod_size, lod_size.c_str()),
+                       "Kind", {static_cast<int>(LodKind::Billboard)}),
+    };
+    register_lua_class("LodLayer", "ReferenceAsset", lod_layer_fields,
+                       static_cast<int>(sizeof(lod_layer_fields) / sizeof(lod_layer_fields[0])));
     const LuaField prefab_fields[] = {
         lua_property("OriginOffset", "Vector3", false, read_origin_offset, nullptr),
     };

@@ -1,5 +1,6 @@
 #include "PropertyReflection.hpp"
 
+#include "CurveJson.hpp"
 #include "DataModel.hpp"
 #include "Enum.hpp"
 #include "LuaApi.hpp"
@@ -32,6 +33,10 @@ bool slot_to_json(const LuaSlot& slot, std::string_view type, JsonValue& out) {
         out = JsonValue::boolean(slot.flag);
     } else if (type == "string" && slot.kind == LuaSlot::Kind::String) {
         out = JsonValue::string(slot.text);
+    } else if (type == "NumberCurve" && slot.kind == LuaSlot::Kind::NumberCurve && slot.number_curve) {
+        out = number_curve_to_json(*slot.number_curve);
+    } else if (type == "ColorCurve" && slot.kind == LuaSlot::Kind::ColorCurve && slot.color_curve) {
+        out = color_curve_to_json(*slot.color_curve);
     } else if (type == "Color3" && slot.kind == LuaSlot::Kind::Color) {
         const float channels[3] = {slot.color.r, slot.color.g, slot.color.b};
         out = json_floats(channels, 3);
@@ -86,6 +91,22 @@ bool slot_from_json(const JsonValue& value, std::string_view type, const char* n
         }
         out.kind = LuaSlot::Kind::String;
         out.text = value.as_string();
+    } else if (type == "NumberCurve") {
+        std::string why;
+        auto curve = number_curve_from_json(value, why);
+        if (!curve) {
+            error = label + " " + why;
+            return false;
+        }
+        out = number_curve_slot(std::move(*curve));
+    } else if (type == "ColorCurve") {
+        std::string why;
+        auto curve = color_curve_from_json(value, why);
+        if (!curve) {
+            error = label + " " + why;
+            return false;
+        }
+        out = color_curve_slot(std::move(*curve));
     } else if (type == "Color3") {
         if (!read_json_floats(value, 3, 3, floats)) {
             error = label + " must be 3 numbers";
@@ -162,6 +183,10 @@ bool same_slot(const LuaSlot& a, const LuaSlot& b) {
         return std::memcmp(a.transform.m, b.transform.m, sizeof(a.transform.m)) == 0;
     case LuaSlot::Kind::Enum:
         return a.enum_type == b.enum_type && a.number == b.number;
+    case LuaSlot::Kind::NumberCurve:
+        return a.number_curve && b.number_curve && *a.number_curve == *b.number_curve;
+    case LuaSlot::Kind::ColorCurve:
+        return a.color_curve && b.color_curve && *a.color_curve == *b.color_curve;
     case LuaSlot::Kind::TouchObject:
         return a.touch.time == b.touch.time && a.touch.instance == b.touch.instance;
     case LuaSlot::Kind::InputObject:

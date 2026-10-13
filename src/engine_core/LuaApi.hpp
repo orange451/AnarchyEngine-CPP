@@ -1,11 +1,13 @@
 #pragma once
 
+#include "Curve.hpp"
 #include "InputRecord.hpp"
 #include "TouchRecord.hpp"
 #include "types.hpp"
 
 #include <cstdint>
 #include <initializer_list>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -23,7 +25,8 @@ struct EnumType;
 struct LuaSlot {
     // A Vec2 (a Vector2) keeps its x and y in vec, with z 0. An InputObject is
     // only ever an event's value, never a property's.
-    enum class Kind { Nil, Bool, Number, String, Instance, Vec3, Color, Matrix4, Signal, Enum, Vec2, InputObject, TouchObject };
+    enum class Kind { Nil, Bool, Number, String, Instance, Vec3, Color, Matrix4, Signal, Enum, Vec2, InputObject, TouchObject,
+                      NumberCurve, ColorCurve };
     Kind kind = Kind::Nil;
     bool flag = false;
     // A Number's value, or an Enum item's value.
@@ -39,6 +42,10 @@ struct LuaSlot {
     InputRecord input{};
     // A TouchObject's record: only ever an event's value.
     TouchRecord touch{};
+    // A NumberCurve or ColorCurve. Shared and immutable, so a slot copied into
+    // undo history copies a pointer.
+    std::shared_ptr<const engine_core::NumberCurve> number_curve;
+    std::shared_ptr<const engine_core::ColorCurve> color_curve;
     // Why a write refused the value, for the user. Empty when it did not say.
     std::string error;
 };
@@ -145,8 +152,9 @@ inline LuaField lua_property(const char* name, const char* type_name, bool writa
 
 // A property the class keeps no other record of: the registry is the whole
 // list. DataModel saves, loads, and restores it at Stop from read and write,
-// by its type: number, boolean, string, Color3, or Vector3. default_json is
-// the value a new instance has, as the JSON a save would write. The write
+// by its type: number, boolean, string, Color3, Vector3, NumberCurve, or
+// ColorCurve. default_json is the value a new instance has, as the JSON a
+// save would write. The write
 // validates and calls DataModel::note_property_change, which gives undo and
 // Changed.
 inline LuaField lua_saved_property(const char* name, const char* type_name, LuaRead read, LuaWrite write,

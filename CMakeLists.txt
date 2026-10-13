@@ -653,6 +653,7 @@ add_library(engine_core STATIC
     src/engine_core/LuaApi.cpp
     src/engine_core/InstanceFile.cpp
     src/engine_core/PropertyReflection.cpp
+    src/engine_core/CurveJson.cpp
     src/engine_core/InstanceRef.cpp
     src/engine_core/LuaReflect.cpp
     src/engine_core/ScriptBindings.cpp

@@ -1391,6 +1391,12 @@ bool type_fits(std::string_view type, const LuaSlot& slot) {
     if (type == "Color3") {
         return slot.kind == Kind::Color;
     }
+    if (type == "NumberCurve") {
+        return slot.kind == Kind::NumberCurve;
+    }
+    if (type == "ColorCurve") {
+        return slot.kind == Kind::ColorCurve;
+    }
     if (type == "Matrix4") {
         return slot.kind == Kind::Matrix4;
     }

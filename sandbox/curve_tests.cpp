@@ -112,3 +112,70 @@ TEST_CASE("CRV9 interpolation names go both ways", "[curve]") {
     REQUIRE_FALSE(curve_interp_from_name("Wobbly").has_value());
     REQUIRE(std::string(curve_interp_name(CurveInterp::Step)) == "Step");
 }
+
+#include "CurveJson.hpp"
+#include "PropertyReflection.hpp"
+
+namespace {
+JsonValue parsed(const char* text) {
+    JsonValue out;
+    std::string error;
+    REQUIRE(parse_json(text, out, error));
+    return out;
+}
+}  // namespace
+
+TEST_CASE("CRV10 curves round-trip through JSON and refuse bad JSON", "[curve]") {
+    std::string error;
+    const auto curve = NumberCurve::keys({{0.f, 0.f}, {0.2f, 3.f, CurveInterp::Smooth}, {1.f, 0.f}}, error);
+    REQUIRE(curve.has_value());
+    const auto back = number_curve_from_json(number_curve_to_json(*curve), error);
+    REQUIRE(back.has_value());
+    REQUIRE(*back == *curve);
+    REQUIRE(compact_json(number_curve_to_json(NumberCurve::constant(5.f))) == R"({"mode":"Constant","value":5})");
+    REQUIRE(compact_json(number_curve_to_json(NumberCurve::range(1.f, 3.f))) == R"({"max":3,"min":1,"mode":"Range"})");
+    REQUIRE(compact_json(number_curve_to_json(*curve)) ==
+            R"({"keys":[[0,0,"Linear"],[0.2,3,"Smooth"],[1,0,"Linear"]],"mode":"Curve"})");
+
+    REQUIRE_FALSE(number_curve_from_json(parsed(R"({"mode":"Curve","keys":[]})"), error).has_value());
+    REQUIRE(error.find("at least one key") != std::string::npos);
+    REQUIRE_FALSE(number_curve_from_json(parsed(R"({"mode":"Wavy"})"), error).has_value());
+    REQUIRE(error.find("unknown mode") != std::string::npos);
+    REQUIRE_FALSE(number_curve_from_json(parsed(R"({"mode":"Curve","keys":[[0,0,"Wobbly"]]})"), error).has_value());
+    REQUIRE(error.find("interpolation") != std::string::npos);
+    REQUIRE_FALSE(number_curve_from_json(parsed(R"({"mode":"Curve","keys":[[0]]})"), error).has_value());
+    REQUIRE(error.find("malformed key") != std::string::npos);
+    REQUIRE_FALSE(number_curve_from_json(parsed("5"), error).has_value());
+
+    const ColorCurve between =
+        ColorCurve::between(ColorRgb{1.f, 0.5f, 0.f, 1.f}, 0.f, ColorRgb{1.f, 1.f, 0.f, 1.f}, 0.25f);
+    const auto color_back = color_curve_from_json(color_curve_to_json(between), error);
+    REQUIRE(color_back.has_value());
+    REQUIRE(*color_back == between);
+    const auto grad = ColorCurve::gradient({{0.f, ColorRgb{1.f, 0.8f, 0.2f, 1.f}, 0.f}, {1.f, ColorRgb{0.3f, 0.3f, 0.3f, 1.f}, 1.f}}, error);
+    REQUIRE(*color_curve_from_json(color_curve_to_json(*grad), error) == *grad);
+    REQUIRE(compact_json(color_curve_to_json(ColorCurve::constant(ColorRgb{1.f, 1.f, 1.f, 1.f}, 0.f))) ==
+            R"({"color":[1,1,1],"mode":"Constant","transparency":0})");
+    REQUIRE_FALSE(color_curve_from_json(parsed(R"({"mode":"Gradient","keys":[[0,5,0]]})"), error).has_value());
+}
+
+TEST_CASE("CRV11 slots of curves convert to JSON by type name and compare by value", "[curve]") {
+    const LuaSlot a = number_curve_slot(NumberCurve::range(1.f, 2.f));
+    const LuaSlot b = number_curve_slot(NumberCurve::range(1.f, 2.f));
+    REQUIRE(same_slot(a, b));
+    REQUIRE_FALSE(same_slot(a, number_curve_slot(NumberCurve::range(1.f, 3.f))));
+    JsonValue json;
+    REQUIRE(slot_to_json(a, "NumberCurve", json));
+    LuaSlot back;
+    std::string error;
+    REQUIRE(slot_from_json(json, "NumberCurve", "Size", back, error));
+    REQUIRE(back.kind == LuaSlot::Kind::NumberCurve);
+    REQUIRE(*back.number_curve == NumberCurve::range(1.f, 2.f));
+    REQUIRE_FALSE(slot_from_json(parsed("5"), "NumberCurve", "Size", back, error));
+    REQUIRE(error.find("Size") != std::string::npos);
+
+    const LuaSlot c = color_curve_slot(ColorCurve::constant(ColorRgb{1.f, 0.f, 0.f, 1.f}, 0.5f));
+    REQUIRE(slot_to_json(c, "ColorCurve", json));
+    REQUIRE(slot_from_json(json, "ColorCurve", "Color", back, error));
+    REQUIRE(same_slot(c, back));
+}

@@ -929,7 +929,6 @@ Register for analysis with `ANARCHY_LUA_REGISTER(register_curve_lua)` exactly as
       slot.number_curve = std::move(curve);
   } else if (type == "ColorCurve") {
       auto curve = to_color_curve(state, 3);
-      Color3 color;
       if (!curve && read_color3(state, 3, slot.color)) {
           curve = std::make_shared<const ColorCurve>(ColorCurve::constant(slot.color, 0.f));   // a Color3 is a Constant
       }
@@ -981,7 +980,7 @@ git commit -m "Curves: NumberCurve and ColorCurve in Lua"
   ```
   Lua names: `Enum.ParticleShape`, `Enum.ParticleEmitFrom`, `Enum.ParticleCollision`, `Enum.ParticleCollisionResponse`, `Enum.ParticleTextureMode`, `Enum.ParticleFacing`, `Enum.ParticleBlendMode`.
 
-- [ ] **Step 1: Write the failing test** (`tests/PropertiesTest.cpp`). There is no particle class yet, so the test uses `PhysicsObject`'s registry entry temporarily patched? No: test the rule through `read_sheet` with a field installed on a test-only class is not available. Write this test now and keep it red until Task 5 lands; mark it in `main()` after Task 5 is committed. Instead, for this task, test the enum registration in Lua:
+- [ ] **Step 1: Write the failing test.** No class uses the grey-out rule until Task 5, whose `TestParticleEmitterRows` covers it; this task tests the enum registration in Lua:
 
 ```cpp
 // tests/LuaEngineTest.cpp, in testCurves or a new testParticleEnums called from main()
@@ -1249,7 +1248,7 @@ void TestParticleEmitterRows() {
     Expect(from != nullptr && !from->enabled, "EmitFrom is greyed while the emitter emits from a point (Workspace parent)");
     const ide::PropertyRow* group = rig.panel.sheet().find("CollisionGroup");
     Expect(group != nullptr && !group->enabled, "CollisionGroup is greyed unless Collision is World");
-    Expect(!rig.hasRow("Bounciness") == false, "Bounciness shows for Bounce");
+    Expect(rig.hasRow("Bounciness"), "Bounciness shows for Bounce");
 }
 ```
 
@@ -1751,8 +1750,7 @@ ShapeSample cylinder(ParticleEmitFrom from, Vec3 h, float arc, Pcg32& rng) {
     return {{p.x, sign * h.y, p.z}, {0.f, sign, 0.f}};
 }
 
-// Base at -h.y, apex at +h.y; opens along +Y means particles leave through the base?
-// No: the spec's cone opens along +Y, so the apex is at -h.y and the wide base at +h.y.
+// The cone opens along +Y: apex at -h.y, wide base at +h.y.
 ShapeSample cone(ParticleEmitFrom from, Vec3 h, float arc, Pcg32& rng) {
     const float a = arc_angle(arc, rng);
     if (from == ParticleEmitFrom::Edge) {
@@ -1801,17 +1799,17 @@ Vec3 spread_direction(Vec3 dir, float spread_x_deg, float spread_y_deg, Pcg32& r
     if (spread_x_deg <= 0.f && spread_y_deg <= 0.f) {
         return d;
     }
-    const Vec3 u = perpendicular(d);            // tilts in the plane of d and u give the X spread
-    const Vec3 v = cross(d, u);
+    // For d = +Y the X spread tilts toward X (about Z) and the Y spread toward Z (about X).
+    const Vec3 xr = std::fabs(d.y) > 0.9f ? Vec3{0.f, 0.f, 1.f} : normalize(cross(d, Vec3{0.f, 1.f, 0.f}));
+    const Vec3 yr = normalize(cross(xr, d));
     const float ax = rng.range(-spread_x_deg, spread_x_deg) * kPi / 180.f;
     const float ay = rng.range(-spread_y_deg, spread_y_deg) * kPi / 180.f;
-    return normalize(rotate(rotate(d, v, ax), u, ay));
+    return normalize(rotate(rotate(d, xr, ax), yr, ay));
 }
 
 }  // namespace engine_core::particles
 ```
 
-The "PS4 flat fan" assertion assumes the X spread tilts within the X/Y plane for `dir = up`. `perpendicular(up)` returns `normalize(cross(up, X)) = (0,0,-1)`... so `v = cross(up, u)` = X axis, and rotating about `v`(X) tilts into Z. Fix by choosing the axes so that for `dir = +Y`, X spread rotates about +Z (tilting toward X) and Y spread about +X: compute `u = perpendicular(d)` then `v = cross(d, u)`, and rotate `ax` about `u` if `u` is Z-like. Implement: `const Vec3 xr = std::fabs(d.y) > 0.9f ? Vec3{0,0,1} : normalize(cross(d, Vec3{0,1,0}));` (rotation axis for the X spread), `const Vec3 yr = normalize(cross(xr, d));` (axis for the Y spread), then `rotate(rotate(d, xr, ax), yr, ay)`. Use that and keep PS4 as written.
 
 - [ ] **Step 4: Run `[particle-shapes]`; pass.**
 - [ ] **Step 5: Commit** — `git commit -m "Particles: PCG32 and analytic shape sampling"`
@@ -2273,10 +2271,16 @@ void EmitterSim::step(const EmitterFrame& frame, bool playing, int pending_emits
         if (cycle_time_ >= s_.duration) {
             if (s_.looping) {
                 cycle_time_ = std::fmod(cycle_time_, s_.duration);
-                next_burst_ = 0;
-                while (next_burst_ < s_.bursts.size() && s_.bursts[next_burst_].time < cycle_time_) ++next_burst_;   // fired in the wrap step above? no: fire them next step
-                next_burst_ = 0;   // bursts at times < cycle_time_ fire on the next step's scan
                 cycle_rate_blend_ = rng_.uniform();
+                // Bursts of the new cycle that the wrapped time already passed fire now.
+                next_burst_ = 0;
+                int wrapped = 0;
+                while (next_burst_ < s_.bursts.size() && s_.bursts[next_burst_].time < cycle_time_) {
+                    wrapped += static_cast<int>(std::max(0.f, s_.bursts[next_burst_].count.sample(0.f, rng_.uniform())) + 0.5f);
+                    ++next_burst_;
+                }
+                const int wrapped_n = std::min(wrapped, room);
+                if (wrapped_n > 0) { spawn(frame, wrapped_n, 1.f); room -= wrapped_n; }
             } else {
                 cycle_over_ = true;
                 cycle_ended_flag_ = true;
@@ -2337,7 +2341,7 @@ void EmitterSim::step(const EmitterFrame& frame, bool playing, int pending_emits
 }
 ```
 
-Fix the wrap logic while implementing (delete the two contradictory `next_burst_` lines and keep: on wrap, `next_burst_ = 0` and immediately fire bursts whose time `< cycle_time_` within the same step so SIM3's loop count holds). `spawn(frame, n, spread_start)`:
+`spawn(frame, n, spread_start)`:
 
 ```cpp
 void EmitterSim::spawn(const EmitterFrame& frame, int count, float spread_start) {

@@ -109,8 +109,35 @@ std::optional<std::string> PhysicsObject::set_mesh(const LuaSlot& value) {
     return error;
 }
 
+LuaSlot PhysicsObject::game_object() const { return instance_reference_slot(game_object_ref_, "GameObject"); }
+
+InstanceId PhysicsObject::game_object_id() const {
+    // Resolved directly, not through a LuaSlot, so it copies no GUID.
+    const InstanceId target = game_object_ref_.resolve(*this);
+    return target != 0 && DataModel::game_object(target) != nullptr ? target : 0;
+}
+
+InstanceId PhysicsObject::driven_game_object() const {
+    if (const InstanceId linked = game_object_id(); linked != 0) {
+        return linked;
+    }
+    return parent_game_object();
+}
+
+std::optional<std::string> PhysicsObject::set_game_object(const LuaSlot& value) {
+    require_gameplay_thread(*this);
+    // The physics world sees a new target by comparing it with the one its body drives.
+    const bool was_relevant = assemblies().relevant(*this, id());
+    std::optional<std::string> refused = set_instance_reference("GameObject", "GameObject", game_object_ref_, value);
+    if (!refused && (was_relevant || assemblies().relevant(*this, id()))) {
+        assemblies().tree_changed(*this, id());
+    }
+    return refused;
+}
+
 void PhysicsObject::on_reuse() {
     PhysicsBase::on_reuse();
+    game_object_ref_.set_guid(std::string());
     angular_velocity_ = {};
     friction_ = kDefaultFriction;
     bounciness_ = 0.0;
@@ -138,6 +165,19 @@ bool write_mesh(DataModel&, DataModel& object, LuaSlot& in) {
     return body != nullptr && refuse(in, body->set_mesh(in));
 }
 
+bool read_game_object(DataModel&, DataModel& object, LuaSlot& out) {
+    const PhysicsObject* body = dynamic_cast<const PhysicsObject*>(&object);
+    if (body == nullptr) {
+        return false;
+    }
+    out = body->game_object();
+    return true;
+}
+
+bool write_game_object(DataModel&, DataModel& object, LuaSlot& in) {
+    PhysicsObject* body = dynamic_cast<PhysicsObject*>(&object);
+    return body != nullptr && refuse(in, body->set_game_object(in));
+}
 
 bool read_shape(DataModel&, DataModel& object, LuaSlot& out) {
     const PhysicsObject* body = dynamic_cast<const PhysicsObject*>(&object);
@@ -189,6 +229,8 @@ ANARCHY_LUA_REGISTER(register_physics_object_lua) {
                         static_cast<int>(PhysicsObject::Shape::Wedge)}),
         lua_shown_when(lua_saved_property("Mesh", "Mesh?", read_mesh, write_mesh, "null"), "Shape",
                        {static_cast<int>(PhysicsObject::Shape::Hull), static_cast<int>(PhysicsObject::Shape::Custom)}),
+        lua_group("Behavior"),
+        lua_saved_property("GameObject", "GameObject?", read_game_object, write_game_object, "null"),
     };
     register_lua_class("PhysicsObject", "PhysicsBase", fields, static_cast<int>(std::size(fields)));
     register_suited_parents("PhysicsObject", {"Workspace", "PVInstance"});

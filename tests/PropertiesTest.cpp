@@ -2118,7 +2118,7 @@ void TestClassGroups() {
     const std::vector<std::string> player = GroupedRows(rig, rig.add<engine_core::PlayerController>("Player"));
     Expect(!Has(player, "Behavior:GameObject"), "a PlayerController has no GameObject row");
     const std::vector<std::string> body = GroupedRows(rig, rig.add<engine_core::PhysicsObject>("Body"));
-    Expect(!Has(body, "Behavior:GameObject"), "a PhysicsObject has no GameObject row: a GameObject above it moves");
+    Expect(Has(body, "Behavior:GameObject"), "a PhysicsObject has its GameObject row, in Behavior");
     for (const std::vector<std::string>& sheet : {brush, player, body}) {
         Expect(Has(sheet, "Physics:CollisionGroup"), "every body has CollisionGroup, in Physics");
     }

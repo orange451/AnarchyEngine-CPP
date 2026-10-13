@@ -1,6 +1,6 @@
-// No body names the GameObject it moves: a PhysicsObject or a
-// PlayerController moves the GameObject it is under, a Brush is what it draws
-// and moves none, and any other link is a constraint's.
+// The GameObject field is a PhysicsObject's alone: a Brush is what it draws
+// and moves no GameObject, and a PlayerController moves only the GameObject
+// it is under.
 
 #include "physics_rig.hpp"
 #include "support.hpp"
@@ -36,8 +36,8 @@ bool has_field(const char* class_name, const char* field) {
 
 }  // namespace
 
-TEST_CASE("PG1 no body has a GameObject field", "[physics][gameobject]") {
-    REQUIRE_FALSE(has_field("PhysicsObject", "GameObject"));
+TEST_CASE("PG1 only a PhysicsObject has a GameObject field", "[physics][gameobject]") {
+    REQUIRE(has_field("PhysicsObject", "GameObject"));
     REQUIRE_FALSE(has_field("PhysicsBase", "GameObject"));
     REQUIRE_FALSE(has_field("Brush", "GameObject"));
     REQUIRE_FALSE(has_field("PlayerController", "GameObject"));
@@ -67,7 +67,7 @@ TEST_CASE("PG3 a PlayerController moves the GameObject it is under", "[physics][
     REQUIRE(player.driven_game_object() == character.id());
 }
 
-TEST_CASE("PG4 an old file's GameObject link on any body is kept aside and links nothing",
+TEST_CASE("PG4 an old file's GameObject link on a Brush or a PlayerController is kept aside and links nothing",
           "[physics][gameobject]") {
     PhysicsRig rig;
     GameObject& part = create_part(rig.game);
@@ -82,12 +82,12 @@ TEST_CASE("PG4 an old file's GameObject link on any body is kept aside and links
     REQUIRE(error.empty());
     REQUIRE(brush.driven_game_object() == 0);
     REQUIRE(player.driven_game_object() == 0);
-    // Nor does a PhysicsObject, which once took it.
+    // A PhysicsObject still takes it.
     engine_core::PhysicsObject& body = rig.game.create<engine_core::PhysicsObject>();
     rig.game.set_parent(body.id(), workspace_of(rig.game));
-    REQUIRE_FALSE(body.load_property("GameObject", link, error));
+    REQUIRE(body.load_property("GameObject", link, error));
     REQUIRE(error.empty());
-    REQUIRE(body.driven_game_object() == 0);
+    REQUIRE(body.driven_game_object() == part.id());
 }
 
 TEST_CASE("PG5 a turned body under a scaled GameObject keeps its Transform bit for bit, session after session",

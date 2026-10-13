@@ -247,6 +247,7 @@ DataModel& create_sound(DataModel& world) { return world.create<Sound>(); }
 DataModel& create_animation(DataModel& world) { return world.create<Animation>(); }
 DataModel& create_material(DataModel& world) { return world.create<Material>(); }
 DataModel& create_model(DataModel& world) { return world.create<Model>(); }
+DataModel& create_lod_layer(DataModel& world) { return world.create<LodLayer>(); }
 DataModel& create_prefab(DataModel& world) { return world.create<Prefab>(); }
 DataModel& create_terrain(DataModel& world) { return world.create<Terrain>(); }
 DataModel& create_brush(DataModel& world) { return world.create<Brush>(); }
@@ -310,6 +311,7 @@ ANARCHY_LUA_REGISTER(register_creatable_instances) {
     register_lua_creatable("Animation", create_animation);
     register_lua_creatable("Material", create_material);
     register_lua_creatable("Model", create_model);
+    register_lua_creatable("LodLayer", create_lod_layer);
     register_lua_creatable("Prefab", create_prefab);
     register_lua_creatable("Terrain", create_terrain);
     register_lua_creatable("Brush", create_brush);

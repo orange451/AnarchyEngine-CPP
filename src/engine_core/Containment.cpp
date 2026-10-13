@@ -73,7 +73,7 @@ std::string service_guid(std::string_view class_name) {
 }
 
 const char* asset_home(std::string_view class_name) {
-    if (class_name == "Model") {
+    if (class_name == "Model" || class_name == "LodLayer") {
         return "Prefab";
     }
     for (const Category& category : kCategories) {
@@ -119,10 +119,16 @@ std::optional<std::string> placement_error(std::string_view holder_class, std::s
         return std::string(category->service) + " holds " + category->plural + " and Folders";
     }
     if (holder_class == "Prefab") {
+        if (child_class == "Model" || child_class == "LodLayer") {
+            return std::nullopt;
+        }
+        return std::string("A Prefab holds only Models and LodLayers");
+    }
+    if (holder_class == "LodLayer") {
         if (child_class == "Model") {
             return std::nullopt;
         }
-        return std::string("A Prefab holds only Models");
+        return std::string("A LodLayer holds only Models");
     }
     if (child_class == "TerrainMaterial" && holder_class != "Terrain") {
         return std::string("A TerrainMaterial must be in a Terrain");

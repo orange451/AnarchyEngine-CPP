@@ -111,6 +111,12 @@ const EnumType& shading_model_enum();
 enum class ShadingModel { Standard = 0, Fast = 1 };
 // The asset class an AssetPicker lists: Material 0, Prefab 1, Texture 2, Mesh 3, Sound 4, Model 5.
 const EnumType& asset_type_enum();
+// What a Prefab's LodLayer draws from its Distance on: Model 0, its own
+// Models; Billboard 1, a quad of its Texture turned to face the camera; None
+// 2, nothing. LodLayer.Kind.
+const EnumType& lod_kind_enum();
+// lod_kind_enum's items, by value.
+enum class LodKind { Model = 0, Billboard = 1, None = 2 };
 
 // Every type the Enum global holds, for script analysis to declare.
 int enum_type_count();

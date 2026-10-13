@@ -9,17 +9,18 @@ Connection::Connection(double bytes_per_second, double send_interval)
     : flow_(bytes_per_second), send_interval_(send_interval) {}
 
 std::size_t Connection::payload_budget(double now) const {
-    const std::size_t due = reliable_.bytes_due(now, rtt());
+    // At most one packet's share of the reliable backlog, so a block in flight
+    // cannot starve the payload.
+    const std::size_t due = std::min(reliable_.bytes_due(now, rtt()), kFragmentBytes + 16);
     // One byte stays for the section's terminating bit.
     const std::size_t room = kMaxPayloadBytes - 1;
     const std::size_t space = due >= room ? 0 : room - due;
-    const double tick = flow_.bytes_per_second() * send_interval_;
-    const std::size_t by_rate = tick > static_cast<double>(due) ? static_cast<std::size_t>(tick - static_cast<double>(due)) : 0;
+    const std::size_t by_rate = static_cast<std::size_t>(flow_.bytes_per_second() * send_interval_);
     return std::min(space, by_rate);
 }
 
 std::optional<std::uint16_t> Connection::set_payload(const std::uint8_t* bytes, std::size_t length, std::uint32_t tag) {
-    if (has_payload_ || length > kMaxPayloadBytes - 1) return std::nullopt;
+    if (has_payload_ || length == 0 || length > kMaxPayloadBytes - 1) return std::nullopt;
     if (length > 0) std::memcpy(payload_, bytes, length);
     payload_length_ = static_cast<std::uint16_t>(length);
     payload_tag_ = tag;
@@ -28,7 +29,7 @@ std::optional<std::uint16_t> Connection::set_payload(const std::uint8_t* bytes, 
 }
 
 bool Connection::wants_packet(double now) const {
-    return has_payload_ || reliable_.has_due(now, rtt()) || last_send_ < 0.0 || now - last_send_ >= 0.1;
+    return has_payload_ || reliable_.has_due(now, rtt()) || last_send_ < 0.0 || now - last_send_ >= 0.1 - 1e-9;
 }
 
 std::size_t Connection::write_packet(std::uint8_t* out, std::size_t capacity, double now) {
@@ -82,11 +83,14 @@ bool Connection::read_packet(const PacketHeader& header, BitReader& reader, cons
     ++stats_.packets_received;
     account(in_window_bytes_, in_rate_, in_window_start_, length, now);
     flow_.update(now, rtt(), ring_.loss(now, loss_timeout()));
-    if (offset < length && callbacks.on_payload) callbacks.on_payload(header.sequence, bytes + offset, length - offset);
+    // Messages first: a "create instance" message lands before that instance's state.
     if (callbacks.on_message) {
         reliable_.deliver(callbacks.on_message);
     } else {
         reliable_.deliver([](const std::uint8_t*, std::size_t) {});
+    }
+    if (header.type == PacketType::Payload && offset < length && callbacks.on_payload) {
+        callbacks.on_payload(header.sequence, bytes + offset, length - offset);
     }
     return true;
 }

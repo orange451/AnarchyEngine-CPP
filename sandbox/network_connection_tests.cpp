@@ -10,6 +10,7 @@
 
 #include <cstdint>
 #include <cstring>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -95,6 +96,7 @@ TEST_CASE("N46 a quiet connection wants a keep-alive every 100 ms and nothing so
     REQUIRE(static_cast<PacketType>(buffer[2]) == PacketType::KeepAlive);
     REQUIRE_FALSE(a.c.wants_packet(0.05));
     REQUIRE(a.c.wants_packet(0.1));
+    REQUIRE(a.c.wants_packet(6.0 / 60.0));
     const std::uint8_t byte = 1;
     a.c.send_message(&byte, 1);
     REQUIRE(a.c.wants_packet(0.0));   // a message is due at once
@@ -136,8 +138,12 @@ TEST_CASE("N49 the payload budget is the tick's share of the rate, less what the
     REQUIRE(a.c.payload_budget(0.0) == 533);   // 32000 / 60
     std::vector<std::uint8_t> message(100, 1);
     a.c.send_message(message.data(), message.size());
-    REQUIRE(a.c.payload_budget(0.0) < 533);
-    REQUIRE(a.c.payload_budget(0.0) >= 533 - 110);
+    REQUIRE(a.c.payload_budget(0.0) == 533);   // min(1186 - 107, 533)
+    Peer blocked;
+    std::vector<std::uint8_t> block(100 * 1024, 3);
+    REQUIRE(blocked.c.send_message(block.data(), block.size()));
+    REQUIRE(blocked.c.payload_budget(0.0) > 0);
+    REQUIRE(blocked.c.payload_budget(0.0) <= 1186 - 1000);
     Connection fast(10'000'000.0, 1.0 / 60.0);
     REQUIRE(fast.payload_budget(0.0) == network::kMaxPayloadBytes - 1);
 }
@@ -174,4 +180,16 @@ TEST_CASE("N51 a payload keeps its room beside a full reliable section, and over
     REQUIRE(b.messages[0] == big);
     std::vector<std::uint8_t> huge(network::kMaxPayloadBytes + 1, 0);
     REQUIRE_FALSE(a.c.set_payload(huge.data(), huge.size(), 3).has_value());
+}
+
+TEST_CASE("N51b a packet's reliable messages land before its payload", "[network][connection]") {
+    Peer a, b;
+    std::string order;
+    b.c.callbacks.on_message = [&](const std::uint8_t*, std::size_t) { order += "m"; };
+    b.c.callbacks.on_payload = [&](std::uint16_t, const std::uint8_t*, std::size_t) { order += "p"; };
+    const std::uint8_t byte = 1;
+    REQUIRE(a.c.send_message(&byte, 1));
+    REQUIRE(a.c.set_payload(&byte, 1, 0).has_value());
+    exchange(a, b, 0.0);
+    REQUIRE(order == "mp");
 }

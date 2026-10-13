@@ -44,8 +44,9 @@ public:
     std::uint16_t session() const { return session_; }
 
     bool send_message(const std::uint8_t* bytes, std::size_t length) { return reliable_.send(bytes, length); }
-    // Payload bytes this tick's packet may carry: the rate's share of a tick,
-    // less what the reliable channel is due to send, never more than fits.
+    // Payload bytes this tick's packet may carry: the rate's share of a tick
+    // (the reliable section is not rate-limited by it), less at most one
+    // packet's share of the reliable backlog, never more than fits.
     std::size_t payload_budget(double now) const;
     // This tick's unreliable payload, once; returns the sequence it will ride in.
     std::optional<std::uint16_t> set_payload(const std::uint8_t* bytes, std::size_t length, std::uint32_t tag);

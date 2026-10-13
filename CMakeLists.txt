@@ -586,6 +586,20 @@ target_compile_features(profiler PUBLIC cxx_std_17)
 find_package(Threads REQUIRED)
 target_link_libraries(profiler PUBLIC Threads::Threads)
 
+# anarchy_network moves bytes between a server and its clients over UDP
+# (docs/superpowers/specs/2026-10-12-network-transport-design.md). It knows
+# nothing about instances or physics and never includes engine_core. The
+# resources hash in the handshake is zstd's bundled XXH64.
+add_library(anarchy_network STATIC
+    src/network/Bits.cpp
+)
+target_include_directories(anarchy_network PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src/network")
+target_compile_features(anarchy_network PUBLIC cxx_std_17)
+target_link_libraries(anarchy_network PRIVATE zstd)
+if(WIN32)
+    target_link_libraries(anarchy_network PUBLIC ws2_32)
+endif()
+
 add_library(engine_datatypes STATIC
     src/engine_datatypes/Color3.cpp
     src/engine_datatypes/Curve.cpp
@@ -1171,8 +1185,9 @@ add_executable(sandbox
     sandbox/aanim_tests.cpp
     sandbox/animation_tests.cpp
     sandbox/animator_tests.cpp
+    sandbox/network_bits_tests.cpp
 )
-target_link_libraries(sandbox PRIVATE studio_core Catch2::Catch2WithMain)
+target_link_libraries(sandbox PRIVATE studio_core anarchy_network Catch2::Catch2WithMain)
 # The dense views tests check flecs state the engine keeps private.
 target_link_libraries(sandbox PRIVATE flecs)
 # The cylinder tests call Box3D directly (src/cylinder.c in the Box3D fork).

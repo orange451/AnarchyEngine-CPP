@@ -67,6 +67,14 @@ public:
     // returns why and changes nothing. Otherwise empty.
     std::optional<std::string> set_gravity(double value);
 
+    // The most particles every ParticleEmitter in Workspace may have alive at
+    // once. Over it, the emitters farthest from the camera spawn fewer first;
+    // live particles are never removed. Refuses a value that is not a whole
+    // number, 0 or more.
+    static constexpr int kDefaultParticleBudget = 20000;
+    int particle_budget() const { return particle_budget_; }
+    std::optional<std::string> set_particle_budget(double value);
+
     // Notes a change to the collision groups, as save_text gave them before
     // and after (CollisionGroupEdits.hpp calls it): undo, Changed, and an
     // unsaved place, as any saved property's setter does.
@@ -75,6 +83,7 @@ public:
 private:
     InstanceId current_camera_ = 0;
     double gravity_ = kDefaultGravity;
+    int particle_budget_ = kDefaultParticleBudget;
 };
 
 // Assets a place keeps to use at runtime. Nothing here renders or runs.

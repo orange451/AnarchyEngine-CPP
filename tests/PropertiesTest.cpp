@@ -21,6 +21,7 @@
 #include "PlayerController.hpp"
 #include "Enum.hpp"
 #include "Script.hpp"
+#include "ParticleEmitter.hpp"
 #include "SoundEmitter.hpp"
 #include "jadefx/jadefx.hpp"
 
@@ -1375,6 +1376,47 @@ void TestInstanceDragIds() {
 
 // PhysicsObject's Shape is an Enum row, a dropdown of Enum.PhysicsShape's
 // items, and its Mesh row shows only while Shape is Hull.
+// A ParticleEmitter's curve rows show, its rules hide and grey rows, and a
+// greyed row cannot be edited from the panel.
+void TestParticleEmitterRows() {
+    Rig rig;
+    const InstanceId emitter = rig.add<engine_core::ParticleEmitter>("Emitter");
+    rig.select({emitter});
+    rig.frame();
+    const ide::PropertyRow* rate = rig.panel.sheet().find("Rate");
+    Expect(rate != nullptr && rate->value.text == "20", "a NumberCurve row shows its constant");
+    const ide::PropertyRow* lifetime = rig.panel.sheet().find("Lifetime");
+    Expect(lifetime != nullptr && lifetime->value.text == "1 - 2", "a range shows its ends");
+    const ide::PropertyRow* bursts = rig.panel.sheet().find("Bursts");
+    Expect(bursts != nullptr && bursts->value.text == "None", "an empty burst list says so");
+    Expect(rig.hasRow("Color"), "a ColorCurve row shows");
+    Expect(!rig.hasRow("FlipbookGrid"), "a Static texture hides FlipbookGrid");
+    Expect(!rig.hasRow("FacingAxis"), "Camera facing hides FacingAxis");
+    Expect(rig.hasRow("Bounciness"), "Bounciness shows for Bounce");
+    const ide::PropertyRow* from = rig.panel.sheet().find("EmitFrom");
+    Expect(from != nullptr && !from->enabled && !from->writable,
+           "EmitFrom is greyed while the emitter emits from a point (a Workspace parent)");
+    const ide::PropertyRow* group = rig.panel.sheet().find("CollisionGroup");
+    Expect(group != nullptr && !group->enabled, "CollisionGroup is greyed unless Collision is World");
+    const ide::PropertyRow* inherit = rig.panel.sheet().find("InheritVelocity");
+    Expect(inherit != nullptr && inherit->enabled && inherit->writable, "InheritVelocity is live in World space");
+
+    // Under a PhysicsObject, the shape has a size: EmitFrom comes alive.
+    const InstanceId body = rig.add<engine_core::PhysicsObject>("Body");
+    rig.game.set_parent(emitter, body);
+    ide::PropertyEdit collide;
+    collide.property = "Collision";
+    collide.kind = ide::PropertyKind::Enum;
+    collide.value.number = static_cast<int>(engine_core::ParticleCollision::World);
+    Expect(ide::apply_edit(rig.game, {emitter}, collide).written == 1, "Collision takes World");
+    rig.frame();
+    rig.frame();
+    from = rig.panel.sheet().find("EmitFrom");
+    Expect(from != nullptr && from->enabled && from->writable, "EmitFrom is live in a sized parent");
+    group = rig.panel.sheet().find("CollisionGroup");
+    Expect(group != nullptr && group->enabled, "CollisionGroup is live for World collision");
+}
+
 void TestEnumRowAndShownWhen() {
     Rig rig;
     const InstanceId body = rig.add<engine_core::PhysicsObject>("Body");
@@ -1963,6 +2005,7 @@ int main() {
     TestAssetPreview();
     TestSoundPreviewStops();
     TestEnumRowAndShownWhen();
+    TestParticleEmitterRows();
     TestCollisionGroupDropdown();
     TestAssetReferencePicker();
     TestR1SingleSelectionEditsName();

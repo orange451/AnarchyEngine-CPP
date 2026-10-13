@@ -611,6 +611,7 @@ add_library(engine_instances STATIC
     src/engine_instances/DynamicSky.cpp
     src/engine_instances/Skybox.cpp
     src/engine_instances/SoundEmitter.cpp
+    src/engine_instances/ParticleEmitter.cpp
     src/engine_instances/Attachment.cpp
     src/engine_instances/Bone.cpp
     src/engine_instances/Animator.cpp
@@ -655,6 +656,7 @@ add_library(engine_core STATIC
     src/engine_core/InstanceFile.cpp
     src/engine_core/PropertyReflection.cpp
     src/engine_core/CurveJson.cpp
+    src/engine_core/ParticleBursts.cpp
     src/engine_core/InstanceRef.cpp
     src/engine_core/LuaReflect.cpp
     src/engine_core/ScriptBindings.cpp
@@ -1077,6 +1079,7 @@ add_executable(sandbox
     sandbox/bloom_tests.cpp
     sandbox/value_tests.cpp
     sandbox/curve_tests.cpp
+    sandbox/particle_emitter_tests.cpp
     sandbox/physics_tests.cpp
     sandbox/pose_blend_tests.cpp
     sandbox/physics_game_object_tests.cpp

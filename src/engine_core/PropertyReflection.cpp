@@ -1,6 +1,7 @@
 #include "PropertyReflection.hpp"
 
 #include "CurveJson.hpp"
+#include "ParticleBursts.hpp"
 #include "DataModel.hpp"
 #include "Enum.hpp"
 #include "LuaApi.hpp"
@@ -33,6 +34,11 @@ bool slot_to_json(const LuaSlot& slot, std::string_view type, JsonValue& out) {
         out = JsonValue::boolean(slot.flag);
     } else if (type == "string" && slot.kind == LuaSlot::Kind::String) {
         out = JsonValue::string(slot.text);
+    } else if (type == "ParticleBursts" && slot.kind == LuaSlot::Kind::String) {
+        std::string why;
+        if (!parse_json(slot.text.empty() ? "[]" : slot.text, out, why)) {
+            return false;
+        }
     } else if (type == "NumberCurve" && slot.kind == LuaSlot::Kind::NumberCurve && slot.number_curve) {
         out = number_curve_to_json(*slot.number_curve);
     } else if (type == "ColorCurve" && slot.kind == LuaSlot::Kind::ColorCurve && slot.color_curve) {
@@ -91,6 +97,14 @@ bool slot_from_json(const JsonValue& value, std::string_view type, const char* n
         }
         out.kind = LuaSlot::Kind::String;
         out.text = value.as_string();
+    } else if (type == "ParticleBursts") {
+        std::string why;
+        auto bursts = bursts_from_json(value, why);
+        if (!bursts) {
+            error = label + " " + why;
+            return false;
+        }
+        out = bursts_slot(*bursts);
     } else if (type == "NumberCurve") {
         std::string why;
         auto curve = number_curve_from_json(value, why);

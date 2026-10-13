@@ -49,6 +49,10 @@ const char* IconFileOverride(const std::string& class_name) {
     if (class_name == "SpotLight") {
         return "LightSpot.png";
     }
+    // A flame, for what it emits.
+    if (class_name == "ParticleEmitter") {
+        return "fire.png";
+    }
     // A speaker, as the Sound it plays has.
     if (class_name == "SoundEmitter") {
         return "Sound.png";

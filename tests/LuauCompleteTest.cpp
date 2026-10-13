@@ -1223,7 +1223,7 @@ void testInsertFilter() {
         "DynamicSky", "Skybox",
         "AmbientOcclusionEffect", "BloomEffect", "ScreenSpaceReflections",
         "DirectionalLight", "PointLight", "SpotLight",
-        "Sound", "SoundEmitter",
+        "ParticleEmitter", "Sound", "SoundEmitter",
         "Animator", "Attachment", "Bone", "DistanceConstraint", "NoCollisionConstraint", "PrismaticConstraint",
         "RevoluteConstraint", "RigidConstraint", "SphericalConstraint", "WeldConstraint", "WheelConstraint",
         "BillboardGui", "ScreenGui",

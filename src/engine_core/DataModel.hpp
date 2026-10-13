@@ -200,6 +200,9 @@ public:
     // True for a class the audio world plays while it is under game
     // (SoundEmitter). Read once, when its entity is issued.
     virtual bool sound_source() const { return false; }
+    // True for a class the particle world simulates while it is in Workspace
+    // (ParticleEmitter). Read once, when its entity is issued.
+    virtual bool particle_emitter() const { return false; }
     // True for a class DraggerWorld drives while it is under game (Dragger).
     // Read once, when its entity is issued.
     virtual bool dragger() const { return false; }

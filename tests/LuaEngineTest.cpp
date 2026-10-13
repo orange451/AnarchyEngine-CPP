@@ -261,6 +261,35 @@ void expectChunkError(runner::Runner& runner, const char* source, const char* ne
 }
 
 // Roblox's Color3: constructors, channels, conversions, and a Color property taking one.
+void testParticleEmitterLua() {
+    runner::Runner runner;
+    runner.start();
+    expectPrinted(runner,
+                  "local e = Instance.new('ParticleEmitter') e.Rate = 50 e.Color = Color3.new(1, 0, 0) "
+                  "print(e.Rate.Mode, e.Rate:Evaluate(0), e.Color.Mode, e.MaxParticles, e.Shape.Name)",
+                  "Constant\t50\tConstant\t1000\tBox", "numbers and Color3s become Constant curves");
+    expectPrinted(runner,
+                  "local e = Instance.new('ParticleEmitter') e.Size = NumberCurve.keys({{0, 0}, {1, 2, 'Smooth'}}) "
+                  "print(e.Size.Mode, #e.Size.Keys)",
+                  "Curve\t2", "a NumberCurve writes and reads back");
+    expectChunkError(runner, "Instance.new('ParticleEmitter').Duration = 0", "Duration", "Duration must be above 0");
+    expectChunkError(runner, "Instance.new('ParticleEmitter').Rate = NumberCurve.new(-1)", "negative",
+                     "a negative Rate is refused");
+    expectChunkError(runner, "Instance.new('ParticleEmitter').Rate = 'fast'", "NumberCurve",
+                     "a string is not a NumberCurve");
+    expectPrinted(runner,
+                  "local e = Instance.new('ParticleEmitter') "
+                  "e.Bursts = {{Time = 1, Count = NumberCurve.range(2, 4)}, {Time = 0, Count = 50}} "
+                  "print(#e.Bursts, e.Bursts[1].Count:Evaluate(0), e.Bursts[2].Count.Mode, e.Bursts[2].Time)",
+                  "2\t50\tRange\t1", "Bursts read and write as tables, sorted by time");
+    expectChunkError(runner, "Instance.new('ParticleEmitter').Bursts = {{Time = -1, Count = 1}}", "Time",
+                     "a negative burst Time is refused");
+    expectChunkError(runner, "Instance.new('ParticleEmitter').Bursts = {{Time = 0}}", "Count",
+                     "a burst needs a Count");
+    expectPrinted(runner, "print(workspace.ParticleBudget)", "20000", "Workspace.ParticleBudget");
+    runner.stop();
+}
+
 void testParticleEnums() {
     runner::Runner runner;
     runner.start();
@@ -533,6 +562,7 @@ int main() {
         testColor3();
         testCurves();
         testParticleEnums();
+        testParticleEmitterLua();
         testMatrix4();
         testContextActions();
         testInsertInstance();

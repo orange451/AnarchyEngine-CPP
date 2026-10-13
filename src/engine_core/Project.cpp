@@ -29,6 +29,7 @@
 #include "ScreenSpaceReflections.hpp"
 #include "SelectionService.hpp"
 #include "Skybox.hpp"
+#include "ParticleEmitter.hpp"
 #include "SoundEmitter.hpp"
 #include "Script.hpp"
 #include "Brush.hpp"
@@ -158,6 +159,8 @@ std::vector<ClassEntry>& class_registry() {
             {"PlayerController", [](DataModel& world) -> DataModel& { return world.create<PlayerController>(); }});
         out.push_back(
             {"SoundEmitter", [](DataModel& world) -> DataModel& { return world.create<SoundEmitter>(); }});
+        out.push_back(
+            {"ParticleEmitter", [](DataModel& world) -> DataModel& { return world.create<ParticleEmitter>(); }});
         out.push_back({"Attachment", [](DataModel& world) -> DataModel& { return world.create<Attachment>(); }});
         out.push_back(
             {"WeldConstraint", [](DataModel& world) -> DataModel& { return world.create<WeldConstraint>(); }});

@@ -11,6 +11,8 @@
 #include "Contract.hpp"
 #include "CurveJson.hpp"
 #include "CurveLua.hpp"
+#include "ParticleBursts.hpp"
+#include "ParticleEmitter.hpp"
 #include "DynamicSky.hpp"
 #include "Enum.hpp"
 #include "Folder.hpp"
@@ -206,6 +208,7 @@ DataModel& create_physics_object(DataModel& world) { return world.create<Physics
 DataModel& create_player_controller(DataModel& world) { return world.create<PlayerController>(); }
 
 DataModel& create_sound_emitter(DataModel& world) { return world.create<SoundEmitter>(); }
+DataModel& create_particle_emitter(DataModel& world) { return world.create<ParticleEmitter>(); }
 DataModel& create_attachment(DataModel& world) { return world.create<Attachment>(); }
 DataModel& create_bone(DataModel& world) { return world.create<Bone>(); }
 DataModel& create_animator(DataModel& world) { return world.create<Animator>(); }
@@ -269,6 +272,7 @@ ANARCHY_LUA_REGISTER(register_creatable_instances) {
     register_lua_creatable("PhysicsObject", create_physics_object);
     register_lua_creatable("PlayerController", create_player_controller);
     register_lua_creatable("SoundEmitter", create_sound_emitter);
+    register_lua_creatable("ParticleEmitter", create_particle_emitter);
     register_lua_creatable("Attachment", create_attachment);
     register_lua_creatable("Bone", create_bone);
     register_lua_creatable("Animator", create_animator);
@@ -512,6 +516,10 @@ int ScriptBindings::instance_index(lua_State* state) {
             lua_pushnil(state);
             return 1;
         }
+        if (field->type_name != nullptr && std::strcmp(field->type_name, "ParticleBursts") == 0) {
+            push_bursts(state, slot.text);
+            return 1;
+        }
         push_registered(state, runtime, slot, object->id(), ud->world);
         return 1;
     });
@@ -585,6 +593,12 @@ int ScriptBindings::instance_newindex(lua_State* state) {
                 luaL_error(state, "%s expects a Color3", field->name);
             }
             slot.kind = LuaSlot::Kind::Color;
+        } else if (type == "ParticleBursts") {
+            std::string error;
+            slot.kind = LuaSlot::Kind::String;
+            if (!read_bursts(state, 3, slot.text, error)) {
+                luaL_error(state, "%s", error.c_str());
+            }
         } else if (type == "NumberCurve") {
             // A number is a Constant, so `emitter.Rate = 50` works.
             auto curve = to_number_curve(state, 3);

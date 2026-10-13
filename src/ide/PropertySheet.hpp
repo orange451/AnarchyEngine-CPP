@@ -79,6 +79,9 @@ struct PropertyRow {
     std::vector<std::string> choices;
     std::string choices_more;
     bool writable = false;
+    // False while the field's enabled_when rule fails for any selected
+    // instance: the row shows, greyed, and writable is false too.
+    bool enabled = true;
     bool mixed = false;
     bool axis_mixed[kTransformParts] = {false, false, false, false, false, false};
     PropertyValue value;

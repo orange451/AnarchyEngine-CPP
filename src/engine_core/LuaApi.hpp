@@ -109,6 +109,10 @@ struct LuaField {
     // and scriptable. See lua_shown_when.
     const char* shown_when = nullptr;
     std::uint32_t shown_when_items = 0;
+    // Properties shows the field disabled, visible but not editable, while this
+    // returns false; it is read each time the sheet is read. A display rule
+    // like shown_when: scripts still write the field. See lua_enabled_when.
+    bool (*enabled_when)(DataModel& world, DataModel& object) = nullptr;
     // Never a row in the Properties panel, though scripts, the command line,
     // and MCP read and write it. Archivable is one.
     bool hidden = false;
@@ -250,6 +254,13 @@ inline LuaField lua_shown_when(LuaField field, const char* property, std::initia
     for (int value : values) {
         field.shown_when_items |= 1u << value;
     }
+    return field;
+}
+
+// field, shown disabled in Properties while predicate(world, object) is false
+// (LuaField::enabled_when).
+inline LuaField lua_enabled_when(LuaField field, bool (*predicate)(DataModel& world, DataModel& object)) {
+    field.enabled_when = predicate;
     return field;
 }
 

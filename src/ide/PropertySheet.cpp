@@ -1,6 +1,7 @@
 #include "PropertySheet.hpp"
 
 #include "ChangeHistoryService.hpp"
+#include "ParticleBursts.hpp"
 #include "LuaApi.hpp"
 #include "PropertyBag.hpp"
 #include "PropertyReflection.hpp"
@@ -84,6 +85,39 @@ float& vec_part(engine_core::Vec3& vec, int axis) { return axis == 0 ? vec.x : a
 
 float vec_part(const engine_core::Vec3& vec, int axis) { return axis == 0 ? vec.x : axis == 1 ? vec.y : vec.z; }
 
+// A NumberCurve in a few characters: "5", "1 - 3", "Curve (3 keys)", or "Curve range".
+std::string curve_summary(const engine_core::NumberCurve& curve) {
+    using Mode = engine_core::NumberCurveMode;
+    switch (curve.mode()) {
+    case Mode::Constant:
+        return format_number(curve.min());
+    case Mode::Range:
+        return format_number(curve.min()) + " - " + format_number(curve.max());
+    case Mode::Curve:
+        return "Curve (" + std::to_string(curve.keys_a().size()) + " keys)";
+    case Mode::CurveRange:
+        return "Curve range";
+    }
+    return std::string();
+}
+
+std::string color_curve_summary(const engine_core::ColorCurve& curve) {
+    using Mode = engine_core::ColorCurveMode;
+    switch (curve.mode()) {
+    case Mode::Constant: {
+        const engine_core::ColorKey& key = curve.keys_a()[0];
+        return format_float(key.color.r) + ", " + format_float(key.color.g) + ", " + format_float(key.color.b);
+    }
+    case Mode::RandomBetween:
+        return "Random between two";
+    case Mode::Gradient:
+        return "Gradient (" + std::to_string(curve.keys_a().size()) + " keys)";
+    case Mode::GradientRange:
+        return "Gradient range";
+    }
+    return std::string();
+}
+
 bool read_value(DataModel& world, DataModel& object, const LuaField& field, PropertyKind kind, PropertyValue& out) {
     LuaSlot slot;
     if (!field.read(world, object, slot)) {
@@ -129,7 +163,20 @@ bool read_value(DataModel& world, DataModel& object, const LuaField& field, Prop
         out.ref = slot.id;
         return slot.kind == LuaSlot::Kind::Instance;
     case PropertyKind::ReadOnlyText:
+        if (field.type_name != nullptr && std::string_view(field.type_name) == "ParticleBursts") {
+            std::string error;
+            const auto bursts = engine_core::bursts_from_slot(slot, error);
+            const std::size_t count = bursts ? bursts->size() : 0;
+            out.text = count == 0 ? "None" : count == 1 ? "1 burst" : std::to_string(count) + " bursts";
+            return true;
+        }
         switch (slot.kind) {
+        case LuaSlot::Kind::NumberCurve:
+            out.text = slot.number_curve ? curve_summary(*slot.number_curve) : std::string();
+            return true;
+        case LuaSlot::Kind::ColorCurve:
+            out.text = slot.color_curve ? color_curve_summary(*slot.color_curve) : std::string();
+            return true;
         case LuaSlot::Kind::Color:
             out.text = format_float(slot.color.r) + ", " + format_float(slot.color.g) + ", " +
                        format_float(slot.color.b);
@@ -271,8 +318,8 @@ std::vector<InstanceId> instance_drag_ids(std::string_view text) {
 }
 
 bool PropertyRow::operator==(const PropertyRow& other) const {
-    if (!same_slot(other) || writable != other.writable || mixed != other.mixed || label != other.label ||
-        path != other.path || choices != other.choices || choices_more != other.choices_more) {
+    if (!same_slot(other) || writable != other.writable || enabled != other.enabled || mixed != other.mixed ||
+        label != other.label || path != other.path || choices != other.choices || choices_more != other.choices_more) {
         return false;
     }
     for (int axis = 0; axis < kTransformParts; ++axis) {
@@ -324,6 +371,9 @@ bool property_kind_for(const std::string& type_name, PropertyKind& out) {
         out = PropertyKind::Transform;
     } else if (type_name == "EnumItem") {
         out = PropertyKind::Enum;
+    } else if (type_name == "NumberCurve" || type_name == "ColorCurve" || type_name == "ParticleBursts") {
+        // Shown as a summary until the curve editors take them.
+        out = PropertyKind::ReadOnlyText;
     } else {
         return false;
     }
@@ -401,6 +451,10 @@ PropertySheet read_sheet(DataModel& world, const std::vector<InstanceId>& select
                 break;
             }
             row.writable = row.writable && own->writable && own->write != nullptr;
+            if (own->enabled_when != nullptr && !own->enabled_when(world, *object)) {
+                row.enabled = false;
+                row.writable = false;
+            }
             // Classes that disagree on the range get a plain field.
             if (own->slider_min != row.slider_min || own->slider_max != row.slider_max) {
                 row.slider_min = 0;

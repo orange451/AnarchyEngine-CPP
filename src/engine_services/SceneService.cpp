@@ -71,6 +71,23 @@ std::optional<std::string> Workspace::set_gravity(double value) {
     return std::nullopt;
 }
 
+std::optional<std::string> Workspace::set_particle_budget(double value) {
+    if (!on_gameplay_thread()) {
+        contract_fail("Workspace setters run on SimulationThread");
+    }
+    if (!std::isfinite(value) || value < 0.0 || value != std::floor(value) || value > 1.0e9) {
+        return std::string("ParticleBudget must be a whole number, 0 or more");
+    }
+    const int next = static_cast<int>(value);
+    if (particle_budget_ == next) {
+        return std::nullopt;
+    }
+    const int previous = particle_budget_;
+    particle_budget_ = next;
+    note_property_change("ParticleBudget", number_slot(previous), number_slot(next));
+    return std::nullopt;
+}
+
 void Workspace::note_collision_groups(std::string before, std::string after) {
     LuaSlot previous;
     previous.kind = LuaSlot::Kind::String;
@@ -127,6 +144,27 @@ bool read_gravity(DataModel&, DataModel& object, LuaSlot& out) {
     return true;
 }
 
+bool read_particle_budget(DataModel&, DataModel& object, LuaSlot& out) {
+    auto* workspace = dynamic_cast<Workspace*>(&object);
+    if (workspace == nullptr) {
+        return false;
+    }
+    out = number_slot(workspace->particle_budget());
+    return true;
+}
+
+bool write_particle_budget(DataModel&, DataModel& object, LuaSlot& in) {
+    auto* workspace = dynamic_cast<Workspace*>(&object);
+    if (workspace == nullptr) {
+        return false;
+    }
+    if (const auto error = workspace->set_particle_budget(in.number)) {
+        in.error = *error;
+        return false;
+    }
+    return true;
+}
+
 bool write_gravity(DataModel&, DataModel& object, LuaSlot& in) {
     auto* workspace = dynamic_cast<Workspace*>(&object);
     if (workspace == nullptr) {
@@ -175,6 +213,7 @@ ANARCHY_LUA_REGISTER(register_scene_service_lua) {
     const LuaField workspace[] = {
         lua_property("CurrentCamera", "Camera?", true, read_current_camera, write_current_camera),
         lua_saved_property("Gravity", "number", read_gravity, write_gravity, gravity.c_str()),
+        lua_saved_property("ParticleBudget", "number", read_particle_budget, write_particle_budget, "20000"),
         // Set through PhysicsService or the Collision Groups pane, not Properties.
         lua_hidden(lua_json_text(
             lua_saved_property("CollisionGroups", "string", read_collision_groups, write_collision_groups, "null"))),

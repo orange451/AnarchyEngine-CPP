@@ -1630,6 +1630,87 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
         "How long this Sound's file plays, in seconds. 0 when Path names no file that plays. Read-only.", "number",
         false, {});
 
+    {
+        // Each row: member, summary, type. Curves say what their time runs over.
+        const char* const emitter_docs[][3] = {
+            {"Playing", "Setting true starts a cycle from its beginning; false stops new particles, and live ones "
+                        "finish. A one-shot sets it false itself when its cycle ends.", "boolean"},
+            {"Rate", "Particles per second. A curve runs over one cycle (Duration); a Range is picked each cycle.",
+             "NumberCurve"},
+            {"Bursts", "Extra particles at set times in each cycle, as {Time, Count} rows; Count is a number or a "
+                       "Range.", "{any}"},
+            {"Duration", "The length of one cycle, in seconds, above 0.", "number"},
+            {"Looping", "When false, the emitter runs one cycle, then stops and fires Finished once its last "
+                        "particle dies.", "boolean"},
+            {"Prewarm", "A looping emitter starts as if one full cycle had already run.", "boolean"},
+            {"MaxParticles", "The most particles this emitter has alive at once. At it, new ones are skipped.",
+             "number"},
+            {"Seed", "0 gives a new random pattern each time it plays; any other number replays the same one.",
+             "number"},
+            {"Shape", "Where particles are born, sized by the parent: a PhysicsObject's or Brush's size, or a "
+                      "GameObject's Prefab. Any other parent is a point.", "EnumItem"},
+            {"EmitFrom", "Inside the shape, on its surface, or along its edges.", "EnumItem"},
+            {"Arc", "How much of the shape, in degrees around its up axis, particles are born from.", "number"},
+            {"EmitDirection", "The way particles fly when born.", "Vector3"},
+            {"EmitDirectionSpace", "Local turns EmitDirection with the parent; World keeps it fixed.", "EnumItem"},
+            {"EmitSpread", "Random spread around EmitDirection, in degrees, on two axes. (180, 180) is every "
+                           "direction; (90, 0) is a flat fan.", "Vector2"},
+            {"Lifetime", "Seconds each particle lives, above 0. A curve runs over one cycle.", "NumberCurve"},
+            {"EmitSpeed", "Speed at birth, in units per second. A curve runs over one cycle.", "NumberCurve"},
+            {"EmitRotation", "Spin angle at birth, in degrees. A curve runs over one cycle.", "NumberCurve"},
+            {"RotationSpeed", "Spin in degrees per second, picked at birth. A curve runs over one cycle.",
+             "NumberCurve"},
+            {"SimulationSpace", "World leaves particles where they were born; Local carries them with the parent.",
+             "EnumItem"},
+            {"InheritVelocity", "How much of the parent's assembly velocity, from 0 to 1, particles keep at birth.",
+             "number"},
+            {"Acceleration", "A constant push in units per second squared, such as gravity or wind.", "Vector3"},
+            {"AccelerationSpace", "Local turns Acceleration with the parent; World keeps it fixed.", "EnumItem"},
+            {"Drag", "Slows particles: each second they lose about Drag times their speed. A curve runs over each "
+                     "particle's life.", "NumberCurve"},
+            {"OrbitSpeed", "Swirl around the emitter in degrees per second. A curve runs over each particle's life.",
+             "NumberCurve"},
+            {"OrbitAxis", "The axis particles orbit around, in the parent's space.", "Vector3"},
+            {"Collision", "What particles hit: nothing, terrain, or terrain and physics bodies.", "EnumItem"},
+            {"CollisionResponse", "Whether a particle bounces, sticks, or dies when it hits.", "EnumItem"},
+            {"Bounciness", "How much speed away from the surface a bounce keeps, from 0 to 1.", "number"},
+            {"Friction", "How much sliding speed a bounce loses, from 0 to 1.", "number"},
+            {"CollisionGroup", "The collision group particles are in when they hit the world.", "string"},
+            {"Texture", "The particle's image. Without one, a soft round dot.", "Texture?"},
+            {"TextureMode", "Static draws the whole texture; Flipbook plays it as a sprite sheet over each "
+                            "particle's life.", "EnumItem"},
+            {"FlipbookGrid", "The sprite sheet's columns and rows.", "Vector2"},
+            {"Color", "Color and transparency over each particle's life.", "ColorCurve"},
+            {"Size", "Size in units over each particle's life.", "NumberCurve"},
+            {"Brightness", "Multiplies the color. Above 1, particles glow into bloom.", "number"},
+            {"Stretch", "Shape change at the same area: positive is taller, negative wider. A curve runs over each "
+                        "particle's life.", "NumberCurve"},
+            {"Facing", "Which way each particle's quad points.", "EnumItem"},
+            {"FacingAxis", "The way a World-facing particle's face points.", "Vector3"},
+            {"FacingAxisSpace", "Local turns FacingAxis with the parent; World keeps it fixed.", "EnumItem"},
+            {"VelocityStretch", "Extra length per unit of speed for Velocity facing.", "number"},
+            {"BlendMode", "Normal covers what is behind; Additive brightens it; Multiply darkens it.", "EnumItem"},
+            {"SoftEdge", "Units over which particles fade where they meet surfaces. 0 is off.", "number"},
+            {"LightInfluence", "How much the scene's lighting tints particles, from 0 to 1.", "number"},
+            {"DrawOrder", "Among overlapping see-through things, a higher DrawOrder draws on top.", "number"},
+            {"ParticleCount", "How many particles are alive. Read-only.", "number"},
+            {"Finished", "Fires when a non-looping emitter's cycle has ended and its last particle has died.",
+             "Signal"},
+        };
+        for (const auto& row : emitter_docs) {
+            add("ParticleEmitter", row[0], row[1], row[2], false, {});
+        }
+    }
+    add("ParticleEmitter", "Emit",
+        "Spawns count particles now, whether or not it is Playing. MaxParticles and Workspace.ParticleBudget still "
+        "apply.",
+        "nil", false, {P("count", "number")});
+    add("ParticleEmitter", "Clear", "Removes every live particle at once.", "nil", false, {});
+    add("Workspace", "ParticleBudget",
+        "The most particles every ParticleEmitter in Workspace may have alive at once. Over it, the emitters "
+        "farthest from the camera spawn fewer; live particles are never removed.",
+        "number", false, {});
+
     add("GuiBase", "ClassList", "CSS classes, separated by spaces, that a stylesheet's .class selectors match.",
         "string", false, {});
     add("GuiBase", "Style", "Inline CSS declarations, as an HTML style attribute. They win over stylesheets.",

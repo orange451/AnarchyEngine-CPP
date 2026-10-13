@@ -1,7 +1,7 @@
 #include "Endpoint.hpp"
 
 #include <algorithm>
-#include <chrono>
+#include <random>
 
 namespace network {
 
@@ -27,8 +27,8 @@ std::uint64_t read_u64(BitReader& reader) {
 Endpoint::Endpoint(std::unique_ptr<ISocket> socket, EndpointConfig config, EndpointCallbacks callbacks)
     : conditioner_(std::move(socket)), config_(std::move(config)), callbacks_(std::move(callbacks)),
       peers_(config_.role == Role::Server ? config_.max_peers : 1),
-      random_(static_cast<std::uint64_t>(std::chrono::steady_clock::now().time_since_epoch().count()) ^
-              reinterpret_cast<std::uintptr_t>(this)) {}
+      random_((static_cast<std::uint64_t>(std::random_device{}()) << 32 | std::random_device{}()) ^
+              static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(this))) {}
 
 Endpoint::Peer* Endpoint::find(const Address& address) {
     for (Peer& peer : peers_) {
@@ -116,7 +116,10 @@ void Endpoint::receive_as_server(const Address& from, const PacketHeader& header
                 // The same client did not get our accept: answer again. A
                 // different salt from a live address is someone else, or a
                 // restart; it waits until this peer is gone.
-                if (peer->client_salt == salt) send_accept(*peer);
+                if (peer->client_salt == salt) {
+                    peer->state_time = now;   // a sign of life, so a lost accept cannot time the peer out
+                    send_accept(*peer);
+                }
                 else ++stats_.dropped_unknown_peer;
                 return;
             }
@@ -195,12 +198,15 @@ void Endpoint::receive_as_client(const Address& from, const PacketHeader& header
             if (peer.state != ConnectionState::Connecting) return;
             const std::uint32_t reason = reader.bits(8);
             const std::uint32_t version_length = reader.bits(8);
-            if (reader.failed() || reason > static_cast<std::uint32_t>(DenyReason::WrongContent) || reader.bytes_left() < version_length) {
+            if (reader.failed() || reason == 0 || reason > static_cast<std::uint32_t>(DenyReason::WrongContent) || reader.bytes_left() < version_length) {
                 ++stats_.dropped_malformed;
                 return;
             }
-            denied_version_.resize(version_length);
-            reader.bytes(reinterpret_cast<std::uint8_t*>(denied_version_.data()), version_length);
+            denied_version_.clear();
+            if (reason == static_cast<std::uint32_t>(DenyReason::WrongVersion)) {
+                denied_version_.resize(version_length);
+                reader.bytes(reinterpret_cast<std::uint8_t*>(denied_version_.data()), version_length);
+            }
             drop_peer(0, DisconnectReason::Denied, static_cast<DenyReason>(reason));
             return;
         }
@@ -270,35 +276,35 @@ void Endpoint::send(double now) {
             continue;
         }
         if (peer.state == ConnectionState::Connected && peer.connection->wants_packet(now)) {
-            const std::size_t length = peer.connection->write_packet(buffer_, kMaxPacketBytes, now);
-            conditioner_.send(peer.address, buffer_, length);
+            const std::size_t length = peer.connection->write_packet(send_buffer_, kMaxPacketBytes, now);
+            conditioner_.send(peer.address, send_buffer_, length);
         }
     }
     if (conditioner_.failed()) fail_all();
 }
 
 void Endpoint::send_request(Peer& peer) {
-    BitWriter writer(buffer_, kMaxPacketBytes);
+    BitWriter writer(send_buffer_, kMaxPacketBytes);
     PacketHeader header;
     header.type = PacketType::ConnectRequest;
     write_header(writer, header);
     write_u64(writer, peer.client_salt);
     write_identity(writer, config_.identity);
-    conditioner_.send(peer.address, buffer_, encode_packet(buffer_, writer.bytes_written(), kMaxPacketBytes));
+    conditioner_.send(peer.address, send_buffer_, encode_packet(send_buffer_, writer.bytes_written(), kMaxPacketBytes));
 }
 
 void Endpoint::send_accept(const Peer& peer) {
-    BitWriter writer(buffer_, kMaxPacketBytes);
+    BitWriter writer(send_buffer_, kMaxPacketBytes);
     PacketHeader header;
     header.type = PacketType::ConnectAccept;
     write_header(writer, header);
     write_u64(writer, peer.client_salt);
     write_u64(writer, peer.server_salt);
-    conditioner_.send(peer.address, buffer_, encode_packet(buffer_, writer.bytes_written(), kMaxPacketBytes));
+    conditioner_.send(peer.address, send_buffer_, encode_packet(send_buffer_, writer.bytes_written(), kMaxPacketBytes));
 }
 
 void Endpoint::send_deny(const Address& to, DenyReason reason) {
-    BitWriter writer(buffer_, kMaxPacketBytes);
+    BitWriter writer(send_buffer_, kMaxPacketBytes);
     PacketHeader header;
     header.type = PacketType::ConnectDeny;
     write_header(writer, header);
@@ -306,17 +312,17 @@ void Endpoint::send_deny(const Address& to, DenyReason reason) {
     const std::size_t length = std::min<std::size_t>(config_.identity.version.size(), 255);
     writer.bits(static_cast<std::uint32_t>(length), 8);
     writer.bytes(reinterpret_cast<const std::uint8_t*>(config_.identity.version.data()), length);
-    conditioner_.send(to, buffer_, encode_packet(buffer_, writer.bytes_written(), kMaxPacketBytes));
+    conditioner_.send(to, send_buffer_, encode_packet(send_buffer_, writer.bytes_written(), kMaxPacketBytes));
 }
 
 void Endpoint::send_disconnect(const Peer& peer) {
-    BitWriter writer(buffer_, kMaxPacketBytes);
+    BitWriter writer(send_buffer_, kMaxPacketBytes);
     PacketHeader header;
     header.type = PacketType::Disconnect;
     header.session = peer.connection->session();
     write_header(writer, header);
-    const std::size_t length = encode_packet(buffer_, writer.bytes_written(), kMaxPacketBytes);
-    for (int i = 0; i < kDisconnectSends; ++i) conditioner_.send(peer.address, buffer_, length);
+    const std::size_t length = encode_packet(send_buffer_, writer.bytes_written(), kMaxPacketBytes);
+    for (int i = 0; i < kDisconnectSends; ++i) conditioner_.send(peer.address, send_buffer_, length);
 }
 
 ConnectionState Endpoint::state(PeerId id) const {

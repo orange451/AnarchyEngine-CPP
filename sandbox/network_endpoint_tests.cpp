@@ -385,3 +385,57 @@ TEST_CASE("N69 a socket that fails drops every peer with reason Socket", "[netwo
     REQUIRE(std::get<1>(server_log.disconnected[0]) == DisconnectReason::Socket);
     REQUIRE(server.peers().empty());
 }
+
+TEST_CASE("N69b a callback that disconnects another peer does not disturb the packet being read", "[network][endpoint]") {
+    network::LinkHub hub;
+    Log server_log;
+    Endpoint* server_ptr = nullptr;
+    double clock = 0.0;
+    std::vector<std::string> order;
+    EndpointCallbacks server_callbacks = server_log.callbacks();
+    server_callbacks.on_message = [&](PeerId peer, const std::uint8_t*, std::size_t) {
+        order.push_back("message");
+        if (peer == 0) server_ptr->disconnect(1, clock);
+    };
+    server_callbacks.on_payload = [&](PeerId peer, std::uint16_t sequence, const std::uint8_t* bytes, std::size_t length) {
+        order.push_back("payload");
+        server_log.payloads.emplace_back(peer, sequence, std::vector<std::uint8_t>(bytes, bytes + length));
+    };
+    EndpointConfig server_config;
+    server_config.identity = identity();
+    Endpoint server(hub.open(kServer), server_config, server_callbacks);
+    server_ptr = &server;
+    Log logs[2];
+    std::unique_ptr<Endpoint> clients[2];
+    for (int i = 0; i < 2; ++i) {
+        EndpointConfig config;
+        config.role = Role::Client;
+        config.identity = identity();
+        clients[i] = std::make_unique<Endpoint>(hub.open(client_address(i)), config, logs[i].callbacks());
+    }
+    auto tick = [&](double now) {
+        clock = now;
+        server.receive(now);
+        for (auto& c : clients) c->receive(now);
+        server.send(now);
+        for (auto& c : clients) c->send(now);
+    };
+    clients[0]->connect(kServer, 0.0);
+    clients[1]->connect(kServer, 0.0);
+    double now = 0.0;
+    for (int i = 0; i < 12; ++i) tick(now += 1.0 / 60.0);
+    REQUIRE(server.peers().size() == 2);
+    const std::uint8_t byte = 5;
+    const std::uint8_t state[4] = {9, 8, 7, 6};
+    REQUIRE(clients[0]->send_message(0, &byte, 1));
+    REQUIRE(clients[0]->send_payload(0, state, 4, 1).has_value());
+    for (int i = 0; i < 12; ++i) tick(now += 1.0 / 60.0);
+    REQUIRE(order == std::vector<std::string>{"message", "payload"});
+    REQUIRE(server_log.payloads.size() == 1);
+    REQUIRE(std::get<0>(server_log.payloads[0]) == 0);
+    REQUIRE(std::get<2>(server_log.payloads[0]) == std::vector<std::uint8_t>{9, 8, 7, 6});
+    REQUIRE(server.state(1) == ConnectionState::Disconnected);
+    REQUIRE(std::get<1>(server_log.disconnected.at(0)) == DisconnectReason::Requested);
+    REQUIRE(logs[1].disconnected.size() == 1);
+    REQUIRE(std::get<1>(logs[1].disconnected[0]) == DisconnectReason::Requested);
+}

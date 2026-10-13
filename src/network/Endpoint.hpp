@@ -24,6 +24,8 @@ constexpr PeerId kNoPeer = 0xFF;
 enum class Role { Server, Client };
 enum class ConnectionState { Disconnected, Connecting, Connected };
 enum class DisconnectReason { None, Requested, Timeout, Denied, Socket };
+// WrongProtocol is reserved: a packet with another protocol id is dropped and
+// counted without a reply, so it is never sent.
 enum class DenyReason : std::uint8_t { None, Full, WrongProtocol, WrongGame, WrongVersion, WrongContent };
 
 struct EndpointConfig {
@@ -73,6 +75,7 @@ public:
     std::size_t payload_budget(PeerId peer, double now) const;
     std::optional<std::uint16_t> send_payload(PeerId peer, const std::uint8_t* bytes, std::size_t length, std::uint32_t tag);
     std::vector<PeerId> peers() const;
+    // The server's version after a WrongVersion deny; empty after any other outcome.
     const std::string& denied_version() const { return denied_version_; }
     bool failed() const { return failed_; }
 
@@ -112,7 +115,8 @@ private:
     EndpointStats stats_;
     std::string denied_version_;
     bool failed_ = false;
-    std::uint8_t buffer_[kMaxPacketBytes];
+    std::uint8_t buffer_[kMaxPacketBytes];        // receive only: callbacks may send while a packet is read
+    std::uint8_t send_buffer_[kMaxPacketBytes];
 };
 
 }  // namespace network

@@ -25,7 +25,7 @@
 - Test names: `N<n> sentence`, tag `[network]` plus an area tag (`[bits]`, `[ring]`, `[socket]`, `[conditioner]`, `[reliable]`, `[flow]`, `[connection]`, `[identity]`, `[endpoint]`, `[bench]`); project tests `PJ<n> sentence`, tags `[project][network]`.
 - Commits: one or more per task. Message style `Network: what changed, as a sentence`, ending with:
   ```
-  Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+  Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
   ```
 - Files are LF. Python is not on PATH; edit with the Edit tool.
 
@@ -533,7 +533,7 @@ Run: build, then `./build/Release/sandbox.exe "[network]"`. Expected: N1 to N8 p
 git add CMakeLists.txt src/network sandbox/network_bits_tests.cpp
 git commit -m "Network: the anarchy_network library with bit serialization and sequence math
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
 ---
@@ -977,7 +977,7 @@ Run: build, then `./build/Release/sandbox.exe "[network]"`. Expected: N10 to N17
 git add CMakeLists.txt src/network sandbox/network_ring_tests.cpp
 git commit -m "Network: the packet header and the sent and received rings
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
 ---
@@ -1672,7 +1672,7 @@ Run: build, then `./build/Release/sandbox.exe "[network]"`. Expected: N20 to N24
 git add CMakeLists.txt src/network sandbox/network_socket_tests.cpp
 git commit -m "Network: addresses, the in-process link hub, and the UDP socket
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
 ---
@@ -1965,7 +1965,7 @@ Run: build, then `./build/Release/sandbox.exe "[network]"`. Expected: N25 to N29
 git add CMakeLists.txt src/network sandbox/network_conditioner_tests.cpp
 git commit -m "Network: the conditioner delays, jitters, drops, duplicates, and caps
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
 ---
@@ -2511,7 +2511,7 @@ Run: build, then `./build/Release/sandbox.exe "[network]"`. Expected: N30 to N36
 git add CMakeLists.txt src/network sandbox/network_reliable_tests.cpp
 git commit -m "Network: the reliable channel sends messages and blocks until acked
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
 ---
@@ -2655,7 +2655,7 @@ Run: build, then `./build/Release/sandbox.exe "[network]"`. Expected: N40 to N42
 git add CMakeLists.txt src/network sandbox/network_flow_tests.cpp
 git commit -m "Network: two-mode flow control
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
 ---
@@ -3115,7 +3115,7 @@ Run: build, then `./build/Release/sandbox.exe "[network]"`. Expected: N44 to N51
 git add CMakeLists.txt src/network sandbox/network_connection_tests.cpp
 git commit -m "Network: a Connection writes and reads one peer's packets
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
 ---
@@ -3390,7 +3390,7 @@ Run: build, then `./build/Release/sandbox.exe "[network]"`. Expected: N52 to N54
 git add CMakeLists.txt src/network sandbox/network_identity_tests.cpp
 git commit -m "Network: the game identity and the resources hash
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
 ---
@@ -4345,7 +4345,7 @@ Run: build, then `./build/Release/sandbox.exe "[network]"`. Expected: N60 to N69
 git add CMakeLists.txt src/network sandbox/network_endpoint_tests.cpp
 git commit -m "Network: Endpoint connects, checks the game, pumps peers, and times them out
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
 ---
@@ -4668,7 +4668,7 @@ Run: build, then `./build/Release/sandbox.exe "[project]"`. Expected: PJ1 to PJ4
 git add CMakeLists.txt src/engine_core/Project.hpp src/engine_core/Project.cpp sandbox/project_identity_tests.cpp
 git commit -m "Project: project.json carries a gameId and a version
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
 ---
@@ -4915,7 +4915,7 @@ Run: `./build/Release/sandbox.exe`. Expected: every test passes (the memory `rel
 git add CMakeLists.txt sandbox/network_soak_tests.cpp
 git commit -m "Network: soak, allocation, and pumping benchmark tests
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
 ---

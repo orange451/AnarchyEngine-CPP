@@ -86,7 +86,8 @@ def _ages(n: int, species: str) -> list:
 
 
 def _trunk_pivot(t):
-    return (_cx(t.bounds), t.bounds[1], _cz(t.bounds))
+    # Every tree stands on the export's ground plane; the trunk below it is meant to be underground.
+    return (_cx(t.bounds), GROUND_Y, _cz(t.bounds))
 
 
 def build_catalog(groups: list, albedo_of: dict) -> list:
@@ -138,7 +139,8 @@ def build_catalog(groups: list, albedo_of: dict) -> list:
                             (_cx(g.bounds), GROUND_Y, _cz(g.bounds))))
     for i, g in enumerate(sorted(logs, key=lambda g: -_span(g.bounds))):
         assets.append(Asset(f"GroundLog-Var{i + 1:02d}", "GroundLog", None, None, None, [g.name],
-                            (_cx(g.bounds), g.bounds[1], _cz(g.bounds))))
+                            # on the ground plane, or on its lowest point if it rests above it
+                            (_cx(g.bounds), max(g.bounds[1], GROUND_Y), _cz(g.bounds))))
     return assets
 
 

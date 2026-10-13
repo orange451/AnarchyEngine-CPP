@@ -14,9 +14,11 @@ for _, family in ipairs(root:GetChildren()) do
 	end
 end
 
+-- Destroy alone orphans an instance's children (they stay alive and hold slots).
+local function destroyTree(i) for _, c in ipairs(i:GetChildren()) do destroyTree(c) end i:Destroy() end
 local old = workspace:FindFirstChild("VegetationGallery")
 if old then
-	old:Destroy()
+	destroyTree(old)
 end
 local gallery = Instance.new("Folder", workspace)
 gallery.Name = "VegetationGallery"

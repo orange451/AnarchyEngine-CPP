@@ -56,7 +56,7 @@ def write_asset(asset: Asset, groups: dict, albedo_of: dict, out_dir: str) -> di
                 hi[i] = max(hi[i], c)
             r = math.hypot(X, Z)
             if is_trunk:
-                if Y <= TRUNK_BASE_BAND:
+                if 0.0 <= Y <= TRUNK_BASE_BAND:   # at the ground line, not the buried flare
                     trunk_r = max(trunk_r, r)
             else:
                 crown_r = max(crown_r, r)

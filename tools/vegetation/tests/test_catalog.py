@@ -27,7 +27,7 @@ def test_tree_ages_and_dead():
     assert set(by) == {"Spruce-Dead", "Spruce-Old-Var01", "Spruce-Old-Var02", "Spruce-Young-Var01"}
     assert by["Spruce-Dead"].groups == ["Trunk1"] and by["Spruce-Dead"].age == "Dead"
     assert by["Spruce-Old-Var01"].groups == ["Trunk2", "Leaves10", "Leaves11"]
-    assert by["Spruce-Old-Var01"].pivot == (-60.0, -2.0, -634.0)
+    assert by["Spruce-Old-Var01"].pivot == (-60.0, GROUND_Y, -634.0)   # the ground plane, not the trunk's base
     assert by["Spruce-Young-Var01"].trunk == "Trunk4"
 
 

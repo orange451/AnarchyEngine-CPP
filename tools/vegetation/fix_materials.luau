@@ -5,6 +5,8 @@ local TEX = __TEXTURES__            -- {["Bark_Trunk27"]={Color="Veg_Trunk27_Col
 local ASSET_MATS = __ASSET_MATERIALS__ -- {["Oak-Old-Var01"]={"Bark_Trunk27","Leaf_Leaves3"}, ...}
 local FAMILY = __FAMILIES__         -- {["Oak-Old-Var01"]="Tree", ...}
 
+-- Destroy alone orphans an instance's children (they stay alive and hold slots).
+local function destroyTree(i) for _, c in ipairs(i:GetChildren()) do destroyTree(c) end i:Destroy() end
 local assets = game:GetService("Assets")
 local history = game:GetService("ChangeHistoryService")
 local recording = history:TryBeginRecording("Vegetation materials")
@@ -98,7 +100,7 @@ for name, _ in pairs(ASSET_MATS) do
 	prefab.Parent = familyFolder[FAMILY[name]]
 	local oldMaterials = assets.Materials:FindFirstChild(name)
 	if oldMaterials then
-		oldMaterials:Destroy()
+		destroyTree(oldMaterials)
 		nFolders += 1
 	end
 	local meshes = assets.Meshes:FindFirstChild(name)

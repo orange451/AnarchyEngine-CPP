@@ -45,7 +45,8 @@ def main(split_dir, port=8765, token="veg"):
         png = s.screenshot(1600)
         with open(os.path.join(out_dir, f"{key}.png"), "wb") as f:
             f.write(png)
-    print(s.lua('local g = workspace:FindFirstChild("VegetationGallery"); if g then g:Destroy() end; print("CLEANED")'))
+    print(s.lua('local function destroyTree(i) for _, c in ipairs(i:GetChildren()) do destroyTree(c) end i:Destroy() end; '
+                'local g = workspace:FindFirstChild("VegetationGallery"); if g then destroyTree(g) end; print("CLEANED")'))
     print("saved:", json.dumps(s.call("save_place"))[:200])
 
 

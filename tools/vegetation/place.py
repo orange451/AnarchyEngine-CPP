@@ -15,19 +15,24 @@ import sys
 import numpy as np
 
 from .import_vegetation import lua_table
-from .mcp_client import Studio
+from .mcp_client import McpError, Studio
 
 DT = np.dtype([("x", "<f4"), ("y", "<f4"), ("z", "<f4"), ("yaw", "<f4"), ("tx", "<f4"), ("tz", "<f4"),
                ("s", "<f4"), ("a", "<u2"), ("c", "u1"), ("k", "u1")])
 
 SETUP = r'''
+-- Undo history keeps deleted instances' slots; a replacement near the place's
+-- instance cap needs them back, so this placement starts a fresh history.
+game:GetService("ChangeHistoryService"):ResetWaypoints()
+-- Destroy alone orphans an instance's children (they stay alive and hold slots).
+local function destroyTree(i) for _, c in ipairs(i:GetChildren()) do destroyTree(c) end i:Destroy() end
 local root = game:GetService("Assets").Prefabs.Vegetation
 local byName = {}
 for _, family in ipairs(root:GetChildren()) do
 	for _, p in ipairs(family:GetChildren()) do byName[p.Name] = p end
 end
 local old = workspace:FindFirstChild("Vegetation")
-if old then old:Destroy() end
+if old then destroyTree(old) end
 local veg = Instance.new("Folder", workspace)
 veg.Name = "Vegetation"
 local t = Instance.new("Folder", veg); t.Name = "Trees"
@@ -104,7 +109,10 @@ def main(argv=None) -> int:
         total += int(made[0].split()[1]) if made else 0
         print(f"placed {total}/{len(sub)}", flush=True)
     if a.save:
-        print("saved:", json.dumps(s.call("save_place"))[:160])
+        try:
+            print("saved:", json.dumps(s.call("save_place"))[:160])
+        except McpError as e:   # a big save outlasts the MCP reply window but keeps going in the studio
+            print("save still running in the studio:", e)
     return 0 if total == len(sub) else 1
 
 

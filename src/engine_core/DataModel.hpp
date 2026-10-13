@@ -489,6 +489,9 @@ public:
     // The audio sources under game (sound_source()), in no set order, into
     // out, which is cleared first.
     void sound_sources(std::vector<InstanceId>& out) const;
+    // The particle emitters in Workspace and not in a ViewportPane
+    // (particle_emitter()), in no set order, into out, which is cleared first.
+    void particle_emitters(std::vector<InstanceId>& out) const;
     // The Draggers under game (dragger()), in no set order, into out, which
     // is cleared first.
     void draggers(std::vector<InstanceId>& out) const;

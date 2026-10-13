@@ -209,7 +209,9 @@ void EmitterSim::spawn(const EmitterFrame& frame, int count, bool spread, float 
         const float ago = spread ? dt * (1.f - (static_cast<float>(k) + rng_.uniform()) / static_cast<float>(count))
                                  : birth_ago;
         const float f = dt > 0.f ? 1.f - ago / dt : 1.f;
-        const Matrix4 at = f >= 1.f ? frame.current : matrix4_lerp(frame.previous, frame.current, f);
+        // Spread along the parent's path in World space; in Local space it rides with the parent.
+        const Matrix4 at =
+            f >= 1.f || s_.local_space ? frame.current : matrix4_lerp(frame.previous, frame.current, f);
         const ShapeSample sample = sample_shape(s_.shape, s_.emit_from, frame.half, s_.arc, rng_);
         Vec3 dir = s_.emit_direction_local ? direction_in(at, s_.emit_direction) : normalize(s_.emit_direction);
         dir = spread_direction(dir, s_.spread_x, s_.spread_y, rng_);

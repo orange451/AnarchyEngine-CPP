@@ -118,6 +118,9 @@ struct DataModel::State {
     // Audio sources the audio world plays: Instance (in), with SoundSource
     // and InGame.
     flecs::query<> source_query;
+    // Particle emitters the particle world simulates: Instance (in), with
+    // ParticleEmitterTag and InWorkspace, never in a ViewportPane.
+    flecs::query<> particle_query;
     // Draggers under game: Instance (in), with DraggerTag and InGame.
     flecs::query<> dragger_query;
     flecs::query<> animator_query;

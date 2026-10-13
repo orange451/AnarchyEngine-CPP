@@ -98,6 +98,14 @@ DataModel::DataModel(const char* root_name) : owned_(std::make_unique<State>()),
                              .without<ecs::InViewport>()
                               .cached()
                              .build();
+    world.particle_query = world.ecs.query_builder<>()
+                               .with<ecs::Instance>()
+                               .in()
+                               .with<ecs::ParticleEmitterTag>()
+                               .with<ecs::InWorkspace>()
+                               .without<ecs::InViewport>()
+                               .cached()
+                               .build();
     world.dragger_query = world.ecs.query_builder<>()
                               .with<ecs::Instance>()
                               .in()
@@ -585,6 +593,9 @@ void tag_entity(ecs_world_t* world, ecs_entity_t entity, const EcsIds& ids, cons
     }
     if (object.sound_source()) {
         ecs_add_id(world, entity, ids.sound_source);
+    }
+    if (object.particle_emitter()) {
+        ecs_add_id(world, entity, ids.particle_emitter);
     }
     if (object.dragger()) {
         ecs_add_id(world, entity, ids.dragger);
@@ -1094,6 +1105,17 @@ void DataModel::viewport_panes(std::vector<InstanceId>& out) const {
 void DataModel::viewport_animators(std::vector<InstanceId>& out) const {
     out.clear();
     ecs_iter_t it = ecs_query_iter(ecs_world(), state_->viewport_animator_query.c_ptr());
+    while (ecs_query_next(&it)) {
+        const auto* owners = static_cast<const ecs::Instance*>(ecs_field_w_size(&it, sizeof(ecs::Instance), 0));
+        for (std::int32_t i = 0; i < it.count; ++i) {
+            out.push_back(owners[i].id);
+        }
+    }
+}
+
+void DataModel::particle_emitters(std::vector<InstanceId>& out) const {
+    out.clear();
+    ecs_iter_t it = ecs_query_iter(ecs_world(), state_->particle_query.c_ptr());
     while (ecs_query_next(&it)) {
         const auto* owners = static_cast<const ecs::Instance*>(ecs_field_w_size(&it, sizeof(ecs::Instance), 0));
         for (std::int32_t i = 0; i < it.count; ++i) {

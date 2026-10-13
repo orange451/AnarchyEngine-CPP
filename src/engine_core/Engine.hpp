@@ -1,6 +1,7 @@
 #pragma once
 
 #include "AudioWorld.hpp"
+#include "ParticleWorld.hpp"
 #include "ConvexDecomposition.hpp"
 #include "DataModel.hpp"
 #include "Game.hpp"
@@ -61,6 +62,8 @@ public:
     void run_frame(double wall);
 
     DataModel& datamodel() { return game_; }
+    // Every ParticleEmitter's simulation; engine thread, or a test with the engine stopped.
+    const ParticleWorld& particles() const { return particles_; }
     SnapshotPump& pump() { return pump_; }
     TaskScheduler& scheduler() { return scheduler_; }
     // For PhysicsWorld's terrain bodies (set_terrain_world) and the snapshot
@@ -141,6 +144,11 @@ private:
     std::uint64_t terrain_failures_seen_ = 0;   // report_terrain_failures' high-water mark
     // SoundEmitter voices, stepped after the scripts each frame while the place plays.
     AudioWorld audio_;
+    // Every ParticleEmitter in Workspace, stepped once a frame in run_frame,
+    // stopped or playing; frozen while play is paused.
+    ParticleWorld particles_;
+    // The dt run_step last stepped with, which particles_ takes in play.
+    double last_step_dt_ = 1.0 / 60.0;
     IRenderer* renderer_ = nullptr;
     IClock* clock_ = nullptr;
     double render_dt_ = 1.0 / 60.0;

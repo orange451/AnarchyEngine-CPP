@@ -31,6 +31,7 @@ class Mesh;
 class MeshEditor;
 class Brush;
 class SoundEmitter;
+class ParticleEmitter;
 class Camera;
 class WireframeAdornment;
 class Terrain;
@@ -420,6 +421,9 @@ struct ScriptBindings {
     static SoundEmitter& emitter_self(lua_State* state);
     static int emitter_play(lua_State* state);
     static int emitter_stop(lua_State* state);
+    static ParticleEmitter& particle_self(lua_State* state);
+    static int particle_emit(lua_State* state);
+    static int particle_clear(lua_State* state);
     // A Prefab's bounding box size, from Prefab::bounds.
     static int prefab_get_bounding_box(lua_State* state);
     // Workspace:Raycast, and the two RaycastParams/RaycastResult members that

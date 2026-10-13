@@ -360,6 +360,15 @@ void Engine::run_frame(double wall) {
             }
             sim_frames_.fetch_add(1);
         }
+        {
+            // Stopped, edit-mode particles keep wall time; paused play freezes them;
+            // playing, they take the step's dt. After the scripts, so an Emit this
+            // frame shows this frame.
+            PROFILE_SCOPE("Particles", profiler::Group::Engine);
+            const double particle_dt =
+                !game_.simulation_running() ? wall : (paused_now ? 0.0 : last_step_dt_);
+            guarded_step([&] { particles_.step(game_, particle_dt); }, [&] { contract_count_.fetch_add(1); });
+        }
         const auto hold_start = std::chrono::steady_clock::now();
         {
             PROFILE_SCOPE("Prepare", profiler::Group::Render);
@@ -556,6 +565,7 @@ void Engine::run_step(double wall) {
     PROFILE_SCOPE("Audio", profiler::Group::Engine);
     audio_.step(game_, step_dt);
     last_substeps_.store(substeps);
+    last_step_dt_ = step_dt;
 }
 
 void Engine::run_window(double dt) {

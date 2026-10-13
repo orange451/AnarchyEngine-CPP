@@ -1316,6 +1316,35 @@ int ScriptBindings::emitter_stop(lua_State* state) {
     });
 }
 
+ParticleEmitter& ScriptBindings::particle_self(lua_State* state) {
+    auto* ud = static_cast<InstanceUd*>(luaL_checkudata(state, 1, kInstanceMeta));
+    ScriptRuntime* runtime = runtime_from(state);
+    auto* emitter = dynamic_cast<ParticleEmitter*>(runtime->resolve_id(ud->id, ud->world));
+    if (emitter == nullptr) {
+        luaL_error(state, "instance is gone");
+    }
+    return *emitter;
+}
+
+int ScriptBindings::particle_emit(lua_State* state) {
+    return lua_guard(state, [&] {
+        ParticleEmitter& emitter = particle_self(state);
+        const double count = luaL_checknumber(state, 2);
+        if (!(count >= 0.0) || count != std::floor(count)) {
+            luaL_error(state, "Emit expects a whole count of 0 or more");
+        }
+        emitter.request_emit(static_cast<int>(std::min(count, 1.0e7)));
+        return 0;
+    });
+}
+
+int ScriptBindings::particle_clear(lua_State* state) {
+    return lua_guard(state, [&] {
+        particle_self(state).request_clear();
+        return 0;
+    });
+}
+
 int ScriptBindings::prefab_get_bounding_box(lua_State* state) {
     return lua_guard(state, [&] {
         auto* ud = static_cast<InstanceUd*>(luaL_checkudata(state, 1, kInstanceMeta));
@@ -1657,6 +1686,13 @@ ANARCHY_LUA_REGISTER(register_script_methods) {
         lua_method("Stop", "nil", reinterpret_cast<void*>(&ScriptBindings::emitter_stop)),
     };
     register_lua_class("SoundEmitter", nullptr, emitter, static_cast<int>(sizeof(emitter) / sizeof(emitter[0])));
+    // ParticleEmitter.cpp declares the class and its properties.
+    const LuaField particle_emitter[] = {
+        lua_method("Emit", "nil", reinterpret_cast<void*>(&ScriptBindings::particle_emit)),
+        lua_method("Clear", "nil", reinterpret_cast<void*>(&ScriptBindings::particle_clear)),
+    };
+    register_lua_class("ParticleEmitter", nullptr, particle_emitter,
+                       static_cast<int>(sizeof(particle_emitter) / sizeof(particle_emitter[0])));
 
     // AssetInstances.cpp declares the class and its OriginOffset.
     const LuaField prefab =

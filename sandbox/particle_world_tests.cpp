@@ -540,3 +540,20 @@ TEST_CASE("PW19 a particle that does not move spends no ray", "[particle-world]"
     REQUIRE(e.particle_count() == 20);
     REQUIRE(rig.world.rays_last_step() == 0);   // no speed, no acceleration: nothing moved
 }
+
+TEST_CASE("PW20 an emitter moved to a far parent spawns only at the new one", "[particle-world]") {
+    ParticleRig rig;
+    Attachment& near_one = rig.attachment_at(0.f, 0.f, 0.f);
+    Attachment& far_one = rig.attachment_at(100.f, 0.f, 0.f);
+    ParticleEmitter& e = rig.emitter(near_one.id());
+    REQUIRE_FALSE(e.set_emit_speed(NumberCurve::constant(0.f)).has_value());
+    REQUIRE_FALSE(e.set_lifetime(NumberCurve::constant(10.f)).has_value());
+    REQUIRE_FALSE(e.set_rate(NumberCurve::constant(600.f)).has_value());
+    rig.steps(5);
+    rig.game.set_parent(e.id(), far_one.id());
+    rig.steps(1);
+    for (const auto& p : *rig.world.draws().front().particles) {
+        const float x = p.position[0];
+        REQUIRE((x < 1.f || x > 99.f));   // at one parent or the other, never between
+    }
+}

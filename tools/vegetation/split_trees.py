@@ -71,8 +71,11 @@ def write_asset(asset: Asset, groups: dict, albedo_of: dict, out_dir: str) -> di
     with open(os.path.join(out_dir, asset.name + ".obj"), "w", newline="\n") as f:
         f.write("\n".join(lines) + "\n")
     with open(os.path.join(out_dir, asset.name + ".mtl"), "w", newline="\n") as f:
-        for k in keys:
-            f.write(f"newmtl {k}\nKd 1 1 1\nd 1\nillum 2\n")
+        # A distinct Ns per material: the importer's Assimp RemoveRedundantMaterials step
+        # ignores names, so otherwise-identical materials would merge bark and leaves into
+        # one mesh. The import's material pass replaces these materials, so Ns is unused.
+        for i, k in enumerate(keys):
+            f.write(f"newmtl {k}\nKd 1 1 1\nNs {10 + i}\nd 1\nillum 2\n")
     if asset.family != "Tree" or crown_base == math.inf:
         crown_base = 0.0
     return {"name": asset.name, "family": asset.family, "species": asset.species, "age": asset.age,

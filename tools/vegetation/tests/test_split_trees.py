@@ -62,6 +62,25 @@ def test_dead_tree_has_no_crown(tmp_path):
     assert abs(entry["height"] - 40 * SCALE) < 1e-6
 
 
+def test_mtl_materials_differ_beyond_their_names(tmp_path):
+    # The importer runs Assimp's RemoveRedundantMaterials, which compares materials
+    # while ignoring their names: identical map-less materials would merge into one
+    # mesh, so every material in a file must differ in some property.
+    bark = tri([(0, 0, 0), (1, 0, 0), (0, 5, 0)])
+    bark.name, bark.material = "Trunk1", "T"
+    leaf_a = tri([(0, 3, 0), (2, 3, 0), (0, 6, 0)])
+    leaf_a.name, leaf_a.material = "Leaves1", "A"
+    leaf_b = tri([(0, 3, 1), (2, 3, 1), (0, 6, 1)])
+    leaf_b.name, leaf_b.material = "Leaves2", "B"
+    asset = Asset("Oak-Old-Var01", "Tree", "Oak", "Old", "Trunk1", ["Trunk1", "Leaves1", "Leaves2"], (0.5, 0.0, 0.0))
+    write_asset(asset, {"Trunk1": bark, "Leaves1": leaf_a, "Leaves2": leaf_b},
+                {"T": "Trunk27_diff.png", "A": "Leaves1_diff.png", "B": "Leaves3_diff.png"}, str(tmp_path))
+    blocks = (tmp_path / "Oak-Old-Var01.mtl").read_text().split("newmtl ")[1:]
+    bodies = [b.split("\n", 1)[1] for b in blocks]
+    assert len(bodies) == 3 and len(set(bodies)) == 3
+    assert all("map_" not in b for b in bodies)
+
+
 def test_same_albedo_groups_share_material(tmp_path):
     a = Group("Leaves1", "LA", v=[(0, 0, 0), (1, 0, 0), (0, 1, 0)], faces=[[(0, None, None), (1, None, None), (2, None, None)]])
     b = Group("Leaves2", "LB", v=[(0, 0, 1), (1, 0, 1), (0, 1, 1)], faces=[[(0, None, None), (1, None, None), (2, None, None)]])

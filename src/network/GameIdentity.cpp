@@ -47,28 +47,46 @@ std::string format_game_id(const std::array<std::uint8_t, 16>& id) {
 std::uint64_t hash_resources(const std::filesystem::path& folder) {
     namespace fs = std::filesystem;
     std::error_code error;
-    if (!fs::is_directory(folder, error)) return 0;
+    if (!fs::is_directory(folder, error) || error) return 0;
     std::vector<std::pair<std::string, fs::path>> files;
-    for (fs::recursive_directory_iterator it(folder, error), end; !error && it != end; it.increment(error)) {
-        if (!it->is_regular_file(error)) continue;
-        files.emplace_back(fs::relative(it->path(), folder, error).generic_string(), it->path());
+    fs::recursive_directory_iterator it(folder, error);
+    if (error) return 0;
+    for (const fs::recursive_directory_iterator end; it != end; it.increment(error)) {
+        if (error) return 0;
+        const bool regular = it->is_regular_file(error);
+        if (error) return 0;
+        if (!regular) continue;
+        const fs::path relative = fs::relative(it->path(), folder, error);
+        if (error) return 0;
+        const auto u8 = relative.generic_u8string();
+        files.emplace_back(std::string(reinterpret_cast<const char*>(u8.data()), u8.size()), it->path());
     }
+    if (error) return 0;
     std::sort(files.begin(), files.end());
     XXH64_state_t* state = XXH64_createState();
+    if (!state) return 0;
     XXH64_reset(state, 0);
     std::vector<char> chunk(64 * 1024);
+    bool ok = true;
     for (const auto& [relative, path] : files) {
         XXH64_update(state, relative.data(), relative.size());
         const char zero = 0;
         XXH64_update(state, &zero, 1);
+        const std::uint64_t size = fs::file_size(path, error);
+        if (error) { ok = false; break; }
+        unsigned char size_bytes[8];
+        for (int i = 0; i < 8; ++i) size_bytes[i] = static_cast<unsigned char>(size >> (8 * i));
+        XXH64_update(state, size_bytes, sizeof(size_bytes));
         std::ifstream in(path, std::ios::binary);
+        if (!in.is_open()) { ok = false; break; }
         while (in) {
             in.read(chunk.data(), static_cast<std::streamsize>(chunk.size()));
             const std::streamsize got = in.gcount();
             if (got > 0) XXH64_update(state, chunk.data(), static_cast<std::size_t>(got));
         }
+        if (in.bad() || !in.eof()) { ok = false; break; }
     }
-    const std::uint64_t hash = XXH64_digest(state);
+    const std::uint64_t hash = ok ? XXH64_digest(state) : 0;
     XXH64_freeState(state);
     return hash;
 }

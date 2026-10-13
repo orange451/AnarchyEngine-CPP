@@ -22,7 +22,8 @@ bool parse_game_id(std::string_view hex32, std::array<std::uint8_t, 16>& out);
 std::string format_game_id(const std::array<std::uint8_t, 16>& id);
 
 // XXH64 over every file under folder: its path relative to folder with '/'
-// separators, then its bytes, in sorted path order. 0 for a missing folder.
+// separators (UTF-8), a NUL, its size, then its bytes, in sorted path order.
+// 0 for a missing folder or any read error; callers treat 0 as no identity.
 std::uint64_t hash_resources(const std::filesystem::path& folder);
 
 void write_identity(BitWriter& writer, const GameIdentity& identity);

@@ -78,3 +78,32 @@ TEST_CASE("N54 an identity round-trips, with the version clamped to 255 bytes", 
     network::BitReader cut(buffer, 10);
     REQUIRE_FALSE(network::read_identity(cut, out));
 }
+
+TEST_CASE("N53b nested siblings and non-ASCII names hash stably; an empty folder is not a missing one", "[network][identity]") {
+    TempDir a;
+    write(a.path / "a" / "x.bin", "x");
+    write(a.path / "a" / "b" / "y.bin", "y");
+    write(a.path / "ab" / "z.bin", "z");
+    TempDir b;
+    write(b.path / "ab" / "z.bin", "z");
+    write(b.path / "a" / "b" / "y.bin", "y");
+    write(b.path / "a" / "x.bin", "x");
+    REQUIRE(network::hash_resources(a.path) != 0);
+    REQUIRE(network::hash_resources(a.path) == network::hash_resources(b.path));
+
+    const std::string accented = "texture\xC3\xA9.png";
+    TempDir c;
+    write(c.path / fs::u8path(accented), "t");
+    TempDir d;
+    write(d.path / fs::u8path(accented), "t");
+    TempDir e;
+    write(e.path / "texture.png", "t");
+    REQUIRE(network::hash_resources(c.path) != 0);
+    REQUIRE(network::hash_resources(c.path) == network::hash_resources(d.path));
+    REQUIRE(network::hash_resources(c.path) != network::hash_resources(e.path));
+
+    TempDir empty;
+    fs::create_directories(empty.path);
+    REQUIRE(network::hash_resources(empty.path) != 0);
+    REQUIRE(network::hash_resources(empty.path / "missing") == 0);
+}

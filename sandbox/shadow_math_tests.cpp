@@ -7,7 +7,9 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <limits>
 #include <utility>
 #include <vector>
@@ -233,4 +235,50 @@ TEST_CASE("CL1 casters are culled by their bounds", "[shadow]") {
 
     REQUIRE(SpheresTouch({{0, 0, 0}, 1.f}, {{2.5f, 0, 0}, 2.f}));
     REQUIRE_FALSE(SpheresTouch({{0, 0, 0}, 1.f}, {{3.5f, 0, 0}, 2.f}));
+}
+
+TEST_CASE("CB1 a cascade's box test agrees with its frustum's planes", "[shadow]") {
+    // A sphere turned into the cascade's view and compared with the box's
+    // sides must land where the six plane tests put it. Only spheres within
+    // a hair of a side may differ, by rounding.
+    std::uint32_t seed = 12345u;
+    const auto next = [&seed]() {
+        seed = seed * 1664525u + 1013904223u;
+        return static_cast<float>(seed >> 8) / static_cast<float>(1u << 24);
+    };
+    int compared = 0;
+    int boundary = 0;
+    for (int fitIndex = 0; fitIndex < 40; ++fitIndex) {
+        const Sphere slice{{next() * 400.f - 200.f, next() * 100.f, next() * 400.f - 200.f}, 5.f + next() * 120.f};
+        Vec3 shine{next() * 2.f - 1.f, -0.2f - next(), next() * 2.f - 1.f};
+        const float length = std::sqrt(shine.x * shine.x + shine.y * shine.y + shine.z * shine.z);
+        shine = {shine.x / length, shine.y / length, shine.z / length};
+        const CascadeFit fit = FitCascade(slice, shine, 2048, next() * 200.f);
+        const Frustum planes = MakeFrustum(fit.viewProjection);
+        for (int s = 0; s < 400; ++s) {
+            const Sphere sphere{{slice.center.x + (next() * 2.f - 1.f) * slice.radius * 3.f,
+                                 slice.center.y + (next() * 2.f - 1.f) * slice.radius * 3.f,
+                                 slice.center.z + (next() * 2.f - 1.f) * slice.radius * 3.f},
+                                next() * 15.f};
+            const Vec3 lit = matrix4_point(fit.lightView, sphere.center);
+            for (const bool ignoreNear : {false, true}) {
+                const bool byPlanes = SphereInFrustum(planes, sphere, ignoreNear);
+                const bool byBox = SphereInCascadeBox(fit, lit.x, lit.y, -lit.z, sphere.radius, ignoreNear);
+                ++compared;
+                if (byPlanes != byBox) {
+                    // How far the sphere is from the nearest side it straddles.
+                    const float r = sphere.radius;
+                    const float margin = std::min({std::abs(lit.x - fit.left + r), std::abs(fit.right - lit.x + r),
+                                                   std::abs(lit.y - fit.bottom + r), std::abs(fit.top - lit.y + r),
+                                                   std::abs(fit.farPlane + lit.z + r),
+                                                   std::abs(-lit.z - fit.nearPlane + r)});
+                    INFO("fit " << fitIndex << " sphere " << s);
+                    REQUIRE(margin < 1e-2f);
+                    ++boundary;
+                }
+            }
+        }
+    }
+    REQUIRE(compared == 40 * 400 * 2);
+    REQUIRE(boundary < compared / 1000);
 }

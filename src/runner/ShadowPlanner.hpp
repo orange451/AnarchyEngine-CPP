@@ -296,8 +296,15 @@ private:
     CascadeShadow pendingCascade_;
     std::uint64_t pendingCascadeHash_ = 0;
     bool cascadePending_ = false;
-    // Scratch kept between calls: each caster's fingerprint, and the casters inside each cascade.
-    std::vector<std::uint64_t> casterHashes_;
+    // Scratch kept between calls: each caster turned toward the sun, and the casters inside each cascade.
+    struct LitCaster {
+        float x = 0.f;
+        float y = 0.f;
+        // Down the shine, as the cascade boxes measure depth.
+        float depth = 0.f;
+        float radius = 0.f;
+    };
+    std::vector<LitCaster> lit_;
     std::vector<int> cascadeCasters_[kMaxCascades];
 };
 

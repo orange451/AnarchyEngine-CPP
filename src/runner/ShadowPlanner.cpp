@@ -32,16 +32,16 @@ private:
 // Each caster's own fingerprint, worked out once a call: which geometry, which
 // upload of it, how it is posed, and where. A light or cascade folds in these,
 // not their bytes.
-void HashCasters(const std::vector<ShadowCaster>& casters, std::vector<std::uint64_t>& out) {
-    out.resize(casters.size());
-    for (std::size_t c = 0; c < casters.size(); ++c) {
-        Hasher hash;
-        hash.add(casters[c].mesh);
-        hash.add(casters[c].revision);
-        hash.add(casters[c].pose);
-        hash.add(casters[c].model);
-        out[c] = hash.value();
-    }
+// Worked out only for the casters a light or a cascade reaches: with
+// hundreds of thousands of casters, hashing them all every frame cost more
+// than the shadows.
+std::uint64_t CasterHash(const ShadowCaster& caster) {
+    Hasher hash;
+    hash.add(caster.mesh);
+    hash.add(caster.revision);
+    hash.add(caster.pose);
+    hash.add(caster.model);
+    return hash.value();
 }
 
 int TileCount(ShadowKind kind) {
@@ -330,7 +330,6 @@ ShadowPlan ShadowPlanner::plan(const std::vector<ShadowRequest>& requests, const
     // What each map should be drawn from: the light, its tile, and every
     // caster in its reach. A PointLight's cube is world-aligned, so where it
     // points and its cone do not change its map.
-    HashCasters(casters, casterHashes_);
     for (std::size_t i = 0; i < count; ++i) {
         const ShadowRequest& request = requests[i];
         Record& record = records_.at(request.key);
@@ -352,7 +351,7 @@ ShadowPlan ShadowPlanner::plan(const std::vector<ShadowRequest>& requests, const
             if ((request.owner != 0 && caster.owner == request.owner) || !SpheresTouch(reachSphere, caster.bounds)) {
                 continue;
             }
-            hash.add(casterHashes_[c]);
+            hash.add(CasterHash(caster));
         }
         record.wantHash = hash.value();
         if (!request.cached || record.wantHash != record.hash) {
@@ -531,33 +530,42 @@ std::vector<CascadeDraw> ShadowPlanner::planCascades(const SunRequest* sun, cons
     CascadeShadow next;
     next.count = count;
     Hasher hash;
-    HashCasters(casters, casterHashes_);
+    // Every cascade sees the sun from the same turn (CascadeLightView), and
+    // its frustum is a box in that view. So each caster is turned once, and
+    // testing it against a cascade is comparing it with the box's six sides:
+    // the same test as the frustum's six planes, without them.
+    const engine_core::Matrix4 lightView = CascadeLightView(sun->shine);
+    lit_.resize(casters.size());
+    for (std::size_t c = 0; c < casters.size(); ++c) {
+        const engine_core::Vec3 at = engine_core::matrix4_point(lightView, casters[c].bounds.center);
+        lit_[c] = LitCaster{at.x, at.y, -at.z, casters[c].bounds.radius};
+    }
+    const auto in_box = [](const LitCaster& lit, const CascadeFit& box, bool ignoreNear) {
+        return SphereInCascadeBox(box, lit.x, lit.y, lit.depth, lit.radius, ignoreNear);
+    };
     for (int i = 0; i < count; ++i) {
         const Sphere slice =
             FrustumSliceSphere(camera.world, camera.fovYDegrees, camera.aspect, splits[i], splits[i + 1]);
         const CascadeFit box = FitCascade(slice, sun->shine, settings.cascadeSize);
-        const Frustum boxView = MakeFrustum(box.viewProjection);
         // How far toward the sun to reach, so a caster outside the slice that
         // shades it is still drawn. The sun's own meshes cast nothing for it.
         float pull = 0.f;
-        for (const ShadowCaster& caster : casters) {
-            if ((sun->owner != 0 && caster.owner == sun->owner) || !SphereInFrustum(boxView, caster.bounds, true)) {
+        for (std::size_t c = 0; c < casters.size(); ++c) {
+            if ((sun->owner != 0 && casters[c].owner == sun->owner) || !in_box(lit_[c], box, true)) {
                 continue;
             }
-            const float nearest =
-                -engine_core::matrix4_point(box.lightView, caster.bounds.center).z - caster.bounds.radius;
+            const float nearest = lit_[c].depth - lit_[c].radius;
             pull = std::max(pull, box.nearDepth - nearest);
         }
         const CascadeFit fit = FitCascade(slice, sun->shine, settings.cascadeSize, std::min(pull, pullLimit));
-        const Frustum fitView = MakeFrustum(fit.viewProjection);
         hash.add(fit.viewProjection);
         // Kept from frame to frame, so a frame that changes nothing allocates nothing.
         std::vector<int>& inside = cascadeCasters_[i];
         inside.clear();
         for (std::size_t c = 0; c < casters.size(); ++c) {
-            if ((sun->owner == 0 || casters[c].owner != sun->owner) && SphereInFrustum(fitView, casters[c].bounds)) {
+            if ((sun->owner == 0 || casters[c].owner != sun->owner) && in_box(lit_[c], fit, false)) {
                 inside.push_back(static_cast<int>(c));
-                hash.add(casterHashes_[c]);
+                hash.add(CasterHash(casters[c]));
             }
         }
         next.viewProjection[i] = fit.viewProjection;

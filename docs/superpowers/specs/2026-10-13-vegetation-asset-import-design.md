@@ -156,7 +156,7 @@ In the editor (Studio open on the project, driven over MCP):
      Folders (Trees, Bushes, BerryBushes, Cards, GroundLogs).
 4. Save the place.
 
-Result: 132 Prefabs (79 trees, 27 ground logs, 10 bushes, 6 berry bushes,
+Result: 127 Prefabs (79 trees, 27 ground logs, 10 bushes, 6 berry bushes,
 5 cards), 24 Materials, ≤ 48 Textures. Nothing else in the project changes.
 
 ## Leaf rendering facts the design relies on

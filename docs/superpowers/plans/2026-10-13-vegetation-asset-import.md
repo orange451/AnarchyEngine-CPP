@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Turn the single Roblox OBJ export `C:\Users\Andrew\Desktop\Trees\Trees.obj` into 132 vegetation Prefabs, 24 shared Materials and at most 48 Textures inside a copy of the H1Z1 Z1 project, with ground-level pivots and a manifest of measured sizes.
+**Goal:** Turn the single Roblox OBJ export `C:\Users\Andrew\Desktop\Trees\Trees.obj` into 127 vegetation Prefabs, 24 shared Materials and at most 48 Textures inside a copy of the H1Z1 Z1 project, with ground-level pivots and a manifest of measured sizes.
 
 **Architecture:** Offline Python (streaming, no numpy) scans the OBJ once, classifies groups into assets, and writes one scaled, re-centred OBJ+MTL per asset plus `manifest.json`. A second Python script prepares the shared textures. A small Python MCP client then drives a running AnarchyStudio on the project copy: imports textures and OBJs, runs one Luau pass to build and assign the shared materials, verifies, screenshots a gallery, and saves.
 
@@ -16,7 +16,7 @@
 - Work only in the copy `C:\Users\Andrew\Documents\Anarchy Engine Projects\H1Z1 Z1 Vegetation`; never open or write `...\H1Z1 Z1`.
 - Skip every `Strump*` group and the 78 `Log*` groups paired to trunks; keep the 27 ground logs.
 - Per-asset MTLs carry **no `map_*` lines**; the importer must not copy textures.
-- Final counts: 132 Prefabs (79 trees, 27 ground logs, 10 bushes, 6 berry bushes, 5 cards), 24 Materials under `Assets.Materials.Vegetation`, ≤ 48 Textures.
+- Final counts: 127 Prefabs (79 trees, 27 ground logs, 10 bushes, 6 berry bushes, 5 cards), 24 Materials under `Assets.Materials.Vegetation`, ≤ 48 Textures.
 - Names: `<Species>-<Age>-VarNN`, `<Species>-Dead`, `Bush-Sycamore-VarNN`, `Bush-Oak-VarNN`, `BerryBush-VarNN`, `Card-VarNN`, `GroundLog-VarNN`. Species: Spruce, ScotsPine, Fir, Hawthorn, Apple, Cherry, Sycamore, Oak.
 - Pivots: tree = trunk footprint centre XZ, trunk lowest vertex Y; bush/berry/card = bounds centre XZ, Y = −0.15 export; ground log = bounds centre XZ, lowest vertex Y. All in export space before scaling.
 - Python tools live in `tools/vegetation/`; tests in `tools/vegetation/tests/`; run with `py -m pytest tools/vegetation/tests -q`.
@@ -730,7 +730,7 @@ Run:
 ```bash
 py -m tools.vegetation.split_trees "C:\Users\Andrew\Desktop\Trees\Trees.obj" "C:\Users\Andrew\Desktop\Trees\Trees.mtl" "C:\Users\Andrew\Desktop\Trees\split"
 ```
-Expected: `132 assets written` (2–3 minutes). Then check:
+Expected: `127 assets written` (2–3 minutes). Then check:
 ```bash
 py -c "import json;m=json.load(open(r'C:\Users\Andrew\Desktop\Trees\split\manifest.json'));import collections;print(collections.Counter(e['family'] for e in m));print(sorted((round(e['height'],2),e['name']) for e in m if e['family']=='Bush'));print(max(abs(e['bounds'][1]) for e in m if e['family'] in ('Tree','GroundLog')));print([ (e['name'],round(e['height'],1),round(e['crownRadius'],1)) for e in m if e['name'].startswith('Oak-Old')])"
 ```
@@ -1337,7 +1337,7 @@ Expected: `FIX_DONE 24 4 3`, report `prefabs 3, materials 24, stray 0, mismatche
 ```bash
 py -m tools.vegetation.import_vegetation --project-src "C:\Users\Andrew\Documents\Anarchy Engine Projects\H1Z1 Z1" --project-dst "C:\Users\Andrew\Documents\Anarchy Engine Projects\H1Z1 Z1 Vegetation" --exe build\Release\AnarchyStudio.exe --split-dir "C:\Users\Andrew\Desktop\Trees\split"
 ```
-Expected: `textures imported: ≤48`, three `prefabs imported` lines (64, 64, 4), `FIX_DONE 24 <n> 132`, report with `prefabs 132, materials 24, textures ≤ 48, stray 0, mismatches 0`, `saved`. Confirm on disk: `ls "C:\Users\Andrew\Documents\Anarchy Engine Projects\H1Z1 Z1 Vegetation\src\Assets.assets\Prefabs.prefabs\Vegetation*"` shows the five family folders, and the original project's `src` tree is byte-identical to before (`git -C "...\H1Z1 Z1" status` if it is a git repo, else compare `find src -type f | wc -l` before and after: 107).
+Expected: `textures imported: ≤48`, two `prefabs imported` lines (64, 63), `FIX_DONE 24 <n> 127`, report with `prefabs 127, materials 24, textures ≤ 48, stray 0, mismatches 0`, `saved`. Confirm on disk: `ls "C:\Users\Andrew\Documents\Anarchy Engine Projects\H1Z1 Z1 Vegetation\src\Assets.assets\Prefabs.prefabs\Vegetation*"` shows the five family folders, and the original project's `src` tree is byte-identical to before (`git -C "...\H1Z1 Z1" status` if it is a git repo, else compare `find src -type f | wc -l` before and after: 107).
 
 - [ ] **Step 7: Commit**
 
@@ -1446,7 +1446,7 @@ Expected: one `GALLERY_READY` line per row (8 species + Bush-Sycamore, Bush-Oak,
 - [ ] **Step 2: Final numeric check and close**
 
 Run: `py -c "import json;r=json.load(open(r'C:\Users\Andrew\Desktop\Trees\split\import_report.json'));print(r['prefabs'],r['materials'],r['textures'],r['stray'],len(r['bounds_mismatch']))"`
-Expected: `132 24 <=48 0 0`. Confirm `workspace` has no `VegetationGallery` folder on disk: `ls "C:\Users\Andrew\Documents\Anarchy Engine Projects\H1Z1 Z1 Vegetation\src\Workspace.workspace" | grep -i gallery` prints nothing. Close the studio via the Popen handle or ask the user.
+Expected: `127 24 <=48 0 0`. Confirm `workspace` has no `VegetationGallery` folder on disk: `ls "C:\Users\Andrew\Documents\Anarchy Engine Projects\H1Z1 Z1 Vegetation\src\Workspace.workspace" | grep -i gallery` prints nothing. Close the studio via the Popen handle or ask the user.
 
 - [ ] **Step 3: Commit and hand the screenshots to the user**
 

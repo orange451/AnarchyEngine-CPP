@@ -615,7 +615,7 @@ const char* lod_kind_tip(engine_core::LodKind kind) {
     case engine_core::LodKind::Model:
         return "Swap in other Models from this distance";
     case engine_core::LodKind::Billboard:
-        return "Draw a card with a texture, turned to face the camera, from this distance";
+        return "Draw a card with a Material, turned to face the camera, from this distance";
     case engine_core::LodKind::None:
         return "Draw nothing from this distance";
     }
@@ -685,9 +685,9 @@ struct IdePrefabEditor::LodCard {
     // Model: its Models' cards, and its New Model tile.
     std::shared_ptr<jadefx::FlowPane> grid;
     std::shared_ptr<jadefx::Node> new_tile;
-    // Billboard: its Texture, its width and height, and Bake card.
+    // Billboard: its Material, its width and height, and Bake card.
     std::shared_ptr<jadefx::HBox> billboard;
-    SlotWidgets texture;
+    SlotWidgets material;
     std::shared_ptr<NumberField> size[2];
     std::shared_ptr<jadefx::Button> bake;
     // None.
@@ -1178,28 +1178,29 @@ std::shared_ptr<IdePrefabEditor::LodCard> IdePrefabEditor::make_lod_card(const L
     card->billboard = jadefx::make<jadefx::HBox>();
     card->billboard->getClassList().add("pe-lod-billboard");
     card->billboard->setAlignment(jadefx::Pos::TopLeft);
-    auto texture = jadefx::make<jadefx::VBox>();
-    texture->getClassList().add("pe-section");
-    texture->setPrefWidth(kCardWidth);
-    texture->setMinSize(kCardWidth, 0);
-    texture->getChildren().add(text_label("TEXTURE", "pe-slot-label"));
-    build_slot(card->texture, "Texture.png", "pe-lod-texture:" + std::to_string(id), "Clear Texture", [this, raw, id] {
-        raw->swallow = true;
-        if (host_.set_lod_texture) {
-            host_.set_lod_texture(id, 0);
-        }
-    });
-    card->texture.root->setOnMouseClicked([this, raw, id](const jadefx::MouseEvent& event) {
+    auto material = jadefx::make<jadefx::VBox>();
+    material->getClassList().add("pe-section");
+    material->setPrefWidth(kCardWidth);
+    material->setMinSize(kCardWidth, 0);
+    material->getChildren().add(text_label("MATERIAL", "pe-slot-label"));
+    build_slot(card->material, part_icon(ModelPart::Material), "pe-lod-material:" + std::to_string(id),
+               "Clear Material", [this, raw, id] {
+                   raw->swallow = true;
+                   if (host_.set_lod_material) {
+                       host_.set_lod_material(id, 0);
+                   }
+               });
+    card->material.root->setOnMouseClicked([this, raw, id](const jadefx::MouseEvent& event) {
         if (event.button != 0 || raw->swallow) {
             return;
         }
         raw->swallow = true;
         world_.selection().set({id});
         requestFocus();
-        openTexturePicker(id);
+        openMaterialPicker(id);
     });
-    texture->getChildren().add(card->texture.root);
-    card->billboard->getChildren().add(texture);
+    material->getChildren().add(card->material.root);
+    card->billboard->getChildren().add(material);
     auto size = jadefx::make<jadefx::VBox>();
     size->getClassList().add("pe-section");
     size->getChildren().add(text_label("SIZE", "pe-slot-label"));
@@ -1239,10 +1240,10 @@ std::shared_ptr<IdePrefabEditor::LodCard> IdePrefabEditor::make_lod_card(const L
     card->bake->setOnAction([this, id](jadefx::ActionEvent&) { bakeCard(id); });
     jadefx::Tooltip::install(card->bake.get(),
                              jadefx::make<jadefx::Tooltip>("Draw this Prefab's Models onto a card, and use it as this "
-                                                           "LOD's texture and size"));
+                                                           "LOD's Material and size"));
     bake->getChildren().add(card->bake);
     card->billboard->getChildren().add(bake);
-    accept_texture_drops(*card->billboard, id);
+    accept_material_drops(*card->billboard, id);
 
     // None: what it saves.
     card->none = text_label("", "pe-lod-note");
@@ -1292,7 +1293,7 @@ void IdePrefabEditor::fill_lod_card(LodCard& card, const LodView& view, std::vec
         body = card.grid;
         break;
     case engine_core::LodKind::Billboard:
-        show_slot(card.texture, "Texture.png", "texture", "Texture", view.texture);
+        show_slot(card.material, part_icon(ModelPart::Material), "material", "Material", view.material);
         card.size[0]->show(view.width);
         card.size[1]->show(view.height);
         card.bake->setText(baking_ == view.id ? "Baking..." : "Bake card");
@@ -1654,7 +1655,7 @@ void IdePrefabEditor::bake_pending() {
         baker_ = std::make_unique<BillboardBaker>();
     }
     baker_->setRoot(root);
-    runner::ViewPixels card;
+    CardMaps card;
     if (!baker_->bake(prefab, low, high, card)) {
         // A texture still loads: drawn whole on a later paint.
         if (++bake_waits_ > kBakeWaits) {
@@ -1663,32 +1664,25 @@ void IdePrefabEditor::bake_pending() {
         markLayoutDirty(LayoutDirt::Arrange);
         return;
     }
-    if (card.empty()) {
+    if (card.color.empty()) {
         end_bake("The card could not be drawn");
         return;
     }
-    const std::string png = runner::EncodePngWithAlpha(card);
-    const std::string path = card_file(name, png);
-    const std::filesystem::path file = root / std::filesystem::u8path(path);
-    std::error_code error;
-    std::filesystem::create_directories(file.parent_path(), error);
-    {
-        std::ofstream out(file, std::ios::binary);
-        out << png;
-        if (!out) {
-            end_bake("The card could not be saved to " + file.u8string());
-            return;
-        }
+    CardFiles files;
+    std::string why;
+    if (!save_card(card, root, name, files, why)) {
+        end_bake(why);
+        return;
     }
     // The card as drawn: its height, and as wide as its pixels make it.
-    const float height = card_frame(low, high).height;
-    const float width = height * static_cast<float>(card.width) / static_cast<float>(card.height);
+    files.height = card_frame(low, high).height;
+    files.width = files.height * static_cast<float>(card.color.width) / static_cast<float>(card.color.height);
     const engine_core::InstanceId layer = baking_;
     end_bake("");
-    host_.set_lod_card(layer, path, width, height);
+    host_.set_lod_card(layer, std::move(files));
 }
 
-void IdePrefabEditor::openTexturePicker(engine_core::InstanceId layer) {
+void IdePrefabEditor::openMaterialPicker(engine_core::InstanceId layer) {
     const LodCard* card = lod_card(layer);
     const LodView* view = lod_view(layer);
     if (card == nullptr || view == nullptr || !picker_ || view->kind != engine_core::LodKind::Billboard) {
@@ -1700,13 +1694,13 @@ void IdePrefabEditor::openTexturePicker(engine_core::InstanceId layer) {
         if (!lock.owns()) {
             return;
         }
-        choices = texture_choices(world_);
+        choices = part_choices(world_, ModelPart::Material);
     }
-    picker_->open(*card->texture.root, "Texture", std::move(choices), view->texture.id,
+    picker_->open(*card->material.root, model_part_name(ModelPart::Material), std::move(choices), view->material.id,
                   [this, layer](engine_core::InstanceId asset) {
                       const LodView* now = lod_view(layer);
-                      if (now != nullptr && now->texture.id != asset && host_.set_lod_texture) {
-                          host_.set_lod_texture(layer, asset);
+                      if (now != nullptr && now->material.id != asset && host_.set_lod_material) {
+                          host_.set_lod_material(layer, asset);
                       }
                   });
 }
@@ -1880,23 +1874,23 @@ void IdePrefabEditor::accept_drops(jadefx::Node& node, engine_core::InstanceId m
     });
 }
 
-void IdePrefabEditor::accept_texture_drops(jadefx::Node& node, engine_core::InstanceId layer) {
+void IdePrefabEditor::accept_material_drops(jadefx::Node& node, engine_core::InstanceId layer) {
     jadefx::Node* raw = &node;
     node.setOnDragOver([this, raw](jadefx::DragEvent& event) {
         const std::vector<engine_core::InstanceId> ids = dragged(event);
         if (ids.empty() || !prefab_alive_) {
             return;
         }
-        engine_core::InstanceId texture = 0;
+        engine_core::InstanceId material = 0;
         {
             // A busy place refuses this over; the next one asks again.
             engine_core::DataModelLock lock(world_, engine_core::DataModelLock::Read, kActionLockWait);
             if (!lock.owns()) {
                 return;
             }
-            texture = dragged_texture(world_, ids);
+            material = dragged_parts(world_, ids).material;
         }
-        if (texture == 0) {
+        if (material == 0) {
             return;
         }
         event.acceptTransferModes(jadefx::TransferMode::Link);
@@ -1914,7 +1908,7 @@ void IdePrefabEditor::accept_texture_drops(jadefx::Node& node, engine_core::Inst
             return;
         }
         mark_drop(nullptr);
-        event.setDropCompleted(dropTexture(ids, layer));
+        event.setDropCompleted(dropMaterial(ids, layer));
         event.consume();
     });
 }
@@ -1932,25 +1926,25 @@ void IdePrefabEditor::mark_drop(jadefx::Node* node) {
     }
 }
 
-bool IdePrefabEditor::dropTexture(const std::vector<engine_core::InstanceId>& ids, engine_core::InstanceId layer) {
-    engine_core::InstanceId texture = 0;
+bool IdePrefabEditor::dropMaterial(const std::vector<engine_core::InstanceId>& ids, engine_core::InstanceId layer) {
+    engine_core::InstanceId material = 0;
     {
         engine_core::DataModelLock lock(world_, engine_core::DataModelLock::Read, kDropLockWait);
         if (!lock.owns()) {
             return false;
         }
-        texture = dragged_texture(world_, ids);
+        material = dragged_parts(world_, ids).material;
     }
-    if (texture == 0) {
+    if (material == 0) {
         if (host_.notice) {
-            host_.notice("Only a Texture goes on a billboard");
+            host_.notice("Only a Material goes on a billboard");
         }
         return false;
     }
-    if (!host_.set_lod_texture) {
+    if (!host_.set_lod_material) {
         return false;
     }
-    host_.set_lod_texture(layer, texture);
+    host_.set_lod_material(layer, material);
     return true;
 }
 
@@ -2089,11 +2083,11 @@ jadefx::Node* IdePrefabEditor::lodKindButton(engine_core::InstanceId layer, engi
     return nullptr;
 }
 
-jadefx::Node* IdePrefabEditor::lodTextureSlot(engine_core::InstanceId layer) const {
+jadefx::Node* IdePrefabEditor::lodMaterialSlot(engine_core::InstanceId layer) const {
     const LodCard* card = lod_card(layer);
     const LodView* view = lod_view(layer);
     return card != nullptr && view != nullptr && view->kind == engine_core::LodKind::Billboard
-               ? card->texture.root.get()
+               ? card->material.root.get()
                : nullptr;
 }
 

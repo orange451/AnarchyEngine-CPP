@@ -22,6 +22,7 @@
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -2888,34 +2889,68 @@ bool Renderer::fxaaPass() {
     return true;
 }
 
-bool Renderer::readAlbedo(ViewPixels& out) const {
-    out = ViewPixels{};
-    if (albedoTexture_ == 0 || targetWidth_ <= 0 || targetHeight_ <= 0) {
+bool Renderer::readGBuffer(GBufferPixels& out) const {
+    out = GBufferPixels{};
+    if (albedoTexture_ == 0 || normalTexture_ == 0 || materialTexture_ == 0 || emissiveTexture_ == 0 ||
+        targetWidth_ <= 0 || targetHeight_ <= 0) {
         return false;
     }
+    const int width = targetWidth_;
+    const int height = targetHeight_;
+    const std::size_t pixels = static_cast<std::size_t>(width) * static_cast<std::size_t>(height);
     GLint previous = 0;
     glGetIntegerv(RT_GL_FRAMEBUFFER_BINDING, &previous);
     GLuint framebuffer = 0;
     glGenFramebuffers(1, &framebuffer);
     glBindFramebuffer(RT_GL_FRAMEBUFFER, framebuffer);
-    glFramebufferTexture2D(RT_GL_FRAMEBUFFER, RT_GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, albedoTexture_, 0);
-    const bool complete = glCheckFramebufferStatus(RT_GL_FRAMEBUFFER) == RT_GL_FRAMEBUFFER_COMPLETE;
-    if (complete) {
-        const std::size_t row = static_cast<std::size_t>(targetWidth_) * 4;
-        // RGBA rows are whole words, so the default pack alignment of 4 adds no padding.
-        std::vector<unsigned char> bottomUp(row * static_cast<std::size_t>(targetHeight_));
-        glReadPixels(0, 0, targetWidth_, targetHeight_, GL_RGBA, GL_UNSIGNED_BYTE, bottomUp.data());
-        out.width = targetWidth_;
-        out.height = targetHeight_;
-        out.rgba.resize(bottomUp.size());
-        for (int y = 0; y < targetHeight_; ++y) {
-            std::copy_n(bottomUp.data() + row * static_cast<std::size_t>(targetHeight_ - 1 - y), row,
-                        out.rgba.data() + row * static_cast<std::size_t>(y));
+    // texture's RGBA as type, top row first. RGBA rows are whole words, so
+    // the default pack alignment of 4 adds no padding.
+    const auto read = [&](unsigned texture, GLenum type, auto& into) {
+        glFramebufferTexture2D(RT_GL_FRAMEBUFFER, RT_GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, 0);
+        if (glCheckFramebufferStatus(RT_GL_FRAMEBUFFER) != RT_GL_FRAMEBUFFER_COMPLETE) {
+            return false;
         }
-    }
+        using Value = typename std::decay_t<decltype(into)>::value_type;
+        std::vector<Value> bottomUp(pixels * 4);
+        glReadPixels(0, 0, width, height, GL_RGBA, type, bottomUp.data());
+        into.resize(pixels * 4);
+        const std::size_t row = static_cast<std::size_t>(width) * 4;
+        for (int y = 0; y < height; ++y) {
+            std::copy_n(bottomUp.data() + row * static_cast<std::size_t>(height - 1 - y), row,
+                        into.data() + row * static_cast<std::size_t>(y));
+        }
+        return true;
+    };
+    std::vector<float> normals;
+    std::vector<float> glow;
+    const bool complete = read(albedoTexture_, GL_UNSIGNED_BYTE, out.albedo) && read(normalTexture_, GL_FLOAT, normals) &&
+                          read(materialTexture_, GL_UNSIGNED_BYTE, out.material) && read(emissiveTexture_, GL_FLOAT, glow);
     glBindFramebuffer(RT_GL_FRAMEBUFFER, static_cast<GLuint>(previous));
     glDeleteFramebuffers(1, &framebuffer);
-    return complete;
+    if (!complete) {
+        out = GBufferPixels{};
+        return false;
+    }
+    out.width = width;
+    out.height = height;
+    out.normal.resize(pixels * 3);
+    out.emissive.resize(pixels * 3);
+    for (std::size_t i = 0; i < pixels; ++i) {
+        // gbuffer.glsl's decodeNormal: off the octahedron and back to unit length.
+        float x = normals[i * 4] * 2.f - 1.f;
+        float y = normals[i * 4 + 1] * 2.f - 1.f;
+        const float z = 1.f - std::abs(x) - std::abs(y);
+        const float t = std::clamp(-z, 0.f, 1.f);
+        x += x >= 0.f ? -t : t;
+        y += y >= 0.f ? -t : t;
+        const float length = std::sqrt(x * x + y * y + z * z);
+        const float scale = length > 0.f ? 1.f / length : 0.f;
+        out.normal[i * 3] = x * scale;
+        out.normal[i * 3 + 1] = y * scale;
+        out.normal[i * 3 + 2] = z * scale;
+        std::copy_n(glow.data() + i * 4, 3, out.emissive.data() + i * 3);
+    }
+    return true;
 }
 
 bool Renderer::read(double x, double y, double width, double height, double sceneWidth, double sceneHeight,

@@ -817,17 +817,17 @@ PrefabEditorHost IdeLayout::prefab_editor_host() {
     host.set_lod_kind = [lod_write](engine_core::InstanceId layer, engine_core::LodKind kind) {
         lod_write([layer, kind](engine_core::DataModel& world) { return run_set_lod_kind(world, layer, kind); });
     };
-    host.set_lod_texture = [lod_write](engine_core::InstanceId layer, engine_core::InstanceId texture) {
-        lod_write([layer, texture](engine_core::DataModel& world) { return run_set_lod_texture(world, layer, texture); });
+    host.set_lod_material = [lod_write](engine_core::InstanceId layer, engine_core::InstanceId material) {
+        lod_write([layer, material](engine_core::DataModel& world) { return run_set_lod_material(world, layer, material); });
     };
     host.set_lod_size = [lod_write](engine_core::InstanceId layer, float width, float height) {
         lod_write([layer, width, height](engine_core::DataModel& world) {
             return run_set_lod_size(world, layer, width, height);
         });
     };
-    host.set_lod_card = [lod_write](engine_core::InstanceId layer, std::string path, float width, float height) {
-        lod_write([layer, path = std::move(path), width, height](engine_core::DataModel& world) {
-            return run_set_lod_card(world, layer, path, width, height);
+    host.set_lod_card = [lod_write](engine_core::InstanceId layer, CardFiles files) {
+        lod_write([layer, files = std::move(files)](engine_core::DataModel& world) {
+            return run_set_lod_card(world, layer, files);
         });
     };
     host.rename = [this](engine_core::InstanceId id, std::string name) { rename(id, std::move(name)); };

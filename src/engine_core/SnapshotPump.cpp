@@ -483,18 +483,12 @@ void fill_visual_prefab(const DataModel& game, const std::string& guid, Instance
         } else {
             lod.meshes.clear();
         }
-        const Texture* texture = lod.kind == LodKind::Billboard
-                                     ? ReferencedAs<Texture>(game, layer, LodLayer::kTextureReference)
-                                     : nullptr;
-        if (texture != nullptr) {
-            lod.texture = texture->path();
-            lod.texture_flip_y = texture->flip_y();
-            lod.texture_always_loaded = texture->streaming() == TextureStreaming::AlwaysLoaded;
-        } else {
-            lod.texture.clear();
-            lod.texture_flip_y = false;
-            lod.texture_always_loaded = false;
-        }
+        // A Billboard's Material; no Material draws it white, as a Model's.
+        fill_visual_material(game,
+                             lod.kind == LodKind::Billboard
+                                 ? ReferencedAs<Material>(game, layer, LodLayer::kMaterialReference)
+                                 : nullptr,
+                             lod.card);
         lod.width = layer.size().x;
         lod.height = layer.size().y;
     }

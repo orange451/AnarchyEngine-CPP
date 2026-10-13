@@ -14,6 +14,26 @@ using engine_core::texture::Usage;
 
 namespace {
 
+// draw drawn with source's Material: its textures, loaded through textures, and its numbers.
+void ApplyMaterial(const engine_core::VisualMesh& source, TextureCache& textures, MeshDraw& draw) {
+    draw.texture = textures.get(source.diffuse_texture, Usage::Color, source.diffuse_flip_y, source.diffuse_always_loaded);
+    draw.normalTexture = textures.get(source.normal_texture, Usage::Normal, source.normal_flip_y, source.normal_always_loaded);
+    draw.roughnessTexture = textures.get(source.roughness_texture, Usage::Mask, source.roughness_flip_y, source.roughness_always_loaded);
+    draw.metalnessTexture = textures.get(source.metalness_texture, Usage::Mask, source.metalness_flip_y, source.metalness_always_loaded);
+    draw.emissiveTexture = textures.get(source.emissive_texture, Usage::Color, source.emissive_flip_y, source.emissive_always_loaded);
+    draw.color[0] = source.color.r;
+    draw.color[1] = source.color.g;
+    draw.color[2] = source.color.b;
+    draw.color[3] = source.color.a;
+    draw.emissive[0] = source.emissive.r;
+    draw.emissive[1] = source.emissive.g;
+    draw.emissive[2] = source.emissive.b;
+    draw.metalness = source.metalness;
+    draw.roughness = source.roughness;
+    draw.reflectivity = source.reflectivity;
+    draw.transparency = source.transparency;
+}
+
 // sources as templates drawn from lodNear up to lodFar.
 void LoadMeshDraws(const std::vector<engine_core::VisualMesh>& sources, float lodNear, float lodFar,
                    MeshCache& meshes, TextureCache& textures, std::uint32_t& nextSlot, std::vector<MeshDraw>& out) {
@@ -27,22 +47,7 @@ void LoadMeshDraws(const std::vector<engine_core::VisualMesh>& sources, float lo
         }
         MeshDraw draw;
         draw.mesh = mesh;
-        draw.texture = textures.get(source.diffuse_texture, Usage::Color, source.diffuse_flip_y, source.diffuse_always_loaded);
-        draw.normalTexture = textures.get(source.normal_texture, Usage::Normal, source.normal_flip_y, source.normal_always_loaded);
-        draw.roughnessTexture = textures.get(source.roughness_texture, Usage::Mask, source.roughness_flip_y, source.roughness_always_loaded);
-        draw.metalnessTexture = textures.get(source.metalness_texture, Usage::Mask, source.metalness_flip_y, source.metalness_always_loaded);
-        draw.emissiveTexture = textures.get(source.emissive_texture, Usage::Color, source.emissive_flip_y, source.emissive_always_loaded);
-        draw.color[0] = source.color.r;
-        draw.color[1] = source.color.g;
-        draw.color[2] = source.color.b;
-        draw.color[3] = source.color.a;
-        draw.emissive[0] = source.emissive.r;
-        draw.emissive[1] = source.emissive.g;
-        draw.emissive[2] = source.emissive.b;
-        draw.metalness = source.metalness;
-        draw.roughness = source.roughness;
-        draw.reflectivity = source.reflectivity;
-        draw.transparency = source.transparency;
+        ApplyMaterial(source, textures, draw);
         draw.skinned = source.skinned;
         draw.lodNear = lodNear;
         draw.lodFar = lodFar;
@@ -78,12 +83,10 @@ void LoadPrefabDraws(const engine_core::VisualPrefab& prefab, MeshCache& meshes,
         if (quad == nullptr) {
             continue;
         }
-        // A card: its texture on a quad turned to the camera, casting nothing.
+        // A card: a quad turned to the camera, drawn with its Material, casting nothing.
         MeshDraw draw;
         draw.mesh = quad;
-        draw.texture = textures.get(lod.texture, Usage::Color, lod.texture_flip_y, lod.texture_always_loaded);
-        draw.roughness = 1.f;
-        draw.reflectivity = 0.f;
+        ApplyMaterial(lod.card, textures, draw);
         draw.castsShadow = false;
         draw.billboard = true;
         draw.billboardSize[0] = lod.width;

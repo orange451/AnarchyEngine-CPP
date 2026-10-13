@@ -31,12 +31,12 @@ struct PrefabEditorHost {
     // Each sets one of a LodLayer's properties (run_set_lod_*).
     std::function<void(engine_core::InstanceId layer, double distance)> set_lod_distance;
     std::function<void(engine_core::InstanceId layer, engine_core::LodKind kind)> set_lod_kind;
-    // texture 0 clears it.
-    std::function<void(engine_core::InstanceId layer, engine_core::InstanceId texture)> set_lod_texture;
+    // material 0 clears it.
+    std::function<void(engine_core::InstanceId layer, engine_core::InstanceId material)> set_lod_material;
     std::function<void(engine_core::InstanceId layer, float width, float height)> set_lod_size;
-    // Makes the card baked for layer, saved at path under the resources
-    // folder, its Texture and Size (run_set_lod_card).
-    std::function<void(engine_core::InstanceId layer, std::string path, float width, float height)> set_lod_card;
+    // Makes the card baked for layer, its maps saved in the resources folder
+    // as files says, its Material and Size (run_set_lod_card).
+    std::function<void(engine_core::InstanceId layer, CardFiles files)> set_lod_card;
     // Points model's part at target, or at nothing when target is 0.
     std::function<void(engine_core::InstanceId model, ModelPart part, engine_core::InstanceId target)> set_part;
     std::function<void(engine_core::InstanceId id, std::string name)> rename;
@@ -77,12 +77,13 @@ class BillboardBaker;
 // its LodLayers nearest first, each a card: the distance it takes over from,
 // typed in place, and what it draws from there on. Model swaps in its own
 // Models, cards as above with their own New Model tile; Billboard draws a
-// Texture on a card turned to face the camera, its slot picked or dropped
-// on like a Model's, with its width and height, or baked: Bake card draws
-// the Prefab's own Models onto a card, saves it in the resources folder, and
-// makes it the layer's Texture and Size. None draws nothing. Add LOD adds one
-// farther out. A click on a layer's card selects it, and Delete removes it
-// with its Models. Every change is one undo step.
+// card turned to face the camera with a Material, its slot picked or dropped
+// on like a Model's, at its width and height; or baked: Bake card draws the
+// Prefab's own Models onto a card, saves its colors, normals, roughness,
+// metalness, and glow in the resources folder, and makes them the layer's
+// Material and Size. None draws nothing. Add LOD adds one farther out. A
+// click on a layer's card selects it, and Delete removes it with its Models.
+// Every change is one undo step.
 class IdePrefabEditor : public IdePane {
 public:
     IdePrefabEditor(engine_core::DataModel& world, engine_core::InstanceId prefab, PrefabEditorHost host = {});
@@ -99,8 +100,8 @@ public:
     void addModel(engine_core::InstanceId holder = 0);
     // Adds a LodLayer past the farthest. What Add LOD does.
     void addLod();
-    // Opens a Billboard layer's Texture picker.
-    void openTexturePicker(engine_core::InstanceId layer);
+    // Opens a Billboard layer's Material picker.
+    void openMaterialPicker(engine_core::InstanceId layer);
     // Bakes a card for a Billboard layer from its Prefab's Models, the next
     // time the editor paints (it needs GL). What Bake card does.
     void bakeCard(engine_core::InstanceId layer);
@@ -117,9 +118,9 @@ public:
     // does. False, with a notice, when there is no Mesh or Material among them.
     bool dropOnto(const std::vector<engine_core::InstanceId>& ids, engine_core::InstanceId model = 0,
                   const ModelPart* part = nullptr, engine_core::InstanceId holder = 0);
-    // Sets a Billboard layer's Texture to the first Texture dragged. False,
+    // Sets a Billboard layer's Material to the first Material dragged. False,
     // with a notice, when there is none.
-    bool dropTexture(const std::vector<engine_core::InstanceId>& ids, engine_core::InstanceId layer);
+    bool dropMaterial(const std::vector<engine_core::InstanceId>& ids, engine_core::InstanceId layer);
 
     // For tests: the widgets a person would click.
     jadefx::Node* cardNode(engine_core::InstanceId model) const;
@@ -135,7 +136,7 @@ public:
     jadefx::Node* lodCard(engine_core::InstanceId layer) const;
     jadefx::TextField* lodDistanceField(engine_core::InstanceId layer) const;
     jadefx::Node* lodKindButton(engine_core::InstanceId layer, engine_core::LodKind kind) const;
-    jadefx::Node* lodTextureSlot(engine_core::InstanceId layer) const;
+    jadefx::Node* lodMaterialSlot(engine_core::InstanceId layer) const;
     // axis 0 is the width, 1 the height.
     jadefx::TextField* lodSizeField(engine_core::InstanceId layer, int axis) const;
     jadefx::Node* lodNewModelTile(engine_core::InstanceId layer) const;
@@ -187,8 +188,8 @@ private:
     // too, else empty space, which adds a Model to holder (0 for the Prefab).
     void accept_drops(jadefx::Node& node, engine_core::InstanceId model, const ModelPart* part,
                       engine_core::InstanceId holder = 0);
-    // Wires Texture drops onto a Billboard layer's slot.
-    void accept_texture_drops(jadefx::Node& node, engine_core::InstanceId layer);
+    // Wires Material drops onto a Billboard layer's slot.
+    void accept_material_drops(jadefx::Node& node, engine_core::InstanceId layer);
     // Outlines node as the drop target, and only node; null clears.
     void mark_drop(jadefx::Node* node);
     std::vector<engine_core::InstanceId> dragged(const jadefx::DragEvent& event) const;

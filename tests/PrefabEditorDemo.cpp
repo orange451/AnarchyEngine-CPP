@@ -101,8 +101,8 @@ private:
         host.set_lod_kind = [this](InstanceId layer, engine_core::LodKind kind) {
             ide::run_set_lod_kind(game_, layer, kind);
         };
-        host.set_lod_texture = [this](InstanceId layer, InstanceId texture) {
-            ide::run_set_lod_texture(game_, layer, texture);
+        host.set_lod_material = [this](InstanceId layer, InstanceId material) {
+            ide::run_set_lod_material(game_, layer, material);
         };
         host.set_lod_size = [this](InstanceId layer, float width, float height) {
             ide::run_set_lod_size(game_, layer, width, height);
@@ -142,7 +142,7 @@ private:
         const InstanceId pine_mesh = Add<engine_core::Mesh>(game_, "Pine", meshes);
         const InstanceId low_mesh = Add<engine_core::Mesh>(game_, "PineLow", meshes);
         const InstanceId needles = Add<engine_core::Material>(game_, "Needles", materials);
-        const InstanceId card = Add<engine_core::Texture>(game_, "PineCard", game_.service("Textures"));
+        const InstanceId card = Add<engine_core::Material>(game_, "PineCard", materials);
         pine_ = Add<engine_core::Prefab>(game_, "Pine", game_.service("Prefabs"));
         ide::add_model(game_, pine_, pine_mesh, needles, error);
         const InstanceId low = ide::run_add_lod(game_, pine_, error);
@@ -153,7 +153,7 @@ private:
         game_.set_name(card_, "Card");
         ide::run_set_lod_distance(game_, card_, 300.0);
         ide::run_set_lod_kind(game_, card_, engine_core::LodKind::Billboard);
-        ide::run_set_lod_texture(game_, card_, card);
+        ide::run_set_lod_material(game_, card_, card);
         ide::run_set_lod_size(game_, card_, 6.f, 14.f);
         const InstanceId gone = ide::run_add_lod(game_, pine_, error);
         game_.set_name(gone, "Far");
@@ -164,7 +164,7 @@ private:
         const InstanceId bush_card = ide::run_add_lod(game_, bush_, error);
         ide::run_set_lod_distance(game_, bush_card, 0.0);
         ide::run_set_lod_kind(game_, bush_card, engine_core::LodKind::Billboard);
-        ide::run_set_lod_texture(game_, bush_card, card);
+        ide::run_set_lod_material(game_, bush_card, card);
         const InstanceId bush_gone = ide::run_add_lod(game_, bush_, error);
         ide::run_set_lod_distance(game_, bush_gone, 250.0);
         ide::run_set_lod_kind(game_, bush_gone, engine_core::LodKind::None);

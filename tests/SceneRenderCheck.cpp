@@ -2325,13 +2325,16 @@ void CheckBillboardBake() {
     mesh.mesh = 7;
     mesh.revision = 1;
     mesh.color = {0.9f, 0.1f, 0.1f, 1.f};
+    mesh.roughness = 0.7f;
+    mesh.metalness = 0.f;
     prefab.meshes.push_back(mesh);
     ide::BillboardBaker baker(64);
-    runner::ViewPixels card;
+    ide::CardMaps maps;
     bool done = false;
     for (int pass = 0; pass < 10 && !done; ++pass) {
-        done = baker.bake(prefab, {-0.5f, 0.f, -1.f}, {0.5f, 3.f, 1.f}, card);
+        done = baker.bake(prefab, {-0.5f, 0.f, -1.f}, {0.5f, 3.f, 1.f}, maps);
     }
+    const runner::ViewPixels& card = maps.color;
     Expect(done && !card.empty(), "bake: a card is drawn");
     if (card.empty()) {
         return;
@@ -2353,6 +2356,28 @@ void CheckBillboardBake() {
     Expect(beside.first.r > 180, "bake: a clear pixel carries the nearest drawn color (" + Text(beside.first) + ")");
     Expect(at(card.width / 2, card.height - 1).second > 0 && at(card.width / 2, 0).second > 0,
            "bake: it stands on the card's bottom edge and reaches its top");
+    // Its other maps, from the same draw: the front face points straight out
+    // of the card, and its Material's numbers are the same everywhere.
+    const std::size_t middle_at =
+        (static_cast<std::size_t>(card.height / 2) * static_cast<std::size_t>(card.width) + static_cast<std::size_t>(card.width / 2)) * 4;
+    const unsigned char* normal = maps.normal.rgba.data() + middle_at;
+    Expect(std::abs(normal[0] - 128) <= 3 && std::abs(normal[1] - 128) <= 3 && normal[2] >= 250,
+           "bake: its normal map points straight out of the card (" + std::to_string(normal[0]) + "," +
+               std::to_string(normal[1]) + "," + std::to_string(normal[2]) + ")");
+    Expect(std::abs(maps.roughness.rgba[middle_at] - 179) <= 2 && maps.metalness.rgba[middle_at] == 0,
+           "bake: its roughness and metalness maps hold its Material's (" +
+               std::to_string(maps.roughness.rgba[middle_at]) + ")");
+    // Saved, the uniform numbers stand in for maps, and a flat card has no normal map.
+    const std::filesystem::path root = std::filesystem::temp_directory_path() / "anarchy-bake-check";
+    ide::CardFiles files;
+    std::string why;
+    Expect(ide::save_card(maps, root, "Box", files, why), "bake: its maps save (" + why + ")");
+    Expect(!files.color.empty() && files.normal.empty() && files.roughness_map.empty() && files.metalness_map.empty() &&
+               files.emissive.empty() && std::abs(files.roughness - 0.7f) < 0.02f && files.metalness == 0.f,
+           "bake: one roughness and one metalness are numbers, and a flat front needs no normal map");
+    Expect(std::filesystem::exists(root / std::filesystem::u8path(files.color)), "bake: its color map is on disk");
+    std::error_code ignored;
+    std::filesystem::remove_all(root, ignored);
     baker.release();
 }
 

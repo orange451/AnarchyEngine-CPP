@@ -345,6 +345,23 @@ struct SceneLighting {
     SceneOcclusion occlusion;
 };
 
+// A draw's G-buffer read back (Renderer::readGBuffer): what its opaque
+// surfaces are before any light, each top row first, width by height pixels.
+struct GBufferPixels {
+    int width = 0;
+    int height = 0;
+    // RGB as sRGB, alpha 255 where a surface was drawn and 0 elsewhere: 4 a pixel.
+    std::vector<unsigned char> albedo;
+    // The view-space unit normal: 3 a pixel.
+    std::vector<float> normal;
+    // Metalness, roughness, reflectivity, each 0 to 255, then 255: 4 a pixel.
+    std::vector<unsigned char> material;
+    // The glow, linear and unbounded: 3 a pixel.
+    std::vector<float> emissive;
+
+    bool empty() const { return width <= 0 || height <= 0; }
+};
+
 // Draws meshes seen from the camera, through the legacy AnarchyEngine
 // pipeline (engine/gl): first the shadow maps of the lights that cast them
 // (ShadowRenderer), then a G-buffer of each opaque surface's albedo, normal,
@@ -461,11 +478,9 @@ public:
     // there is nothing to read.
     bool read(double x, double y, double width, double height, double sceneWidth, double sceneHeight,
               ViewPixels& out) const;
-    // The last draw's G-buffer albedo: its opaque surfaces as their Materials
-    // and textures color them, before any light. RGB as sRGB, alpha 255 where
-    // a surface was drawn and 0 elsewhere, top row first, at the draw's size
-    // in pixels. False when there is none. Leaves the framebuffer binding.
-    bool readAlbedo(ViewPixels& out) const;
+    // The last draw's G-buffer, at its size in pixels. False when there is
+    // none. Leaves the framebuffer binding as it was.
+    bool readGBuffer(GBufferPixels& out) const;
     // Also deletes the look textures terrainLookTexture made.
     void shutdown();
     // terrain's look table as a GL texture for MeshDraw::terrainLook: made

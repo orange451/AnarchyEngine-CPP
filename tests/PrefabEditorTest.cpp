@@ -14,6 +14,7 @@
 #include "jadefx/jadefx.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <memory>
 #include <string>
@@ -120,14 +121,14 @@ struct Rig {
         host.set_lod_kind = [this, said](InstanceId layer, LodKind kind) {
             said(ide::run_set_lod_kind(game, layer, kind));
         };
-        host.set_lod_texture = [this, said](InstanceId layer, InstanceId texture) {
-            said(ide::run_set_lod_texture(game, layer, texture));
+        host.set_lod_material = [this, said](InstanceId layer, InstanceId material) {
+            said(ide::run_set_lod_material(game, layer, material));
         };
         host.set_lod_size = [this, said](InstanceId layer, float width, float height) {
             said(ide::run_set_lod_size(game, layer, width, height));
         };
-        host.set_lod_card = [this, said](InstanceId layer, std::string path, float width, float height) {
-            said(ide::run_set_lod_card(game, layer, path, width, height));
+        host.set_lod_card = [this, said](InstanceId layer, ide::CardFiles files) {
+            said(ide::run_set_lod_card(game, layer, files));
         };
         editor = jadefx::make<ide::IdePrefabEditor>(game, crate, std::move(host));
         editor->setPrefWidthRatio(1);
@@ -438,8 +439,8 @@ void lod_logic() {
     Expect(ide::run_set_lod_distance(game, far_layer, -5.0).has_value(), "a negative distance is refused");
 
     Expect(!ide::run_set_lod_kind(game, near_layer, LodKind::Billboard), "a kind is set");
-    Expect(ide::run_set_lod_texture(game, near_layer, rig.rock).has_value(), "a Mesh is refused as a Texture");
-    Expect(!ide::run_set_lod_texture(game, near_layer, rig.bark), "a Texture is set");
+    Expect(ide::run_set_lod_material(game, near_layer, rig.bark).has_value(), "a Texture is refused as a Material");
+    Expect(!ide::run_set_lod_material(game, near_layer, rig.wood), "a Material is set");
     Expect(!ide::run_set_lod_size(game, near_layer, 3.f, 9.f), "a size is set");
     Expect(ide::run_set_lod_size(game, near_layer, 0.f, 9.f).has_value(), "a zero width is refused");
     // The LOD a list holds with id.
@@ -448,16 +449,16 @@ void lod_logic() {
         return found != list.end() ? *found : ide::LodView{};
     };
     const ide::LodView billboard = find(ide::read_lods(game, rig.crate), near_layer);
-    Expect(billboard.kind == LodKind::Billboard && billboard.texture.id == rig.bark &&
-               billboard.texture.where == "Textures" && billboard.width == 3.f && billboard.height == 9.f,
-           "read_lods reads a billboard's Texture and size");
+    Expect(billboard.kind == LodKind::Billboard && billboard.material.id == rig.wood &&
+               billboard.material.where == "Materials" && billboard.width == 3.f && billboard.height == 9.f,
+           "read_lods reads a billboard's Material and size");
 
     // Each write is its own step.
     game.history().undo();
     const ide::LodView sized = find(ide::read_lods(game, rig.crate), near_layer);
-    Expect(sized.width == 4.f && sized.texture.id == rig.bark, "undo takes back the size alone");
+    Expect(sized.width == 4.f && sized.material.id == rig.wood, "undo takes back the size alone");
     game.history().undo();
-    Expect(find(ide::read_lods(game, rig.crate), near_layer).texture.id == 0, "then the Texture");
+    Expect(find(ide::read_lods(game, rig.crate), near_layer).material.id == 0, "then the Material");
     game.history().undo();
     Expect(find(ide::read_lods(game, rig.crate), near_layer).kind == LodKind::Model, "then the kind");
     game.history().redo();
@@ -469,12 +470,11 @@ void lod_logic() {
     const ide::LodView holder = find(ide::read_lods(game, rig.crate), far_layer);
     Expect(holder.models.size() == 1 && holder.models[0].name == "Lid", "read_lods reads a layer's Models");
     Expect(ide::read_models(game, rig.crate).empty(), "the Prefab's own Models are only its own");
-    Expect(ide::dragged_texture(game, {rig.rock, rig.bark}) == rig.bark, "a drag's first Texture counts");
     Expect(ide::distance_text(250.0) == "250" && ide::distance_text(62.5) == "62.5", "distances read plainly");
 }
 
 // The LOD section: Add LOD, the distance typed in place, the kind, a
-// billboard's Texture and size, a layer's own Models, and Delete.
+// billboard's Material and size, a layer's own Models, and Delete.
 void lod_section() {
     Rig rig;
     rig.click(rig.editor->addLodButton());
@@ -496,22 +496,22 @@ void lod_section() {
     rig.click(rig.editor->lodKindButton(layer, LodKind::Billboard));
     rig.frames();
     Expect(rig.lod(layer)->kind == LodKind::Billboard, "Billboard makes it a billboard");
-    Expect(rig.editor->lodTextureSlot(layer) != nullptr && rig.editor->lodNewModelTile(layer) == nullptr,
-           "a billboard shows a Texture slot, not Models");
+    Expect(rig.editor->lodMaterialSlot(layer) != nullptr && rig.editor->lodNewModelTile(layer) == nullptr,
+           "a billboard shows a Material slot, not Models");
     jadefx::TextField* width = rig.editor->lodSizeField(layer, 0);
     Expect(width != nullptr && width->getText() == "4", "its width shows");
     rig.type(width, "6");
     Expect(rig.lod(layer)->width == 6.f && rig.lod(layer)->height == 8.f, "a width typed is set, the height kept");
-    Expect(rig.editor->dropTexture({rig.bark}, layer), "a Texture dropped on it is taken");
+    Expect(rig.editor->dropMaterial({rig.wood}, layer), "a Material dropped on it is taken");
     rig.frames();
-    Expect(rig.lod(layer)->texture.id == rig.bark, "it fills the Texture slot");
+    Expect(rig.lod(layer)->material.id == rig.wood, "it fills the Material slot");
     rig.notices.clear();
-    Expect(!rig.editor->dropTexture({rig.rock}, layer) && !rig.notices.empty(),
+    Expect(!rig.editor->dropMaterial({rig.rock}, layer) && !rig.notices.empty(),
            "a Mesh dropped on it is refused, with a notice");
 
     rig.click(rig.editor->lodKindButton(layer, LodKind::None));
     rig.frames();
-    Expect(rig.lod(layer)->kind == LodKind::None && rig.editor->lodTextureSlot(layer) == nullptr,
+    Expect(rig.lod(layer)->kind == LodKind::None && rig.editor->lodMaterialSlot(layer) == nullptr,
            "None draws nothing, and shows no slot");
 
     rig.click(rig.editor->lodKindButton(layer, LodKind::Model));
@@ -546,33 +546,76 @@ void lod_section() {
            "Delete removes the selected LOD");
 }
 
-// A baked card: a Texture in Textures/Billboards with the card's Path, and
-// the card's size, in one undo step; baked again, the same Texture.
+// The Texture material's slot holds, or null.
+const engine_core::Texture* slot_texture(const engine_core::Game& game, const engine_core::Material& material,
+                                         std::size_t slot) {
+    const engine_core::LuaSlot reference = material.reference(slot);
+    return reference.kind == engine_core::LuaSlot::Kind::Instance
+               ? dynamic_cast<const engine_core::Texture*>(game.instance(reference.id))
+               : nullptr;
+}
+
+// A baked card: a Material in Materials/Billboards whose maps are Textures in
+// Textures/Billboards, numbers where a map was not saved, and the card's
+// size, in one undo step; baked again, the same Material and Textures.
 void lod_card_bake() {
+    using engine_core::Material;
     Rig rig;
     engine_core::Game& game = rig.game;
     std::string error;
     const InstanceId layer = ide::run_add_lod(game, rig.crate, error);
     Expect(!ide::run_set_lod_kind(game, layer, LodKind::Billboard), "a billboard to bake for");
-    Expect(!ide::run_set_lod_card(game, layer, "textures/billboards/Crate.00000001.png", 2.f, 3.f), "a card is set");
+    ide::CardFiles files;
+    files.color = "textures/billboards/Crate.color.00000001.png";
+    files.normal = "textures/billboards/Crate.normal.00000001.png";
+    files.roughness = 0.8f;
+    files.metalness = 0.f;
+    files.reflectivity = 0.25f;
+    files.width = 2.f;
+    files.height = 3.f;
+    Expect(!ide::run_set_lod_card(game, layer, files), "a card is set");
     ide::LodView card = ide::read_lods(game, rig.crate)[0];
-    Expect(card.texture.id != 0 && card.texture.where == "Textures/Billboards" && card.texture.name == "Crate Card",
-           "its Texture is new, in Textures/Billboards, named after the Prefab");
-    const auto* texture = dynamic_cast<const engine_core::Texture*>(game.instance(card.texture.id));
-    Expect(texture != nullptr && texture->path() == "textures/billboards/Crate.00000001.png", "its Path is the card's");
+    Expect(card.material.id != 0 && card.material.where == "Materials/Billboards" && card.material.name == "Crate Card",
+           "its Material is new, in Materials/Billboards, named after the Prefab");
+    const auto* material = dynamic_cast<const Material*>(game.instance(card.material.id));
+    const engine_core::Texture* color =
+        material != nullptr ? slot_texture(game, *material, Material::kDiffuseTextureReference) : nullptr;
+    const engine_core::Texture* normal =
+        material != nullptr ? slot_texture(game, *material, Material::kNormalTextureReference) : nullptr;
+    Expect(color != nullptr && color->path() == files.color && game.name(color->id()) == "Crate Card Color" &&
+               game.name(game.parent(color->id())) == "Billboards",
+           "its color map is a Texture in Textures/Billboards with the card's Path");
+    Expect(normal != nullptr && normal->path() == files.normal, "and its normal map another");
+    Expect(material != nullptr && slot_texture(game, *material, Material::kRoughnessTextureReference) == nullptr &&
+               std::abs(material->roughness() - 0.8) < 1e-6 && material->metalness() == 0.0 &&
+               std::abs(material->reflectivity() - 0.25) < 1e-6,
+           "a map not saved leaves its slot empty, and the Material's number holds it");
     Expect(card.width == 2.f && card.height == 3.f, "the layer takes the card's size");
     game.history().undo();
     card = ide::read_lods(game, rig.crate)[0];
-    Expect(card.texture.id == 0 && card.width == 4.f &&
-               game.find_first_child(game.service("Textures"), "Billboards") == 0,
-           "one undo takes back the Texture, its folder, and the size");
+    Expect(card.material.id == 0 && card.width == 4.f &&
+               game.find_first_child(game.service("Textures"), "Billboards") == 0 &&
+               game.find_first_child(game.service("Materials"), "Billboards") == 0,
+           "one undo takes back the Material, its Textures, their folders, and the size");
     game.history().redo();
-    const InstanceId first = ide::read_lods(game, rig.crate)[0].texture.id;
-    Expect(!ide::run_set_lod_card(game, layer, "textures/billboards/Crate.00000002.png", 2.5f, 3.f), "baked again");
+    const InstanceId first = ide::read_lods(game, rig.crate)[0].material.id;
+    files.color = "textures/billboards/Crate.color.00000002.png";
+    files.normal.clear();
+    files.roughness_map = "textures/billboards/Crate.roughness.00000002.png";
+    files.roughness = 1.f;
+    files.width = 2.5f;
+    Expect(!ide::run_set_lod_card(game, layer, files), "baked again");
     card = ide::read_lods(game, rig.crate)[0];
-    texture = dynamic_cast<const engine_core::Texture*>(game.instance(card.texture.id));
-    Expect(card.texture.id == first && texture != nullptr && texture->path() == "textures/billboards/Crate.00000002.png",
-           "baked again, the same Texture takes the new card");
+    material = dynamic_cast<const Material*>(game.instance(card.material.id));
+    const engine_core::Texture* recolored =
+        material != nullptr ? slot_texture(game, *material, Material::kDiffuseTextureReference) : nullptr;
+    Expect(card.material.id == first && recolored != nullptr && recolored->id() == color->id() &&
+               recolored->path() == files.color,
+           "baked again, the same Material and color Texture take the new card");
+    Expect(material != nullptr && slot_texture(game, *material, Material::kNormalTextureReference) == nullptr &&
+               slot_texture(game, *material, Material::kRoughnessTextureReference) != nullptr &&
+               material->roughness() == 1.0,
+           "a map no longer saved leaves its slot; a new one takes its own");
 
     // The button: a Billboard's card has it, and a click waits for the next paint to draw.
     rig.frames(2);
@@ -581,41 +624,56 @@ void lod_card_bake() {
     Expect(rig.editor->baking() == layer, "Bake card waits to draw at the next paint");
 }
 
-// The card's frame, its pixels shrunk with their color carried into the clear ones, and its file.
+// The card's frame, its maps shrunk with each one's values carried into the clear pixels, and its files.
 void card_pixels() {
     const ide::CardFrame frame = ide::card_frame({-1.f, -0.5f, -3.f}, {2.f, 6.f, 1.f});
     Expect(frame.width == 6.f && frame.height == 6.f, "a card is twice the widest reach wide, from the origin up");
-    // Six by two: an opaque red block, a block with one opaque blue pixel, and a clear block.
-    runner::ViewPixels render;
+    // Six by two: an opaque red block facing out, a block with one opaque blue
+    // pixel facing right, and a clear block.
+    runner::GBufferPixels render;
     render.width = 6;
     render.height = 2;
-    render.rgba.assign(6 * 2 * 4, 0);
-    const auto put = [&](int x, int y, unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
-        unsigned char* p = render.rgba.data() + (static_cast<std::size_t>(y) * 6 + static_cast<std::size_t>(x)) * 4;
-        p[0] = r;
-        p[1] = g;
-        p[2] = b;
-        p[3] = a;
+    render.albedo.assign(6 * 2 * 4, 0);
+    render.normal.assign(6 * 2 * 3, 0.f);
+    render.material.assign(6 * 2 * 4, 0);
+    render.emissive.assign(6 * 2 * 3, 0.f);
+    const auto put = [&](int x, int y, unsigned char r, unsigned char b, float nx, float nz, unsigned char rough) {
+        const std::size_t at = static_cast<std::size_t>(y) * 6 + static_cast<std::size_t>(x);
+        render.albedo[at * 4] = r;
+        render.albedo[at * 4 + 2] = b;
+        render.albedo[at * 4 + 3] = 255;
+        render.normal[at * 3] = nx;
+        render.normal[at * 3 + 2] = nz;
+        render.material[at * 4 + 1] = rough;
+        render.material[at * 4 + 2] = 128;
     };
     for (int y = 0; y < 2; ++y) {
-        put(0, y, 200, 0, 0, 255);
-        put(1, y, 200, 0, 0, 255);
+        put(0, y, 200, 0, 0.f, 1.f, 100);
+        put(1, y, 200, 0, 0.f, 1.f, 100);
     }
-    put(3, 1, 0, 0, 200, 255);
-    const runner::ViewPixels small = ide::shrink_card(render);
-    Expect(small.width == 3 && small.height == 1, "shrunk to half");
-    if (small.rgba.size() == 12) {
-        Expect(small.rgba[0] == 200 && small.rgba[3] == 255, "a drawn block keeps its color, whole");
-        Expect(small.rgba[6] == 200 && small.rgba[7] == 64, "a part-drawn block keeps the drawn color, a quarter there");
-        Expect(small.rgba[11] == 0 && small.rgba[10] == 200, "a clear block carries its nearest drawn color");
+    put(3, 1, 0, 200, 1.f, 0.f, 200);
+    const ide::CardMaps small = ide::shrink_card(render);
+    Expect(small.color.width == 3 && small.color.height == 1 && small.normal.width == 3, "shrunk to half");
+    if (small.color.rgba.size() == 12 && small.normal.rgba.size() == 12 && small.roughness.rgba.size() == 12) {
+        Expect(small.color.rgba[0] == 200 && small.color.rgba[3] == 255, "a drawn block keeps its color, whole");
+        Expect(small.color.rgba[6] == 200 && small.color.rgba[7] == 64,
+               "a part-drawn block keeps the drawn color, a quarter there");
+        Expect(small.color.rgba[11] == 0 && small.color.rgba[10] == 200,
+               "a clear block carries its nearest drawn color, and stays clear");
+        Expect(small.normal.rgba[0] == 128 && small.normal.rgba[2] == 255 && small.normal.rgba[4] == 255 &&
+                   small.normal.rgba[6] == 128,
+               "each normal shrinks to the drawn ones' direction, x right and z out");
+        Expect(small.roughness.rgba[0] == 100 && small.roughness.rgba[4] == 200 && small.roughness.rgba[8] == 200,
+               "roughness shrinks the same way, carried into the clear block");
+        Expect(std::abs(small.reflectivity - 128.f / 255.f) < 1e-3f, "reflectivity is what was drawn, averaged");
     }
-    const std::string named = ide::card_file("Oak Tree/1", "bytes");
-    Expect(named.rfind("textures/billboards/Oak_Tree_1.", 0) == 0 && named.size() > 4 &&
+    const std::string named = ide::card_file("Oak Tree/1", "color", "bytes");
+    Expect(named.rfind("textures/billboards/Oak_Tree_1.color.", 0) == 0 && named.size() > 4 &&
                named.compare(named.size() - 4, 4, ".png") == 0,
-           "a card's file is in textures/billboards, named after its Prefab");
-    Expect(ide::card_file("Oak", "bytes") == ide::card_file("Oak", "bytes") &&
-               ide::card_file("Oak", "bytes") != ide::card_file("Oak", "other bytes"),
-           "the same card is the same file; a different card, another");
+           "a card's map is a file in textures/billboards, named after its Prefab and map");
+    Expect(ide::card_file("Oak", "color", "bytes") == ide::card_file("Oak", "color", "bytes") &&
+               ide::card_file("Oak", "color", "bytes") != ide::card_file("Oak", "color", "other bytes"),
+           "the same map is the same file; a different one, another");
 }
 
 }  // namespace

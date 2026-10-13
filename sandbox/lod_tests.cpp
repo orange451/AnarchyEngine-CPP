@@ -45,6 +45,13 @@ LodLayer& add_layer(engine_core::DataModel& game, InstanceId prefab, const char*
     return made;
 }
 
+engine_core::Material& add_material(engine_core::DataModel& game, const char* name) {
+    engine_core::Material& made = game.create<engine_core::Material>();
+    game.set_name(made.id(), name);
+    game.set_parent(made.id(), game.service("Materials"));
+    return made;
+}
+
 engine_core::Texture& add_texture(engine_core::DataModel& game, const char* name, const char* path) {
     engine_core::Texture& made = game.create<engine_core::Texture>();
     game.set_name(made.id(), name);
@@ -69,7 +76,7 @@ const engine_core::LuaField& field(const char* name) {
 
 }  // namespace
 
-TEST_CASE("LOD1 a LodLayer's Distance, Kind, Texture and Size: defaults, limits, and the Lua fields",
+TEST_CASE("LOD1 a LodLayer's Distance, Kind, Material and Size: defaults, limits, and the Lua fields",
           "[lod]") {
     SimRole role;
     engine_core::Game game;
@@ -96,9 +103,13 @@ TEST_CASE("LOD1 a LodLayer's Distance, Kind, Texture and Size: defaults, limits,
     REQUIRE_FALSE(layer.set_size({3.f, 12.f}));
     REQUIRE(layer.set_size({0.f, 1.f}).has_value());
     REQUIRE(layer.size().x == 3.f);
-    engine_core::Texture& texture = add_texture(game, "TreeCard", "textures/tree_card.png");
-    REQUIRE_FALSE(layer.set_reference(LodLayer::kTextureReference, instance_slot(texture.id())));
-    REQUIRE(layer.reference(LodLayer::kTextureReference).id == texture.id());
+    engine_core::Material& card = add_material(game, "TreeCard");
+    REQUIRE_FALSE(layer.set_reference(LodLayer::kMaterialReference, instance_slot(card.id())));
+    REQUIRE(layer.reference(LodLayer::kMaterialReference).id == card.id());
+    // Only a Material: a Texture is refused.
+    engine_core::Texture& texture = add_texture(game, "TreeCardTexture", "textures/tree_card.png");
+    REQUIRE(layer.set_reference(LodLayer::kMaterialReference, instance_slot(texture.id())).has_value());
+    REQUIRE(layer.reference(LodLayer::kMaterialReference).id == card.id());
 
     // The Lua fields read and write the same values.
     engine_core::LuaSlot slot;
@@ -114,8 +125,8 @@ TEST_CASE("LOD1 a LodLayer's Distance, Kind, Texture and Size: defaults, limits,
     REQUIRE(field("Size").read(game, layer, slot));
     REQUIRE(slot.vec.x == 3.f);
     REQUIRE(slot.vec.y == 12.f);
-    REQUIRE(field("Texture").read(game, layer, slot));
-    REQUIRE(slot.id == texture.id());
+    REQUIRE(field("Material").read(game, layer, slot));
+    REQUIRE(slot.id == card.id());
 }
 
 TEST_CASE("LOD2 a LodLayer lives in a Prefab, beside its Models, and holds only Models", "[lod]") {
@@ -159,12 +170,12 @@ TEST_CASE("LOD3 each LodLayer edit is one undo step", "[lod]") {
     REQUIRE(layer.size().y == 5.f);
 }
 
-TEST_CASE("LOD4 a Prefab's LodLayers, their Models and Texture survive a save and a load", "[lod][project]") {
+TEST_CASE("LOD4 a Prefab's LodLayers, their Models and Material survive a save and a load", "[lod][project]") {
     SimRole role;
     TempDir dir;
     std::string billboard_guid;
     std::string swap_guid;
-    std::string texture_guid;
+    std::string material_guid;
     {
         engine_core::Project project = engine_core::Project::create(dir.path);
         engine_core::DataModel& game = project.datamodel();
@@ -181,11 +192,11 @@ TEST_CASE("LOD4 a Prefab's LodLayers, their Models and Texture survive a save an
         REQUIRE_FALSE(billboard.set_distance(200.0));
         REQUIRE_FALSE(billboard.set_kind(static_cast<int>(LodKind::Billboard)));
         REQUIRE_FALSE(billboard.set_size({5.f, 11.f}));
-        engine_core::Texture& texture = add_texture(game, "Card", "textures/card.png");
-        REQUIRE_FALSE(billboard.set_reference(LodLayer::kTextureReference, instance_slot(texture.id())));
+        engine_core::Material& card = add_material(game, "Card");
+        REQUIRE_FALSE(billboard.set_reference(LodLayer::kMaterialReference, instance_slot(card.id())));
         billboard_guid = game.guid(billboard.id());
         swap_guid = game.guid(swap.id());
-        texture_guid = game.guid(texture.id());
+        material_guid = game.guid(card.id());
         project.save();
     }
     engine_core::Project loaded = engine_core::Project::load(dir.path);
@@ -202,7 +213,7 @@ TEST_CASE("LOD4 a Prefab's LodLayers, their Models and Texture survive a save an
     REQUIRE(billboard->kind() == LodKind::Billboard);
     REQUIRE(billboard->size().x == 5.f);
     REQUIRE(billboard->size().y == 11.f);
-    REQUIRE(billboard->reference(LodLayer::kTextureReference).id == *loaded.instance_for(texture_guid));
+    REQUIRE(billboard->reference(LodLayer::kMaterialReference).id == *loaded.instance_for(material_guid));
 }
 
 namespace {

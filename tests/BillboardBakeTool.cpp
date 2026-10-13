@@ -105,7 +105,7 @@ int main(int argc, char** argv) {
             engine_core::VisualPrefab visual;
             InstanceId cached = id;
             engine_core::fill_visual_prefab(game, game.guid(id), cached, visual);
-            runner::ViewPixels card;
+            ide::CardMaps card;
             bool done = false;
             for (int pass = 0; pass < 2000 && !done; ++pass) {
                 done = baker.bake(visual, low, high, card);
@@ -113,15 +113,16 @@ int main(int argc, char** argv) {
                     std::this_thread::sleep_for(std::chrono::milliseconds(5));
                 }
             }
-            if (card.empty()) {
+            if (card.color.empty()) {
                 std::printf("%-28s no card\n", game.name(id).c_str());
                 continue;
             }
-            const std::string png = runner::EncodePngWithAlpha(card);
-            const std::string path = ide::card_file(game.name(id), png);
-            const std::filesystem::path file = resources / std::filesystem::u8path(path);
-            std::filesystem::create_directories(file.parent_path());
-            std::ofstream(file, std::ios::binary) << png;
+            ide::CardFiles files;
+            std::string why;
+            if (!ide::save_card(card, resources, game.name(id), files, why)) {
+                std::printf("%-28s %s\n", game.name(id).c_str(), why.c_str());
+                continue;
+            }
             // Its Card layer, made the first time.
             InstanceId layer = game.find_first_child(id, "Card");
             if (dynamic_cast<const engine_core::LodLayer*>(game.instance(layer)) == nullptr) {
@@ -131,15 +132,18 @@ int main(int argc, char** argv) {
             }
             ide::run_set_lod_kind(game, layer, engine_core::LodKind::Billboard);
             ide::run_set_lod_distance(game, layer, distance);
-            const float card_height = ide::card_frame(low, high).height;
-            const float card_width = card_height * static_cast<float>(card.width) / static_cast<float>(card.height);
-            if (std::optional<std::string> error = ide::run_set_lod_card(game, layer, path, card_width, card_height)) {
+            files.height = ide::card_frame(low, high).height;
+            files.width = files.height * static_cast<float>(card.color.width) / static_cast<float>(card.color.height);
+            if (std::optional<std::string> error = ide::run_set_lod_card(game, layer, files)) {
                 std::printf("%-28s %s\n", game.name(id).c_str(), error->c_str());
                 continue;
             }
             ++baked;
-            std::printf("%-28s %4d x %-4d %6.2f x %6.2f units  %s\n", game.name(id).c_str(), card.width, card.height,
-                        card_width, card_height, path.c_str());
+            std::printf("%-28s %4d x %-4d %6.2f x %6.2f units  maps: color%s%s%s%s  roughness %.2f metalness %.2f\n",
+                        game.name(id).c_str(), card.color.width, card.color.height, files.width, files.height,
+                        files.normal.empty() ? "" : " normal", files.roughness_map.empty() ? "" : " roughness",
+                        files.metalness_map.empty() ? "" : " metalness", files.emissive.empty() ? "" : " glow",
+                        files.roughness, files.metalness);
         }
         baker.release();
     }

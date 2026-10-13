@@ -395,8 +395,8 @@ protected:
 // nothing else: bounds, skeleton, and collision read the base layer.
 class LodLayer : public ReferenceAsset {
 public:
-    // reference() index.
-    static constexpr std::size_t kTextureReference = 0;
+    // reference() index: a Billboard's Material, which its card is drawn with.
+    static constexpr std::size_t kMaterialReference = 0;
     static constexpr double kDefaultDistance = 100.0;
     static constexpr Vec2 kDefaultSize{4.f, 8.f};
 

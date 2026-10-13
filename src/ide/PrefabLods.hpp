@@ -25,13 +25,31 @@ struct LodView {
     std::optional<double> until;
     // Another layer at its distance, later in sibling order, draws instead.
     bool covered = false;
-    // Billboard: its Texture, and its Size in units.
-    PartView texture;
+    // Billboard: its Material, and its Size in units.
+    PartView material;
     float width = 0.f;
     float height = 0.f;
     // Model: its Models in sibling order.
     std::vector<ModelView> models;
     bool operator==(const LodView&) const;
+};
+
+// What a bake saved for a card (save_card): each map's Path under the
+// resources folder, empty where the card did not vary, and the numbers its
+// Material takes, a map multiplying its number.
+struct CardFiles {
+    std::string color;
+    std::string normal;
+    std::string roughness_map;
+    std::string metalness_map;
+    std::string emissive;
+    // 1 with its map, which holds it; else the card's one value.
+    float roughness = 1.f;
+    float metalness = 1.f;
+    float reflectivity = 0.5f;
+    // The card's Size, in units.
+    float width = 0.f;
+    float height = 0.f;
 };
 
 // "Model", "Billboard" or "None".
@@ -43,11 +61,6 @@ std::string distance_text(double value);
 // prefab's LodLayers as they draw: nearest first, two at one distance in
 // sibling order. Empty when prefab is not a live Prefab.
 std::vector<LodView> read_lods(const engine_core::DataModel& world, engine_core::InstanceId prefab);
-// Every Texture under its Assets category, by name, ignoring case.
-std::vector<AssetChoice> texture_choices(const engine_core::DataModel& world);
-// Of the dragged ids, the first live Texture, or 0.
-engine_core::InstanceId dragged_texture(const engine_core::DataModel& world,
-                                        const std::vector<engine_core::InstanceId>& ids);
 
 // These run on the simulation thread, each one undo step.
 // A new LodLayer last in prefab: Kind Model, named "LOD" (with a number when
@@ -60,17 +73,18 @@ std::optional<std::string> run_set_lod_distance(engine_core::DataModel& world, e
                                                 double distance);
 std::optional<std::string> run_set_lod_kind(engine_core::DataModel& world, engine_core::InstanceId layer,
                                             engine_core::LodKind kind);
-// texture 0 clears it.
-std::optional<std::string> run_set_lod_texture(engine_core::DataModel& world, engine_core::InstanceId layer,
-                                               engine_core::InstanceId texture);
+// material 0 clears it.
+std::optional<std::string> run_set_lod_material(engine_core::DataModel& world, engine_core::InstanceId layer,
+                                                engine_core::InstanceId material);
 std::optional<std::string> run_set_lod_size(engine_core::DataModel& world, engine_core::InstanceId layer, float width,
                                             float height);
-// A card baked for layer (BillboardBaker), saved at path under the resources
-// folder, as layer's Texture and Size, width by height units. The Texture is
-// layer's own when it already shows a card from Assets' Textures/Billboards
-// folder, else a new one there, named after the Prefab; its Path becomes
-// path. One undo step.
+// A card baked for layer (BillboardBaker), saved as files says, as layer's
+// Material and Size. The Material is layer's own when it already draws a card
+// from Assets' Materials/Billboards folder, else a new one there named after
+// the Prefab; each map is a Texture in Textures/Billboards, the Material's own
+// when it has one from there in that slot, its Path the map's. A map not saved
+// leaves its slot empty, and the Material's number holds it. One undo step.
 std::optional<std::string> run_set_lod_card(engine_core::DataModel& world, engine_core::InstanceId layer,
-                                            const std::string& path, float width, float height);
+                                            const CardFiles& files);
 
 }  // namespace ide

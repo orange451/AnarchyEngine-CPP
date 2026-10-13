@@ -639,7 +639,7 @@ constexpr ReferenceSpec kModelRefs[] = {
 };
 
 constexpr ReferenceSpec kLodLayerRefs[] = {
-    {"Texture", "Texture"},
+    {"Material", "Material"},
 };
 
 static_assert(std::size(kMaterialRefs) <= ReferenceAsset::kMaxReferences);
@@ -1259,7 +1259,7 @@ ANARCHY_LUA_REGISTER(register_asset_instances_lua) {
     const LuaField lod_layer_fields[] = {
         lua_saved_property("Distance", "number", read_lod_distance, write_lod_distance, lod_distance.c_str()),
         lua_saved_enum("Kind", lod_kind_enum(), read_lod_kind, write_lod_kind, "\"Model\""),
-        lua_shown_when(lua_saved_property("Texture", "Texture?", read_reference<0>, write_reference<0>, "null"),
+        lua_shown_when(lua_saved_property("Material", "Material?", read_reference<0>, write_reference<0>, "null"),
                        "Kind", {static_cast<int>(LodKind::Billboard)}),
         lua_shown_when(lua_saved_property("Size", "Vector2", read_lod_size, write_lod_size, lod_size.c_str()),
                        "Kind", {static_cast<int>(LodKind::Billboard)}),

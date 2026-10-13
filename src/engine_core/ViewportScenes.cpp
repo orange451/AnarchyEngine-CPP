@@ -57,9 +57,8 @@ bool same_meshes(const std::vector<VisualMesh>& a, const std::vector<VisualMesh>
 }
 
 bool same_lod(const VisualLod& a, const VisualLod& b) {
-    return a.distance == b.distance && a.kind == b.kind && same_meshes(a.meshes, b.meshes) && a.texture == b.texture &&
-           a.texture_flip_y == b.texture_flip_y && a.texture_always_loaded == b.texture_always_loaded &&
-           a.width == b.width && a.height == b.height;
+    return a.distance == b.distance && a.kind == b.kind && same_meshes(a.meshes, b.meshes) &&
+           same_mesh(a.card, b.card) && a.width == b.width && a.height == b.height;
 }
 
 bool same_prefab(const VisualPrefab& a, const VisualPrefab& b) {

@@ -265,11 +265,9 @@ struct VisualLod {
     LodKind kind = LodKind::Model;
     // Model: one per Model of the layer, in child order, as VisualPrefab::meshes.
     std::vector<VisualMesh> meshes;
-    // Billboard: its Texture's Path (empty for none), FlipY and Streaming, and
-    // its Size in units, width and height.
-    std::string texture;
-    bool texture_flip_y = false;
-    bool texture_always_loaded = false;
+    // Billboard: its Material, as a Model's fills a VisualMesh (its mesh
+    // fields unused: the card is a quad), and its Size in units.
+    VisualMesh card;
     float width = 0.f;
     float height = 0.f;
 };

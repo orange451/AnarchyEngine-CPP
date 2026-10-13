@@ -100,6 +100,8 @@ private:
     // What draw handed the planner, and the MeshDraw each came from.
     std::vector<ShadowCaster> casters_;
     std::vector<int> casterMeshes_;
+    // Per block of draws while draw finds the casters on worker threads.
+    std::vector<std::vector<int>> casterBlocks_;
     // Not owned: setDrawItems'.
     const DrawItem* items_ = nullptr;
     // The casters of every tile or cascade drawn this frame, as instanced runs.

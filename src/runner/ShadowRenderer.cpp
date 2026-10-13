@@ -2,8 +2,10 @@
 
 #include "Renderer.hpp"
 #include "ShaderFile.hpp"
+#include "ParallelBlocks.hpp"
 #include "amesh.hpp"
 #include "gl.hpp"
+#include "profiler/Profiler.hpp"
 
 #include <algorithm>
 #include <cstdio>
@@ -205,26 +207,38 @@ bool ShadowRenderer::draw(const std::vector<ShadowRequest>& requests, const Mesh
         plannedMinTile_ = settings.minTile;
         plannedMaxTile_ = settings.maxTile;
     }
-    casters_.clear();
-    casterMeshes_.clear();
-    for (int index = 0; index < count; ++index) {
-        const MeshDraw& mesh = meshes[index];
-        // See-through surfaces cast nothing, as in the legacy engine.
-        // A terrain node (terrainLook) is always opaque, so it always casts,
-        // but of two levels cross-fading only the one fading in, whole.
-        if (mesh.mesh == nullptr || !mesh.mesh->valid() || !mesh.castsShadow || (mesh.transparency > 0.f && mesh.terrainLook == 0) ||
-            (mesh.terrainLook != 0 && !mesh.terrainFadeIn)) {
-            continue;
-        }
-        ShadowCaster caster;
-        caster.mesh = reinterpret_cast<std::uintptr_t>(mesh.mesh);
-        caster.revision = mesh.mesh->generation();
-        caster.pose = mesh.bones != nullptr ? mesh.poseRevision : 0;
-        caster.owner = mesh.owner;
-        caster.model = mesh.model;
-        caster.bounds = spheres[index];
-        casters_.push_back(caster);
-        casterMeshes_.push_back(index);
+    {
+        PROFILE_SCOPE("Shadow casters", profiler::Group::Render);
+        // Which draws cast, in draw order, then each one's caster: blocks of
+        // draws on worker threads.
+        constexpr std::size_t kGrain = 8192;
+        const auto total = static_cast<std::size_t>(std::max(count, 0));
+        ParallelSelect(
+            total, kGrain,
+            [&](std::size_t index) {
+                const MeshDraw& mesh = meshes[index];
+                // See-through surfaces cast nothing, as in the legacy engine.
+                // A terrain node (terrainLook) is always opaque, so it always casts,
+                // but of two levels cross-fading only the one fading in, whole.
+                return !(mesh.mesh == nullptr || !mesh.mesh->valid() || !mesh.castsShadow ||
+                         (mesh.transparency > 0.f && mesh.terrainLook == 0) ||
+                         (mesh.terrainLook != 0 && !mesh.terrainFadeIn));
+            },
+            casterBlocks_, casterMeshes_);
+        casters_.resize(casterMeshes_.size());
+        ParallelBlocks(casterMeshes_.size(), kGrain, [&](std::size_t, std::size_t begin, std::size_t end) {
+            for (std::size_t at = begin; at < end; ++at) {
+                const int index = casterMeshes_[at];
+                const MeshDraw& mesh = meshes[index];
+                ShadowCaster& caster = casters_[at];
+                caster.mesh = reinterpret_cast<std::uintptr_t>(mesh.mesh);
+                caster.revision = mesh.mesh->generation();
+                caster.pose = mesh.bones != nullptr ? mesh.poseRevision : 0;
+                caster.owner = mesh.owner;
+                caster.model = mesh.model;
+                caster.bounds = spheres[index];
+            }
+        });
     }
 
     ShadowPlan plan = planner_.plan(requests, casters_, camera, settings);
@@ -344,21 +358,28 @@ bool ShadowRenderer::drawSun(const SunRequest* sun, const MeshDraw* meshes, cons
         glReadBuffer(RT_GL_NONE);
         planner_.forgetCascades();
     }
-    const std::vector<CascadeDraw> draws = planner_.planCascades(sun, casters_, camera, settings);
+    std::vector<CascadeDraw> draws;
+    {
+        PROFILE_SCOPE("Cascade plan", profiler::Group::Render);
+        draws = planner_.planCascades(sun, casters_, camera, settings);
+    }
     if (draws.empty()) {
         return true;
     }
     // Unreadable until these draws commit: a layer redrawn before one fails
     // would no longer match the matrices the last commit kept.
     planner_.forgetCascades();
-    casterRuns_.clear();
-    casterRows_.clear();
-    tileRuns_.clear();
-    for (const CascadeDraw& draw : draws) {
-        const int first = addCasterRuns(draw.casters, meshes);
-        tileRuns_.emplace_back(first, static_cast<int>(casterRuns_.size()));
+    {
+        PROFILE_SCOPE("Cascade casters", profiler::Group::Render);
+        casterRuns_.clear();
+        casterRows_.clear();
+        tileRuns_.clear();
+        for (const CascadeDraw& draw : draws) {
+            const int first = addCasterRuns(draw.casters, meshes);
+            tileRuns_.emplace_back(first, static_cast<int>(casterRuns_.size()));
+        }
+        instances_.upload(casterRows_.data(), static_cast<int>(casterRows_.size()));
     }
-    instances_.upload(casterRows_.data(), static_cast<int>(casterRows_.size()));
     glBindFramebuffer(RT_GL_FRAMEBUFFER, cascadeFbo_);
     begin();
     glViewport(0, 0, size, size);

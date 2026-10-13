@@ -1,9 +1,11 @@
 #include "ShadowPlanner.hpp"
 
+#include "ParallelBlocks.hpp"
 #include "RenderMath.hpp"
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <numeric>
 
 namespace runner {
@@ -12,29 +14,39 @@ namespace {
 using engine_core::Matrix4;
 using engine_core::Vec3;
 
-// 64-bit FNV-1a over the bytes of what is added.
+// A 64-bit hash of what is added, eight bytes at a step. Each step is a
+// bijection of the running value for a given word, so two inputs that differ
+// in one word never hash alike. Only ever compared with itself, frame to frame.
 class Hasher {
 public:
     template <typename T>
     void add(const T& value) {
         const auto* bytes = reinterpret_cast<const unsigned char*>(&value);
-        for (std::size_t i = 0; i < sizeof(T); ++i) {
-            value_ ^= bytes[i];
-            value_ *= 1099511628211ull;
+        std::size_t i = 0;
+        for (; i + 8 <= sizeof(T); i += 8) {
+            std::uint64_t word = 0;
+            std::memcpy(&word, bytes + i, 8);
+            mix(word);
+        }
+        for (; i < sizeof(T); ++i) {
+            mix(bytes[i]);
         }
     }
     std::uint64_t value() const { return value_; }
 
 private:
+    void mix(std::uint64_t word) {
+        value_ = (value_ ^ word) * 0x9e3779b97f4a7c15ull;
+        value_ ^= value_ >> 29;
+    }
+
     std::uint64_t value_ = 1469598103934665603ull;
 };
 
-// Each caster's own fingerprint, worked out once a call: which geometry, which
-// upload of it, how it is posed, and where. A light or cascade folds in these,
-// not their bytes.
-// Worked out only for the casters a light or a cascade reaches: with
-// hundreds of thousands of casters, hashing them all every frame cost more
-// than the shadows.
+// Each caster's own fingerprint: which geometry, which upload of it, how it is
+// posed, and where. A light or cascade folds in these, not their bytes. Worked
+// out only for the casters a light or a cascade reaches: with hundreds of
+// thousands of casters, hashing them all every frame cost more than the shadows.
 std::uint64_t CasterHash(const ShadowCaster& caster) {
     Hasher hash;
     hash.add(caster.mesh);
@@ -516,7 +528,8 @@ const LocalShadow* ShadowPlanner::find(std::uint64_t key) const {
 }
 
 std::vector<CascadeDraw> ShadowPlanner::planCascades(const SunRequest* sun, const std::vector<ShadowCaster>& casters,
-                                                     const CameraView& camera, const ShadowSettings& settings) {
+                                                     const CameraView& camera, const ShadowSettings& settings,
+                                                     std::size_t grain) {
     std::vector<CascadeDraw> draws;
     cascadePending_ = false;
     if (sun == nullptr || !(sun->shadowDistance > camera.nearZ)) {
@@ -535,41 +548,93 @@ std::vector<CascadeDraw> ShadowPlanner::planCascades(const SunRequest* sun, cons
     // testing it against a cascade is comparing it with the box's six sides:
     // the same test as the frustum's six planes, without them.
     const engine_core::Matrix4 lightView = CascadeLightView(sun->shine);
-    lit_.resize(casters.size());
-    for (std::size_t c = 0; c < casters.size(); ++c) {
-        const engine_core::Vec3 at = engine_core::matrix4_point(lightView, casters[c].bounds.center);
-        lit_[c] = LitCaster{at.x, at.y, -at.z, casters[c].bounds.radius};
-    }
+    const std::size_t casterCount = casters.size();
+    lit_.resize(casterCount);
+    // Blocks of casters on worker threads, each pass joined in block order,
+    // so the lists and the hash come out as one loop would make them.
+    cascadeBlocks_.resize(BlockCount(casterCount, grain));
+    ParallelBlocks(casterCount, grain, [&](std::size_t, std::size_t begin, std::size_t end) {
+        for (std::size_t c = begin; c < end; ++c) {
+            const engine_core::Vec3 at = engine_core::matrix4_point(lightView, casters[c].bounds.center);
+            lit_[c] = LitCaster{at.x, at.y, -at.z, casters[c].bounds.radius};
+        }
+    });
     const auto in_box = [](const LitCaster& lit, const CascadeFit& box, bool ignoreNear) {
         return SphereInCascadeBox(box, lit.x, lit.y, lit.depth, lit.radius, ignoreNear);
     };
+    // The sun's own meshes cast nothing for it.
+    const auto own = [&](std::size_t c) { return sun->owner != 0 && casters[c].owner == sun->owner; };
+    Sphere slices[kMaxCascades];
+    CascadeFit boxes[kMaxCascades];
     for (int i = 0; i < count; ++i) {
-        const Sphere slice =
-            FrustumSliceSphere(camera.world, camera.fovYDegrees, camera.aspect, splits[i], splits[i + 1]);
-        const CascadeFit box = FitCascade(slice, sun->shine, settings.cascadeSize);
-        // How far toward the sun to reach, so a caster outside the slice that
-        // shades it is still drawn. The sun's own meshes cast nothing for it.
-        float pull = 0.f;
-        for (std::size_t c = 0; c < casters.size(); ++c) {
-            if ((sun->owner != 0 && casters[c].owner == sun->owner) || !in_box(lit_[c], box, true)) {
+        slices[i] = FrustumSliceSphere(camera.world, camera.fovYDegrees, camera.aspect, splits[i], splits[i + 1]);
+        boxes[i] = FitCascade(slices[i], sun->shine, settings.cascadeSize);
+    }
+    // How far toward the sun each cascade reaches, so a caster outside its
+    // slice that shades it is still drawn: the most any caster in it asks.
+    ParallelBlocks(casterCount, grain, [&](std::size_t block, std::size_t begin, std::size_t end) {
+        float* pull = cascadeBlocks_[block].pull;
+        std::fill(pull, pull + kMaxCascades, 0.f);
+        for (std::size_t c = begin; c < end; ++c) {
+            if (own(c)) {
                 continue;
             }
-            const float nearest = lit_[c].depth - lit_[c].radius;
-            pull = std::max(pull, box.nearDepth - nearest);
+            const LitCaster& lit = lit_[c];
+            const float nearest = lit.depth - lit.radius;
+            for (int i = 0; i < count; ++i) {
+                if (in_box(lit, boxes[i], true)) {
+                    pull[i] = std::max(pull[i], boxes[i].nearDepth - nearest);
+                }
+            }
         }
-        const CascadeFit fit = FitCascade(slice, sun->shine, settings.cascadeSize, std::min(pull, pullLimit));
-        hash.add(fit.viewProjection);
+    });
+    CascadeFit fits[kMaxCascades];
+    for (int i = 0; i < count; ++i) {
+        float pull = 0.f;
+        for (const CascadeBlock& block : cascadeBlocks_) {
+            pull = std::max(pull, block.pull[i]);
+        }
+        fits[i] = FitCascade(slices[i], sun->shine, settings.cascadeSize, std::min(pull, pullLimit));
+    }
+    ParallelBlocks(casterCount, grain, [&](std::size_t block, std::size_t begin, std::size_t end) {
+        CascadeBlock& mine = cascadeBlocks_[block];
+        for (int i = 0; i < count; ++i) {
+            mine.inside[i].clear();
+            mine.hashes[i].clear();
+        }
+        for (std::size_t c = begin; c < end; ++c) {
+            if (own(c)) {
+                continue;
+            }
+            // Worked out once, however many cascades hold it.
+            std::uint64_t fingerprint = 0;
+            bool hashed = false;
+            for (int i = 0; i < count; ++i) {
+                if (!in_box(lit_[c], fits[i], false)) {
+                    continue;
+                }
+                if (!hashed) {
+                    fingerprint = CasterHash(casters[c]);
+                    hashed = true;
+                }
+                mine.inside[i].push_back(static_cast<int>(c));
+                mine.hashes[i].push_back(fingerprint);
+            }
+        }
+    });
+    for (int i = 0; i < count; ++i) {
+        hash.add(fits[i].viewProjection);
         // Kept from frame to frame, so a frame that changes nothing allocates nothing.
         std::vector<int>& inside = cascadeCasters_[i];
         inside.clear();
-        for (std::size_t c = 0; c < casters.size(); ++c) {
-            if ((sun->owner == 0 || casters[c].owner != sun->owner) && in_box(lit_[c], fit, false)) {
-                inside.push_back(static_cast<int>(c));
-                hash.add(CasterHash(casters[c]));
+        for (const CascadeBlock& block : cascadeBlocks_) {
+            inside.insert(inside.end(), block.inside[i].begin(), block.inside[i].end());
+            for (const std::uint64_t fingerprint : block.hashes[i]) {
+                hash.add(fingerprint);
             }
         }
-        next.viewProjection[i] = fit.viewProjection;
-        next.texelWorld[i] = fit.texelWorld;
+        next.viewProjection[i] = fits[i].viewProjection;
+        next.texelWorld[i] = fits[i].texelWorld;
     }
     if (cascadeReady_ && hash.value() == cascadeHash_) {
         return draws;

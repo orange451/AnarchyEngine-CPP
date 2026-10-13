@@ -12,6 +12,7 @@
 #include "TextureCache.hpp"
 #include "ViewportRenderer.hpp"
 #include "Renderer.hpp"
+#include "SceneDraws.hpp"
 #include "types.hpp"
 
 #include <atomic>
@@ -222,6 +223,10 @@ private:
     // colors, then one draw per row and mesh at that row's Transform.
     std::vector<std::vector<MeshDraw>> prefabMeshes_;
     std::vector<MeshDraw> meshDraws_;
+    // The rows' draws at the front of meshDraws_, kept from frame to frame,
+    // and which of them the last collectMeshes wrote.
+    RowDrawCache rowDraws_;
+    std::vector<DrawRange> rowDrawsWritten_;
     // Per frame: each enabled PointLight, SpotLight, and DirectionalLight in the snapshot.
     std::vector<LightDraw> lightDraws_;
     // The session game. The runner keeps it alive for this view.

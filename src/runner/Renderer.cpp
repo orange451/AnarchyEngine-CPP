@@ -4,6 +4,7 @@
 
 #include "ColorSpace.hpp"
 #include "OcclusionMath.hpp"
+#include "ParallelBlocks.hpp"
 #include "RenderMath.hpp"
 #include "ShaderFile.hpp"
 #include "TerrainTextures.hpp"
@@ -2052,51 +2053,61 @@ CameraView Renderer::cameraView(const float* projection) const {
 void Renderer::findVisible(const MeshDraw* meshes, int count, const CameraView& camera) {
     {
         PROFILE_SCOPE("Visibility", profiler::Group::Render);
-        drawItems_.resize(static_cast<std::size_t>(count));
+        const auto total = static_cast<std::size_t>(std::max(count, 0));
+        drawItems_.resize(total);
         bonePalette_.clear();
-        for (int index = 0; index < count; ++index) {
-            const MeshDraw& draw = meshes[index];
-            DrawItem& item = drawItems_[static_cast<std::size_t>(index)];
-            item = DrawItem{};
-            item.model = &draw.model;
-            item.transparency = draw.transparency;
-            // As the passes have always skipped: no mesh, not uploaded, or wholly see-through.
-            item.drawable = draw.mesh != nullptr && draw.mesh->valid() &&
-                            (draw.terrainLook != 0 || !(draw.transparency >= 1.f));
-            if (item.drawable) {
-                item.boundsMin = draw.mesh->bounds_min();
-                item.boundsMax = draw.mesh->bounds_max();
-                // Posed, it reaches where its bones are: cull by that, and
-                // pack its matrices for every pass that draws it.
-                if (draw.bones != nullptr && draw.boneCount > 0) {
-                    item.boundsMin = draw.poseMin;
-                    item.boundsMax = draw.poseMax;
-                    item.boneBase = bonePalette_.add(draw.bones, draw.boneCount);
+        posedBlocks_.resize(BlockCount(total, kVisibilityGrain));
+        ParallelBlocks(total, kVisibilityGrain, [&](std::size_t block, std::size_t begin, std::size_t end) {
+            std::vector<int>& posed = posedBlocks_[block];
+            posed.clear();
+            for (std::size_t index = begin; index < end; ++index) {
+                const MeshDraw& draw = meshes[index];
+                DrawItem& item = drawItems_[index];
+                item = DrawItem{};
+                item.model = &draw.model;
+                item.transparency = draw.transparency;
+                item.lod = draw.lod;
+                // As the passes have always skipped: no mesh, not uploaded, or wholly see-through.
+                item.drawable = draw.mesh != nullptr && draw.mesh->valid() &&
+                                (draw.terrainLook != 0 || !(draw.transparency >= 1.f));
+                if (item.drawable) {
+                    item.boundsMin = draw.mesh->bounds_min();
+                    item.boundsMax = draw.mesh->bounds_max();
+                    // Posed, it reaches where its bones are: cull by that, and
+                    // pack its matrices for every pass that draws it.
+                    if (draw.bones != nullptr && draw.boneCount > 0) {
+                        item.boundsMin = draw.poseMin;
+                        item.boundsMax = draw.poseMax;
+                        posed.push_back(static_cast<int>(index));
+                    }
+                }
+                item.tint = draw.tint;
+                // A terrain chunk is opaque, drawn alone, and sorted after every
+                // other opaque draw so the geometry pass switches program once.
+                item.terrain = draw.terrainLook != 0;
+                item.shadowOnly = draw.shadowOnly;
+                if (item.terrain) {
+                    item.transparency = 0.f;
+                    item.slot = 0;
+                } else {
+                    item.slot = draw.slot;
                 }
             }
-            item.tint = draw.tint;
-            // A terrain chunk is opaque, drawn alone, and sorted after every
-            // other opaque draw so the geometry pass switches program once.
-            item.terrain = draw.terrainLook != 0;
-            item.shadowOnly = draw.shadowOnly;
-            if (item.terrain) {
-                item.transparency = 0.f;
-                item.slot = 0;
-            } else {
-                item.slot = draw.slot;
+        });
+        // In draw order, as one loop packed them.
+        for (const std::vector<int>& posed : posedBlocks_) {
+            for (const int index : posed) {
+                drawItems_[static_cast<std::size_t>(index)].boneBase =
+                    bonePalette_.add(meshes[index].bones, meshes[index].boneCount);
             }
         }
         // Once a frame, before any pass: the geometry, see-through, and shadow
         // passes all read it, on its own unit.
         boneTexture_.upload(bonePalette_);
         shadows_.setDrawItems(drawItems_.data());
+        PROFILE_SCOPE("Frustum", profiler::Group::Render);
+        // A draw that names its LOD (Brush Materials) keeps it: FindVisible copies each item's.
         FindVisible(drawItems_.data(), count, camera, culling_, visibility_);
-        // A draw that names its LOD (Brush Materials) keeps it.
-        for (std::vector<VisibleDraw>* list : {&visibility_.opaque, &visibility_.transparent}) {
-            for (VisibleDraw& visible : *list) {
-                visible.lod = meshes[visible.index].lod;
-            }
-        }
         stats_.draws = count;
         stats_.visible = static_cast<int>(visibility_.opaque.size() + visibility_.transparent.size());
         stats_.culled = visibility_.culled;

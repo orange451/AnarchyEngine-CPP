@@ -48,18 +48,24 @@ struct DrawBatches {
         float depth = 0.f;
         int index = 0;
         std::uint8_t lod = 0;
+        // Its DrawItem's, kept here so sorting reads only the entries.
+        bool terrain = false;
     };
     std::vector<Entry> order;
 };
+
+// Draws BuildBatches gives each worker thread at a time.
+constexpr std::size_t kBatchGrain = 8192;
 
 // Sorts visible's opaque draws by BatchKey, nearest first within a key (a
 // terrain chunk by the middle of its own mesh box, as one Terrain's chunks
 // share a model; anything else by its model's origin), into
 // runs; a slot 0 draw or a terrain chunk is always a run of its own, and
 // terrain chunks come after every other opaque run. Then each see-through draw,
-// farthest first by its Transform's depth in view, as a run of 1.
+// farthest first by its Transform's depth in view, as a run of 1. Blocks of
+// grain draws run on worker threads; the result is the same whatever the grain.
 void BuildBatches(const DrawItem* items, const VisibilityResult& visible, const engine_core::Matrix4& view,
-                  DrawBatches& out);
+                  DrawBatches& out, std::size_t grain = kBatchGrain);
 
 // slot << 32 | lod << 1 | mirrored.
 std::uint64_t BatchKey(std::uint32_t slot, std::uint8_t lod, bool mirrored);

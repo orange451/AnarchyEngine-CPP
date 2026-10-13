@@ -77,6 +77,10 @@ public:
     // in this list and its copies. Rows [k * kChunkRows, ...) are in it.
     std::size_t chunk_count() const { return chunks_.size(); }
     const Chunk* chunk(std::size_t k) const { return chunks_[k].get(); }
+    // Chunk k itself, for a reader that keeps it: while it is kept, no other
+    // rows are ever stored at its address, and a writer of this list copies
+    // it before writing.
+    std::shared_ptr<const Chunk> shared_chunk(std::size_t k) const { return chunks_[k]; }
 
     class const_iterator {
     public:

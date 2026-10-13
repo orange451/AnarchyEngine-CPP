@@ -1,5 +1,7 @@
 #include "Visibility.hpp"
 
+#include "ParallelBlocks.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -29,33 +31,64 @@ float ScreenRadius(const Sphere& sphere, const CameraView& camera) {
     return ScreenRadiusScaled(sphere, camera, std::tan(halfFov));
 }
 
-void FindVisible(const DrawItem* items, int count, const CameraView& camera, bool cull, VisibilityResult& out) {
-    count = std::max(count, 0);
-    out.spheres.assign(static_cast<std::size_t>(count), Sphere{});
+void FindVisible(const DrawItem* items, int count, const CameraView& camera, bool cull, VisibilityResult& out,
+                 std::size_t grain) {
+    const auto total = static_cast<std::size_t>(std::max(count, 0));
+    // Every sphere is written below, so the old ones need no clearing.
+    out.spheres.resize(total);
     out.opaque.clear();
     out.transparent.clear();
     out.culled = 0;
     const Frustum frustum = MakeFrustum(camera.viewProjection);
     const float halfFov = camera.fovYDegrees * 0.5f * 0.01745329252f;
     const float tanHalfFov = std::tan(halfFov);
-    for (int index = 0; index < count; ++index) {
-        const DrawItem& item = items[index];
-        if (!item.drawable) {
-            continue;
+    const std::size_t blockCount = BlockCount(total, grain);
+    const bool alone = blockCount == 1;
+    if (!alone) {
+        out.blocks.resize(blockCount);
+    }
+    ParallelBlocks(total, grain, [&](std::size_t block, std::size_t begin, std::size_t end) {
+        // One block writes straight into the result.
+        VisibilityResult::Block* mine = alone ? nullptr : &out.blocks[block];
+        std::vector<VisibleDraw>& opaque = alone ? out.opaque : mine->opaque;
+        std::vector<VisibleDraw>& transparent = alone ? out.transparent : mine->transparent;
+        opaque.clear();
+        transparent.clear();
+        int culled = 0;
+        for (std::size_t index = begin; index < end; ++index) {
+            const DrawItem& item = items[index];
+            if (!item.drawable) {
+                out.spheres[index] = Sphere{};
+                continue;
+            }
+            const Sphere sphere = WorldBounds(*item.model, item.boundsMin, item.boundsMax);
+            out.spheres[index] = sphere;
+            if (item.shadowOnly) {
+                continue;
+            }
+            if (cull && !SphereInFrustum(frustum, sphere)) {
+                ++culled;
+                continue;
+            }
+            VisibleDraw visible;
+            visible.index = static_cast<int>(index);
+            visible.screenRadius = ScreenRadiusScaled(sphere, camera, tanHalfFov);
+            visible.lod = item.lod;
+            (item.transparency > 0.f ? transparent : opaque).push_back(visible);
         }
-        const Sphere sphere = WorldBounds(*item.model, item.boundsMin, item.boundsMax);
-        out.spheres[static_cast<std::size_t>(index)] = sphere;
-        if (item.shadowOnly) {
-            continue;
+        if (alone) {
+            out.culled = culled;
+        } else {
+            mine->culled = culled;
         }
-        if (cull && !SphereInFrustum(frustum, sphere)) {
-            ++out.culled;
-            continue;
-        }
-        VisibleDraw visible;
-        visible.index = index;
-        visible.screenRadius = ScreenRadiusScaled(sphere, camera, tanHalfFov);
-        (item.transparency > 0.f ? out.transparent : out.opaque).push_back(visible);
+    });
+    if (alone) {
+        return;
+    }
+    for (const VisibilityResult::Block& block : out.blocks) {
+        out.opaque.insert(out.opaque.end(), block.opaque.begin(), block.opaque.end());
+        out.transparent.insert(out.transparent.end(), block.transparent.begin(), block.transparent.end());
+        out.culled += block.culled;
     }
 }
 

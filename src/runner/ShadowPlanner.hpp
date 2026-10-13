@@ -210,10 +210,16 @@ public:
     // Forgets every map and the atlas, as when the settings or the context change.
     void clear();
 
+    // Casters planCascades gives each worker thread at a time.
+    static constexpr std::size_t kCascadeGrain = 8192;
+
     // The sun's cascades to draw this frame: none when nothing they are fitted
     // to or cast from changed since the last committed ones, or with no sun.
+    // Blocks of grain casters run on worker threads; the plan is the same
+    // whatever the grain.
     std::vector<CascadeDraw> planCascades(const SunRequest* sun, const std::vector<ShadowCaster>& casters,
-                                          const CameraView& camera, const ShadowSettings& settings);
+                                          const CameraView& camera, const ShadowSettings& settings,
+                                          std::size_t grain = kCascadeGrain);
     void commitCascades();
     // The cascades as last drawn, or null with none.
     const CascadeShadow* cascades() const { return cascadeReady_ ? &cascade_ : nullptr; }
@@ -306,6 +312,15 @@ private:
     };
     std::vector<LitCaster> lit_;
     std::vector<int> cascadeCasters_[kMaxCascades];
+    // Per block of casters while planCascades runs blocks on worker threads:
+    // how far each cascade pulls toward the sun, and the casters inside each
+    // cascade with their fingerprints, joined in block order.
+    struct CascadeBlock {
+        float pull[kMaxCascades] = {};
+        std::vector<int> inside[kMaxCascades];
+        std::vector<std::uint64_t> hashes[kMaxCascades];
+    };
+    std::vector<CascadeBlock> cascadeBlocks_;
 };
 
 }  // namespace runner

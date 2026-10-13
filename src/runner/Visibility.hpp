@@ -4,6 +4,7 @@
 #include "ShadowMath.hpp"
 #include "ShadowPlanner.hpp"
 
+#include <cstddef>
 #include <cstdint>
 #include <vector>
 
@@ -34,6 +35,8 @@ struct DrawItem {
     int boneBase = -1;
     // Shadows only (MeshDraw::shadowOnly): its sphere is found, but it is never visible.
     bool shadowOnly = false;
+    // Which of its mesh's LODs it draws (MeshDraw::lod), copied into its VisibleDraw.
+    std::uint8_t lod = 0;
 };
 
 // A drawable mesh the camera may see.
@@ -42,7 +45,7 @@ struct VisibleDraw {
     int index = 0;
     // Its sphere's radius as projected, in pixels; infinite with the camera inside it. Read by tests and kept for a future LOD pick.
     float screenRadius = 0.f;
-    // Which LOD it draws: copied from MeshDraw::lod by findVisible.
+    // Which LOD it draws: its DrawItem's.
     std::uint8_t lod = 0;
 };
 
@@ -55,13 +58,27 @@ struct VisibilityResult {
     std::vector<VisibleDraw> transparent;
     // Drawable, but outside the view.
     int culled = 0;
+
+    // Each block's lists while FindVisible runs blocks apart, joined in block order.
+    struct Block {
+        std::vector<VisibleDraw> opaque;
+        std::vector<VisibleDraw> transparent;
+        int culled = 0;
+    };
+    std::vector<Block> blocks;
 };
+
+// Items FindVisible gives each worker thread at a time.
+constexpr std::size_t kVisibilityGrain = 8192;
 
 // Each drawable item's world sphere and, when cull is set, whether it is in
 // camera's view. With cull false every drawable item is visible but a
 // shadowOnly one, which is never visible. Conservative: an item just past a
 // corner of the view may count as visible; one in view never counts as culled.
-void FindVisible(const DrawItem* items, int count, const CameraView& camera, bool cull, VisibilityResult& out);
+// Blocks of grain items run on worker threads; the lists come out in item
+// order whatever the grain.
+void FindVisible(const DrawItem* items, int count, const CameraView& camera, bool cull, VisibilityResult& out,
+                 std::size_t grain = kVisibilityGrain);
 
 // sphere's radius in pixels as camera sees it: radius * paneHeight /
 // (2 * distance * tan(fovY / 2)). Infinite when the camera is inside it.

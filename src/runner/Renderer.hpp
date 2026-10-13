@@ -42,6 +42,9 @@ namespace runner {
 // One uploaded AMESH at a GameObject's Transform (column-major, world space),
 // shaded by its Material: the diffuse texture times color times the mesh's
 // vertex colors, lit by the scene's lights.
+// A field added here goes in SameDraw (SceneDraws.cpp) too: a scene view keeps
+// its rows' draws from frame to frame, and draws them again when a template
+// draw is no longer the same.
 struct MeshDraw {
     const anarchy::amesh::GpuMesh* mesh = nullptr;
     engine_core::Matrix4 model = engine_core::matrix4_identity();
@@ -981,6 +984,8 @@ private:
     BonePalette bonePalette_;
     BoneTexture boneTexture_;
     std::vector<DrawItem> drawItems_;
+    // Per block of draws in findVisible: the posed ones, whose bones are packed after, in draw order.
+    std::vector<std::vector<int>> posedBlocks_;
     VisibilityResult visibility_;
     bool culling_ = true;
     RenderStats stats_;

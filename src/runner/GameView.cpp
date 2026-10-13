@@ -399,7 +399,8 @@ void GameView::requestCapture(std::function<void(ViewPixels)> done) {
 }
 
 void GameView::collectMeshes() {
-    meshDraws_.clear();
+    // meshDraws_ is not cleared: rowDraws_ keeps the rows' draws at its front
+    // from frame to frame, and drops what was appended after them.
     if (!frameSnapshot_) {
         frameSnapshot_ = testSnapshot_ ? testSnapshot_ : feed_->hold();
     }
@@ -428,19 +429,9 @@ void GameView::collectMeshes() {
     // Uploads for sessions no Mesh draws now, as after a Stop. None this frame uses.
     meshes_.sweepSessions();
     lightDraws_.clear();
-    for (const engine_core::VisualInstance& row : snapshot.instances) {
-        if (!row.alive) {
-            continue;
-        }
-        LightDraw light;
-        if (LightDrawFor(row, light)) {
-            lightDraws_.push_back(light);
-        }
-        if (row.prefab == 0 || row.prefab >= snapshot.prefabs.size()) {
-            continue;
-        }
-        AppendRowDraws(row, prefabMeshes_[row.prefab], meshDraws_);
-    }
+    // Only the snapshot's Prefabs: prefabMeshes_ may be longer from an earlier frame.
+    prefabMeshes_.resize(snapshot.prefabs.size());
+    rowDraws_.update(snapshot.instances, prefabMeshes_, meshDraws_, lightDraws_, rowDrawsWritten_);
     // Each Terrain's LOD nodes chosen for this camera and pane (spec decision 2:
     // here, before Renderer::draw, which learns its target size only inside),
     // with its look; uploads not drawn for some seconds are deleted.

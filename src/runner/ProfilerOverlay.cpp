@@ -558,6 +558,28 @@ void ProfilerOverlay::drawTimeline(jadefx::Painter& painter, const profiler::His
     painter.popClip();
 }
 
+void ProfilerOverlay::releaseGraphics() {
+    graphCanvas_.release();
+    timelineCanvas_.release();
+}
+
+void ProfilerOverlay::RectCanvas::release() {
+    if (vbo_ != 0) {
+        glDeleteBuffers(1, &vbo_);
+        vbo_ = 0;
+    }
+    if (vao_ != 0) {
+        glDeleteVertexArrays(1, &vao_);
+        vao_ = 0;
+    }
+    if (program_ != 0) {
+        glDeleteProgram(program_);
+        program_ = 0;
+    }
+    viewport_ = -1;
+    failed_ = false;
+}
+
 void ProfilerOverlay::RectCanvas::begin(float pixelsPerPoint) {
     scale_ = pixelsPerPoint > 0.f ? pixelsPerPoint : 1.f;
     vertices_.clear();

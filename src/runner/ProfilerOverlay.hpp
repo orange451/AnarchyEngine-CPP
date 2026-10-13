@@ -56,6 +56,9 @@ private:
 // geometry, so it works before the first paint.
 class ProfilerOverlay : public jadefx::Region {
 public:
+    // Its GL objects deleted while their context is current, as the view
+    // leaves its window: a window of its own has a context of its own.
+    void releaseGraphics();
     struct Rect {
         double x = 0;
         double y = 0;
@@ -153,6 +156,9 @@ private:
         void fill(double x, double y, double w, double h, const jadefx::Color& color);
         // The batch, in one draw, inside the painter's clip. Needs the GL context.
         void draw(jadefx::Painter& painter);
+        // Its GL objects deleted, with the context that made them current;
+        // the next draw makes them again.
+        void release();
 
     private:
         struct Rect {

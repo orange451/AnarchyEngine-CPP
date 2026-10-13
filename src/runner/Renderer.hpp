@@ -1010,6 +1010,10 @@ private:
     unsigned probeTarget_ = 0;
     unsigned probeFbo_ = 0;
     bool probeCopied_ = false;
+    // The float target would not attach: no probe from then on.
+    bool probeRefused_ = false;
+    // The depth before this draw cleared it, kept while a read is on its way.
+    std::optional<float> probeLast_;
     SceneDepth sceneDepth_;
     double probeX_ = -1;
     double probeY_ = -1;

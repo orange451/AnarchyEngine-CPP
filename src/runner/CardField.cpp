@@ -103,6 +103,11 @@ void CardField::upload() {
     for (Slot& slot : slots_) {
         if (slot.dirty && !slot.rows.empty()) {
             slot.buffer.upload(slot.rows.data(), static_cast<int>(slot.rows.size()));
+        } else if (slot.dirty) {
+            // Emptied, as when its cards moved to another slot: nothing kept for it.
+            slot.buffer.destroy();
+            std::vector<InstanceData>().swap(slot.rows);
+            std::vector<int>().swap(slot.draws);
         }
         slot.dirty = false;
     }

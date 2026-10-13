@@ -1158,6 +1158,7 @@ bool Renderer::draw(double x, double y, double width, double height, double scen
     drawsNoted_ = false;
     // Nothing to hide behind, and no depth under the probe, until this draw leaves some.
     sceneDepth_ = SceneDepth{};
+    probeLast_ = probedDepth_;
     probedDepth_.reset();
     stats_ = RenderStats{};
     if (!ready_ || width <= 0.0 || height <= 0.0 || sceneWidth <= 0.0 || sceneHeight <= 0.0) {
@@ -1462,7 +1463,8 @@ void Renderer::copyProbe(int paneX, int paneY, int paneWidth, int paneHeight, do
     probeCopied_ = false;
     int px = 0;
     int py = 0;
-    if (!probeTexel(paneX, paneY, paneWidth, paneHeight, sceneWidth, sceneHeight, viewport, px, py)) {
+    if (probeRefused_ ||
+        !probeTexel(paneX, paneY, paneWidth, paneHeight, sceneWidth, sceneHeight, viewport, px, py)) {
         return;
     }
     if (probeFbo_ == 0) {
@@ -1471,6 +1473,10 @@ void Renderer::copyProbe(int paneX, int paneY, int paneWidth, int paneHeight, do
         glBindFramebuffer(RT_GL_FRAMEBUFFER, probeFbo_);
         if (!Attach({probeTarget_}, 0)) {
             glBindFramebuffer(RT_GL_FRAMEBUFFER, gbufferFbo_);
+            glDeleteFramebuffers(1, &probeFbo_);
+            probeFbo_ = 0;
+            DeleteTexture(probeTarget_);
+            probeRefused_ = true;
             return;
         }
     }
@@ -1502,6 +1508,7 @@ void Renderer::readProbe(int paneX, int paneY, int paneWidth, int paneHeight, do
     // Mapping one it has not done would stall this thread until the GPU
     // finished that whole frame, so those wait for a later draw.
     bool pending = false;
+    bool took = false;
     for (int age = kProbeBuffers; age >= 1; --age) {
         const int slot = (probeNext_ + kProbeBuffers - age) % kProbeBuffers;
         if (!probeFilled_[slot]) {
@@ -1516,6 +1523,7 @@ void Renderer::readProbe(int paneX, int paneY, int paneWidth, int paneHeight, do
         glBindBuffer(RT_GL_PIXEL_PACK_BUFFER, probeBuffers_[slot]);
         if (const void* mapped = glMapBufferRange(RT_GL_PIXEL_PACK_BUFFER, 0, sizeof(float), RT_GL_MAP_READ_BIT)) {
             probedDepth_ = *static_cast<const float*>(mapped);
+            took = true;
             glUnmapBuffer(RT_GL_PIXEL_PACK_BUFFER);
         }
         glDeleteSync(probeFences_[slot]);
@@ -1540,9 +1548,12 @@ void Renderer::readProbe(int paneX, int paneY, int paneWidth, int paneHeight, do
         probeFences_[probeNext_] = glFenceSync(RT_GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
         probeFilled_[probeNext_] = true;
     }
-    // Off the pane, with nothing left on its way, there is no depth under the cursor.
+    // Off the pane, with nothing left on its way, there is no depth under the
+    // cursor; while a read is still on its way, the last one stands.
     if (!inPane && !pending) {
         probedDepth_.reset();
+    } else if (!took && pending) {
+        probedDepth_ = probeLast_;
     }
     glBindBuffer(RT_GL_PIXEL_PACK_BUFFER, 0);
     probeNext_ = (probeNext_ + 1) % kProbeBuffers;
@@ -3189,7 +3200,9 @@ void Renderer::shutdown() {
     }
     DeleteTexture(probeTarget_);
     probeCopied_ = false;
+    probeRefused_ = false;
     probedDepth_.reset();
+    probeLast_.reset();
     sceneDepth_ = SceneDepth{};
     // The current set first: unparking writes over its names.
     destroyTargets();

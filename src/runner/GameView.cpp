@@ -1160,6 +1160,9 @@ void GameView::sceneChanged(jadefx::Scene* previous) {
     }
     viewports_->release();
     renderer_.shutdown();
+    if (profilerOverlay_ != nullptr) {
+        profilerOverlay_->releaseGraphics();
+    }
     meshes_.clear();
     textures_.clear();
     graphicsAttempted_ = false;

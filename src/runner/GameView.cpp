@@ -432,6 +432,8 @@ void GameView::collectMeshes() {
     // Only the snapshot's Prefabs: prefabMeshes_ may be longer from an earlier frame.
     prefabMeshes_.resize(snapshot.prefabs.size());
     rowDraws_.update(snapshot.instances, prefabMeshes_, meshDraws_, lightDraws_, rowDrawsWritten_);
+    // The rows' draws are the renderer's too: it works out again only what it keeps of the ones written.
+    renderer_.noteDrawChanges(meshDraws_.size(), rowDrawsWritten_);
     // Each Terrain's LOD nodes chosen for this camera and pane (spec decision 2:
     // here, before Renderer::draw, which learns its target size only inside),
     // with its look; uploads not drawn for some seconds are deleted.

@@ -260,8 +260,34 @@ void ShadowPlanner::allocate(const std::vector<ShadowRequest>& requests, const s
     }
 }
 
+std::uint64_t ShadowCasterFingerprint(const ShadowCaster& caster) { return CasterHash(caster) | 1u; }
+
+const CasterView& ShadowPlanner::viewOf(const std::vector<ShadowCaster>& casters) {
+    viewBounds_.resize(casters.size());
+    viewOwners_.resize(casters.size());
+    viewFingerprints_.resize(casters.size());
+    for (std::size_t c = 0; c < casters.size(); ++c) {
+        viewBounds_[c] = casters[c].bounds;
+        viewOwners_[c] = casters[c].owner;
+        viewFingerprints_[c] = ShadowCasterFingerprint(casters[c]);
+    }
+    view_ = CasterView{casters.size(), viewBounds_.data(), viewOwners_.data(), viewFingerprints_.data()};
+    return view_;
+}
+
 ShadowPlan ShadowPlanner::plan(const std::vector<ShadowRequest>& requests, const std::vector<ShadowCaster>& casters,
                                const CameraView& camera, const ShadowSettings& settings) {
+    return planView(requests, viewOf(casters), camera, settings);
+}
+
+std::vector<CascadeDraw> ShadowPlanner::planCascades(const SunRequest* sun, const std::vector<ShadowCaster>& casters,
+                                                     const CameraView& camera, const ShadowSettings& settings,
+                                                     std::size_t grain) {
+    return planCascadesView(sun, viewOf(casters), camera, settings, grain);
+}
+
+ShadowPlan ShadowPlanner::planView(const std::vector<ShadowRequest>& requests, const CasterView& casters,
+                                   const CameraView& camera, const ShadowSettings& settings) {
     ShadowPlan out;
     pending_.clear();
     if (atlas_.pageSize() == 0) {
@@ -358,12 +384,12 @@ ShadowPlan ShadowPlanner::plan(const std::vector<ShadowRequest>& requests, const
         hash.add(request.radius);
         hash.add(record.size);
         const Sphere reachSphere{request.position, request.radius};
-        for (std::size_t c = 0; c < casters.size(); ++c) {
-            const ShadowCaster& caster = casters[c];
-            if ((request.owner != 0 && caster.owner == request.owner) || !SpheresTouch(reachSphere, caster.bounds)) {
+        for (std::size_t c = 0; c < casters.count; ++c) {
+            if (casters.fingerprints[c] == 0 || !SpheresTouch(reachSphere, casters.bounds[c]) ||
+                (request.owner != 0 && casters.owners[c] == request.owner)) {
                 continue;
             }
-            hash.add(CasterHash(caster));
+            hash.add(casters.fingerprints[c]);
         }
         record.wantHash = hash.value();
         if (!request.cached || record.wantHash != record.hash) {
@@ -473,11 +499,11 @@ ShadowPlan ShadowPlanner::plan(const std::vector<ShadowRequest>& requests, const
             draw.tile = record.tiles[face];
             draw.viewProjection = matrices[face];
             const Frustum tileView = MakeFrustum(matrices[face]);
-            for (std::size_t c = 0; c < casters.size(); ++c) {
-                if (request.owner != 0 && casters[c].owner == request.owner) {
+            for (std::size_t c = 0; c < casters.count; ++c) {
+                if (casters.fingerprints[c] == 0 || (request.owner != 0 && casters.owners[c] == request.owner)) {
                     continue;
                 }
-                if (SphereInFrustum(tileView, casters[c].bounds)) {
+                if (SphereInFrustum(tileView, casters.bounds[c])) {
                     draw.casters.push_back(static_cast<int>(c));
                 }
             }
@@ -527,9 +553,9 @@ const LocalShadow* ShadowPlanner::find(std::uint64_t key) const {
                                                                                                     : nullptr;
 }
 
-std::vector<CascadeDraw> ShadowPlanner::planCascades(const SunRequest* sun, const std::vector<ShadowCaster>& casters,
-                                                     const CameraView& camera, const ShadowSettings& settings,
-                                                     std::size_t grain) {
+std::vector<CascadeDraw> ShadowPlanner::planCascadesView(const SunRequest* sun, const CasterView& casters,
+                                                         const CameraView& camera, const ShadowSettings& settings,
+                                                         std::size_t grain) {
     std::vector<CascadeDraw> draws;
     cascadePending_ = false;
     if (sun == nullptr || !(sun->shadowDistance > camera.nearZ)) {
@@ -548,22 +574,24 @@ std::vector<CascadeDraw> ShadowPlanner::planCascades(const SunRequest* sun, cons
     // testing it against a cascade is comparing it with the box's six sides:
     // the same test as the frustum's six planes, without them.
     const engine_core::Matrix4 lightView = CascadeLightView(sun->shine);
-    const std::size_t casterCount = casters.size();
+    const std::size_t casterCount = casters.count;
     lit_.resize(casterCount);
     // Blocks of casters on worker threads, each pass joined in block order,
     // so the lists and the hash come out as one loop would make them.
     cascadeBlocks_.resize(BlockCount(casterCount, grain));
     ParallelBlocks(casterCount, grain, [&](std::size_t, std::size_t begin, std::size_t end) {
         for (std::size_t c = begin; c < end; ++c) {
-            const engine_core::Vec3 at = engine_core::matrix4_point(lightView, casters[c].bounds.center);
-            lit_[c] = LitCaster{at.x, at.y, -at.z, casters[c].bounds.radius};
+            const engine_core::Vec3 at = engine_core::matrix4_point(lightView, casters.bounds[c].center);
+            lit_[c] = LitCaster{at.x, at.y, -at.z, casters.bounds[c].radius};
         }
     });
     const auto in_box = [](const LitCaster& lit, const CascadeFit& box, bool ignoreNear) {
         return SphereInCascadeBox(box, lit.x, lit.y, lit.depth, lit.radius, ignoreNear);
     };
-    // The sun's own meshes cast nothing for it.
-    const auto own = [&](std::size_t c) { return sun->owner != 0 && casters[c].owner == sun->owner; };
+    // The sun's own meshes cast nothing for it, nor does what casts nothing at all.
+    const auto own = [&](std::size_t c) {
+        return casters.fingerprints[c] == 0 || (sun->owner != 0 && casters.owners[c] == sun->owner);
+    };
     Sphere slices[kMaxCascades];
     CascadeFit boxes[kMaxCascades];
     for (int i = 0; i < count; ++i) {
@@ -606,19 +634,12 @@ std::vector<CascadeDraw> ShadowPlanner::planCascades(const SunRequest* sun, cons
             if (own(c)) {
                 continue;
             }
-            // Worked out once, however many cascades hold it.
-            std::uint64_t fingerprint = 0;
-            bool hashed = false;
             for (int i = 0; i < count; ++i) {
                 if (!in_box(lit_[c], fits[i], false)) {
                     continue;
                 }
-                if (!hashed) {
-                    fingerprint = CasterHash(casters[c]);
-                    hashed = true;
-                }
                 mine.inside[i].push_back(static_cast<int>(c));
-                mine.hashes[i].push_back(fingerprint);
+                mine.hashes[i].push_back(casters.fingerprints[c]);
             }
         }
     });

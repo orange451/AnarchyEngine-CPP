@@ -154,11 +154,12 @@ void ShadowRenderer::end() {
 int ShadowRenderer::addCasterRuns(const std::vector<int>& casters, const MeshDraw* meshes) {
     const int begin = static_cast<int>(casterRuns_.size());
     casterOrder_.assign(casters.begin(), casters.end());
-    const auto meshOf = [&](int caster) { return meshes[casterMeshes_[static_cast<std::size_t>(caster)]].mesh; };
+    // Caster i is mesh i.
+    const auto meshOf = [&](int caster) { return meshes[caster].mesh; };
     std::stable_sort(casterOrder_.begin(), casterOrder_.end(),
                      [&](int a, int b) { return std::less<const void*>()(meshOf(a), meshOf(b)); });
     for (const int caster : casterOrder_) {
-        const MeshDraw& draw = meshes[casterMeshes_[static_cast<std::size_t>(caster)]];
+        const MeshDraw& draw = meshes[caster];
         if (static_cast<int>(casterRuns_.size()) == begin || casterRuns_.back().mesh != draw.mesh) {
             casterRuns_.push_back(CasterRun{draw.mesh, static_cast<int>(casterRows_.size()), 0});
         }
@@ -166,8 +167,7 @@ int ShadowRenderer::addCasterRuns(const std::vector<int>& casters, const MeshDra
         // Depth reads the world matrix, and a skinned caster its bones.
         InstanceData row{};
         std::copy(draw.model.m, draw.model.m + 16, row.model);
-        const int drawn = casterMeshes_[static_cast<std::size_t>(caster)];
-        row.boneBase = items_ != nullptr ? static_cast<float>(items_[drawn].boneBase) : -1.f;
+        row.boneBase = items_ != nullptr ? static_cast<float>(items_[caster].boneBase) : -1.f;
         casterRows_.push_back(row);
     }
     return begin;
@@ -209,39 +209,51 @@ bool ShadowRenderer::draw(const std::vector<ShadowRequest>& requests, const Mesh
     }
     {
         PROFILE_SCOPE("Shadow casters", profiler::Group::Render);
-        // Which draws cast, in draw order, then each one's caster: blocks of
-        // draws on worker threads.
+        // Each changed mesh's caster, blocks of meshes on worker threads; the
+        // rest are as the last frame left them.
         constexpr std::size_t kGrain = 8192;
         const auto total = static_cast<std::size_t>(std::max(count, 0));
-        ParallelSelect(
-            total, kGrain,
-            [&](std::size_t index) {
+        if (castersAll_ || meshes != castersMeshes_) {
+            castersChanged_.assign(1, DrawRange{0, total});
+        } else {
+            for (DrawRange& range : castersChanged_) {
+                range.count = range.first >= total ? 0 : std::min(range.count, total - range.first);
+            }
+            NormalizeRanges(castersChanged_);
+        }
+        casterOwners_.resize(total);
+        casterFingerprints_.resize(total);
+        ParallelRanges(castersChanged_, kGrain, [&](std::size_t, std::size_t begin, std::size_t end) {
+            for (std::size_t index = begin; index < end; ++index) {
                 const MeshDraw& mesh = meshes[index];
                 // See-through surfaces cast nothing, as in the legacy engine.
                 // A terrain node (terrainLook) is always opaque, so it always casts,
                 // but of two levels cross-fading only the one fading in, whole.
-                return !(mesh.mesh == nullptr || !mesh.mesh->valid() || !mesh.castsShadow ||
-                         (mesh.transparency > 0.f && mesh.terrainLook == 0) ||
-                         (mesh.terrainLook != 0 && !mesh.terrainFadeIn));
-            },
-            casterBlocks_, casterMeshes_);
-        casters_.resize(casterMeshes_.size());
-        ParallelBlocks(casterMeshes_.size(), kGrain, [&](std::size_t, std::size_t begin, std::size_t end) {
-            for (std::size_t at = begin; at < end; ++at) {
-                const int index = casterMeshes_[at];
-                const MeshDraw& mesh = meshes[index];
-                ShadowCaster& caster = casters_[at];
+                if (mesh.mesh == nullptr || !mesh.mesh->valid() || !mesh.castsShadow ||
+                    (mesh.transparency > 0.f && mesh.terrainLook == 0) ||
+                    (mesh.terrainLook != 0 && !mesh.terrainFadeIn)) {
+                    casterOwners_[index] = 0;
+                    casterFingerprints_[index] = 0;
+                    continue;
+                }
+                ShadowCaster caster;
                 caster.mesh = reinterpret_cast<std::uintptr_t>(mesh.mesh);
                 caster.revision = mesh.mesh->generation();
                 caster.pose = mesh.bones != nullptr ? mesh.poseRevision : 0;
                 caster.owner = mesh.owner;
                 caster.model = mesh.model;
                 caster.bounds = spheres[index];
+                casterOwners_[index] = mesh.owner;
+                casterFingerprints_[index] = ShadowCasterFingerprint(caster);
             }
         });
+        castersAll_ = false;
+        castersChanged_.clear();
+        castersMeshes_ = meshes;
+        casterView_ = CasterView{total, spheres, casterOwners_.data(), casterFingerprints_.data()};
     }
 
-    ShadowPlan plan = planner_.plan(requests, casters_, camera, settings);
+    ShadowPlan plan = planner_.planView(requests, casterView_, camera, settings);
     const int size = planner_.atlasSize();
     const int pages = planner_.atlasPages();
     if (size != atlasTextureSize_ || pages != atlasTexturePages_) {
@@ -270,7 +282,7 @@ bool ShadowRenderer::draw(const std::vector<ShadowRequest>& requests, const Mesh
         // A texture made again holds nothing yet, whatever the planner
         // thinks: every map is unreadable until drawn into it, planned again.
         planner_.forgetMaps();
-        plan = planner_.plan(requests, casters_, camera, settings);
+        plan = planner_.planView(requests, casterView_, camera, settings);
     }
     if (!plan.draws.empty()) {
         // Each page's tiles together, so each page is attached once.
@@ -361,7 +373,7 @@ bool ShadowRenderer::drawSun(const SunRequest* sun, const MeshDraw* meshes, cons
     std::vector<CascadeDraw> draws;
     {
         PROFILE_SCOPE("Cascade plan", profiler::Group::Render);
-        draws = planner_.planCascades(sun, casters_, camera, settings);
+        draws = planner_.planCascadesView(sun, casterView_, camera, settings);
     }
     if (draws.empty()) {
         return true;
@@ -402,6 +414,19 @@ bool ShadowRenderer::drawSun(const SunRequest* sun, const MeshDraw* meshes, cons
     end();
     planner_.commitCascades();
     return true;
+}
+
+void ShadowRenderer::noteDraws(bool all, const std::vector<DrawRange>& changed) {
+    // Frames that draw no shadows pile their changes up; past a few thousand
+    // ranges, making every caster again is as cheap.
+    if (all || castersChanged_.size() + changed.size() > 4096) {
+        castersAll_ = true;
+        castersChanged_.clear();
+        return;
+    }
+    if (!castersAll_) {
+        castersChanged_.insert(castersChanged_.end(), changed.begin(), changed.end());
+    }
 }
 
 ShadowLookup ShadowRenderer::sunLookup() const {

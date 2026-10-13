@@ -10,6 +10,15 @@
 
 namespace runner {
 
+// Draws [first, first + count).
+struct DrawRange {
+    std::size_t first = 0;
+    std::size_t count = 0;
+};
+
+// ranges sorted and joined: ascending, no two touching or overlapping, none empty.
+void NormalizeRanges(std::vector<DrawRange>& ranges);
+
 // What visibility and batching read from one MeshDraw, with no GL: the
 // Renderer fills one per draw each frame, pointing into that draw.
 struct DrawItem {
@@ -53,6 +62,9 @@ struct VisibleDraw {
 struct VisibilityResult {
     // One per DrawItem, world space, for the shadow pass too. Zero for one that is not drawable.
     std::vector<Sphere> spheres;
+    // One per DrawItem, beside its sphere: what culling reads of it, the
+    // kTrait bits and its LOD in the high byte.
+    std::vector<std::uint16_t> traits;
     // In DrawItem order.
     std::vector<VisibleDraw> opaque;
     std::vector<VisibleDraw> transparent;
@@ -70,6 +82,22 @@ struct VisibilityResult {
 
 // Items FindVisible gives each worker thread at a time.
 constexpr std::size_t kVisibilityGrain = 8192;
+
+// VisibilityResult::traits bits.
+constexpr std::uint16_t kTraitDrawable = 1;
+constexpr std::uint16_t kTraitShadowOnly = 2;
+constexpr std::uint16_t kTraitTransparent = 4;
+
+// The spheres and traits of the items in ranges (normalized), or of every
+// item when all, into out's, which are sized count; the others are kept as
+// they were. Blocks on worker threads.
+void UpdateDrawBounds(const DrawItem* items, int count, bool all, const std::vector<DrawRange>& ranges,
+                      VisibilityResult& out, std::size_t grain = kVisibilityGrain);
+
+// Which items camera sees, from out's spheres and traits alone, into out's
+// lists, as FindVisible finds them.
+void CullDraws(int count, const CameraView& camera, bool cull, VisibilityResult& out,
+               std::size_t grain = kVisibilityGrain);
 
 // Each drawable item's world sphere and, when cull is set, whether it is in
 // camera's view. With cull false every drawable item is visible but a

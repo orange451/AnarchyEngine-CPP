@@ -293,3 +293,107 @@ TEST_CASE("PAR6 every block runs once, and a loop inside a block runs where it i
         REQUIRE(sums[block] == block * 200);
     }
 }
+
+TEST_CASE("PAR7 ranges normalize; bounds kept but for changed ranges cull as if all were new", "[parallel][visibility]") {
+    std::vector<DrawRange> ranges = {{10, 5}, {0, 2}, {14, 3}, {2, 1}, {40, 0}, {30, 4}, {31, 1}};
+    NormalizeRanges(ranges);
+    REQUIRE(ranges.size() == 3);
+    REQUIRE((ranges[0].first == 0 && ranges[0].count == 3));
+    REQUIRE((ranges[1].first == 10 && ranges[1].count == 7));
+    REQUIRE((ranges[2].first == 30 && ranges[2].count == 4));
+
+    Field field(20'000);
+    const CameraView camera = Camera({0.f, 20.f, 0.f}, {100.f, 0.f, -60.f});
+    VisibilityResult kept;
+    UpdateDrawBounds(field.items.data(), static_cast<int>(field.items.size()), true, {}, kept, 1000);
+    // Some draws move, some stop or start being drawable; only their ranges are bounded again.
+    std::vector<DrawRange> changed = {{5, 3}, {9'000, 2'500}, {19'990, 10}};
+    for (const DrawRange& range : changed) {
+        for (std::size_t i = range.first; i < range.first + range.count; ++i) {
+            field.models[i].m[12] += 40.f;
+            field.items[i].drawable = !field.items[i].drawable;
+            field.items[i].lod = static_cast<std::uint8_t>(2);
+        }
+    }
+    UpdateDrawBounds(field.items.data(), static_cast<int>(field.items.size()), false, changed, kept, 700);
+    CullDraws(static_cast<int>(field.items.size()), camera, true, kept, 333);
+    VisibilityResult fresh;
+    FindVisible(field.items.data(), static_cast<int>(field.items.size()), camera, true, fresh);
+    REQUIRE(kept.culled == fresh.culled);
+    REQUIRE(SameVisible(kept.opaque, fresh.opaque));
+    REQUIRE(SameVisible(kept.transparent, fresh.transparent));
+    for (std::size_t i = 0; i < fresh.spheres.size(); ++i) {
+        REQUIRE(SameSphere(kept.spheres[i], fresh.spheres[i]));
+        REQUIRE(kept.traits[i] == fresh.traits[i]);
+    }
+    // Fewer items: the lists and arrays follow.
+    UpdateDrawBounds(field.items.data(), 100, false, {}, kept);
+    CullDraws(100, camera, true, kept);
+    FindVisible(field.items.data(), 100, camera, true, fresh);
+    REQUIRE(kept.spheres.size() == 100);
+    REQUIRE(SameVisible(kept.opaque, fresh.opaque));
+}
+
+TEST_CASE("PAR8 a caster view plans as the casters it holds, and those with no fingerprint cast nothing",
+          "[parallel][shadow]") {
+    Random random;
+    std::vector<ShadowCaster> casters;
+    for (std::uint64_t mesh = 1; mesh <= 3'000; ++mesh) {
+        casters.push_back(Caster(random, mesh));
+    }
+    // The view holds every caster with one that casts nothing after every fourth.
+    std::vector<Sphere> bounds;
+    std::vector<std::uint64_t> owners;
+    std::vector<std::uint64_t> fingerprints;
+    std::vector<int> viewIndex;
+    for (std::size_t c = 0; c < casters.size(); ++c) {
+        viewIndex.push_back(static_cast<int>(bounds.size()));
+        bounds.push_back(casters[c].bounds);
+        owners.push_back(casters[c].owner);
+        fingerprints.push_back(ShadowCasterFingerprint(casters[c]));
+        if (c % 4 == 3) {
+            bounds.push_back(casters[c].bounds);
+            owners.push_back(0);
+            fingerprints.push_back(0);
+        }
+    }
+    const CasterView view{bounds.size(), bounds.data(), owners.data(), fingerprints.data()};
+    const CameraView camera = Camera({0.f, 15.f, 40.f}, {0.f, 0.f, 0.f});
+    SunRequest sun;
+    sun.shine = Normalize({0.4f, -1.f, 0.3f});
+    sun.shadowDistance = 120.f;
+    sun.owner = 7;
+    const ShadowSettings settings;
+    ShadowPlanner byVector;
+    ShadowPlanner byView;
+    const std::vector<CascadeDraw> expected = byVector.planCascades(&sun, casters, camera, settings);
+    const std::vector<CascadeDraw> drawn = byView.planCascadesView(&sun, view, camera, settings, 500);
+    REQUIRE(drawn.size() == expected.size());
+    for (std::size_t c = 0; c < drawn.size(); ++c) {
+        std::vector<int> mapped;
+        for (const int caster : expected[c].casters) {
+            mapped.push_back(viewIndex[static_cast<std::size_t>(caster)]);
+        }
+        REQUIRE(drawn[c].casters == mapped);
+        REQUIRE(std::memcmp(&drawn[c].viewProjection, &expected[c].viewProjection, sizeof(engine_core::Matrix4)) == 0);
+    }
+    // Lights too: the same tiles, from the same casters.
+    std::vector<ShadowRequest> lights;
+    ShadowRequest point;
+    point.key = 5;
+    point.owner = 5;
+    point.kind = ShadowKind::Point;
+    point.position = {0.f, 3.f, 0.f};
+    point.radius = 25.f;
+    lights.push_back(point);
+    const ShadowPlan planVector = byVector.plan(lights, casters, camera, settings);
+    const ShadowPlan planView = byView.planView(lights, view, camera, settings);
+    REQUIRE(planView.draws.size() == planVector.draws.size());
+    for (std::size_t d = 0; d < planView.draws.size(); ++d) {
+        std::vector<int> mapped;
+        for (const int caster : planVector.draws[d].casters) {
+            mapped.push_back(viewIndex[static_cast<std::size_t>(caster)]);
+        }
+        REQUIRE(planView.draws[d].casters == mapped);
+    }
+}

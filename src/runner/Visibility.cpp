@@ -31,11 +31,65 @@ float ScreenRadius(const Sphere& sphere, const CameraView& camera) {
     return ScreenRadiusScaled(sphere, camera, std::tan(halfFov));
 }
 
+void NormalizeRanges(std::vector<DrawRange>& ranges) {
+    ranges.erase(std::remove_if(ranges.begin(), ranges.end(), [](const DrawRange& range) { return range.count == 0; }),
+                 ranges.end());
+    std::sort(ranges.begin(), ranges.end(),
+              [](const DrawRange& a, const DrawRange& b) { return a.first < b.first; });
+    std::size_t kept = 0;
+    for (const DrawRange& range : ranges) {
+        if (kept > 0 && ranges[kept - 1].first + ranges[kept - 1].count >= range.first) {
+            DrawRange& last = ranges[kept - 1];
+            last.count = std::max(last.first + last.count, range.first + range.count) - last.first;
+        } else {
+            ranges[kept++] = range;
+        }
+    }
+    ranges.resize(kept);
+}
+
+namespace {
+
+void BoundItem(const DrawItem& item, Sphere& sphere, std::uint16_t& traits) {
+    if (!item.drawable) {
+        sphere = Sphere{};
+        traits = 0;
+        return;
+    }
+    sphere = WorldBounds(*item.model, item.boundsMin, item.boundsMax);
+    traits = static_cast<std::uint16_t>(kTraitDrawable | (item.shadowOnly ? kTraitShadowOnly : 0) |
+                                        (item.transparency > 0.f ? kTraitTransparent : 0) | (item.lod << 8));
+}
+
+}  // namespace
+
+void UpdateDrawBounds(const DrawItem* items, int count, bool all, const std::vector<DrawRange>& ranges,
+                      VisibilityResult& out, std::size_t grain) {
+    const auto total = static_cast<std::size_t>(std::max(count, 0));
+    out.spheres.resize(total);
+    out.traits.resize(total);
+    const auto bound = [&](std::size_t begin, std::size_t end) {
+        for (std::size_t index = begin; index < end; ++index) {
+            BoundItem(items[index], out.spheres[index], out.traits[index]);
+        }
+    };
+    if (all) {
+        ParallelBlocks(total, grain, [&](std::size_t, std::size_t begin, std::size_t end) { bound(begin, end); });
+        return;
+    }
+    ParallelRanges(ranges, grain, [&](std::size_t, std::size_t begin, std::size_t end) {
+        bound(begin, std::min(end, total));
+    });
+}
+
 void FindVisible(const DrawItem* items, int count, const CameraView& camera, bool cull, VisibilityResult& out,
                  std::size_t grain) {
+    UpdateDrawBounds(items, count, true, {}, out, grain);
+    CullDraws(count, camera, cull, out, grain);
+}
+
+void CullDraws(int count, const CameraView& camera, bool cull, VisibilityResult& out, std::size_t grain) {
     const auto total = static_cast<std::size_t>(std::max(count, 0));
-    // Every sphere is written below, so the old ones need no clearing.
-    out.spheres.resize(total);
     out.opaque.clear();
     out.transparent.clear();
     out.culled = 0;
@@ -56,16 +110,11 @@ void FindVisible(const DrawItem* items, int count, const CameraView& camera, boo
         transparent.clear();
         int culled = 0;
         for (std::size_t index = begin; index < end; ++index) {
-            const DrawItem& item = items[index];
-            if (!item.drawable) {
-                out.spheres[index] = Sphere{};
+            const std::uint16_t traits = out.traits[index];
+            if ((traits & kTraitDrawable) == 0 || (traits & kTraitShadowOnly) != 0) {
                 continue;
             }
-            const Sphere sphere = WorldBounds(*item.model, item.boundsMin, item.boundsMax);
-            out.spheres[index] = sphere;
-            if (item.shadowOnly) {
-                continue;
-            }
+            const Sphere& sphere = out.spheres[index];
             if (cull && !SphereInFrustum(frustum, sphere)) {
                 ++culled;
                 continue;
@@ -73,8 +122,8 @@ void FindVisible(const DrawItem* items, int count, const CameraView& camera, boo
             VisibleDraw visible;
             visible.index = static_cast<int>(index);
             visible.screenRadius = ScreenRadiusScaled(sphere, camera, tanHalfFov);
-            visible.lod = item.lod;
-            (item.transparency > 0.f ? transparent : opaque).push_back(visible);
+            visible.lod = static_cast<std::uint8_t>(traits >> 8);
+            ((traits & kTraitTransparent) != 0 ? transparent : opaque).push_back(visible);
         }
         if (alone) {
             out.culled = culled;

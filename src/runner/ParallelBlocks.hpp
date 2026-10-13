@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <functional>
+#include <utility>
 #include <vector>
 
 namespace runner {
@@ -42,6 +43,32 @@ void ParallelBlocks(std::size_t count, std::size_t grain, const Body& body) {
         const std::size_t begin = block * grain;
         body(block, begin, std::min(count, begin + grain));
     });
+}
+
+// How many pieces ParallelRanges cuts ranges into.
+template <class Range>
+std::size_t PieceCount(const std::vector<Range>& ranges, std::size_t grain) {
+    std::size_t pieces = 0;
+    for (const Range& range : ranges) {
+        pieces += range.count == 0 ? 0 : BlockCount(range.count, grain);
+    }
+    return pieces;
+}
+
+// Calls body(piece, begin, end) for pieces of at most grain indices covering
+// every range (each with first and count), numbered in range order, on worker
+// threads, and returns once all are done.
+template <class Range, class Body>
+void ParallelRanges(const std::vector<Range>& ranges, std::size_t grain, const Body& body) {
+    std::vector<std::pair<std::size_t, std::size_t>> pieces;
+    pieces.reserve(PieceCount(ranges, grain));
+    for (const Range& range : ranges) {
+        const std::size_t end = range.first + range.count;
+        for (std::size_t begin = range.first; begin < end; begin += grain) {
+            pieces.emplace_back(begin, std::min(end, begin + grain));
+        }
+    }
+    RunBlocks(pieces.size(), [&](std::size_t piece) { body(piece, pieces[piece].first, pieces[piece].second); });
 }
 
 // Every i in [0, count) for which keep(i), ascending, into out: blocks of

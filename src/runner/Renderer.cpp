@@ -1131,8 +1131,26 @@ struct SavedState {
 
 }  // namespace
 
+void Renderer::noteDrawChanges(std::size_t stable, const std::vector<DrawRange>& written) {
+    drawsNoted_ = true;
+    notedStable_ = std::min(notedStable_, stable);
+    // Draws that never reach findVisible pile notes up; past a few thousand
+    // ranges, making every item again is as cheap.
+    if (notedWritten_.size() + written.size() > 4096) {
+        drawsChained_ = false;
+        notedWritten_.clear();
+        return;
+    }
+    notedWritten_.insert(notedWritten_.end(), written.begin(), written.end());
+}
+
 bool Renderer::draw(double x, double y, double width, double height, double sceneWidth, double sceneHeight,
                     const MeshDraw* meshes, int meshCount, const LightDraw* lights, int lightCount) {
+    // A draw with no note before it could be given anything: findVisible makes every item again.
+    if (!drawsNoted_) {
+        drawsChained_ = false;
+    }
+    drawsNoted_ = false;
     // Nothing to hide behind, and no depth under the probe, until this draw leaves some.
     sceneDepth_ = SceneDepth{};
     probedDepth_.reset();
@@ -2054,10 +2072,32 @@ void Renderer::findVisible(const MeshDraw* meshes, int count, const CameraView& 
     {
         PROFILE_SCOPE("Visibility", profiler::Group::Render);
         const auto total = static_cast<std::size_t>(std::max(count, 0));
+        // Which draws changed since the items were made: those the notes
+        // name, and every one past the stable ones; all of them when there
+        // were no notes, or the meshes are somewhere else now.
+        const bool all = !drawsChained_ || meshes != itemsMeshes_;
+        changedDraws_.clear();
+        if (all) {
+            changedDraws_.push_back(DrawRange{0, total});
+        } else {
+            changedDraws_ = notedWritten_;
+            const std::size_t tail = std::min(notedStable_, drawItems_.size());
+            if (tail < total) {
+                changedDraws_.push_back(DrawRange{tail, total - tail});
+            }
+            for (DrawRange& range : changedDraws_) {
+                range.count = range.first >= total ? 0 : std::min(range.count, total - range.first);
+            }
+            NormalizeRanges(changedDraws_);
+        }
+        itemsMeshes_ = meshes;
+        drawsChained_ = true;
+        notedStable_ = static_cast<std::size_t>(-1);
+        notedWritten_.clear();
         drawItems_.resize(total);
         bonePalette_.clear();
-        posedBlocks_.resize(BlockCount(total, kVisibilityGrain));
-        ParallelBlocks(total, kVisibilityGrain, [&](std::size_t block, std::size_t begin, std::size_t end) {
+        posedBlocks_.resize(PieceCount(changedDraws_, kVisibilityGrain));
+        ParallelRanges(changedDraws_, kVisibilityGrain, [&](std::size_t block, std::size_t begin, std::size_t end) {
             std::vector<int>& posed = posedBlocks_[block];
             posed.clear();
             for (std::size_t index = begin; index < end; ++index) {
@@ -2094,20 +2134,48 @@ void Renderer::findVisible(const MeshDraw* meshes, int count, const CameraView& 
                 }
             }
         });
-        // In draw order, as one loop packed them.
-        for (const std::vector<int>& posed : posedBlocks_) {
-            for (const int index : posed) {
-                drawItems_[static_cast<std::size_t>(index)].boneBase =
-                    bonePalette_.add(meshes[index].bones, meshes[index].boneCount);
+        // The posed draws kept: those outside every changed range, and still
+        // here; then the changed ones found posed, merged in.
+        std::size_t kept = 0;
+        if (!all) {
+            std::size_t range = 0;
+            for (const int index : posedDraws_) {
+                const auto at = static_cast<std::size_t>(index);
+                while (range < changedDraws_.size() && changedDraws_[range].first + changedDraws_[range].count <= at) {
+                    ++range;
+                }
+                if (at >= total || (range < changedDraws_.size() && changedDraws_[range].first <= at)) {
+                    continue;
+                }
+                posedDraws_[kept++] = index;
             }
+        }
+        posedDraws_.resize(kept);
+        posedScratch_.clear();
+        for (const std::vector<int>& posed : posedBlocks_) {
+            posedScratch_.insert(posedScratch_.end(), posed.begin(), posed.end());
+        }
+        if (!posedScratch_.empty()) {
+            const std::size_t middle = posedDraws_.size();
+            posedDraws_.insert(posedDraws_.end(), posedScratch_.begin(), posedScratch_.end());
+            std::inplace_merge(posedDraws_.begin(), posedDraws_.begin() + static_cast<std::ptrdiff_t>(middle),
+                               posedDraws_.end());
+        }
+        // In draw order, as one loop packed them, every frame: the palette is made again each frame.
+        for (const int index : posedDraws_) {
+            drawItems_[static_cast<std::size_t>(index)].boneBase =
+                bonePalette_.add(meshes[index].bones, meshes[index].boneCount);
         }
         // Once a frame, before any pass: the geometry, see-through, and shadow
         // passes all read it, on its own unit.
         boneTexture_.upload(bonePalette_);
         shadows_.setDrawItems(drawItems_.data());
+        shadows_.noteDraws(all, changedDraws_);
         PROFILE_SCOPE("Frustum", profiler::Group::Render);
-        // A draw that names its LOD (Brush Materials) keeps it: FindVisible copies each item's.
-        FindVisible(drawItems_.data(), count, camera, culling_, visibility_);
+        // Spheres only for the changed draws; the cull reads every draw's.
+        // A draw that names its LOD (Brush Materials) keeps it: each item's goes to its VisibleDraw.
+        UpdateDrawBounds(drawItems_.data(), count, all, changedDraws_, visibility_);
+        CullDraws(count, camera, culling_, visibility_);
         stats_.draws = count;
         stats_.visible = static_cast<int>(visibility_.opaque.size() + visibility_.transparent.size());
         stats_.culled = visibility_.culled;

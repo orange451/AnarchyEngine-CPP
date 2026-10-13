@@ -33,12 +33,6 @@ void AppendRowDraws(const engine_core::VisualInstance& row, const std::vector<Me
 MeshDraw* WriteRowDraws(const engine_core::VisualInstance& row, const std::vector<MeshDraw>& templates,
                         MeshDraw* out);
 
-// Draws [first, first + count).
-struct DrawRange {
-    std::size_t first = 0;
-    std::size_t count = 0;
-};
-
 // Every field of a and b the same, bit for bit.
 bool SameDraw(const MeshDraw& a, const MeshDraw& b);
 

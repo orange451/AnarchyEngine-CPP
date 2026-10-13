@@ -32,6 +32,7 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <functional>
 #include <cmath>
 #include <cstdlib>
 #include <cstdio>
@@ -758,9 +759,11 @@ public:
                runner::ViewPixels& out) {
         return shoot(renderer, draws, &sun, 1, 4, out);
     }
-    // The same with lights (lightCount of them, or none), drawn frames times.
+    // The same with lights (lightCount of them, or none), drawn frames times;
+    // before each draw, before(frame) when given.
     bool shoot(runner::Renderer& renderer, const std::vector<runner::MeshDraw>& draws, const runner::LightDraw* lights,
-               int lightCount, int frames, runner::ViewPixels& out) {
+               int lightCount, int frames, runner::ViewPixels& out,
+               const std::function<void(int)>& before = nullptr) {
         runner::GLint viewport[4] = {};
         glGetIntegerv(runner::GL_VIEWPORT, viewport);
         glBindFramebuffer(runner::RT_GL_FRAMEBUFFER, framebuffer_);
@@ -769,6 +772,9 @@ public:
         const double h = height_;
         bool drawn = false;
         for (int frame = 0; frame < frames; ++frame) {
+            if (before) {
+                before(frame);
+            }
             drawn = renderer.draw(0, 0, w, h, w, h, draws.empty() ? nullptr : draws.data(),
                                   static_cast<int>(draws.size()), lights, lightCount);
         }
@@ -2112,6 +2118,113 @@ void CheckParticles(runner::Renderer& renderer, const GpuMesh* cube, int size, i
 }
 
 // P9: a depth copy that cannot be made leaves soft edges off on every frame, not only the first.
+// A renderer told which draws changed (noteDrawChanges) keeps what it worked
+// out for the others. Whatever it keeps, each frame must look exactly as a
+// renderer told nothing draws the same draws.
+void CheckKeptDraws(const GpuMesh* cube) {
+    constexpr int kWidth = 96;
+    constexpr int kHeight = 96;
+    OffscreenTarget target(kWidth, kHeight);
+    Expect(target.complete(), "kept draws: an offscreen target");
+    if (!target.complete()) {
+        return;
+    }
+    const engine_core::Matrix4 camera =
+        engine_core::matrix4_look_at({0.f, 6.f, 14.f}, {0.f, 0.f, 0.f}, {0.f, 1.f, 0.f});
+    runner::LightDraw sun;
+    sun.kind = runner::LightDraw::Kind::Directional;
+    sun.direction[0] = 0.5f;
+    sun.direction[1] = -0.8f;
+    sun.direction[2] = -0.3f;
+    sun.intensity = 2.f;
+    sun.shadows = true;
+    sun.shadowDistance = 60.f;
+    sun.id = 31;
+    runner::Renderer kept;
+    Expect(kept.initialize(), "kept draws: the renderer builds");
+    kept.setCamera(camera, 60.f);
+    // A row of cubes sharing a slot, and one that draws alone, far out of view.
+    std::vector<runner::MeshDraw> draws;
+    for (int i = 0; i < 12; ++i) {
+        runner::MeshDraw draw{cube, engine_core::matrix4_translation(-6.f + static_cast<float>(i), 0.f,
+                                                                      -2.f * static_cast<float>(i % 3))};
+        draw.slot = 1;
+        draw.owner = 100 + static_cast<std::uint64_t>(i);
+        draws.push_back(draw);
+    }
+    runner::MeshDraw far{cube, engine_core::matrix4_translation(90.f, 0.f, 0.f)};
+    far.owner = 200;
+    draws.push_back(far);
+    // The kept renderer's frames, the first with the note given, the rest with
+    // nothing changed; then a fresh renderer's, told nothing.
+    const auto compare = [&](std::size_t stable, const std::vector<runner::DrawRange>& written, bool note,
+                             const std::string& what) {
+        runner::ViewPixels keptShot;
+        const bool keptDrawn = target.shoot(kept, draws, &sun, 1, 3, keptShot, [&](int frame) {
+            if (frame == 0) {
+                if (note) {
+                    kept.noteDrawChanges(stable, written);
+                }
+            } else {
+                kept.noteDrawChanges(draws.size(), {});
+            }
+        });
+        runner::Renderer fresh;
+        fresh.initialize();
+        fresh.setCamera(camera, 60.f);
+        runner::ViewPixels freshShot;
+        const bool freshDrawn = target.shoot(fresh, draws, &sun, 1, 3, freshShot);
+        fresh.shutdown();
+        Expect(keptDrawn && freshDrawn, "kept draws: " + what + ": both draw");
+        return keptShot.rgba == freshShot.rgba;
+    };
+    Expect(compare(0, {}, true, "every draw new"), "kept draws: the first frame is drawn as by a fresh renderer");
+    Expect(compare(draws.size(), {}, true, "nothing changed"), "kept draws: a frame with nothing changed");
+
+    // Moved, one into view from far off: the kept sphere would cull it.
+    draws[4].model = engine_core::matrix4_translation(-2.f, 1.5f, 2.f);
+    draws[12].model = engine_core::matrix4_translation(3.f, 1.f, 3.f);
+    Expect(compare(draws.size(), {{4, 1}, {12, 1}}, true, "moved"), "kept draws: moved draws are where they are now");
+
+    // A change not noted is not seen: proof the kept items are what is drawn.
+    draws[12].model = engine_core::matrix4_translation(90.f, 0.f, 0.f);
+    draws[11].model = engine_core::matrix4_translation(95.f, 0.f, 0.f);
+    Expect(compare(draws.size(), {{11, 2}}, true, "set far"), "kept draws: two sent far off");
+    // Draw 11's kept sphere is far off; bring it back into view without saying.
+    draws[11].model = engine_core::matrix4_translation(0.f, 2.f, 4.f);
+    Expect(!compare(draws.size(), {}, true, "not noted"), "kept draws: a change not noted keeps the old sphere");
+    Expect(compare(draws.size(), {{11, 1}}, true, "noted after"), "kept draws: noted, it is seen");
+
+    // See-through now, then a new color: its run and its pass change.
+    draws[7].transparency = 0.5f;
+    Expect(compare(draws.size(), {{7, 1}}, true, "see-through"), "kept draws: a draw made see-through");
+    draws[7].tint[0] = 0.2f;
+    draws[7].transparency = 0.f;
+    Expect(compare(draws.size(), {{7, 1}}, true, "tinted"), "kept draws: a draw tinted and made opaque");
+
+    // The last one gone; then two more at the end.
+    draws.pop_back();
+    Expect(compare(draws.size(), {}, true, "one fewer"), "kept draws: a draw gone from the end");
+    const std::size_t before = draws.size();
+    runner::MeshDraw added{cube, engine_core::matrix4_translation(1.f, 3.f, 0.f)};
+    draws.push_back(added);
+    added.model = engine_core::matrix4_translation(-1.f, 3.f, -1.f);
+    draws.push_back(added);
+    Expect(compare(before, {}, true, "two more"), "kept draws: draws added at the end");
+
+    // Somewhere else in memory: every draw is new.
+    std::vector<runner::MeshDraw> moved(draws.begin(), draws.end());
+    moved.reserve(moved.size() * 4);
+    draws.swap(moved);
+    draws[0].model = engine_core::matrix4_translation(-6.f, 0.5f, 1.f);
+    Expect(compare(draws.size(), {}, true, "moved vector"), "kept draws: draws somewhere else are all new");
+
+    // A draw with no note before it: every draw is new.
+    draws[1].model = engine_core::matrix4_translation(-5.f, 0.5f, 1.f);
+    Expect(compare(draws.size(), {}, false, "no note"), "kept draws: a draw with no note makes everything again");
+    kept.shutdown();
+}
+
 void CheckParticleDepthCopy() {
     runner::ParticleRenderer pass;
     Expect(pass.create(), "the particle pass builds");
@@ -2227,6 +2340,7 @@ int main(int argc, char** argv) {
         Expect(reports.size() == 2, "a file still missing is not reported again");
         CheckParticles(renderer, cube, kSize, fbWidth, fbHeight);
         CheckParticleDepthCopy();
+        CheckKeptDraws(cube);
 
         // The cube at the origin, under the camera a Renderer starts with, fills the middle of the pane.
         runner::MeshDraw draw{cube, engine_core::matrix4_identity()};

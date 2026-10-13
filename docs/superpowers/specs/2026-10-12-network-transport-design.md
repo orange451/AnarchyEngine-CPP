@@ -33,7 +33,7 @@ The physics path encodes each body against the last state a client *acknowledged
 ### 1. The wire
 
 ```
-header  (12 bytes)
+header  (13 bytes)
   protocol id     u16   this engine's wire version; mismatched packets are dropped silently
   type            u8    ConnectRequest, ConnectAccept, ConnectDeny, Disconnect, KeepAlive, Payload
   connection id   u16   low 16 bits of client salt XOR server salt; 0 during the handshake

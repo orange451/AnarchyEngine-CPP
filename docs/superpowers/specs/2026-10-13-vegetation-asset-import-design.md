@@ -2,13 +2,21 @@
 
 Sub-project 1 of the H1Z1 Z1 procedural vegetation program. It turns the
 single Roblox OBJ export at `C:\Users\Andrew\Desktop\Trees\Trees.obj` into
-one Prefab per vegetation asset in the project at
-`C:\Users\Andrew\Documents\Anarchy Engine Projects\H1Z1 Z1`, with textures
+one Prefab per vegetation asset in a **copy** of the project, with textures
 shared, materials corrected for the engine's PBR slots, pivots at ground
 level, and every asset's real size measured for the forest plan
 (sub-project 2).
 
 Nothing in this sub-project places vegetation on the map.
+
+## Working copy
+
+All vegetation work happens in a copy of the place, never in the original:
+`C:\Users\Andrew\Documents\Anarchy Engine Projects\H1Z1 Z1 Vegetation`,
+made by copying the whole `H1Z1 Z1` folder (src, resources, project.json,
+.studio) before step 1 of the editor work; `project.json`'s `name` becomes
+"H1Z1 Z1 Vegetation". The original folder is not opened or written by any
+tool in this program. Later sub-projects open the same copy.
 
 ## The export
 

@@ -1507,6 +1507,18 @@ void TestCurveRows() {
     rig.game.history().undo();
     Expect(emitter->size().keys_a().size() == keys + 1, "undo takes back only the typed value");
 
+    // A key the property refuses (Size below 0) leaves the editor showing what the emitter has.
+    for (int click = 0; click < 2; ++click) {
+        rig.scene->noteButton(0, true, graph.x + graph.w * 0.75, graph.y + graph.h - 2);
+        rig.scene->noteButton(0, false, graph.x + graph.w * 0.75, graph.y + graph.h - 2);
+    }
+    rig.frame();
+    rig.frame();
+    rig.frame();
+    Expect(emitter->size().keys_a().size() == keys + 1, "a refused key is not written");
+    Expect(editor->model().curve() == emitter->size(), "and the editor goes back to the emitter's curve");
+    bottom();
+
     rig.click(rig.panel.editor("Color", 4));
     rig.frame();
     rig.frame();

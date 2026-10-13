@@ -29,6 +29,11 @@ public:
     bool dragging() const { return dragging_; }
     // The row was given model()'s curve from outside (a typed key): show treats it as sent.
     void sent() { sent_ = model_.curve(); }
+    // An edit landed or was refused: the next show takes the row's value as it is.
+    void settle() {
+        sent_.reset();
+        shown_.reset();
+    }
 
     // After each change to model(): done false while a drag goes on, true when it ends.
     std::function<void(bool done)> on_edit;
@@ -93,6 +98,10 @@ public:
     int selected_stop() const { return stop_; }
     bool dragging() const { return dragging_; }
     void sent() { sent_ = model_.curve(); }
+    void settle() {
+        sent_.reset();
+        shown_.reset();
+    }
 
     std::function<void(bool done)> on_edit;
     std::function<void()> on_select;

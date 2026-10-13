@@ -443,6 +443,8 @@ protected:
 struct PendingEdit {
     EditResult result;
     std::atomic<bool> done{false};
+    // Runs on this thread once the edit is done, before the rows read the world again.
+    std::function<void()> after;
 };
 
 }  // namespace
@@ -965,6 +967,9 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
             }
             if ((*it)->result.rejected) {
                 status = (*it)->result.error;
+            }
+            if ((*it)->after) {
+                (*it)->after();
             }
             it = pending.erase(it);
             force = true;
@@ -1699,9 +1704,10 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
     }
 
     // Runs edit_fn there, keeping its result so a refusal shows under the rows.
-    void post_recorded(std::function<EditResult(engine_core::DataModel&)> edit_fn) {
+    void post_recorded(std::function<EditResult(engine_core::DataModel&)> edit_fn, std::function<void()> after = {}) {
         status.clear();
         auto result = std::make_shared<PendingEdit>();
+        result->after = std::move(after);
         pending.push_back(result);
         post([edit_fn = std::move(edit_fn), result](engine_core::DataModel& game) {
             result->result = edit_fn(game);
@@ -1709,11 +1715,11 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
         });
     }
 
-    void submit(const std::vector<InstanceId>& ids, const PropertyEdit& edit) {
+    void submit(const std::vector<InstanceId>& ids, const PropertyEdit& edit, std::function<void()> after = {}) {
         if (world == nullptr || ids.empty()) {
             return;
         }
-        post_recorded([ids, edit](engine_core::DataModel& game) { return apply_edit(game, ids, edit); });
+        post_recorded([ids, edit](engine_core::DataModel& game) { return apply_edit(game, ids, edit); }, std::move(after));
     }
 
     // One step of a drag: the instances show edit now, and the history does
@@ -1737,10 +1743,13 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
     // The end of a drag. commit records edit as one undo step from the value
     // before the drag; otherwise the instances go back to that value. With no
     // drag under way, a commit is an ordinary edit.
-    void finish_live(const std::vector<InstanceId>& ids, const PropertyEdit& edit, bool commit) {
+    void finish_live(const std::vector<InstanceId>& ids, const PropertyEdit& edit, bool commit,
+                     std::function<void()> after = {}) {
         if (!live) {
             if (commit) {
-                submit(ids, edit);
+                submit(ids, edit, std::move(after));
+            } else if (after) {
+                after();
             }
             return;
         }
@@ -1753,7 +1762,7 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
         }
         post_recorded([drag_ids, edit, target, commit](engine_core::DataModel& game) {
             return finish_live_edit(game, drag_ids, edit, *target, commit);
-        });
+        }, std::move(after));
     }
 
     int axis_of(const RowView& view, const PropertyField& field) const {
@@ -1859,7 +1868,17 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
             return;
         }
         field.stack.reset(text);
-        submit(view.ids, edit);
+        submit(view.ids, edit, view.curve ? settle_after(view.curve) : std::function<void()>{});
+    }
+
+    // What an editor runs once its edit is done: take the row's value as it is then.
+    template <class Editor>
+    static std::function<void()> settle_after(const std::shared_ptr<Editor>& editor) {
+        return [weak = std::weak_ptr<Editor>(editor)] {
+            if (const auto locked = weak.lock()) {
+                locked->settle();
+            }
+        };
     }
 
     // The curve editor changed its curve: shown on the instances as a drag
@@ -1873,7 +1892,7 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
         edit.kind = PropertyKind::NumberCurve;
         edit.value.number_curve = std::make_shared<const engine_core::NumberCurve>(view.curve->model().curve());
         if (done) {
-            finish_live(view.ids, edit, true);
+            finish_live(view.ids, edit, true, settle_after(view.curve));
         } else {
             preview(view.ids, edit);
         }
@@ -1889,7 +1908,7 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
         edit.kind = PropertyKind::ColorCurve;
         edit.value.color_curve = std::make_shared<const engine_core::ColorCurve>(view.gradient->model().curve());
         if (done) {
-            finish_live(view.ids, edit, true);
+            finish_live(view.ids, edit, true, settle_after(view.gradient));
         } else {
             preview(view.ids, edit);
         }
@@ -1911,7 +1930,7 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
         edit.kind = PropertyKind::ColorCurve;
         edit.value.color_curve = std::make_shared<const engine_core::ColorCurve>(editor.model().curve());
         if (done) {
-            finish_live(view.ids, edit, commit);
+            finish_live(view.ids, edit, commit, settle_after(view.gradient));
         } else {
             preview(view.ids, edit);
         }
@@ -1930,7 +1949,7 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
         edit.kind = PropertyKind::ColorCurve;
         edit.value.color_curve = std::make_shared<const engine_core::ColorCurve>(editor.model().curve());
         if (done) {
-            finish_live(view.ids, edit, commit);
+            finish_live(view.ids, edit, commit, settle_after(view.gradient));
         } else {
             preview(view.ids, edit);
         }

@@ -190,6 +190,12 @@ public:
     // Where the instance files are: project.json's tree root, src/ unless it names another.
     std::filesystem::path tree_root() const;
     const std::string& name() const { return name_; }
+    // project.json's gameId: 32 hex characters that name this game to the
+    // network handshake. Made at create, added at load to a project without
+    // one, kept by Save As.
+    const std::string& game_id() const { return game_id_; }
+    // project.json's version, "1.0.0" by default. The user will set it.
+    const std::string& version() const { return version_; }
     DataModel& datamodel() { return *game_; }
     const DataModel& datamodel() const { return *game_; }
 
@@ -229,7 +235,7 @@ private:
     // Reads the project at root into the bound world. replace clears a world
     // that already has content, after a dry run so a bad file leaves it as it was.
     void read_into_game(const std::filesystem::path& root, bool replace);
-    void write_skeleton(const std::filesystem::path& root) const;
+    void write_skeleton(const std::filesystem::path& root);
     void save_tree(bool full, const std::vector<SaveConflict>& overwrite = {});
     // The files next would write over, delete, or put back that changed on disk
     // since the last load or save, and files it does not know inside a folder
@@ -291,6 +297,8 @@ private:
 
     std::filesystem::path root_;
     std::string name_;
+    std::string game_id_;
+    std::string version_ = "1.0.0";
     // The tree folder project.json named at the load; create and Save As write "src".
     std::string src_ = "src";
     // project.json's resources.root, relative to root_.

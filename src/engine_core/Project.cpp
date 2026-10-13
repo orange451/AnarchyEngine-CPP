@@ -339,11 +339,23 @@ struct Layout {
     std::string resources = "resources";
 };
 
-JsonValue project_document(const std::string& name, const Layout& layout) {
+// Whether text is a gameId: 32 lowercase hex characters.
+bool well_formed_game_id(const std::string& text) {
+    if (text.size() != 32) return false;
+    for (char c : text) {
+        if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) return false;
+    }
+    return true;
+}
+
+JsonValue project_document(const std::string& name, const Layout& layout, const std::string& game_id,
+                           const std::string& version) {
     JsonValue doc = JsonValue::object();
     doc.set("format", JsonValue::number(kFormat));
     doc.set("name", JsonValue::string(name));
     doc.set("engine", JsonValue::string(kEngine));
+    doc.set("gameId", JsonValue::string(game_id));
+    doc.set("version", JsonValue::string(version));
     JsonValue tree = JsonValue::object();
     tree.set("src", JsonValue::string(layout.src));
     doc.set("tree", std::move(tree));
@@ -353,7 +365,16 @@ JsonValue project_document(const std::string& name, const Layout& layout) {
     return doc;
 }
 
-void read_project_json(const fs::path& root, std::string& name, Layout& layout) {
+// What project.json says. game_id and version are empty when the file
+// lacks them or they are malformed; the load fills them in and writes back.
+struct ProjectJson {
+    std::string name;
+    Layout layout;
+    std::string game_id;
+    std::string version;
+};
+
+ProjectJson read_project_json(const fs::path& root) {
     const fs::path path = root / "project.json";
     std::error_code error;
     if (!fs::is_regular_file(path, error)) {
@@ -371,22 +392,30 @@ void read_project_json(const fs::path& root, std::string& name, Layout& layout) 
     if (format == nullptr || !format->is_number() || format->as_number() != kFormat) {
         fail(utf8_path(path) + ": format must be " + std::to_string(kFormat));
     }
+    ProjectJson json;
     const JsonValue* label = doc.find("name");
-    name = label != nullptr && label->is_string() ? label->as_string() : project_name_for(root);
+    json.name = label != nullptr && label->is_string() ? label->as_string() : project_name_for(root);
     if (const JsonValue* tree = doc.find("tree")) {
         const JsonValue* src = tree->find("src");
         if (src == nullptr || !src->is_string() || !safe_relative(src->as_string())) {
             fail(utf8_path(path) + ": tree.src must be a relative directory");
         }
-        layout.src = src->as_string();
+        json.layout.src = src->as_string();
     }
     if (const JsonValue* resources = doc.find("resources")) {
         const JsonValue* dir = resources->find("root");
         if (dir == nullptr || !dir->is_string() || !safe_relative(dir->as_string())) {
             fail(utf8_path(path) + ": resources.root must be a relative directory");
         }
-        layout.resources = dir->as_string();
+        json.layout.resources = dir->as_string();
     }
+    if (const JsonValue* id = doc.find("gameId"); id != nullptr && id->is_string() && well_formed_game_id(id->as_string())) {
+        json.game_id = id->as_string();
+    }
+    if (const JsonValue* version = doc.find("version"); version != nullptr && version->is_string() && !version->as_string().empty()) {
+        json.version = version->as_string();
+    }
+    return json;
 }
 
 bool reserved_key(const std::string& key) {
@@ -1470,9 +1499,10 @@ Project::Files Project::from_disk(const detail::PlanNode& node, std::string pare
     return files;
 }
 
-void Project::write_skeleton(const fs::path& root) const {
+void Project::write_skeleton(const fs::path& root) {
     const Layout layout;
-    write_file(root / "project.json", write_json(project_document(name_, layout)));
+    if (game_id_.empty()) game_id_ = make_guid() + make_guid();
+    write_file(root / "project.json", write_json(project_document(name_, layout, game_id_, version_)));
     for (const char* kind : kResourceKinds) {
         write_file(disk_path(root, join(join(layout.resources, kind), ".gitkeep")), std::string());
     }
@@ -1548,8 +1578,18 @@ Project Project::load(const fs::path& root, DataModel& into) {
 
 void Project::read_into_game(const fs::path& root, bool replace) {
     root_ = root;
-    Layout layout;
-    read_project_json(root, name_, layout);
+    ProjectJson json = read_project_json(root);
+    name_ = json.name;
+    const Layout layout = json.layout;
+    game_id_ = json.game_id;
+    version_ = json.version;
+    // A project from before gameId and version gets them now, once, the way
+    // ignore_texture_cache adds .cache/ to .gitignore.
+    if (game_id_.empty() || version_.empty()) {
+        if (game_id_.empty()) game_id_ = make_guid() + make_guid();
+        if (version_.empty()) version_ = "1.0.0";
+        write_file(root / "project.json", write_json(project_document(name_, layout, game_id_, version_)));
+    }
     ignore_texture_cache(root);
     src_ = layout.src;
     resources_ = layout.resources;
@@ -1618,10 +1658,9 @@ void Project::save_as(const fs::path& root) {
         fail(utf8_path(root) + " is not empty");
     }
     Layout old_layout;
-    std::string ignored;
     std::error_code error;
     if (fs::is_regular_file(root_ / "project.json", error)) {
-        read_project_json(root_, ignored, old_layout);
+        old_layout = read_project_json(root_).layout;
     }
     write_skeleton(root);
     // Instances name resources by relative path. Copy them so the paths still resolve.
@@ -2268,9 +2307,7 @@ std::vector<std::pair<Project::Comparison::Action, std::string>> Project::Compar
 
 Project::Comparison Project::compare_disk() const {
     using Type = Comparison::Action::Type;
-    Layout layout;
-    std::string ignored;
-    read_project_json(root_, ignored, layout);
+    const Layout layout = read_project_json(root_).layout;
     Comparison out;
     out.plan = PlanReader(root_, layout).read();
     {
@@ -3083,8 +3120,7 @@ void Project::save_tree(bool full, const std::vector<SaveConflict>& overwrite) {
     Layout layout;
     std::error_code error;
     if (fs::is_regular_file(root_ / "project.json", error)) {
-        std::string ignored;
-        read_project_json(root_, ignored, layout);
+        layout = read_project_json(root_).layout;
     }
 
     // Validate before touching disk.

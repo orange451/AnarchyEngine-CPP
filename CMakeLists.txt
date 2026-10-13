@@ -1084,6 +1084,7 @@ endif()
 add_executable(sandbox
     sandbox/tests.cpp
     sandbox/wireframe_tests.cpp
+    sandbox/project_identity_tests.cpp
     sandbox/constraint_tests.cpp
     sandbox/assembly_tests.cpp
     sandbox/assembly_edit_tests.cpp

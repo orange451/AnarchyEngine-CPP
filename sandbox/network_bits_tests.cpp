@@ -42,6 +42,24 @@ TEST_CASE("N2 a write that does not fit sets overflowed and writes nothing", "[n
     REQUIRE(writer.bits_written() == 16);
     REQUIRE(buffer[0] == 0xCD);
     REQUIRE(buffer[1] == 0xAB);
+    writer.bits(0, 0);
+    writer.boolean(true);
+    writer.bits(1, 1);
+    REQUIRE(writer.bits_written() == 16);
+    REQUIRE(buffer[0] == 0xCD);
+    REQUIRE(buffer[1] == 0xAB);
+}
+
+TEST_CASE("N2b a bytes call that does not fit changes nothing but overflowed", "[network][bits]") {
+    std::uint8_t buffer[2] = {};
+    BitWriter writer(buffer, sizeof(buffer));
+    writer.bits(5, 3);
+    const std::uint8_t data[2] = {9, 9};
+    writer.bytes(data, 2);
+    REQUIRE(writer.overflowed());
+    REQUIRE(writer.bits_written() == 3);
+    writer.bits(1, 1);
+    REQUIRE(writer.bits_written() == 3);
 }
 
 TEST_CASE("N3 a read past the end fails and returns 0", "[network][bits]") {
@@ -111,16 +129,23 @@ TEST_CASE("N7 bytes align first and read back whole", "[network][bits]") {
     writer.bits(1, 3);
     const std::uint8_t data[4] = {1, 2, 3, 4};
     writer.bytes(data, 4);
-    REQUIRE(writer.bits_written() == 8 + 32);
+    writer.bits(6, 3);
+    REQUIRE(writer.bits_written() == 8 + 32 + 3);
     BitReader reader(buffer, writer.bytes_written());
     REQUIRE(reader.bits(3) == 1);
     reader.align();
     REQUIRE(reader.byte_offset() == 1);
-    REQUIRE(reader.bytes_left() == 4);
+    REQUIRE(reader.bytes_left() == 5);
     std::uint8_t out[4];
     reader.bytes(out, 4);
     REQUIRE(std::memcmp(out, data, 4) == 0);
-    REQUIRE(reader.bytes_left() == 0);
+    REQUIRE(reader.bytes_left() == 1);
+    REQUIRE(reader.bits(3) == 6);
+    REQUIRE_FALSE(reader.failed());
+    std::uint8_t more[1] = {7};
+    reader.bytes(more, 1);
+    REQUIRE(reader.failed());
+    REQUIRE(more[0] == 0);
 }
 
 TEST_CASE("N8 sequence comparison wraps", "[network][bits]") {

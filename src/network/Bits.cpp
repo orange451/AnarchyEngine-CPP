@@ -19,7 +19,7 @@ BitWriter::BitWriter(std::uint8_t* buffer, std::size_t capacity_bytes)
     : buffer_(buffer), capacity_bits_(capacity_bytes * 8) {}
 
 void BitWriter::bits(std::uint32_t value, int count) {
-    if (count <= 0) return;
+    if (count <= 0 || overflowed_) return;
     if (bits_written_ + static_cast<std::size_t>(count) > capacity_bits_) {
         overflowed_ = true;
         return;
@@ -77,11 +77,13 @@ void BitWriter::align() {
 }
 
 void BitWriter::bytes(const std::uint8_t* data, std::size_t count) {
-    align();
-    if (overflowed_ || bits_written_ + count * 8 > capacity_bits_) {
+    if (overflowed_) return;
+    const std::size_t pad = (8 - bits_written_ % 8) % 8;
+    if (bits_written_ + pad + count * 8 > capacity_bits_) {
         overflowed_ = true;
         return;
     }
+    align();
     std::memcpy(buffer_ + byte_index_, data, count);
     byte_index_ += count;
     bits_written_ += count * 8;
@@ -141,7 +143,18 @@ void BitReader::align() {
 
 void BitReader::bytes(std::uint8_t* out, std::size_t count) {
     align();
-    for (std::size_t i = 0; i < count; ++i) out[i] = static_cast<std::uint8_t>(bits(8));
+    if (bits_read_ + count * 8 > total_bits_) {
+        failed_ = true;
+        std::memset(out, 0, count);
+        return;
+    }
+    // After align() the scratch holds no bits, so the bytes are copied straight
+    // from the buffer and the next bits() call resumes after them.
+    std::memcpy(out, buffer_ + bits_read_ / 8, count);
+    bits_read_ += count * 8;
+    byte_index_ = bits_read_ / 8;
+    scratch_ = 0;
+    scratch_bits_ = 0;
 }
 
 }  // namespace network

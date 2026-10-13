@@ -143,10 +143,8 @@ SnapshotPump::~SnapshotPump() = default;
 void SnapshotPump::reserve(std::size_t instances) {
     // A starting size: rows and the slot map grow as a place grows, so a
     // big cap costs nothing until a place uses it.
+    // Rows live in shared chunks (VisualRows), which need no reserve.
     const std::size_t start = std::min<std::size_t>(instances, kInitialRows);
-    base_.instances.reserve(start);
-    buffers_[0].instances.reserve(start);
-    buffers_[1].instances.reserve(start);
     overrides_.reserve(start);
     base_ids_.reserve(start);
 }
@@ -172,21 +170,21 @@ void SnapshotPump::set_terrain_world(const TerrainWorld* terrains) { terrain_wor
 
 void SnapshotPump::set_particle_world(const ParticleWorld* particles) { particle_world_ = particles; }
 
-VisualInstance* SnapshotPump::base_find(InstanceId id) {
-    const int position = base_ids_.position(id);
-    return position < 0 ? nullptr : &base_.instances[static_cast<std::size_t>(position)];
-}
+int SnapshotPump::base_position(InstanceId id) const { return base_ids_.position(id); }
 
 void SnapshotPump::erase_base(InstanceId id) {
-    if (const VisualInstance* inst = base_find(id)) {
-        release_prefab(inst->prefab);
+    if (const int found = base_position(id); found >= 0) {
+        release_prefab(base_.instances[static_cast<std::size_t>(found)].prefab);
     }
     const int position = base_ids_.erase(id);
     if (position < 0) {
         return;
     }
     // base_ids_ swapped its last id into position; mirror that on the rows.
-    base_.instances[static_cast<std::size_t>(position)] = base_.instances.back();
+    const auto at = static_cast<std::size_t>(position);
+    if (at + 1 != base_.instances.size()) {
+        base_.instances.at_mut(at) = base_.instances.back();
+    }
     base_.instances.pop_back();
 }
 
@@ -208,8 +206,8 @@ void SnapshotPump::apply_live(DataModel& game, const Invalidation& change) {
         if (sun == nullptr) {
             return;
         }
-        if (VisualInstance* row = base_find(change.id)) {
-            row->light = light_of(*sun);
+        if (const int found = base_position(change.id); found >= 0) {
+            base_.instances.at_mut(static_cast<std::size_t>(found)).light = light_of(*sun);
             return;
         }
         base_ids_.insert(change.id);
@@ -218,14 +216,16 @@ void SnapshotPump::apply_live(DataModel& game, const Invalidation& change) {
     }
     // A row that joins reads every field: none was kept while it was out.
     bool whole = any(change.fields, VisualField::Ancestry);
-    VisualInstance* inst = base_find(change.id);
-    if (inst == nullptr) {
+    int position = base_position(change.id);
+    if (position < 0) {
         base_ids_.insert(change.id);
         base_.instances.push_back(VisualInstance{});
-        inst = &base_.instances.back();
-        inst->id = change.id;
+        position = static_cast<int>(base_.instances.size()) - 1;
         whole = true;
     }
+    // This row's chunk becomes the pump's own: published frames keep theirs.
+    VisualInstance* inst = &base_.instances.at_mut(static_cast<std::size_t>(position));
+    inst->id = change.id;
     if (whole || any(change.fields, VisualField::Transform)) {
         inst->world = object->transform();
         inst->transform_origin = change.origin;
@@ -461,16 +461,31 @@ void SnapshotPump::resolve_prefabs(DataModel& game) {
 }
 
 void SnapshotPump::resolve_poses(DataModel& game) {
-    for (VisualInstance& row : base_.instances) {
+    // No Prefab with a skeleton and no row left posed: nothing to look at. A
+    // place of static scenery skips its rows entirely.
+    const bool any_skeleton = std::any_of(base_.prefabs.begin(), base_.prefabs.end(),
+                                          [](const VisualPrefab& prefab) { return prefab.skeleton != nullptr; });
+    if (!any_skeleton && posed_rows_ == 0) {
+        return;
+    }
+    std::size_t posed = 0;
+    for (std::size_t index = 0; index < base_.instances.size(); ++index) {
+        const VisualInstance& row = base_.instances[index];
         const bool skinned = row.prefab != 0 && row.prefab < base_.prefabs.size() &&
                              base_.prefabs[row.prefab].skeleton != nullptr;
         const auto* drawn = skinned ? dynamic_cast<const GameObject*>(game.instance(row.id)) : nullptr;
+        // Written only when it changes, so unchanged rows keep sharing their chunk.
         if (drawn != nullptr) {
-            row.pose = drawn->pose();
+            std::shared_ptr<const Pose> pose = drawn->pose();
+            if (pose != row.pose) {
+                base_.instances.at_mut(index).pose = std::move(pose);
+            }
+            ++posed;
         } else if (row.pose != nullptr) {
-            row.pose.reset();
+            base_.instances.at_mut(index).pose.reset();
         }
     }
+    posed_rows_ = posed;
 }
 
 template <class... T>
@@ -658,8 +673,8 @@ void SnapshotPump::blit(VisualSnapshot& dst) const {
     dst.particles = base_.particles;
     dst.brushes = base_.brushes;
     dst.viewports = base_.viewports;
-    dst.instances.resize(base_.instances.size());
-    std::copy(base_.instances.begin(), base_.instances.end(), dst.instances.begin());
+    // Chunk pointers, not rows: unchanged chunks are shared with base_.
+    dst.instances = base_.instances;
     // Element by element, so strings that did not change keep their buffers.
     dst.prefabs.resize(base_.prefabs.size());
     std::copy(base_.prefabs.begin(), base_.prefabs.end(), dst.prefabs.begin());
@@ -672,13 +687,15 @@ void SnapshotPump::apply_overrides(VisualSnapshot& dst) {
         if (position < 0 || static_cast<std::size_t>(position) >= dst.instances.size()) {
             continue;
         }
-        VisualInstance& inst = dst.instances[static_cast<std::size_t>(position)];
+        const VisualInstance& inst = dst.instances[static_cast<std::size_t>(position)];
         if (inst.id != override.id || !inst.alive) {
             continue;
         }
         if (any(override.field, VisualField::Transform)) {
-            inst.world = override.transform;
-            inst.transform_origin = WriteOrigin::SnapshotOverride;
+            // dst's own copy of the chunk: base_ keeps the row as the DataModel has it.
+            VisualInstance& row = dst.instances.at_mut(static_cast<std::size_t>(position));
+            row.world = override.transform;
+            row.transform_origin = WriteOrigin::SnapshotOverride;
         }
     }
 }

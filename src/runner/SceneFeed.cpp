@@ -45,8 +45,8 @@ void SceneFeed::perform(const engine_core::VisualSnapshot& front) {
     // vectors and strings keep their storage.
     out->frame = front.frame;
     out->camera = front.camera;
-    out->instances.resize(front.instances.size());
-    std::copy(front.instances.begin(), front.instances.end(), out->instances.begin());
+    // Chunk pointers, shared with the engine's frame: rows are not copied.
+    out->instances = front.instances;
     out->prefabs.resize(front.prefabs.size());
     std::copy(front.prefabs.begin(), front.prefabs.end(), out->prefabs.begin());
     out->lighting = front.lighting;

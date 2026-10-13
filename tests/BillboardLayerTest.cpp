@@ -173,7 +173,7 @@ int RunBillboardLayerTests(ide::IdeLayout& layout, jadefx::Scene& scene) {
     // follows that frame, not the one before.
     auto moved = std::make_shared<engine_core::VisualSnapshot>(*shot);
     moved->frame = 2;
-    moved->instances[0].world = engine_core::matrix4_translation(3.f, 0.f, 0.f);
+    moved->instances.at_mut(0).world = engine_core::matrix4_translation(3.f, 0.f, 0.f);
     moved->billboards[0].anchor = engine_core::Vec3{3.f, 0.f, -10.f};
     view->setSnapshotForTest(moved);
     frame();

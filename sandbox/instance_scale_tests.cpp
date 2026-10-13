@@ -158,3 +158,80 @@ TEST_CASE("IS5 a project read past the instance limit is an error", "[IS5][scale
     engine_core::Project::set_instance_limit(DataModel::kMaxInstances + 10);
     REQUIRE(engine_core::Project::instance_limit() == DataModel::kMaxInstances);
 }
+
+TEST_CASE("IS6 shared rows: a copy shares chunks until a write, which copies only that chunk", "[IS6][scale]") {
+    using Rows = engine_core::SharedRows<int, 4>;
+    Rows rows;
+    for (int i = 0; i < 10; ++i) {
+        rows.push_back(i);
+    }
+    REQUIRE(rows.size() == 10);
+    REQUIRE(rows.chunk_count() == 3);
+    const Rows copy = rows;
+    for (std::size_t k = 0; k < rows.chunk_count(); ++k) {
+        REQUIRE(copy.chunk(k) == rows.chunk(k));
+    }
+    rows.at_mut(5) = 50;
+    // The written row's chunk is the writer's own; the copy keeps the old one.
+    REQUIRE(rows[5] == 50);
+    REQUIRE(copy[5] == 5);
+    REQUIRE(rows.chunk(1) != copy.chunk(1));
+    REQUIRE(rows.chunk(0) == copy.chunk(0));
+    REQUIRE(rows.chunk(2) == copy.chunk(2));
+    // Popping across a chunk boundary and pushing back keeps every row.
+    rows.pop_back();
+    rows.pop_back();
+    REQUIRE(rows.size() == 8);
+    REQUIRE(rows.chunk_count() == 2);
+    rows.push_back(80);
+    REQUIRE(rows.size() == 9);
+    REQUIRE(rows[8] == 80);
+    std::vector<int> seen(rows.begin(), rows.end());
+    REQUIRE(seen == std::vector<int>{0, 1, 2, 3, 4, 50, 6, 7, 80});
+    REQUIRE(std::vector<int>(copy.begin(), copy.end()) == std::vector<int>{0, 1, 2, 3, 4, 5, 6, 7, 8, 9});
+    rows.resize(2);
+    REQUIRE(rows.size() == 2);
+    rows.resize(5);
+    REQUIRE(rows[4] == 0);
+}
+
+TEST_CASE("IS7 a published frame keeps its rows while the pump moves on, and unchanged chunks are shared", "[IS7][scale]") {
+    SimRole role;
+    engine_core::Game game;
+    game.history().set_enabled(false);
+    engine_core::SnapshotPump pump;
+    pump.reserve(DataModel::kMaxInstances);
+    const InstanceId ws = workspace_of(game);
+    std::vector<InstanceId> parts;
+    for (int i = 0; i < 1000; ++i) {
+        engine_core::GameObject& part = game.create_game_object();
+        game.set_parent(part.id(), ws);
+        part.set_transform(engine_core::matrix4_translation(static_cast<float>(i), 0.f, 0.f));
+        parts.push_back(part.id());
+    }
+    pump.prepare_copy(game);
+    pump.publish();
+    const engine_core::VisualRows held = pump.front().instances;
+    // One part moves: the next frame copies only that row's chunk.
+    game.game_object(parts[500])->set_transform(engine_core::matrix4_translation(-5.f, 1.f, 0.f));
+    pump.prepare_copy(game);
+    pump.publish();
+    const engine_core::VisualRows& now = pump.front().instances;
+    REQUIRE(now.size() == held.size());
+    std::size_t differing = 0;
+    for (std::size_t k = 0; k < now.chunk_count(); ++k) {
+        differing += now.chunk(k) != held.chunk(k);
+    }
+    REQUIRE(differing == 1);
+    // The held frame still reads as it was.
+    for (const auto& row : held) {
+        if (row.id == parts[500]) {
+            REQUIRE(row.world.m[12] == 500.f);
+        }
+    }
+    for (const auto& row : now) {
+        if (row.id == parts[500]) {
+            REQUIRE(row.world.m[12] == -5.f);
+        }
+    }
+}

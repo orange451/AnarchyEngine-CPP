@@ -239,6 +239,9 @@ private:
     // The Cameras in Workspace, in tree order, as of the last walk.
     std::vector<CameraChoice> cameras_;
     std::vector<CameraChoice> cameraScratch_;
+    // The tree_revision and world cameras_ was read at; walked again when either moves.
+    std::uint64_t camerasRevision_ = ~std::uint64_t{0};
+    const engine_core::DataModel* camerasGame_ = nullptr;
     // The link. cameraId_ is its Camera while that is in Workspace, else 0.
     std::string cameraGuid_;
     engine_core::InstanceId cameraId_ = 0;

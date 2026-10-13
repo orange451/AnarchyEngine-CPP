@@ -656,38 +656,46 @@ void GameView::readWorkspace() {
     if (!lock.owns()) {
         return;
     }
-    // Assigned in place, so names that did not change keep their buffers.
-    std::size_t cameraCount = 0;
     // The list offers the Cameras in Workspace, at any depth, in tree order.
-    walkScratch_.clear();
-    if (const engine_core::InstanceId workspace = game_->scene_service("Workspace"); workspace != 0) {
-        walkScratch_.push_back(workspace);
-    }
-    while (!walkScratch_.empty()) {
-        const engine_core::InstanceId id = walkScratch_.back();
-        walkScratch_.pop_back();
-        // A ViewportPane's Cameras look into its own world, not the place's.
-        if (game_->in_viewport(id)) {
-            continue;
+    // It changes only with a name or the hierarchy, which move tree_revision:
+    // walking every instance each frame cost milliseconds in a large place,
+    // under a read lock the engine thread then waited out.
+    const std::uint64_t treeRevision = game_->tree_revision();
+    if (treeRevision != camerasRevision_ || game_ != camerasGame_) {
+        camerasRevision_ = treeRevision;
+        camerasGame_ = game_;
+        // Assigned in place, so names that did not change keep their buffers.
+        std::size_t cameraCount = 0;
+        walkScratch_.clear();
+        if (const engine_core::InstanceId workspace = game_->scene_service("Workspace"); workspace != 0) {
+            walkScratch_.push_back(workspace);
         }
-        if (dynamic_cast<engine_core::Camera*>(game_->instance(id)) != nullptr) {
-            if (cameraCount == cameraScratch_.size()) {
-                cameraScratch_.emplace_back();
+        while (!walkScratch_.empty()) {
+            const engine_core::InstanceId id = walkScratch_.back();
+            walkScratch_.pop_back();
+            // A ViewportPane's Cameras look into its own world, not the place's.
+            if (game_->in_viewport(id)) {
+                continue;
             }
-            CameraChoice& choice = cameraScratch_[cameraCount++];
-            choice.id = id;
-            choice.guid = game_->guid(id);
-            choice.name = game_->name(id);
+            if (dynamic_cast<engine_core::Camera*>(game_->instance(id)) != nullptr) {
+                if (cameraCount == cameraScratch_.size()) {
+                    cameraScratch_.emplace_back();
+                }
+                CameraChoice& choice = cameraScratch_[cameraCount++];
+                choice.id = id;
+                choice.guid = game_->guid(id);
+                choice.name = game_->name(id);
+            }
+            const std::size_t first = walkScratch_.size();
+            for (engine_core::InstanceId child = game_->first_child(id); child != 0; child = game_->next_sibling(child)) {
+                walkScratch_.push_back(child);
+            }
+            std::reverse(walkScratch_.begin() + static_cast<std::ptrdiff_t>(first), walkScratch_.end());
         }
-        const std::size_t first = walkScratch_.size();
-        for (engine_core::InstanceId child = game_->first_child(id); child != 0; child = game_->next_sibling(child)) {
-            walkScratch_.push_back(child);
+        cameraScratch_.resize(cameraCount);
+        if (cameraScratch_ != cameras_) {
+            cameras_.swap(cameraScratch_);
         }
-        std::reverse(walkScratch_.begin() + static_cast<std::ptrdiff_t>(first), walkScratch_.end());
-    }
-    cameraScratch_.resize(cameraCount);
-    if (cameraScratch_ != cameras_) {
-        cameras_.swap(cameraScratch_);
     }
     // Another place drops the link, so the view takes that place's Camera.
     std::string place = game_->guid(0);

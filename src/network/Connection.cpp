@@ -72,7 +72,7 @@ bool Connection::read_packet(const PacketHeader& header, BitReader& reader, cons
         return false;
     }
     ring_.process_acks(header.ack, header.ack_bits, now, [&](SentPacket& sent, double sample) {
-        sample_rtt(sample);
+        if (sample >= 0.0) sample_rtt(sample);
         for (int i = 0; i < sent.ref_count; ++i) reliable_.acked(sent.refs[i]);
         if (sent.has_payload && callbacks.on_delivered) callbacks.on_delivered(sent.sequence, sent.tag);
     });

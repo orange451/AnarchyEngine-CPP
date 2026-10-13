@@ -2,6 +2,7 @@
 
 #include "Sequence.hpp"
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 
@@ -44,7 +45,9 @@ public:
     std::uint32_t ack_bits() const;
 
     // For each sequence the peer's ack covers that we sent and had not seen
-    // acked: marks it and calls on_acked(SentPacket&, rtt_sample). A late ack
+    // acked: marks it and calls on_acked(SentPacket&, rtt_sample). Only the
+    // packet named by ack yields a sample (others waited on the peer up to its
+    // send interval; they get -1). A late ack
     // still counts: the peer holds that packet, whatever the loss estimate said.
     template <class F>
     void process_acks(std::uint16_t ack, std::uint32_t ack_bits, double now, F&& on_acked) {
@@ -54,7 +57,7 @@ public:
             SentPacket& sent = sent_[sequence % kRingSize];
             if (!sent.valid || sent.acked || sent.sequence != sequence) continue;
             sent.acked = true;
-            on_acked(sent, now - sent.time);
+            on_acked(sent, n < 0 ? std::max(0.0, now - sent.time) : -1.0);
         }
     }
 

@@ -83,7 +83,7 @@ TEST_CASE("N14 a sequence older than the ring is stale, and the ring survives th
     REQUIRE(ring.note_received(3) == PacketRing::Receive::Stale);
 }
 
-TEST_CASE("N15 process_acks fires once per newly acked packet with its RTT sample", "[network][ring]") {
+TEST_CASE("N15 process_acks fires once per newly acked packet; only the named ack has an RTT sample", "[network][ring]") {
     PacketRing ring;
     for (std::uint16_t s = 0; s < 5; ++s) {
         SentPacket& sent = ring.record_sent(s, 1.0 + s * 0.01);
@@ -98,7 +98,8 @@ TEST_CASE("N15 process_acks fires once per newly acked packet with its RTT sampl
     });
     REQUIRE(acked == std::vector<std::uint16_t>{4, 2, 0});
     REQUIRE(samples[0] == Approx(1.2 - 1.04));
-    REQUIRE(samples[2] == Approx(0.2));
+    REQUIRE(samples[1] == -1.0);
+    REQUIRE(samples[2] == -1.0);
     // Again: nothing new.
     acked.clear();
     ring.process_acks(4, (1u << 1) | (1u << 3), 1.3, [&](SentPacket& p, double) { acked.push_back(p.sequence); });

@@ -303,8 +303,8 @@ TEST_CASE("N66 a session over 150 ms, 20 ms jitter, and 2% loss each way deliver
     delivered_reports = static_cast<int>(net.client_logs[0].delivered.size());
     REQUIRE(delivered_reports > 500);
     const double rtt = client.stats(0, now).rtt;
-    REQUIRE(rtt > 0.28);
-    REQUIRE(rtt < 0.42);
+    REQUIRE(rtt > 0.24);
+    REQUIRE(rtt < 0.36);
     REQUIRE(net.server->stats(0, now).loss < 0.1f);
 }
 

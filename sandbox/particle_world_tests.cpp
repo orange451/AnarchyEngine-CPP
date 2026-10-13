@@ -438,3 +438,27 @@ TEST_CASE("PW14 World collision hits a Brush, obeys CollisionGroup, and keeps to
     REQUIRE(rig.world.rays_last_step() > 0);
     REQUIRE(rig.world.rays_last_step() <= ParticleWorld::kRaysPerStep);
 }
+
+#include "SnapshotPump.hpp"
+
+TEST_CASE("PW15 the render snapshot carries each drawn emitter's particles by pointer", "[particle-world]") {
+    ParticleRig rig;
+    SnapshotPump pump;
+    pump.reserve(DataModel::kMaxInstances);
+    pump.set_particle_world(&rig.world);
+    ParticleEmitter& e = rig.emitter(workspace_of(rig.game));
+    REQUIRE_FALSE(e.set_blend_mode(static_cast<int>(ParticleBlendMode::Additive)).has_value());
+    REQUIRE_FALSE(e.set_brightness(3.0).has_value());
+    rig.steps(10);
+    pump.prepare_copy(rig.game);
+    pump.publish();
+    const VisualSnapshot& snap = pump.front();
+    REQUIRE(snap.particles.size() == 1);
+    REQUIRE(snap.particles[0].particles.get() == rig.world.draws()[0].particles.get());   // shared, not copied
+    REQUIRE(snap.particles[0].blend == ParticleBlendMode::Additive);
+    REQUIRE(snap.particles[0].brightness == 3.f);
+    pump.set_particle_world(nullptr);
+    pump.prepare_copy(rig.game);
+    pump.publish();
+    REQUIRE(pump.front().particles.empty());
+}

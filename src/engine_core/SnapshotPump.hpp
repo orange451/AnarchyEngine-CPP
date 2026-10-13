@@ -6,6 +6,7 @@
 #include "DraggerMath.hpp"
 #include "DynamicSky.hpp"
 #include "Skeleton.hpp"
+#include "ParticleWorld.hpp"
 #include "TerrainWorld.hpp"
 #include "types.hpp"
 
@@ -337,6 +338,10 @@ struct VisualSnapshot {
     // Every Terrain in Workspace, as TerrainWorld shows it. Pointers only: the
     // chunk list and look are immutable and shared with the simulation.
     std::vector<TerrainView> terrains;
+    // Every ParticleEmitter with live particles, as ParticleWorld drew them
+    // this frame. Rebuilt at every take_changes, like draggers. Pointers only:
+    // each particle list is immutable and shared with the simulation.
+    std::vector<ParticleDraw> particles;
     // Every Brush in Workspace (BrushVisuals): anchored opaque ones baked into
     // cells, the rest one by one.
     std::vector<VisualBrushDraw> brushes;
@@ -371,6 +376,9 @@ public:
     // Set once, outside the per-frame windows (Engine's constructor sets it,
     // and clears it to null in its destructor before terrain_ is torn down).
     void set_terrain_world(const TerrainWorld* terrains);
+    // The ParticleWorld whose draws() resolve_particles reads each
+    // take_changes, set and cleared as the TerrainWorld is.
+    void set_particle_world(const ParticleWorld* particles);
 
     // Copies dirty DataModel fields into the base snapshot. Needs the DataModel
     // lock, and is the only step here that does.
@@ -414,6 +422,7 @@ private:
     // into base_.terrains. TerrainWorld::update already ran on SimulationThread
     // before take_changes is called, so there is nothing more to read from game here.
     void resolve_terrains(DataModel& game);
+    void resolve_particles();
     BrushVisuals brushes_;
     // Points each row's anchor at its anchor_instance's row in dst, after overrides.
     void anchor_billboards(VisualSnapshot& dst) const;
@@ -444,6 +453,8 @@ private:
     std::vector<SnapshotOverride> overrides_;
     // Not owned. Null until Engine's constructor calls set_terrain_world.
     const TerrainWorld* terrain_world_ = nullptr;
+    // Not owned. Null until Engine's constructor calls set_particle_world.
+    const ParticleWorld* particle_world_ = nullptr;
     bool window_open_ = false;
     // The ids with a row in base_.instances, position for position.
     DenseIdSet base_ids_;

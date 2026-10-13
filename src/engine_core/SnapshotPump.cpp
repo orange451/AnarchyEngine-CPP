@@ -171,6 +171,8 @@ void SnapshotPump::override_visual(const SnapshotOverride& override) {
 
 void SnapshotPump::set_terrain_world(const TerrainWorld* terrains) { terrain_world_ = terrains; }
 
+void SnapshotPump::set_particle_world(const ParticleWorld* particles) { particle_world_ = particles; }
+
 VisualInstance* SnapshotPump::base_find(InstanceId id) {
     const int position = base_ids_.position(id);
     return position < 0 ? nullptr : &base_.instances[static_cast<std::size_t>(position)];
@@ -663,6 +665,7 @@ void SnapshotPump::blit(VisualSnapshot& dst) const {
     dst.billboards = base_.billboards;
     dst.wire_lines = base_.wire_lines;
     dst.terrains = base_.terrains;
+    dst.particles = base_.particles;
     dst.brushes = base_.brushes;
     dst.viewports = base_.viewports;
     dst.instances.resize(base_.instances.size());
@@ -761,6 +764,14 @@ void SnapshotPump::resolve_wireframes(DataModel& game) {
     }
 }
 
+// Under the same write lock ParticleWorld::step takes, so draws() is this frame's.
+void SnapshotPump::resolve_particles() {
+    base_.particles.clear();
+    if (particle_world_ != nullptr) {
+        base_.particles = particle_world_->draws();
+    }
+}
+
 void SnapshotPump::resolve_terrains(DataModel& game) {
     (void)game;  // Called from the frame's snapshot copy, under the DataModel write
     // lock; views() is read under that same write lock that TerrainWorld::update also
@@ -810,6 +821,7 @@ void SnapshotPump::take_changes(DataModel& game) {
     resolve_billboards(game);
     resolve_wireframes(game);
     resolve_terrains(game);
+    resolve_particles();
     brushes_.update(game, base_.brushes);
     base_.resources_root = game.resources_root();
 }

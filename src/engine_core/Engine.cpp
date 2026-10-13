@@ -78,6 +78,7 @@ Engine::Engine() {
     // The engine's snapshot carries each Terrain's chunks and look, read
     // from terrain_ by SnapshotPump::resolve_terrains.
     pump_.set_terrain_world(&terrain_);
+    pump_.set_particle_world(&particles_);
     // So do instances' warnings, such as a Terrain whose voxel file is missing.
     game_.set_warning_sink([this](const std::string& text) {
         scripts_->append_output(ScriptRuntime::OutputKind::Print, text);
@@ -101,6 +102,7 @@ Engine::~Engine() {
     // terrain_ is declared after physics_ and pump_, so it goes first.
     physics_.set_terrain_world(nullptr);
     pump_.set_terrain_world(nullptr);
+    pump_.set_particle_world(nullptr);
 }
 
 void Engine::set_renderer(IRenderer* renderer) { renderer_ = renderer; }

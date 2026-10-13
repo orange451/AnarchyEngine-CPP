@@ -113,3 +113,44 @@ TEST_CASE("PJ4 a version in the file is read, and a gameId that is not 32 hex ch
     REQUIRE(doc.find("gameId")->as_string() == loaded.game_id());
     REQUIRE(doc.find("version")->as_string() == "2.1.0");
 }
+
+TEST_CASE("PJ5 the migration keeps keys it does not know", "[project][network]") {
+    SimRole role;
+    TempDir dir;
+    const fs::path root = dir.path / "Place";
+    { Project made = Project::create(root); }
+    write_text(root / "project.json",
+               "{\"format\": 1, \"name\": \"Old\", \"engine\": \"engine_core\", \"tree\": {\"src\": \"src\"}, "
+               "\"resources\": {\"root\": \"resources\"}, \"custom\": {\"a\": 1}}");
+    std::string id;
+    {
+        Project loaded = Project::load(root);
+        id = loaded.game_id();
+    }
+    const engine_core::JsonValue doc = project_json(root);
+    REQUIRE(doc.find("custom") != nullptr);
+    REQUIRE(doc.find("custom")->find("a")->as_number() == 1);
+    REQUIRE(doc.find("gameId")->as_string() == id);
+    REQUIRE(doc.find("version")->as_string() == "1.0.0");
+}
+
+TEST_CASE("PJ6 an old project whose project.json is read-only still loads", "[project][network]") {
+    SimRole role;
+    TempDir dir;
+    const fs::path root = dir.path / "Place";
+    { Project made = Project::create(root); }
+    write_text(root / "project.json", kOldProjectJson);
+    const fs::path file = root / "project.json";
+    fs::permissions(file, fs::perms::owner_read | fs::perms::group_read | fs::perms::others_read, fs::perm_options::replace);
+    std::string id;
+    bool threw = false;
+    try {
+        Project loaded = Project::load(root);
+        id = loaded.game_id();
+    } catch (...) {
+        threw = true;
+    }
+    fs::permissions(file, fs::perms::owner_read | fs::perms::owner_write, fs::perm_options::replace);
+    REQUIRE_FALSE(threw);
+    REQUIRE(is_hex32(id));
+}

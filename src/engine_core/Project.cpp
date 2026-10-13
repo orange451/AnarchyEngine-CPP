@@ -372,6 +372,7 @@ struct ProjectJson {
     Layout layout;
     std::string game_id;
     std::string version;
+    JsonValue doc;   // the parsed file, so a migration keeps keys it does not know
 };
 
 ProjectJson read_project_json(const fs::path& root) {
@@ -415,6 +416,7 @@ ProjectJson read_project_json(const fs::path& root) {
     if (const JsonValue* version = doc.find("version"); version != nullptr && version->is_string() && !version->as_string().empty()) {
         json.version = version->as_string();
     }
+    json.doc = std::move(doc);
     return json;
 }
 
@@ -1588,7 +1590,11 @@ void Project::read_into_game(const fs::path& root, bool replace) {
     if (game_id_.empty() || version_.empty()) {
         if (game_id_.empty()) game_id_ = make_guid() + make_guid();
         if (version_.empty()) version_ = "1.0.0";
-        write_file(root / "project.json", write_json(project_document(name_, layout, game_id_, version_)));
+        // Best effort, like ignore_texture_cache: a read-only folder still opens, with the values kept in memory.
+        json.doc.set("gameId", JsonValue::string(game_id_));
+        json.doc.set("version", JsonValue::string(version_));
+        std::string write_error;
+        engine_core::write_file(root / "project.json", write_json(json.doc), write_error);
     }
     ignore_texture_cache(root);
     src_ = layout.src;

@@ -29,6 +29,7 @@ struct ParticleWorld::Entry {
     EmitterSim sim;
     Matrix4 last_frame = matrix4_identity();
     bool seen = false;
+    InstanceId last_parent = 0;   // a new parent starts the shape's motion over
     std::uint64_t pass = 0;
     bool finished_pending = false;   // a one-shot ended; Finished fires once its last particle dies
     bool replay_pending = false;     // stopped: a one-shot ended, and replays once its last particle dies
@@ -229,6 +230,7 @@ int ParticleWorld::rays_last_step() const { return colliders_->rays; }
 // One emitter this step: where it is, how many it asks for, and how many it gets.
 struct ParticleWorld::Pending {
     InstanceId id = 0;
+    InstanceId parent = 0;
     ParticleEmitter* emitter = nullptr;
     Entry* entry = nullptr;
     EmitterFrame frame;
@@ -285,10 +287,11 @@ void ParticleWorld::step(DataModel& game, double dt) {
         emitter_extent(game, parent, shape_frame, half);
         Pending p;
         p.id = id;
+        p.parent = parent;
         p.emitter = e;
         p.entry = &entry;
         p.frame.current = shape_frame;
-        p.frame.previous = entry.seen ? entry.last_frame : shape_frame;
+        p.frame.previous = entry.seen && entry.last_parent == parent ? entry.last_frame : shape_frame;
         p.frame.half = half;
         p.frame.inherited = inherited_velocity(game, parent, matrix4_position(shape_frame));
         p.frame.dt = step_dt;
@@ -353,6 +356,7 @@ void ParticleWorld::step(DataModel& game, double dt) {
         }
         entry.sim.step(p.frame, e.playing(), emits, p.allowance, collider);
         entry.last_frame = p.frame.current;
+        entry.last_parent = p.parent;
         entry.seen = true;
         if (entry.sim.take_cycle_ended()) {
             if (game.simulation_running()) {

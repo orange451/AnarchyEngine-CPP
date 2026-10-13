@@ -1925,11 +1925,12 @@ void TerrainBudget(runner::Renderer& renderer) {
 
 
 // A width x 1 RGBA texture from texels, nearest-filtered.
-runner::GLuint ParticleTexture(const std::uint8_t* texels, int width) {
+// texels run bottom row first, as OpenGL and the texture cache upload them.
+runner::GLuint ParticleTexture(const std::uint8_t* texels, int width, int height = 1) {
     runner::GLuint texture = 0;
     glGenTextures(1, &texture);
     glBindTexture(runner::GL_TEXTURE_2D, texture);
-    glTexImage2D(runner::GL_TEXTURE_2D, 0, static_cast<runner::GLint>(runner::GL_RGBA8), width, 1, 0, runner::GL_RGBA,
+    glTexImage2D(runner::GL_TEXTURE_2D, 0, static_cast<runner::GLint>(runner::GL_RGBA8), width, height, 0, runner::GL_RGBA,
                  runner::GL_UNSIGNED_BYTE, texels);
     glTexParameteri(runner::GL_TEXTURE_2D, runner::GL_TEXTURE_MIN_FILTER, static_cast<runner::GLint>(runner::RT_GL_NEAREST));
     glTexParameteri(runner::GL_TEXTURE_2D, runner::GL_TEXTURE_MAG_FILTER, static_cast<runner::GLint>(runner::RT_GL_NEAREST));
@@ -1970,11 +1971,28 @@ void CheckParticles(runner::Renderer& renderer, const GpuMesh* cube, int size, i
 
     // P1: a particle alone draws, at the middle and nowhere near the corner.
     engine_core::ParticleDraw solo = OneParticle(0.f, 0.f, 2.f, 2.f, white);
-    runner::ParticleBatch batch{&solo, 0};
-    renderer.setParticles(&batch, 1);
+    runner::ParticleBatch batch;
+    // The renderer keeps a copy: a draw changed after this is shown again.
+    const auto show = [&](const engine_core::ParticleDraw& draw, runner::GLuint texture) {
+        batch = runner::ParticleBatch{draw, texture};
+        renderer.setParticles(&batch, 1);
+    };
+    show(solo, 0);
     renderer.draw(0, 0, size, size, size, size, nullptr, 0);
     Expect(!IsClear(ReadPixel(midX, midY)), "a particle draws with no meshes (" + Text(ReadPixel(midX, midY)) + ")");
     Expect(IsClear(ReadPixel(2, 2)), "a particle draws nothing far from it");
+
+    // P8: the renderer keeps what it was given, whatever happens to the caller's copy.
+    {
+        engine_core::ParticleDraw kept = OneParticle(0.f, 0.f, 2.f, 2.f, white);
+        runner::ParticleBatch held{kept, 0};
+        renderer.setParticles(&held, 1);
+        kept = engine_core::ParticleDraw{};   // the snapshot moved on
+        held = runner::ParticleBatch{};
+        renderer.draw(0, 0, size, size, size, size, nullptr, 0);
+        Expect(!IsClear(ReadPixel(midX, midY)), "a batch draws after its source is gone");
+        renderer.setParticles(nullptr, 0);
+    }
 
     // P2: over the cube, Additive brightens and Multiply darkens.
     runner::MeshDraw box{cube, engine_core::matrix4_identity()};
@@ -1983,37 +2001,35 @@ void CheckParticles(runner::Renderer& renderer, const GpuMesh* cube, int size, i
     const Pixel bare = ReadPixel(midX, midY);
     engine_core::ParticleDraw glow = OneParticle(0.f, 0.f, 2.f, 3.f, grey);
     glow.blend = engine_core::ParticleBlendMode::Additive;
-    batch = {&glow, 0};
-    renderer.setParticles(&batch, 1);
+    show(glow, 0);
     renderer.draw(0, 0, size, size, size, size, &box, 1);
     const Pixel added = ReadPixel(midX, midY);
     Expect(Sum(added) > Sum(bare) + 30, "Additive brightens (" + Text(bare) + " -> " + Text(added) + ")");
     engine_core::ParticleDraw soot = OneParticle(0.f, 0.f, 2.f, 3.f, dark);
     soot.blend = engine_core::ParticleBlendMode::Multiply;
-    batch = {&soot, 0};
-    renderer.setParticles(&batch, 1);
+    show(soot, 0);
     renderer.draw(0, 0, size, size, size, size, &box, 1);
     const Pixel multiplied = ReadPixel(midX, midY);
     Expect(Sum(multiplied) + 30 < Sum(bare), "Multiply darkens (" + Text(bare) + " -> " + Text(multiplied) + ")");
 
     // P3: Brightness above 1 glows brighter than at 1.
     glow.brightness = 1.f;
-    batch = {&glow, 0};
-    renderer.setParticles(&batch, 1);
+    show(glow, 0);
     renderer.draw(0, 0, size, size, size, size, nullptr, 0);
     const Pixel dim = ReadPixel(midX, midY);
     glow.brightness = 6.f;
+    show(glow, 0);
     renderer.draw(0, 0, size, size, size, size, nullptr, 0);
     const Pixel bright = ReadPixel(midX, midY);
     Expect(Sum(bright) > Sum(dim) + 30, "Brightness glows (" + Text(dim) + " -> " + Text(bright) + ")");
 
     // P4: SoftEdge fades a particle just in front of a surface.
     engine_core::ParticleDraw hugging = OneParticle(0.f, 0.f, 0.6f, 1.f, white);
-    batch = {&hugging, 0};
-    renderer.setParticles(&batch, 1);
+    show(hugging, 0);
     renderer.draw(0, 0, size, size, size, size, &box, 1);
     const Pixel hard = ReadPixel(midX, midY);
     hugging.soft_edge = 1.f;
+    show(hugging, 0);
     renderer.draw(0, 0, size, size, size, size, &box, 1);
     const Pixel soft = ReadPixel(midX, midY);
     Expect(Sum(soft) + 30 < Sum(hard), "SoftEdge fades where it meets a surface (" + Text(hard) + " -> " +
@@ -2024,24 +2040,24 @@ void CheckParticles(runner::Renderer& renderer, const GpuMesh* cube, int size, i
     const int cornerX = midX + 30 * fbWidth / size;
     const int cornerY = midY + 30 * fbHeight / size;
     engine_core::ParticleDraw big = OneParticle(0.f, 0.f, 2.f, 4.f, white);
-    batch = {&big, 0};
-    renderer.setParticles(&batch, 1);
+    show(big, 0);
     renderer.draw(0, 0, size, size, size, size, nullptr, 0);
     Expect(!IsClear(ReadPixel(midX, midY)) && IsClear(ReadPixel(cornerX, cornerY)),
            "no texture draws a round dot (" + Text(ReadPixel(cornerX, cornerY)) + ")");
     const std::uint8_t opaque[4] = {255, 255, 255, 255};
     const runner::GLuint filled = ParticleTexture(opaque, 1);
-    batch = {&big, filled};
-    renderer.setParticles(&batch, 1);
+    show(big, filled);
     renderer.draw(0, 0, size, size, size, size, nullptr, 0);
     Expect(!IsClear(ReadPixel(cornerX, cornerY)), "a texture fills the quad");
 
     // P6: World facing: square on when it faces the camera, nothing edge on.
     big.facing = engine_core::ParticleFacing::World;
     big.facing_axis = {0.f, 0.f, 1.f};
+    show(big, filled);
     renderer.draw(0, 0, size, size, size, size, nullptr, 0);
     Expect(!IsClear(ReadPixel(midX, midY)), "a World-facing particle facing the camera draws");
     big.facing_axis = {0.f, 1.f, 0.f};
+    show(big, filled);
     renderer.draw(0, 0, size, size, size, size, nullptr, 0);
     Expect(IsClear(ReadPixel(midX, midY + 10)), "a World-facing particle seen edge on draws almost nothing");
     big.facing = engine_core::ParticleFacing::Camera;
@@ -2052,17 +2068,38 @@ void CheckParticles(runner::Renderer& renderer, const GpuMesh* cube, int size, i
     engine_core::ParticleDraw book = OneParticle(0.f, 0.f, 2.f, 4.f, white);
     book.grid_x = 2;
     book.grid_y = 1;
-    batch = {&book, flip};
-    renderer.setParticles(&batch, 1);
+    show(book, flip);
     renderer.draw(0, 0, size, size, size, size, nullptr, 0);
     const Pixel first = ReadPixel(midX, midY);
     auto cells = std::make_shared<std::vector<engine_core::particles::ParticleVertex>>(*book.particles);
     (*cells)[0].frame = 1.f;
     book.particles = cells;
+    show(book, flip);
     renderer.draw(0, 0, size, size, size, size, nullptr, 0);
     const Pixel second = ReadPixel(midX, midY);
     Expect(first.r > first.b + 50 && second.b > second.r + 50,
            "a flipbook shows its cell (" + Text(first) + ", " + Text(second) + ")");
+
+    // P10: a flipbook's frames run from the image's top row down, as sheets are drawn. The image's top
+    // row is uploaded last; for FlipY the texture cache uploads it first, and the sheet plays upside down.
+    const std::uint8_t column[8] = {0, 0, 255, 255, 255, 0, 0, 255};   // bottom row blue, top row red
+    const runner::GLuint rows = ParticleTexture(column, 1, 2);
+    engine_core::ParticleDraw tall = OneParticle(0.f, 0.f, 2.f, 4.f, white);
+    tall.grid_x = 1;
+    tall.grid_y = 2;
+    show(tall, rows);
+    renderer.draw(0, 0, size, size, size, size, nullptr, 0);
+    const Pixel top = ReadPixel(midX, midY);
+    Expect(top.r > top.b + 50, "frame 0 is the image's top row (" + Text(top) + ")");
+    const std::uint8_t cached[8] = {255, 0, 0, 255, 0, 0, 255, 255};   // as the cache uploads it for FlipY
+    const runner::GLuint flippedRows = ParticleTexture(cached, 1, 2);
+    tall.texture_flip_y = true;
+    show(tall, flippedRows);
+    renderer.draw(0, 0, size, size, size, size, nullptr, 0);
+    const Pixel flipped = ReadPixel(midX, midY);
+    Expect(flipped.b > flipped.r + 50, "FlipY makes frame 0 the bottom row (" + Text(flipped) + ")");
+    glDeleteTextures(1, &rows);
+    glDeleteTextures(1, &flippedRows);
 
     renderer.setParticles(nullptr, 0);
     glDeleteTextures(1, &filled);
@@ -2072,6 +2109,29 @@ void CheckParticles(runner::Renderer& renderer, const GpuMesh* cube, int size, i
                                                      runner::Renderer::kCameraEye[2]},
                                                     {0.f, 0.f, 0.f}, {0.f, 1.f, 0.f}),
                        runner::Renderer::kCameraFovYDegrees);
+}
+
+// P9: a depth copy that cannot be made leaves soft edges off on every frame, not only the first.
+void CheckParticleDepthCopy() {
+    runner::ParticleRenderer pass;
+    Expect(pass.create(), "the particle pass builds");
+    const float white[4] = {1.f, 1.f, 1.f, 1.f};
+    engine_core::ParticleDraw draw = OneParticle(0.f, 0.f, 2.f, 2.f, white);
+    runner::ParticleBatch batch{draw, 0};
+    const float identity[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+    runner::ParticleFrame frame;
+    frame.view = frame.projection = frame.inverseProjection = identity;
+    frame.targetWidth = 0;   // no depth copy can be made at 0 x 0
+    frame.targetHeight = 0;
+    pass.draw(&batch, 1, frame, 0);
+    Expect(!pass.lastDrawSoft(), "soft edges are off when the copy cannot be made");
+    pass.draw(&batch, 1, frame, 0);
+    Expect(!pass.lastDrawSoft(), "and stay off on the next frame at that size");
+    pass.destroy();
+    // What the Renderer puts back after its particle pass, for the checks after.
+    glUseProgram(0);
+    glDisable(runner::GL_BLEND);
+    glDepthMask(runner::GL_TRUE);
 }
 
 }  // namespace
@@ -2166,6 +2226,7 @@ int main(int argc, char** argv) {
         meshes.get("meshes/missing.amesh");
         Expect(reports.size() == 2, "a file still missing is not reported again");
         CheckParticles(renderer, cube, kSize, fbWidth, fbHeight);
+        CheckParticleDepthCopy();
 
         // The cube at the origin, under the camera a Renderer starts with, fills the middle of the pane.
         runner::MeshDraw draw{cube, engine_core::matrix4_identity()};

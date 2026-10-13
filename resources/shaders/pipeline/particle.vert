@@ -66,6 +66,8 @@ void main() {
     vCorner = aCorner * 2.0;
     float column = mod(iFrame, uGrid.x);
     float row = floor(iFrame / uGrid.x);
-    // Rows count down from the top of the sheet.
-    vUv = (vec2(column, row) + vec2(aCorner.x + 0.5, 0.5 - aCorner.y)) / uGrid;
+    // Frames run from the sheet's top row down, each the right way up. An
+    // image has its top row at v 1 (FlipY has the cache upload it the other way).
+    vec2 sheet = (vec2(column, row) + vec2(aCorner.x + 0.5, 0.5 - aCorner.y)) / uGrid;
+    vUv = vec2(sheet.x, 1.0 - sheet.y);
 }

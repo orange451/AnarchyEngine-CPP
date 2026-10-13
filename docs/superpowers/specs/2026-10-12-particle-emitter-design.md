@@ -94,7 +94,7 @@ Suited parents: `Workspace`, `PVInstance`. Properties groups in order: Emission,
 
 | Property | Type | Default | Notes |
 | --- | --- | --- | --- |
-| `Playing` | bool | true | Writing true starts a cycle from its beginning. False stops spawning; live particles finish. A non-looping emitter sets it false itself when its cycle ends (a quiet engine write that still fires Changed, so `GetPropertyChangedSignal("Playing")` works). Off-then-on mid-cycle restarts. |
+| `Playing` | bool | true | Writing true starts a cycle from its beginning. False stops spawning; live particles finish. A non-looping emitter sets it false itself when its cycle ends (a quiet engine write that still fires `Changed` with "Playing"). Off-then-on mid-cycle restarts. |
 | `Rate` | NumberCurve (cycle) | 20 | Particles per second. Range: re-picked each cycle. No cap. |
 | `Bursts` | list of `{Time, Count}` | empty | Added on top of `Rate`. `Time` in seconds into the cycle; `Count` a min–max (a NumberCurve restricted to Constant/Range). Saved as a JSON array; Lua reads and writes an array of `{Time=, Count=}` tables. |
 | `Duration` | number | 5 | Seconds per cycle; must be > 0. |
@@ -228,3 +228,17 @@ The renderer adds a particle pass inside the forward transparency pass: each emi
 - **Lifecycle:** `Playing` restart and one-shot end, `Finished` timing, `Emit`, `Clear`, `MaxParticles`, `ParticleBudget` far-first scaling, Stop clears particles.
 - **Properties:** defaults, hide and grey-out rules, undo of a curve drag as one step (`tests/PropertiesTest.cpp`).
 - **In the app:** drive the studio over MCP; screenshots of soft edges, the three blend modes, a flipbook, and glow into bloom. Profile a Release build with a scene at the 20000 budget, warmed up, to confirm the CPU cost.
+
+## As built (2026-10-13)
+
+Where the implementation differs from the sections above, and why:
+
+- **Draw order.** Particles draw after every see-through mesh, sorted among themselves by `DrawOrder` then distance, rather than interleaved with see-through meshes (which `DrawBatches` sorts on its own). A particle behind a glass pane draws over it.
+- **Multiply.** The see-through buffer composites over the scene with one coverage value, so a per-channel multiply would need dual-source blending, which GLES 3 lacks. Multiply darkens by the color's lightness (a black over with alpha `a·(1 − luminance)`); a colored tint is lost.
+- **Lighting.** Ambient plus each forward light's falloff and cone, with no surface term and no shadows.
+- **Colors** interpolate per channel as stored.
+- **Properties editors** open inline under the row (a fold arrow, like Transform), not as popovers: a popover would nest the color picker's popup. A `NumberCurve` row's field takes a typed number or `1 - 3`; its editor has mode tabs, a graph (double-click adds a key, drag moves, right-click removes), interpolation tabs, and typed key time and value. A `ColorCurve` row's editor has mode tabs and gradient bars; the selected stop takes the row's color picker and a transparency slider.
+- **Bursts** is a typed field, `time: count` pairs such as `0: 50, 1.5: 10 - 20`, not a table of rows.
+- **Soft edges** read a copy of scene depth (`glBlitFramebuffer`, newly loaded), since the see-through target has the depth attached.
+- **World collision** gives each emitter's particles rays in a rotating window, from 512 rays a frame shared by all emitters; a particle whose turn has not come tests the plane its last ray hit.
+- **Shape size** of a PhysicsObject or Brush ignores a driving GameObject's `Scale`.

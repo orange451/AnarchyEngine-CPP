@@ -86,6 +86,8 @@ struct VisibilityResult {
     // One per DrawItem, set by CullDraws: 1 for a banded one the camera is
     // outside the band of, which is neither visible nor casts a shadow.
     std::vector<std::uint8_t> outOfBand;
+    // Moves on whenever an outOfBand flag changes, or their count.
+    std::uint64_t outOfBandRevision = 0;
     // In DrawItem order.
     std::vector<VisibleDraw> opaque;
     std::vector<VisibleDraw> transparent;

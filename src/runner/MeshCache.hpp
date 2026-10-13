@@ -1,5 +1,7 @@
 #pragma once
 
+#include "FileWatch.hpp"
+
 #include "amesh.hpp"
 #include "terrain/LodNode.hpp"
 #include "types.hpp"
@@ -87,7 +89,8 @@ private:
         // The file's time when it was last read; unset before the first try.
         std::filesystem::file_time_type stamp{};
         bool tried = false;
-        std::chrono::steady_clock::time_point checked{};
+        // Up once the file changes (FileWatch), which a draw then checks.
+        FileWatch::Flag watched;
     };
 
     struct SessionEntry {

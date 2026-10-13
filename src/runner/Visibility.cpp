@@ -1,5 +1,7 @@
 #include "Visibility.hpp"
 
+#include <atomic>
+
 #include "ParallelBlocks.hpp"
 
 #include <algorithm>
@@ -105,7 +107,11 @@ void CullDraws(int count, const CameraView& camera, bool cull, VisibilityResult&
     out.opaque.clear();
     out.transparent.clear();
     out.culled = 0;
-    out.outOfBand.resize(total);
+    if (out.outOfBand.size() != total) {
+        out.outOfBand.resize(total);
+        ++out.outOfBandRevision;
+    }
+    std::atomic<bool> flipped{false};
     const float* eye = camera.world.m + 12;
     const Frustum frustum = MakeFrustum(camera.viewProjection);
     const float halfFov = camera.fovYDegrees * 0.5f * 0.01745329252f;
@@ -127,17 +133,21 @@ void CullDraws(int count, const CameraView& camera, bool cull, VisibilityResult&
             const std::uint16_t traits = out.traits[index];
             // Outside its band, whether or not culling is on: neither seen nor casting.
             std::uint8_t& outside = out.outOfBand[index];
-            outside = 0;
+            std::uint8_t now = 0;
             if ((traits & kTraitBanded) != 0) {
                 const VisibilityResult::Band& band = out.bands[index];
                 const float dx = band.x - eye[0];
                 const float dy = band.y - eye[1];
                 const float dz = band.z - eye[2];
                 const float squared = dx * dx + dy * dy + dz * dz;
-                if (squared < band.nearSquared || !(squared < band.farSquared)) {
-                    outside = 1;
-                    continue;
-                }
+                now = squared < band.nearSquared || !(squared < band.farSquared) ? 1 : 0;
+            }
+            if (now != outside) {
+                outside = now;
+                flipped.store(true, std::memory_order_relaxed);
+            }
+            if (now != 0) {
+                continue;
             }
             if ((traits & kTraitDrawable) == 0 || (traits & kTraitShadowOnly) != 0) {
                 continue;
@@ -159,6 +169,9 @@ void CullDraws(int count, const CameraView& camera, bool cull, VisibilityResult&
             mine->culled = culled;
         }
     });
+    if (flipped.load(std::memory_order_relaxed)) {
+        ++out.outOfBandRevision;
+    }
     if (alone) {
         return;
     }

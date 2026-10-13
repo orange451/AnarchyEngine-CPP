@@ -2286,7 +2286,8 @@ bool Renderer::shadowPass(const MeshDraw* meshes, int count, const CameraView& c
         return true;
     }
     // What is outside its LOD band casts nothing, as it is not drawn.
-    shadows_.setHidden(visibility_.outOfBand.empty() ? nullptr : visibility_.outOfBand.data());
+    shadows_.setHidden(visibility_.outOfBand.empty() ? nullptr : visibility_.outOfBand.data(),
+                       visibility_.outOfBandRevision);
     if (!shadows_.draw(shadowRequests_, meshes, count, visibility_.spheres.data(), camera, shadowSettings_)) {
         return false;
     }

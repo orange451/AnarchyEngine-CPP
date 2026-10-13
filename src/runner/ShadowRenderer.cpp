@@ -8,6 +8,7 @@
 #include "profiler/Profiler.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <cstdio>
 #include <functional>
 
@@ -213,8 +214,10 @@ bool ShadowRenderer::draw(const std::vector<ShadowRequest>& requests, const Mesh
         // rest are as the last frame left them.
         constexpr std::size_t kGrain = 8192;
         const auto total = static_cast<std::size_t>(std::max(count, 0));
+        bool remade = casterOwners_.size() != total;
         if (castersAll_ || meshes != castersMeshes_) {
             castersChanged_.assign(1, DrawRange{0, total});
+            remade = true;
         } else {
             for (DrawRange& range : castersChanged_) {
                 range.count = range.first >= total ? 0 : std::min(range.count, total - range.first);
@@ -223,9 +226,12 @@ bool ShadowRenderer::draw(const std::vector<ShadowRequest>& requests, const Mesh
         }
         casterOwners_.resize(total);
         casterFingerprints_.resize(total);
+        std::atomic<bool> changed{false};
         ParallelRanges(castersChanged_, kGrain, [&](std::size_t, std::size_t begin, std::size_t end) {
             for (std::size_t index = begin; index < end; ++index) {
                 const MeshDraw& mesh = meshes[index];
+                const std::uint64_t ownerWas = casterOwners_[index];
+                const std::uint64_t fingerprintWas = casterFingerprints_[index];
                 // See-through surfaces cast nothing, as in the legacy engine.
                 // A terrain node (terrainLook) is always opaque, so it always casts,
                 // but of two levels cross-fading only the one fading in, whole.
@@ -234,6 +240,9 @@ bool ShadowRenderer::draw(const std::vector<ShadowRequest>& requests, const Mesh
                     (mesh.terrainLook != 0 && !mesh.terrainFadeIn)) {
                     casterOwners_[index] = 0;
                     casterFingerprints_[index] = 0;
+                    if (ownerWas != 0 || fingerprintWas != 0) {
+                        changed.store(true, std::memory_order_relaxed);
+                    }
                     continue;
                 }
                 ShadowCaster caster;
@@ -245,12 +254,22 @@ bool ShadowRenderer::draw(const std::vector<ShadowRequest>& requests, const Mesh
                 caster.bounds = spheres[index];
                 casterOwners_[index] = mesh.owner;
                 casterFingerprints_[index] = ShadowCasterFingerprint(caster);
+                if (casterOwners_[index] != ownerWas || casterFingerprints_[index] != fingerprintWas) {
+                    changed.store(true, std::memory_order_relaxed);
+                }
             }
         });
+        if (remade || changed.load(std::memory_order_relaxed) || hidden_ != revisionHidden_ ||
+            hiddenRevision_ != revisionHiddenAt_) {
+            ++casterRevision_;
+            revisionHidden_ = hidden_;
+            revisionHiddenAt_ = hiddenRevision_;
+        }
         castersAll_ = false;
         castersChanged_.clear();
         castersMeshes_ = meshes;
-        casterView_ = CasterView{total, spheres, casterOwners_.data(), casterFingerprints_.data(), hidden_};
+        casterView_ = CasterView{total,           spheres, casterOwners_.data(), casterFingerprints_.data(),
+                                 hidden_,         casterRevision_};
     }
 
     ShadowPlan plan = planner_.planView(requests, casterView_, camera, settings);

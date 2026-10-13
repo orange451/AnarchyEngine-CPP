@@ -567,6 +567,29 @@ std::vector<CascadeDraw> ShadowPlanner::planCascadesView(const SunRequest* sun, 
         cascadeReady_ = false;
         return draws;
     }
+    // Nothing it is made from has changed: the cascades drawn still hold.
+    // Zeroed first and kept by copying bytes, so the padding compares too.
+    CascadeInputs inputs;
+    std::memset(&inputs, 0, sizeof(CascadeInputs));
+    inputs.world = camera.world;
+    inputs.fovYDegrees = camera.fovYDegrees;
+    inputs.aspect = camera.aspect;
+    inputs.nearZ = camera.nearZ;
+    inputs.shine = sun->shine;
+    inputs.shadowDistance = sun->shadowDistance;
+    inputs.owner = sun->owner;
+    inputs.cascadeCount = settings.cascadeCount;
+    inputs.cascadeLambda = settings.cascadeLambda;
+    inputs.cascadeSize = settings.cascadeSize;
+    inputs.cascadePullLimit = settings.cascadePullLimit;
+    inputs.casterCount = casters.count;
+    inputs.casterRevision = casters.revision;
+    if (cascadeReady_ && cascadeInputsKept_ && casters.revision != 0 &&
+        std::memcmp(&inputs, &cascadeInputs_, sizeof(CascadeInputs)) == 0) {
+        return draws;
+    }
+    std::memcpy(&cascadeInputs_, &inputs, sizeof(CascadeInputs));
+    cascadeInputsKept_ = true;
     const int count = std::clamp(settings.cascadeCount, 1, kMaxCascades);
     float splits[kMaxCascades + 1];
     CascadeSplits(camera.nearZ, sun->shadowDistance, count, settings.cascadeLambda, splits);

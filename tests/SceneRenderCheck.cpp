@@ -2080,8 +2080,8 @@ void CheckParticles(runner::Renderer& renderer, const GpuMesh* cube, int size, i
     Expect(first.r > first.b + 50 && second.b > second.r + 50,
            "a flipbook shows its cell (" + Text(first) + ", " + Text(second) + ")");
 
-    // P10: a flipbook's frames run from the image's top row down, as sheets are drawn; FlipY reads it
-    // the other way up. The image's top row is uploaded last.
+    // P10: a flipbook's frames run from the image's top row down, as sheets are drawn. The image's top
+    // row is uploaded last; for FlipY the texture cache uploads it first, and the sheet plays upside down.
     const std::uint8_t column[8] = {0, 0, 255, 255, 255, 0, 0, 255};   // bottom row blue, top row red
     const runner::GLuint rows = ParticleTexture(column, 1, 2);
     engine_core::ParticleDraw tall = OneParticle(0.f, 0.f, 2.f, 4.f, white);
@@ -2091,12 +2091,15 @@ void CheckParticles(runner::Renderer& renderer, const GpuMesh* cube, int size, i
     renderer.draw(0, 0, size, size, size, size, nullptr, 0);
     const Pixel top = ReadPixel(midX, midY);
     Expect(top.r > top.b + 50, "frame 0 is the image's top row (" + Text(top) + ")");
+    const std::uint8_t cached[8] = {255, 0, 0, 255, 0, 0, 255, 255};   // as the cache uploads it for FlipY
+    const runner::GLuint flippedRows = ParticleTexture(cached, 1, 2);
     tall.texture_flip_y = true;
-    show(tall, rows);
+    show(tall, flippedRows);
     renderer.draw(0, 0, size, size, size, size, nullptr, 0);
     const Pixel flipped = ReadPixel(midX, midY);
     Expect(flipped.b > flipped.r + 50, "FlipY makes frame 0 the bottom row (" + Text(flipped) + ")");
     glDeleteTextures(1, &rows);
+    glDeleteTextures(1, &flippedRows);
 
     renderer.setParticles(nullptr, 0);
     glDeleteTextures(1, &filled);

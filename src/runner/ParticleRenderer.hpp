@@ -69,7 +69,7 @@ private:
     std::vector<int> order_;
     struct Uniforms {
         int view = -1, projection = -1, inverseProjection = -1, cameraPosition = -1, cameraRight = -1,
-            cameraUp = -1, facing = -1, facingAxis = -1, velocityStretch = -1, grid = -1, flipY = -1, texture = -1,
+            cameraUp = -1, facing = -1, facingAxis = -1, velocityStretch = -1, grid = -1, texture = -1,
             hasTexture = -1, sceneDepth = -1, targetSize = -1, softEdge = -1, brightness = -1,
             lightInfluence = -1, blend = -1, ambient = -1, lightCount = -1, lightPositionRadius = -1,
             lightColorIntensity = -1, lightDirection = -1, lightCone = -1;

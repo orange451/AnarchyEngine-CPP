@@ -79,7 +79,6 @@ bool ParticleRenderer::create() {
     u_.facingAxis = at("uFacingAxis");
     u_.velocityStretch = at("uVelocityStretch");
     u_.grid = at("uGrid");
-    u_.flipY = at("uFlipY");
     u_.texture = at("uTexture");
     u_.hasTexture = at("uHasTexture");
     u_.sceneDepth = at("uSceneDepth");
@@ -253,7 +252,6 @@ bool ParticleRenderer::draw(const ParticleBatch* batches, int count, const Parti
         glActiveTexture(GL_TEXTURE0 + kUnitTexture);
         glBindTexture(GL_TEXTURE_2D, batch.texture);
         glUniform1i(u_.hasTexture, batch.texture != 0 ? 1 : 0);
-        glUniform1i(u_.flipY, d.texture_flip_y ? 1 : 0);
         glUniform1i(u_.facing, static_cast<int>(d.facing));
         glUniform3f(u_.facingAxis, d.facing_axis.x, d.facing_axis.y, d.facing_axis.z);
         glUniform1f(u_.velocityStretch, d.velocity_stretch);

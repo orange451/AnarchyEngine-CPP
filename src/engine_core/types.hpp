@@ -12,15 +12,22 @@
 
 namespace engine_core {
 
-// Low 16 bits are the slot index. High 16 bits are the generation.
+// Low 20 bits are the slot index, so a place can hold about a million
+// instances. High 12 bits are the generation, bumped each time a slot is
+// reused, so a stale id stops resolving. (EnTT's default entity layout.)
 // Zero is never a live id.
 using InstanceId = std::uint32_t;
 
-constexpr std::uint32_t id_slot(InstanceId id) { return id & 0xffffu; }
-constexpr std::uint32_t id_generation(InstanceId id) { return id >> 16u; }
-constexpr InstanceId make_instance_id(std::uint32_t generation, std::uint32_t slot) { return (generation << 16u) | slot; }
+constexpr std::uint32_t kSlotBits = 20u;
+constexpr std::uint32_t kSlotMask = (1u << kSlotBits) - 1u;
+constexpr std::uint32_t id_slot(InstanceId id) { return id & kSlotMask; }
+constexpr std::uint32_t id_generation(InstanceId id) { return id >> kSlotBits; }
+constexpr InstanceId make_instance_id(std::uint32_t generation, std::uint32_t slot) {
+    return (generation << kSlotBits) | slot;
+}
 // A slot whose generation reaches this is not reused.
-constexpr std::uint32_t kMaxGeneration = 0xffffu;
+constexpr std::uint32_t kMaxGeneration = (1u << (32u - kSlotBits)) - 1u;
+static_assert(kMaxGeneration == 0xfffu, "generation is the 12 bits above the slot");
 
 // Simulation phases stay contiguous at the front. Resume checks treat
 // PreAnimation..Heartbeat as the simulation range.

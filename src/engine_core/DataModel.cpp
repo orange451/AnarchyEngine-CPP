@@ -158,14 +158,13 @@ DataModel::DataModel(const char* root_name) : owned_(std::make_unique<State>()),
                                  .build();
     // Every dispatch of this world's input passes through its Draggers first.
     world.input.set_filter([this](std::vector<InputRecord>& records) { state_->draggers.dispatch(*this, records); });
-    world.slots.reserve(kMaxInstances);
-    world.free_list.reserve(kMaxInstances);
+    // Per-slot tables grow as slots are used (StableArray, pools in chunks),
+    // so a world's memory follows what it holds, not kMaxInstances.
     world.invalidation.reserve(kMaxInvalidations);
     world.commands.assign(kInitialCommands, Command{});
-    world.bags.resize(kMaxInstances);
-    world.walk.reserve(kMaxInstances);
-    world.step_ids.reserve(kMaxInstances);
-    world.scope_walk.reserve(kMaxInstances);
+    world.walk.reserve(1024);
+    world.step_ids.reserve(1024);
+    world.scope_walk.reserve(1024);
     world.events.watch_prerender(&world.prerender_window);
     world.root = this;
     name_ = root_name;
@@ -490,17 +489,23 @@ std::size_t DataModel::entity_count() const {
 
 std::size_t DataModel::room_left() const {
     const State& world = *state_;
-    return kMaxInstances - world.slots.size() + world.free_list.size() + world.history_held.size();
+    return world.capacity - world.slots.size() + world.free_list.size() + world.history_held.size();
 }
 
-InstanceCapacityError::InstanceCapacityError()
-    : std::runtime_error("The place is full: it already holds " + std::to_string(DataModel::kMaxInstances) +
+std::size_t DataModel::instance_capacity() const { return state_->capacity; }
+
+void DataModel::set_instance_capacity(std::size_t capacity) {
+    state_->capacity = std::clamp<std::size_t>(capacity, state_->slots.size(), kMaxInstances);
+}
+
+InstanceCapacityError::InstanceCapacityError(std::size_t capacity)
+    : std::runtime_error("The place is full: it already holds " + std::to_string(capacity) +
                          " instances, the most it can. Delete some to make room.") {}
 
 InstanceId DataModel::allocate() {
     State& world = *state_;
     std::uint32_t index = 0;
-    if (world.free_list.empty() && world.slots.size() >= kMaxInstances && !world.history_held.empty()) {
+    if (world.free_list.empty() && world.slots.size() >= world.capacity && !world.history_held.empty()) {
         // Full but for the slots kept for undo: room to create wins over undo.
         if (world.history) {
             world.history->reset_waypoints();
@@ -516,11 +521,15 @@ InstanceId DataModel::allocate() {
         index = world.free_list.back();
         world.free_list.pop_back();
     } else {
-        if (world.slots.size() >= kMaxInstances) {
+        if (world.slots.size() >= world.capacity) {
             contract_fail("instance capacity exhausted");
         }
         index = static_cast<std::uint32_t>(world.slots.size());
         world.slots.emplace_back();
+        // Its per-slot tables grow here, outside any of its own operations.
+        if (world.slots.size() > world.assemblies.slot_capacity()) {
+            world.assemblies.ensure_slots(world.slots.size());
+        }
     }
     Slot& part = world.slots[index];
     part.alive = true;
@@ -551,10 +560,12 @@ std::uint32_t DataModel::take_storage(InstancePool& pool) {
 }
 
 DataModel* DataModel::pooled_object(InstancePool& pool, std::uint32_t storage, InstanceId id) {
+    if (storage >= pool.objects.size()) {
+        pool.objects.resize(static_cast<std::size_t>(storage) + 1, nullptr);
+    }
     DataModel* object = pool.objects[storage];
     if (object == nullptr) {
-        void* memory = pool.memory + static_cast<std::size_t>(storage) * pool.stride;
-        object = pool.construct(memory, ChildTag{}, *state_, id);
+        object = pool.construct(pool.memory_for(storage), ChildTag{}, *state_, id);
         pool.objects[storage] = object;
     } else {
         object->rebind(id);
@@ -627,7 +638,7 @@ DataModel& DataModel::spawn(const SpawnOps& ops) {
     // Checked before anything changes. A type's storage never runs out first:
     // each object it holds is also one of the place's instances.
     if (room_left() == 0) {
-        throw InstanceCapacityError();
+        throw InstanceCapacityError(state_->capacity);
     }
     State& world = *state_;
     InstancePool* pool = nullptr;
@@ -651,9 +662,6 @@ DataModel& DataModel::spawn(const SpawnOps& ops) {
         created->align = align;
         created->construct = ops.construct;
         created->destroy = ops.destroy;
-        created->memory = static_cast<std::byte*>(::operator new(stride * kMaxInstances, std::align_val_t(align)));
-        created->objects.assign(kMaxInstances, nullptr);
-        created->free.reserve(kMaxInstances);
         pool_index = static_cast<std::uint16_t>(world.pools.size());
         world.pools.push_back(std::move(created));
         pool = world.pools.back().get();
@@ -986,9 +994,6 @@ void DataModel::apply_scope(InstanceId id, bool in_game_now, bool in_workspace_n
             note(cur, VisualField::Ancestry, current_origin());
         }
         for (InstanceId child = part->first_child; child != 0;) {
-            if (queue.size() == queue.capacity()) {
-                contract_fail("scope walk capacity exhausted");
-            }
             queue.push_back(child);
             const Slot* child_slot = slot(child);
             if (child_slot == nullptr) {
@@ -1196,7 +1201,7 @@ bool DataModel::spatial_transform(InstanceId id, Matrix4& out) const {
 
 void DataModel::step_instances(double dt) {
     // Gather first: step() may create, destroy, or reparent, which flecs would
-    // defer inside a running query. step_ids is reserved, so this does not allocate.
+    // defer inside a running query. Growing step_ids here is fine: it is ours.
     std::vector<InstanceId>& ids = state_->step_ids;
     ids.clear();
     ecs_iter_t it = ecs_query_iter(ecs_world(), state_->step_query.c_ptr());
@@ -1597,9 +1602,6 @@ void DataModel::emit_ancestry(InstanceId id, WriteOrigin origin) {
             continue;
         }
         for (InstanceId child = part->first_child; child != 0;) {
-            if (state_->walk.size() == state_->walk.capacity()) {
-                break;
-            }
             state_->walk.push_back(child);
             Slot* child_slot = slot(child);
             if (child_slot == nullptr) {

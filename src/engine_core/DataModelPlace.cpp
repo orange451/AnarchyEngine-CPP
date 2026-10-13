@@ -273,6 +273,11 @@ void DataModel::rebuild_free_list() {
         if (state_->slots[index].alive) {
             continue;
         }
+        // A slot whose generation ran out stays retired, as destroy leaves it:
+        // reusing it would issue a destroyed instance's id again.
+        if (state_->slots[index].generation == kMaxGeneration) {
+            continue;
+        }
         if (held.count(index) == 0) {
             state_->free_list.push_back(index);
         } else {

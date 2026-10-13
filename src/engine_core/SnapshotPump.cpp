@@ -141,12 +141,14 @@ SnapshotPump::SnapshotPump() : viewports_(std::make_unique<ViewportScenes>()) {}
 SnapshotPump::~SnapshotPump() = default;
 
 void SnapshotPump::reserve(std::size_t instances) {
-    base_.instances.reserve(instances);
-    buffers_[0].instances.reserve(instances);
-    buffers_[1].instances.reserve(instances);
-    overrides_.reserve(instances);
-    // Keyed by slot, so it covers every slot whatever the row capacity.
-    base_ids_.reserve(DataModel::kMaxInstances);
+    // A starting size: rows and the slot map grow as a place grows, so a
+    // big cap costs nothing until a place uses it.
+    const std::size_t start = std::min<std::size_t>(instances, kInitialRows);
+    base_.instances.reserve(start);
+    buffers_[0].instances.reserve(start);
+    buffers_[1].instances.reserve(start);
+    overrides_.reserve(start);
+    base_ids_.reserve(start);
 }
 
 void SnapshotPump::begin_prerender_window(DataModel& game) {
@@ -162,9 +164,6 @@ void SnapshotPump::end_prerender_window(DataModel& game) {
 void SnapshotPump::override_visual(const SnapshotOverride& override) {
     if (!window_open_) {
         contract_fail("SnapshotOverride is only valid inside RenderStepped or PreRender");
-    }
-    if (overrides_.size() == overrides_.capacity()) {
-        contract_fail("snapshot override capacity exhausted");
     }
     overrides_.push_back(override);
 }
@@ -213,9 +212,6 @@ void SnapshotPump::apply_live(DataModel& game, const Invalidation& change) {
             row->light = light_of(*sun);
             return;
         }
-        if (base_.instances.size() == base_.instances.capacity()) {
-            contract_fail("snapshot instance capacity exhausted");
-        }
         base_ids_.insert(change.id);
         base_.instances.push_back(sun_row(*sun));
         return;
@@ -224,9 +220,6 @@ void SnapshotPump::apply_live(DataModel& game, const Invalidation& change) {
     bool whole = any(change.fields, VisualField::Ancestry);
     VisualInstance* inst = base_find(change.id);
     if (inst == nullptr) {
-        if (base_.instances.size() == base_.instances.capacity()) {
-            contract_fail("snapshot instance capacity exhausted");
-        }
         base_ids_.insert(change.id);
         base_.instances.push_back(VisualInstance{});
         inst = &base_.instances.back();
@@ -299,9 +292,6 @@ void SnapshotPump::resync(DataModel& game) {
         const bool lit =
             !game.in_workspace(id) && !game.in_core(id) && dynamic_cast<const Light*>(instance) != nullptr;
         if (sun || lit) {
-            if (base_.instances.size() == base_.instances.capacity()) {
-                contract_fail("snapshot instance capacity exhausted");
-            }
             VisualInstance row;
             if (sun) {
                 row = sun_row(*static_cast<const DirectionalLight*>(instance));

@@ -39,6 +39,7 @@
 #include "terrain/TerrainStash.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <cstring>
 #include <fstream>
@@ -533,9 +534,9 @@ private:
     std::size_t add(PlanNode node, std::size_t parent) {
         // Building more would stop the studio at the world's capacity. The root,
         // nodes_[0], takes no instance slot.
-        if (nodes_.size() > DataModel::kMaxInstances) {
-            fail(layout_.src + " holds more than " + std::to_string(DataModel::kMaxInstances) +
-                 " instances, the most a place can hold");
+        const std::size_t limit = Project::instance_limit();
+        if (nodes_.size() > limit) {
+            fail(layout_.src + " holds more than " + std::to_string(limit) + " instances, the most a place can hold");
         }
         const std::size_t index = nodes_.size();
         nodes_.push_back(std::move(node));
@@ -1302,6 +1303,16 @@ std::string conflict_message(const std::vector<SaveConflict>& conflicts) {
 
 ProjectConflict::ProjectConflict(std::vector<SaveConflict> conflicts)
     : ProjectError(conflict_message(conflicts)), conflicts_(std::move(conflicts)) {}
+
+namespace {
+std::atomic<std::size_t> g_instance_limit{DataModel::kMaxInstances};
+}  // namespace
+
+std::size_t Project::instance_limit() { return g_instance_limit.load(std::memory_order_relaxed); }
+
+void Project::set_instance_limit(std::size_t limit) {
+    g_instance_limit.store(std::clamp<std::size_t>(limit, 1, DataModel::kMaxInstances), std::memory_order_relaxed);
+}
 
 Project::Project() = default;
 

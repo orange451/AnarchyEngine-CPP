@@ -5,6 +5,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <algorithm>
 #include <vector>
 
 namespace engine_core {
@@ -17,8 +18,8 @@ namespace engine_core {
 // owner touches it under whatever already guards its writes.
 class DenseIdSet {
 public:
-    // Sizes the position map and the dense array. Call once, before use;
-    // nothing here allocates afterwards.
+    // Sizes the position map and the dense array for this many slots up
+    // front. Both grow past it as higher slots arrive, so this is a hint.
     void reserve(std::size_t slots) {
         index_.assign(slots, -1);
         dense_.reserve(slots);
@@ -41,14 +42,14 @@ public:
         return pos;
     }
 
-    // False when id is already present. A full set fails the contract.
+    // False when id is already present. Grows to take any slot.
     bool insert(InstanceId id) {
         if (position(id) >= 0) {
             return false;
         }
         const std::uint32_t slot = id_slot(id);
-        if (slot >= index_.size() || dense_.size() == dense_.capacity()) {
-            contract_fail("DenseIdSet capacity exhausted");
+        if (slot >= index_.size()) {
+            index_.resize(std::max<std::size_t>(std::size_t{slot} + 1, index_.size() * 2), -1);
         }
         index_[slot] = static_cast<int>(dense_.size());
         dense_.push_back(id);

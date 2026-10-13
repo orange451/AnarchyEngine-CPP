@@ -849,8 +849,9 @@ struct PhysicsWorld::Impl {
         members_scratch.reserve(1024);
         eligible.reserve(1024);
         wanted.reserve(1024);
-        claim_by_slot.assign(DataModel::kMaxInstances, 0);
-        claimed.reserve(DataModel::kMaxInstances);
+        // Grows in claim(), which every other reader of it follows.
+        claim_by_slot.assign(1024, 0);
+        claimed.reserve(1024);
         claimants.reserve(1024);
         gone.reserve(1024);
         joints.reserve(1024);
@@ -2563,7 +2564,11 @@ struct PhysicsWorld::Impl {
 
     // The first body to claim target this sync holds it. False when one did.
     bool claim(InstanceId target, InstanceId id) {
-        InstanceId& holder = claim_by_slot[id_slot(target)];
+        const std::uint32_t slot = id_slot(target);
+        if (slot >= claim_by_slot.size()) {
+            claim_by_slot.resize(std::max<std::size_t>(std::size_t{slot} + 1, claim_by_slot.size() * 2), 0);
+        }
+        InstanceId& holder = claim_by_slot[slot];
         if (holder != 0) {
             return false;
         }

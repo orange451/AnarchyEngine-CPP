@@ -2638,7 +2638,12 @@ TEST_CASE("P19 a project with more instances than a place holds is an error, not
     TempDir dir;
     write_bare_project(dir.path);
     Project project = Project::load(dir.path);
-    for (std::size_t i = 0; i <= DataModel::kMaxInstances; ++i) {
+    // A lowered limit makes the same check without writing a million files.
+    struct LimitGuard {
+        explicit LimitGuard(std::size_t limit) { Project::set_instance_limit(limit); }
+        ~LimitGuard() { Project::set_instance_limit(DataModel::kMaxInstances); }
+    } guard(2000);
+    for (std::size_t i = 0; i <= Project::instance_limit(); ++i) {
         const std::string guid = "p" + std::to_string(i);
         std::ofstream out(dir.path / "src" / kWorkspace / ("Part." + guid + ".json"), std::ios::binary);
         out << meta("DataModel", guid.c_str(), "Part");
@@ -2658,6 +2663,7 @@ TEST_CASE("D14 changes from disk that need more room than the place has left are
     project.save();
     // Unparented instances take slots without being part of the place.
     game.history().set_enabled(false);
+    game.set_instance_capacity(16384);
     while (game.room_left() > 2) {
         game.create();
     }
@@ -2690,6 +2696,7 @@ TEST_CASE("D15 changes from disk that do not fit settle none of the choices", "[
     REQUIRE(rows.size() == 1);
 
     game.history().set_enabled(false);
+    game.set_instance_capacity(16384);
     while (game.room_left() > 2) {
         game.create();
     }

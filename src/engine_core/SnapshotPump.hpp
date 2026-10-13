@@ -365,6 +365,8 @@ public:
     SnapshotPump(const SnapshotPump&) = delete;
     SnapshotPump& operator=(const SnapshotPump&) = delete;
 
+    // A starting size for the rows; they grow past it as a place grows.
+    static constexpr std::size_t kInitialRows = 16384;
     void reserve(std::size_t instances);
 
     void begin_prerender_window(DataModel& game);

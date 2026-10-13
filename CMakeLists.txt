@@ -1072,6 +1072,7 @@ add_executable(sandbox
     sandbox/scene_services_tests.cpp
     sandbox/game_services_tests.cpp
     sandbox/dense_views_tests.cpp
+    sandbox/instance_scale_tests.cpp
     sandbox/prefab_render_tests.cpp
     sandbox/mesh_shapes_tests.cpp
     sandbox/mesh_editor_tests.cpp

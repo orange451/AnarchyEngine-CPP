@@ -133,6 +133,13 @@ public:
     static Project load(const std::filesystem::path& root);
     static Project load(const std::filesystem::path& root, DataModel& into);
 
+    // The most instances a project read may hold: DataModel::kMaxInstances
+    // unless lowered. Reading more is a ProjectError, never a full world.
+    // Process-wide; for tests that check that limit and hosts that want a
+    // smaller one.
+    static std::size_t instance_limit();
+    static void set_instance_limit(std::size_t limit);
+
     Project(Project&&);
     Project& operator=(Project&&);
     ~Project();

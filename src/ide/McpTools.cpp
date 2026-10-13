@@ -1013,7 +1013,7 @@ JsonValue CreateInstance(const ToolContext& context, const JsonValue& arguments)
         }
         // Refused before the recording opens, so a full place leaves no empty step.
         if (world.room_left() == 0) {
-            throw engine_core::InstanceCapacityError();
+            throw engine_core::InstanceCapacityError(world.instance_capacity());
         }
         engine_core::InstanceId made_id = 0;
         {

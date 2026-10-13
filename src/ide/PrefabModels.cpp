@@ -161,7 +161,7 @@ engine_core::InstanceId add_model(engine_core::DataModel& world, engine_core::In
         return 0;
     }
     if (world.room_left() == 0) {
-        error = engine_core::InstanceCapacityError().what();
+        error = engine_core::InstanceCapacityError(world.instance_capacity()).what();
         return 0;
     }
     engine_core::Model& model = world.create<engine_core::Model>();

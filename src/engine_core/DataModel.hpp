@@ -75,11 +75,12 @@ bool valid_guid(std::string_view guid);
 // 16 lowercase hex digits from a seeded 64-bit generator.
 std::string make_guid();
 
-// A create when the place already holds DataModel::kMaxInstances instances.
-// Nothing was created or changed. A caller says so and carries on.
+// A create when the place already holds as many instances as it may
+// (DataModel::instance_capacity). Nothing was created or changed. A caller
+// says so and carries on.
 class InstanceCapacityError : public std::runtime_error {
 public:
-    InstanceCapacityError();
+    explicit InstanceCapacityError(std::size_t capacity);
 };
 
 class ChangeHistoryService;
@@ -128,7 +129,13 @@ struct PropertyValue;
 // fails the contract.
 class DataModel {
 public:
-    static constexpr std::size_t kMaxInstances = 16384;
+    // The most instances a place can hold. An id keeps 20 bits for the slot
+    // (types.hpp); the cap stays below 0xffff0 so no live id can equal a
+    // sentinel (kNoParent, 0xfffffff0). Memory follows what a place holds,
+    // not this cap: per-slot tables grow as slots are used.
+    static constexpr std::size_t kMaxInstances = 1'000'000;
+    static_assert(kMaxInstances <= 0xffff0u, "a live id must never decode to a sentinel");
+    static_assert(kMaxInstances <= kSlotMask + 1u, "every slot index fits the id's slot bits");
     static constexpr std::size_t kMaxInvalidations = 65536;
     static constexpr std::size_t kInitialCommands = 4096;
 
@@ -240,6 +247,12 @@ public:
     // How many more instances the place can hold. create throws
     // InstanceCapacityError when it is 0.
     std::size_t room_left() const;
+    // How many instances this place may hold: kMaxInstances unless lowered.
+    std::size_t instance_capacity() const;
+    // Lowers (or restores) the capacity, never below the slots in use nor
+    // above kMaxInstances. For tests that fill a place, and for hosts that
+    // want a smaller limit.
+    void set_instance_capacity(std::size_t capacity);
     // Live flecs entities that belong to instances: one per live instance.
     std::size_t entity_count() const;
     void destroy(InstanceId id);

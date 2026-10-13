@@ -1,0 +1,314 @@
+<title>Z1 Forest Survey</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: a survey sheet. The map is the page; a narrow ledger column on the right holds layers, legend and counts. */
+:root {
+  --paper: #eceee4; --panel: #f6f7f1; --ink: #1c2620; --muted: #5d6a60; --rule: #cdd3c4;
+  --accent: #b9740f; --accent-ink: #ffffff; --chip: #e1e5d7; --focus: #2d6cdf; --mapbg: #d9dccd;
+  --display: "Barlow Condensed", "Arial Narrow", "Roboto Condensed", sans-serif;
+  --body: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --paper: #111915; --panel: #17211c; --ink: #dfe7dc; --muted: #93a396; --rule: #2a3830;
+  --accent: #e3a33c; --accent-ink: #1a1408; --chip: #22302a; --focus: #7aa7ff; --mapbg: #0d1310; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --paper: #111915; --panel: #17211c; --ink: #dfe7dc; --muted: #93a396; --rule: #2a3830;
+  --accent: #e3a33c; --accent-ink: #1a1408; --chip: #22302a; --focus: #7aa7ff; --mapbg: #0d1310; color-scheme: dark }
+html, body { height: 100%; }
+body { background: var(--paper); color: var(--ink); font: 14px/1.45 var(--body); }
+.app { display: grid; grid-template-columns: minmax(0, 1fr) 368px; height: 100%; }
+.mapwrap { position: relative; min-width: 0; background: var(--mapbg); overflow: hidden; }
+canvas { display: block; width: 100%; height: 100%; touch-action: none; cursor: grab; }
+canvas.dragging { cursor: grabbing; }
+.sheet-title { position: absolute; left: 16px; top: 14px; pointer-events: none; color: #1c2620;
+  background: rgba(246, 247, 241, .86); padding: 6px 12px 7px; border: 1px solid rgba(28, 38, 32, .25); }
+.sheet-title h1 { margin: 0; font: 700 22px/1 var(--display); letter-spacing: .04em; text-transform: uppercase; }
+.sheet-title p { margin: 3px 0 0; font: 500 11px/1.2 var(--mono); letter-spacing: .02em; color: #4a564d; }
+.scalebar { position: absolute; left: 16px; bottom: 14px; font: 500 11px var(--mono); color: #1c2620;
+  background: rgba(246, 247, 241, .86); padding: 5px 8px; border: 1px solid rgba(28, 38, 32, .25); }
+.scalebar i { display: block; height: 4px; margin-top: 3px; background: #1c2620; border-inline: 2px solid #1c2620; }
+.zoomctl { position: absolute; right: 14px; top: 14px; display: grid; gap: 6px; }
+.zoomctl button { width: 34px; height: 34px; font: 600 18px var(--body); }
+.inspect { position: absolute; right: 14px; bottom: 14px; max-width: min(300px, calc(100% - 28px));
+  background: var(--panel); border: 1px solid var(--rule); padding: 10px 12px; font-size: 12.5px; }
+.inspect h3 { margin: 0 0 6px; font: 600 15px/1 var(--display); letter-spacing: .05em; text-transform: uppercase; }
+.inspect dl { display: grid; grid-template-columns: auto 1fr; gap: 2px 12px; margin: 0; }
+.inspect dt { color: var(--muted); } .inspect dd { margin: 0; font-family: var(--mono); font-variant-numeric: tabular-nums; }
+aside { background: var(--panel); border-left: 1px solid var(--rule); overflow-y: auto; padding-block: 16px 28px; padding-inline: 18px; display: flex; flex-direction: column; gap: 20px; }
+h2 { margin: 0 0 8px; font: 700 13px/1 var(--display); letter-spacing: .14em; text-transform: uppercase; color: var(--muted); }
+.lede { margin: 0; color: var(--ink); }
+.lede b { font-family: var(--mono); font-weight: 500; }
+.modes { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+button { font: 500 13px var(--body); color: var(--ink); background: var(--chip); border: 1px solid var(--rule); padding: 7px 8px; cursor: pointer; }
+button:hover { border-color: var(--muted); }
+button:focus-visible, input:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.modes button[aria-pressed="true"] { background: var(--ink); color: var(--panel); border-color: var(--ink); }
+.modes button.key[aria-pressed="false"] { box-shadow: inset 0 -3px 0 var(--accent); }
+.modehelp { margin: 8px 0 0; color: var(--muted); font-size: 12.5px; min-height: 2.9em; }
+.row { display: flex; flex-wrap: wrap; gap: 12px 16px; align-items: center; font-size: 13px; }
+.row label { display: inline-flex; gap: 6px; align-items: center; cursor: pointer; }
+input[type="range"] { accent-color: var(--accent); width: 120px; }
+.legend { display: grid; gap: 4px; }
+.legend .item { display: grid; grid-template-columns: 12px minmax(0, 1fr) auto auto; gap: 8px; align-items: center; font-size: 12.5px; }
+.legend .sw { width: 12px; height: 12px; border-radius: 50%; }
+.legend .num { font: 400 12px var(--mono); font-variant-numeric: tabular-nums; text-align: right; color: var(--muted); }
+.legend .bar { width: 64px; height: 6px; background: var(--chip); position: relative; }
+.legend .bar i { position: absolute; inset: 0 auto 0 0; background: var(--ink); opacity: .55; }
+.ramp { height: 10px; border: 1px solid var(--rule); }
+.ramp-labels { display: flex; justify-content: space-between; font: 400 11px var(--mono); color: var(--muted); margin-top: 3px; }
+.figures { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 14px; }
+.fig { border-top: 2px solid var(--ink); padding-top: 4px; }
+.fig.key { border-top-color: var(--accent); }
+.fig strong { display: block; font: 600 22px/1.1 var(--display); letter-spacing: .02em; font-variant-numeric: tabular-nums; }
+.fig span { font-size: 12px; color: var(--muted); }
+.spots { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+.spots button { text-align: left; }
+.note { font-size: 12px; color: var(--muted); margin: 0; }
+code { font: 12px var(--mono); }
+@media (max-width: 820px) {
+  .app { grid-template-columns: minmax(0, 1fr); grid-template-rows: 62vh auto; height: auto; }
+  html, body { height: auto; }
+  aside { border-left: 0; border-top: 1px solid var(--rule); overflow: visible; }
+  .modes { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<div class="app">
+  <div class="mapwrap">
+    <canvas id="map" aria-label="Vegetation plan map. Drag to pan, scroll or pinch to zoom, click to inspect a spot."></canvas>
+    <div class="sheet-title"><h1>Z1 Forest Survey</h1><p id="subtitle"></p></div>
+    <div class="zoomctl"><button id="zin" aria-label="Zoom in">+</button><button id="zout" aria-label="Zoom out">&minus;</button><button id="zfit" aria-label="Show the whole map" style="font-size:12px">ALL</button></div>
+    <div class="scalebar" id="scalebar"><span id="scaletext"></span><i id="scaleline"></i></div>
+    <div class="inspect" id="inspect" hidden><h3 id="ins-title">Spot</h3><dl id="ins-body"></dl></div>
+  </div>
+  <aside>
+    <section>
+      <h2>Plan</h2>
+      <p class="lede" id="lede"></p>
+    </section>
+    <section>
+      <h2>Layer</h2>
+      <div class="modes" id="modes" role="group" aria-label="Map layer"></div>
+      <p class="modehelp" id="modehelp"></p>
+      <div class="row">
+        <label><input type="checkbox" id="showTrees" checked> Trees</label>
+        <label><input type="checkbox" id="showUnder"> Undergrowth</label>
+        <label>Layer <input type="range" id="opacity" min="0" max="100" value="80" aria-label="Layer opacity"></label>
+      </div>
+    </section>
+    <section>
+      <h2 id="legend-title">Legend</h2>
+      <div id="legend"></div>
+    </section>
+    <section>
+      <h2>Close-ups</h2>
+      <div class="spots" id="spots"></div>
+    </section>
+    <section>
+      <h2>Counts</h2>
+      <div class="figures" id="figures"></div>
+    </section>
+    <section>
+      <p class="note">Nothing is placed yet. This page renders the encoded plan (<code>plan.bin</code>, 32 bytes per instance) and the terrain layers it was built from. Distances are engine units; north is up (&minus;Z).</p>
+    </section>
+  </aside>
+</div>
+
+<script>
+const D = /*__DATA__*/null;
+const SPECIES = ["Oak","Sycamore","ScotsPine","Spruce","Fir","Hawthorn","Apple","Cherry"];
+const SP_LABEL = ["Oak","Sycamore","Scots pine","Spruce","Fir","Hawthorn","Apple","Cherry"];
+const SP_COL = ["#7f9a2f","#3f9a62","#c7843a","#25645e","#4b62ad","#b05677","#d7c23c","#f08fb7"];
+const AGES = ["Old","Adult","Young","Dead"];
+const AGE_COL = ["#173f26","#4f9a43","#c4df73","#8a7a6a"];
+const CATS = ["Interior","Fringe","Tree line","Riparian","Village","Lone","Orchard"];
+const CAT_COL = ["#1d4d2c","#6aa84f","#e0a526","#3a8fd6","#c45c3c","#7d8a80","#d65ca8"];
+const UNDER = ["Oak bush","Sycamore bush","Sapling","Ground cover","Berry bush","Fallen log"];
+const UNDER_COL = ["#7c9a45","#2f7550","#9fd35e","#d4e88a","#8e3fa3","#8b5a2b"];
+const MODES = [
+  {id:"species", label:"Species", help:"Each crown colored by species. Niches follow wetness, sun, slope, height and soil, with patch noise so species form stands."},
+  {id:"age", label:"Age", help:"Old trees survive in cores, riparian strips, villages and lone field trees. Young trees reclaim edges, roadsides and gaps."},
+  {id:"category", label:"Category", key:true, raster:"category", help:"Placement categories. Amber tree lines run along parcel borders, field edges and roadsides, packed solid to block sight."},
+  {id:"density", label:"Density", raster:"density", trees:"faint", help:"Stand-scale canopy cover within about 35 units. Dark green is closed canopy."},
+  {id:"cover", label:"Cover", key:true, raster:"cover", trees:"faint", help:"Line-of-sight cover: share of 16 sight lines blocked by a crown within 100 units. Orange ground is exposed."},
+  {id:"under", label:"Undergrowth", under:true, trees:"faint", help:"Bushes, saplings, berry patches and fallen logs, placed from the same model as the trees."},
+  {id:"sun", label:"Sun", raster:"sun", trees:"faint", help:"Daily insolation over a sun path, with terrain shadows. Valleys and north faces get less."},
+  {id:"wet", label:"Wetness", raster:"wet", trees:"faint", help:"Topographic wetness from flow accumulation over a pit-aware fill. Blue gathers water."},
+  {id:"potential", label:"Potential", raster:"potential", trees:"faint", help:"Forest potential before the quantile cut: wetness, soil, sun, distance from people, existing woodland and noise."},
+];
+
+const $ = (id) => document.getElementById(id);
+const fmt = (n) => Math.round(n).toLocaleString("en-US");
+function bytes(b64) { const s = atob(b64), a = new Uint8Array(s.length); for (let i = 0; i < s.length; i++) a[i] = s.charCodeAt(i); return a; }
+function img(src) { const i = new Image(); i.src = src; i.onload = () => draw(); return i; }
+
+// ---------------------------------------------------------------- data
+const tb = bytes(D.trees), tv = new DataView(tb.buffer), NT = tb.length / 8;
+const TX = new Float32Array(NT), TZ = new Float32Array(NT), TR = new Float32Array(NT), TS = new Uint8Array(NT), TA = new Uint8Array(NT), TC = new Uint8Array(NT);
+for (let i = 0; i < NT; i++) { const o = i * 8;
+  TX[i] = tv.getUint16(o, true) / 15; TZ[i] = tv.getUint16(o + 2, true) / 15; TR[i] = tb[o + 4] / 16;
+  TS[i] = tb[o + 5] & 7; TA[i] = tb[o + 5] >> 3; TC[i] = tb[o + 6]; }
+const ub = bytes(D.under), uv = new DataView(ub.buffer), NU = ub.length / 6;
+const UX = new Float32Array(NU), UZ = new Float32Array(NU), UR = new Float32Array(NU), UK = new Uint8Array(NU);
+for (let i = 0; i < NU; i++) { const o = i * 6; UX[i] = uv.getUint16(o, true) / 15; UZ[i] = uv.getUint16(o + 2, true) / 15; UR[i] = ub[o + 4] / 16; UK[i] = ub[o + 5]; }
+const UL = Array.from({ length: 6 }, () => []); for (let i = 0; i < NU; i++) UL[UK[i]].push(i);
+const ALL = Int32Array.from({ length: NT }, (_, i) => i);
+const base = img(D.base);
+const rasters = {}; for (const k in D.layers) rasters[k] = img(D.layers[k]);
+const IN = D.inspect, IG = IN.n, ins = {}; for (const k of ["height","sun","wet","cover","stand","slope","cat"]) ins[k] = bytes(IN[k]);
+const SIZE = IG * 2 * D.grid; // world units covered by the grids
+// spatial grid for nearest-tree lookups (16-unit cells)
+const GC = 16, GN = Math.ceil(SIZE / GC), cellStart = new Int32Array(GN * GN + 1), cellItems = new Int32Array(NT);
+{ const cnt = new Int32Array(GN * GN); const key = new Int32Array(NT);
+  for (let i = 0; i < NT; i++) { key[i] = Math.min(GN - 1, TZ[i] / GC | 0) * GN + Math.min(GN - 1, TX[i] / GC | 0); cnt[key[i]]++; }
+  for (let k = 0; k < GN * GN; k++) cellStart[k + 1] = cellStart[k] + cnt[k];
+  const fill = cellStart.slice(0, GN * GN); for (let i = 0; i < NT; i++) cellItems[fill[key[i]]++] = i; }
+
+// ---------------------------------------------------------------- state
+const cv = $("map"), ctx = cv.getContext("2d");
+let mode = MODES[0], view = { cx: SIZE / 2, cz: SIZE / 2, s: 0.2 }, W = 0, H = 0, dpr = 1;
+let showTrees = true, showUnder = false, opacity = 0.8, picked = -1, pickedAt = null;
+try { const m = localStorage.getItem("z1-survey-mode"); const found = MODES.find(x => x.id === m); if (found) mode = found; } catch (e) {}
+
+function fit() { view = { cx: SIZE / 2, cz: SIZE / 2, s: Math.min(W, H) / SIZE * 0.98 }; }
+function resize() {
+  dpr = Math.min(window.devicePixelRatio || 1, 2); const r = cv.getBoundingClientRect();
+  const first = W === 0; W = r.width; H = r.height; cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr);
+  if (first) fit(); draw();
+}
+
+// ---------------------------------------------------------------- drawing
+let groups = null;
+function buildGroups() {
+  const colorOf = mode.id === "age" ? (i) => TA[i] : mode.id === "category" ? (i) => TC[i] : (i) => TS[i];
+  const n = mode.id === "age" ? 4 : mode.id === "category" ? 7 : 8;
+  const g = Array.from({ length: n }, () => []);
+  for (let i = 0; i < NT; i++) g[colorOf(i)].push(i);
+  groups = { lists: g.map(a => Int32Array.from(a)), cols: mode.id === "age" ? AGE_COL : mode.id === "category" ? CAT_COL : SP_COL };
+}
+function drawDots(xs, zs, rs, list, color, minPx, x0, x1, z0, z1, alpha) {
+  ctx.fillStyle = color; ctx.globalAlpha = alpha; ctx.beginPath();
+  const s = view.s;
+  for (let k = 0; k < list.length; k++) { const i = list[k], x = xs[i], z = zs[i];
+    if (x < x0 || x > x1 || z < z0 || z > z1) continue;
+    const r = Math.max(rs[i], minPx / s);
+    if (r * s < 1.6) ctx.rect(x - r, z - r, 2 * r, 2 * r); else { ctx.moveTo(x + r, z); ctx.arc(x, z, r, 0, 6.2832); } }
+  ctx.fill(); ctx.globalAlpha = 1;
+}
+let pending = false;
+function draw() { if (!pending) { pending = true; requestAnimationFrame(render); } }
+function render() {
+  pending = false; if (!W) return;
+  ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue("--mapbg"); ctx.fillRect(0, 0, cv.width, cv.height);
+  const s = view.s * dpr; ctx.setTransform(s, 0, 0, s, cv.width / 2 - view.cx * s, cv.height / 2 - view.cz * s);
+  ctx.imageSmoothingEnabled = view.s < 1.2;
+  if (base.complete) ctx.drawImage(base, 0, 0, SIZE, SIZE);
+  if (mode.raster && rasters[mode.raster].complete) { ctx.globalAlpha = opacity; ctx.drawImage(rasters[mode.raster], 0, 0, SIZE, SIZE); ctx.globalAlpha = 1; }
+  const pad = 20, x0 = view.cx - W / 2 / view.s - pad, x1 = view.cx + W / 2 / view.s + pad, z0 = view.cz - H / 2 / view.s - pad, z1 = view.cz + H / 2 / view.s + pad;
+  const minPx = 0.7;
+  if (showUnder || mode.under) {
+    UL.forEach((l, k) => drawDots(UX, UZ, UR, l, UNDER_COL[k], minPx, x0, x1, z0, z1, mode.under ? 0.95 : 0.8));
+  }
+  if (showTrees) {
+    if (mode.trees === "faint") {
+      drawDots(TX, TZ, TR, ALL, "#0f2418", minPx, x0, x1, z0, z1, mode.under ? 0.18 : 0.35);
+    } else {
+      groups.lists.forEach((l, k) => drawDots(TX, TZ, TR, l, groups.cols[k], minPx, x0, x1, z0, z1, 0.92));
+    }
+  }
+  if (pickedAt) { ctx.lineWidth = 2 / view.s; ctx.strokeStyle = "#e3a33c"; ctx.beginPath(); ctx.arc(pickedAt[0], pickedAt[1], 10 / view.s + (picked >= 0 ? TR[picked] : 0), 0, 6.2832); ctx.stroke(); }
+  updateScale();
+}
+function updateScale() {
+  const target = 120 / view.s; const p = Math.pow(10, Math.floor(Math.log10(target))); const nice = [1, 2, 5, 10].map(m => m * p).filter(v => v <= target).pop();
+  $("scaletext").textContent = `${fmt(nice)} units`; $("scaleline").style.width = `${nice * view.s}px`;
+}
+
+// ---------------------------------------------------------------- interaction
+const pts = new Map(); let moved = false, pinch0 = null;
+cv.addEventListener("pointerdown", (e) => { cv.setPointerCapture(e.pointerId); pts.set(e.pointerId, [e.clientX, e.clientY]); moved = false; cv.classList.add("dragging");
+  if (pts.size === 2) { const [a, b] = [...pts.values()]; pinch0 = { d: Math.hypot(a[0] - b[0], a[1] - b[1]), s: view.s }; } });
+cv.addEventListener("pointermove", (e) => { if (!pts.has(e.pointerId)) return; const prev = pts.get(e.pointerId); const dx = e.clientX - prev[0], dy = e.clientY - prev[1];
+  pts.set(e.pointerId, [e.clientX, e.clientY]);
+  if (pts.size === 1) { if (Math.abs(dx) + Math.abs(dy) > 0) moved = true; view.cx -= dx / view.s; view.cz -= dy / view.s; draw(); }
+  else if (pts.size === 2 && pinch0) { const [a, b] = [...pts.values()]; const d = Math.hypot(a[0] - b[0], a[1] - b[1]); view.s = clampS(pinch0.s * d / pinch0.d); moved = true; draw(); } });
+function up(e) { if (!pts.has(e.pointerId)) return; pts.delete(e.pointerId); if (pts.size < 2) pinch0 = null; cv.classList.remove("dragging");
+  if (!moved && pts.size === 0) { const r = cv.getBoundingClientRect(); inspectAt(view.cx + (e.clientX - r.left - W / 2) / view.s, view.cz + (e.clientY - r.top - H / 2) / view.s); } }
+cv.addEventListener("pointerup", up); cv.addEventListener("pointercancel", up);
+function clampS(s) { return Math.max(Math.min(W, H) / SIZE * 0.6, Math.min(40, s)); }
+function zoomAt(f, px, py) { const r = cv.getBoundingClientRect(); px = px ?? r.left + W / 2; py = py ?? r.top + H / 2;
+  const wx = view.cx + (px - r.left - W / 2) / view.s, wz = view.cz + (py - r.top - H / 2) / view.s;
+  view.s = clampS(view.s * f); view.cx = wx - (px - r.left - W / 2) / view.s; view.cz = wz - (py - r.top - H / 2) / view.s; draw(); }
+cv.addEventListener("wheel", (e) => { e.preventDefault(); zoomAt(Math.exp(-e.deltaY * 0.0015), e.clientX, e.clientY); }, { passive: false });
+cv.addEventListener("dblclick", (e) => zoomAt(2, e.clientX, e.clientY));
+$("zin").onclick = () => zoomAt(1.6); $("zout").onclick = () => zoomAt(1 / 1.6); $("zfit").onclick = () => { fit(); draw(); };
+window.addEventListener("keydown", (e) => { if (e.target.tagName === "INPUT") return; if (e.key === "+" || e.key === "=") zoomAt(1.4); if (e.key === "-") zoomAt(1 / 1.4); });
+
+function gridVal(k, x, z) { const j = Math.min(IG - 1, Math.max(0, x / (2 * D.grid) | 0)), i = Math.min(IG - 1, Math.max(0, z / (2 * D.grid) | 0)); return ins[k][i * IG + j]; }
+function inspectAt(x, z) {
+  if (x < 0 || z < 0 || x > SIZE || z > SIZE) return;
+  let best = -1, bd = 1e9; const ci = Math.min(GN - 1, z / GC | 0), cj = Math.min(GN - 1, x / GC | 0);
+  for (let a = ci - 1; a <= ci + 1; a++) for (let b = cj - 1; b <= cj + 1; b++) { if (a < 0 || b < 0 || a >= GN || b >= GN) continue; const k = a * GN + b;
+    for (let p = cellStart[k]; p < cellStart[k + 1]; p++) { const i = cellItems[p], d = Math.hypot(TX[i] - x, TZ[i] - z); if (d < bd) { bd = d; best = i; } } }
+  const hit = best >= 0 && bd <= Math.max(TR[best], 3);
+  picked = hit ? best : -1; pickedAt = hit ? [TX[best], TZ[best]] : [x, z];
+  const c = gridVal("cat", x, z);
+  const rows = [
+    ["Position", `${fmt(x + D.origin)}, ${fmt(z + D.origin)}`],
+    ["Height", `${(gridVal("height", x, z) / 255 * 200).toFixed(0)} u, slope ${(gridVal("slope", x, z) / 255 * 60).toFixed(0)}°`],
+    ["Category", c === 255 ? "No trees (road, rock, water, town)" : CATS[c]],
+    ["Canopy", `${Math.round(gridVal("stand", x, z) / 2.55)}%`], ["Cover", `${Math.round(gridVal("cover", x, z) / 2.55)}% of sight lines blocked`],
+    ["Sun / wet", `${Math.round(gridVal("sun", x, z) / 2.55)}% / ${Math.round(gridVal("wet", x, z) / 2.55)}%`],
+  ];
+  if (hit) rows.unshift(["Tree", `${SP_LABEL[TS[best]]}, ${AGES[TA[best]].toLowerCase()}, crown ${TR[best].toFixed(1)} u`]);
+  $("ins-title").textContent = hit ? "Tree" : "Ground"; $("ins-body").innerHTML = rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("");
+  $("inspect").hidden = false; draw();
+}
+
+// ---------------------------------------------------------------- panel
+function setMode(m) { mode = m; try { localStorage.setItem("z1-survey-mode", m.id); } catch (e) {}
+  document.querySelectorAll("#modes button").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.id === m.id)));
+  $("modehelp").textContent = m.help; buildGroups(); legend(); draw(); }
+$("modes").innerHTML = MODES.map(m => `<button type="button" data-id="${m.id}" class="${m.key ? "key" : ""}" aria-pressed="false">${m.label}</button>`).join("");
+document.querySelectorAll("#modes button").forEach(b => b.onclick = () => setMode(MODES.find(m => m.id === b.dataset.id)));
+$("showTrees").onchange = (e) => { showTrees = e.target.checked; draw(); };
+$("showUnder").onchange = (e) => { showUnder = e.target.checked; draw(); };
+$("opacity").oninput = (e) => { opacity = e.target.value / 100; draw(); };
+
+function items(labels, cols, counts) { const tot = counts.reduce((a, b) => a + b, 0) || 1, mx = Math.max(...counts, 1);
+  return `<div class="legend">${labels.map((l, i) => `<div class="item"><span class="sw" style="background:${cols[i]}"></span><span>${l}</span>
+    <span class="bar"><i style="width:${counts[i] / mx * 100}%"></i></span><span class="num">${fmt(counts[i])} · ${(counts[i] / tot * 100).toFixed(1)}%</span></div>`).join("")}</div>`; }
+function rampLegend(css, lo, hi) { return `<div class="ramp" style="background:${css}"></div><div class="ramp-labels"><span>${lo}</span><span>${hi}</span></div>`; }
+function count(arr, n) { const c = new Array(n).fill(0); for (const v of arr) c[v]++; return c; }
+const cS = count(TS, 8), cA = count(TA, 4), cC = count(TC, 7), cU = count(UK, 6);
+function legend() {
+  const L = $("legend"); $("legend-title").textContent = mode.label;
+  if (mode.id === "species") L.innerHTML = items(SP_LABEL, SP_COL, cS);
+  else if (mode.id === "age") L.innerHTML = items(AGES, AGE_COL, cA);
+  else if (mode.id === "category") L.innerHTML = items(CATS, CAT_COL, cC);
+  else if (mode.id === "under") L.innerHTML = items(UNDER, UNDER_COL, cU);
+  else if (mode.id === "density") L.innerHTML = rampLegend("linear-gradient(90deg,#f0e4aa,#96be5a,#286e3c,#0c3420)", "open", "closed canopy");
+  else if (mode.id === "cover") L.innerHTML = rampLegend("linear-gradient(90deg,#f2a036,#f0d678,#18544a)", "exposed", "fully screened") +
+    `<p class="note" style="margin-top:8px">${Math.round(D.openExposure * 100)}% of open land is exposed (under a quarter of sight lines blocked).</p>`;
+  else if (mode.id === "sun") L.innerHTML = rampLegend("linear-gradient(90deg,#282e60,#aa786e,#fad664)", "shaded", "full sun");
+  else if (mode.id === "wet") L.innerHTML = rampLegend("linear-gradient(90deg,#d6bc8c,#78aaa0,#1c4c96)", "dry", "wet");
+  else L.innerHTML = rampLegend("linear-gradient(90deg,#783c6e,#ece6d2,#1e643c)", "low", "high");
+}
+$("spots").innerHTML = D.spots.map((s, i) => `<button type="button" data-i="${i}">${s.name}</button>`).join("");
+document.querySelectorAll("#spots button").forEach(b => b.onclick = () => { const s = D.spots[+b.dataset.i];
+  view = { cx: s.x - D.origin, cz: s.z - D.origin, s: Math.min(W, H) / s.size }; draw(); });
+
+const st = D.stats, p = D.params;
+const forestKm = (D.usableArea * st.forest_share_of_usable / 1e6).toFixed(2);
+$("subtitle").textContent = `4,128 u square · 4 u grid · seed ${p.seed}`;
+$("lede").innerHTML = `<b>${fmt(st.trees)}</b> trees on a <b>${fmt(p.tree_budget)}</b> budget. Forest covers <b>${Math.round(st.forest_share_of_usable * 100)}%</b> of usable land (${forestKm} M sq units), with <b>${fmt(cC[2])}</b> trees in tree lines and <b>${st.orchards}</b> orchards. Cherry is <b>${(cS[7] / NT * 100).toFixed(1)}%</b>, dead trees <b>${(cA[3] / NT * 100).toFixed(1)}%</b>.`;
+const figs = [["Trees", NT, true], ["Tree lines", cC[2], true], ["Bushes", cU[0] + cU[1]], ["Saplings", cU[2] + cU[3]], ["Berry bushes", cU[4]], ["Fallen logs", cU[5]]];
+$("figures").innerHTML = figs.map(([l, v, k]) => `<div class="fig${k ? " key" : ""}"><strong>${fmt(v)}</strong><span>${l}</span></div>`).join("");
+
+new ResizeObserver(resize).observe(cv);
+setMode(mode);
+</script>

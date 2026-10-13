@@ -19,6 +19,9 @@ struct ScopeStat {
     // The selected frame's total.
     double frame_ms = 0;
     double calls_per_frame = 0;
+    // The average call: what one paint spends in a UI or GPU scope, as a
+    // profiler frame is an engine tick and the UI may paint less often.
+    double per_call_ms = 0;
     // avg_ms over the average frame's length.
     double share = 0;
 };

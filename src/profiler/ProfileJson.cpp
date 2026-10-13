@@ -137,6 +137,30 @@ JsonValue build_report(const History& history, const ReportOptions& options) {
     out.set("frame_ms", std::move(times));
     out.set("over_budget", JsonValue::number(over));
     std::vector<ScopeStat> stats = compute_stats(history, slowest);
+    // The paints, from the UI row's scopes: a frame here is an engine tick.
+    // Waiting over a millisecond a paint means a frame cap held it, as an
+    // unfocused window's does.
+    const auto find_ui = [&](const char* name) -> const ScopeStat* {
+        for (const ScopeStat& stat : stats) {
+            if (stat.scope < history.scopes.size() && history.scopes[stat.scope].name == name &&
+                stat.row < history.rows.size() && history.rows[stat.row] == "UI") {
+                return &stat;
+            }
+        }
+        return nullptr;
+    };
+    if (const ScopeStat* paint = find_ui("UI paint"); paint != nullptr && paint->calls_per_frame > 0 && !lengths.empty()) {
+        const double period = total / static_cast<double>(lengths.size()) / paint->calls_per_frame;
+        const ScopeStat* wait = find_ui("Frame wait");
+        const double waited = wait != nullptr ? wait->avg_ms / paint->calls_per_frame : 0.0;
+        JsonValue paints = JsonValue::object();
+        paints.set("period_ms", JsonValue::number(round3(period)));
+        paints.set("per_second", JsonValue::number(round3(period > 0 ? 1000.0 / period : 0.0)));
+        paints.set("work_ms", JsonValue::number(round3(period - waited)));
+        paints.set("wait_ms", JsonValue::number(round3(waited)));
+        paints.set("capped", JsonValue::boolean(waited > 1.0));
+        out.set("paint", std::move(paints));
+    }
     sort_stats(stats, history, StatSort::Max);
     JsonValue rows = JsonValue::array();
     for (std::size_t index = 0; index < stats.size() && static_cast<int>(index) < std::max(options.top, 0); ++index) {
@@ -152,6 +176,7 @@ JsonValue build_report(const History& history, const ReportOptions& options) {
         row.set("max_ms", JsonValue::number(round3(stat.max_ms)));
         row.set("avg_ms", JsonValue::number(round3(stat.avg_ms)));
         row.set("calls_per_frame", JsonValue::number(round3(stat.calls_per_frame)));
+        row.set("per_call_ms", JsonValue::number(round3(stat.per_call_ms)));
         row.set("share", JsonValue::number(round3(stat.share)));
         rows.items().push_back(std::move(row));
     }

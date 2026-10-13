@@ -130,8 +130,10 @@ constexpr SpecText kSpecs[] = {
      "debug.profilebegin sections, and GPU passes), and the slowest frame as a tree per thread. When the "
      "profiler is not recording it records for seconds first; when it is paused it reads the paused frames "
      "at once. Numbers taken in edit mode are not the game's: start a playtest first to profile play. GPU "
-     "times arrive a frame or two late. With path, also writes the profile as an HTML page that any browser "
-     "shows, as the profiler's Save does.",
+     "times arrive a frame or two late. A frame is an engine tick: avg_ms is per tick, per_call_ms per call. "
+     "A UI or GPU scope runs once a paint, so per_call_ms is its cost per paint, and paint gives the paint "
+     "period, the work in it, and whether a frame cap (an unfocused window's 30 fps) held it. With path, "
+     "also writes the profile as an HTML page that any browser shows, as the profiler's Save does.",
      R"({"type":"object","properties":{
          "seconds":{"type":"number","minimum":0.1,"maximum":10,"description":"How long to record when nothing is recording. Default 2."},
          "top":{"type":"integer","minimum":1,"maximum":200,"description":"Scope rows, slowest first. Default 25."},

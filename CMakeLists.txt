@@ -582,6 +582,7 @@ target_link_libraries(profiler PUBLIC Threads::Threads)
 
 add_library(engine_datatypes STATIC
     src/engine_datatypes/Color3.cpp
+    src/engine_datatypes/Curve.cpp
     src/engine_datatypes/Enum.cpp
     src/engine_datatypes/Matrix4.cpp
     src/engine_datatypes/Vector2.cpp
@@ -1073,6 +1074,7 @@ add_executable(sandbox
     sandbox/dynamic_sky_tests.cpp
     sandbox/bloom_tests.cpp
     sandbox/value_tests.cpp
+    sandbox/curve_tests.cpp
     sandbox/physics_tests.cpp
     sandbox/pose_blend_tests.cpp
     sandbox/physics_game_object_tests.cpp

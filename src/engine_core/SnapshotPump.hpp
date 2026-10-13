@@ -456,8 +456,14 @@ private:
     VisualSnapshot base_{};
     VisualSnapshot buffers_[2]{};
     int front_ = 0;
-    // Rows resolve_poses left with a pose: while 0 and no Prefab has a skeleton, it skips the rows.
-    std::size_t posed_rows_ = 0;
+    // The rows whose Prefab has a skeleton, by id, as resolve_poses last found
+    // them, and the rows whose Prefab changed since. Only these are looked at,
+    // however many other rows there are; every row is looked at again only
+    // after a resync or when a Prefab gains or loses its skeleton.
+    std::vector<InstanceId> posed_ids_;
+    std::vector<InstanceId> pose_touched_;
+    std::vector<bool> prefab_skinned_;
+    bool poses_dirty_ = true;
     std::uint64_t next_frame_ = 1;
     std::atomic<std::uint64_t> published_frame_{0};
     std::vector<SnapshotOverride> overrides_;

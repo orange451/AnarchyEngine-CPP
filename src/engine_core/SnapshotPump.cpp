@@ -1,5 +1,7 @@
 #include "SnapshotPump.hpp"
 
+#include "profiler/Profiler.hpp"
+
 #include "AmbientOcclusionEffect.hpp"
 #include "AssetInstances.hpp"
 #include "BloomEffect.hpp"
@@ -252,6 +254,7 @@ void SnapshotPump::apply_live(DataModel& game, const Invalidation& change) {
 }
 
 void SnapshotPump::resync(DataModel& game) {
+    poses_dirty_ = true;
     base_.instances.clear();
     base_ids_.clear();
     prefab_entries_.clear();
@@ -364,6 +367,7 @@ void SnapshotPump::set_row_prefab(VisualInstance& inst, const std::string& guid)
     const std::uint32_t next = acquire_prefab(guid);
     release_prefab(inst.prefab);
     inst.prefab = next;
+    pose_touched_.push_back(inst.id);
 }
 
 void fill_visual_material(const DataModel& game, const Material* material, VisualMesh& out) {
@@ -461,31 +465,54 @@ void SnapshotPump::resolve_prefabs(DataModel& game) {
 }
 
 void SnapshotPump::resolve_poses(DataModel& game) {
-    // No Prefab with a skeleton and no row left posed: nothing to look at. A
-    // place of static scenery skips its rows entirely.
-    const bool any_skeleton = std::any_of(base_.prefabs.begin(), base_.prefabs.end(),
-                                          [](const VisualPrefab& prefab) { return prefab.skeleton != nullptr; });
-    if (!any_skeleton && posed_rows_ == 0) {
-        return;
+    std::vector<bool> skinned(base_.prefabs.size(), false);
+    for (std::size_t index = 0; index < base_.prefabs.size(); ++index) {
+        skinned[index] = base_.prefabs[index].skeleton != nullptr;
     }
-    std::size_t posed = 0;
-    for (std::size_t index = 0; index < base_.instances.size(); ++index) {
+    if (skinned != prefab_skinned_) {
+        prefab_skinned_ = std::move(skinned);
+        poses_dirty_ = true;
+    }
+    // Written only when it changes, so unchanged rows keep sharing their chunk.
+    const auto pose_row = [&](std::size_t index) {
         const VisualInstance& row = base_.instances[index];
-        const bool skinned = row.prefab != 0 && row.prefab < base_.prefabs.size() &&
-                             base_.prefabs[row.prefab].skeleton != nullptr;
-        const auto* drawn = skinned ? dynamic_cast<const GameObject*>(game.instance(row.id)) : nullptr;
-        // Written only when it changes, so unchanged rows keep sharing their chunk.
+        const bool has_skeleton = row.prefab != 0 && row.prefab < prefab_skinned_.size() && prefab_skinned_[row.prefab];
+        const auto* drawn = has_skeleton ? dynamic_cast<const GameObject*>(game.instance(row.id)) : nullptr;
         if (drawn != nullptr) {
             std::shared_ptr<const Pose> pose = drawn->pose();
             if (pose != row.pose) {
                 base_.instances.at_mut(index).pose = std::move(pose);
             }
-            ++posed;
-        } else if (row.pose != nullptr) {
+            return true;
+        }
+        if (row.pose != nullptr) {
             base_.instances.at_mut(index).pose.reset();
         }
+        return false;
+    };
+    if (poses_dirty_ || pose_touched_.size() > base_.instances.size() / 4) {
+        poses_dirty_ = false;
+        pose_touched_.clear();
+        posed_ids_.clear();
+        for (std::size_t index = 0; index < base_.instances.size(); ++index) {
+            if (pose_row(index)) {
+                posed_ids_.push_back(base_.instances[index].id);
+            }
+        }
+        return;
     }
-    posed_rows_ = posed;
+    // Only a row last posed, or one whose Prefab changed, can hold a pose. A
+    // row that left is gone from base_ids_ and drops out here.
+    pose_touched_.insert(pose_touched_.end(), posed_ids_.begin(), posed_ids_.end());
+    std::sort(pose_touched_.begin(), pose_touched_.end());
+    pose_touched_.erase(std::unique(pose_touched_.begin(), pose_touched_.end()), pose_touched_.end());
+    posed_ids_.clear();
+    for (const InstanceId id : pose_touched_) {
+        if (const int position = base_position(id); position >= 0 && pose_row(static_cast<std::size_t>(position))) {
+            posed_ids_.push_back(id);
+        }
+    }
+    pose_touched_.clear();
 }
 
 template <class... T>
@@ -811,24 +838,39 @@ void SnapshotPump::anchor_billboards(VisualSnapshot& dst) const {
 
 void SnapshotPump::take_changes(DataModel& game) {
     InvalidationQueue& queue = game.invalidations();
-    if (queue.take_overflow() || game.consume_resync()) {
-        resync(game);
-        viewports_->mark_all();
-    } else {
-        queue.drain([&](const Invalidation& change) {
-            apply_live(game, change);
-            viewports_->note(game, change.id);
-        });
+    {
+        PROFILE_SCOPE("Snapshot changes", profiler::Group::Engine);
+        if (queue.take_overflow() || game.consume_resync()) {
+            resync(game);
+            viewports_->mark_all();
+        } else {
+            queue.drain([&](const Invalidation& change) {
+                apply_live(game, change);
+                viewports_->note(game, change.id);
+            });
+        }
     }
-    resolve_prefabs(game);
-    resolve_poses(game);
-    viewports_->update(game, base_.viewports);
-    resolve_lighting(game);
-    resolve_draggers(game);
-    resolve_billboards(game);
-    resolve_wireframes(game);
-    resolve_terrains(game);
-    resolve_particles();
+    {
+        PROFILE_SCOPE("Snapshot prefabs", profiler::Group::Engine);
+        resolve_prefabs(game);
+        resolve_poses(game);
+    }
+    {
+        PROFILE_SCOPE("Snapshot viewports", profiler::Group::Engine);
+        viewports_->update(game, base_.viewports);
+    }
+    {
+        PROFILE_SCOPE("Snapshot lighting", profiler::Group::Engine);
+        resolve_lighting(game);
+    }
+    {
+        PROFILE_SCOPE("Snapshot overlays", profiler::Group::Engine);
+        resolve_draggers(game);
+        resolve_billboards(game);
+        resolve_wireframes(game);
+        resolve_terrains(game);
+        resolve_particles();
+    }
     brushes_.update(game, base_.brushes);
     base_.resources_root = game.resources_root();
 }

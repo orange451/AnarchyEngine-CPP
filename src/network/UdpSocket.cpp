@@ -41,6 +41,10 @@ int last_error() { return WSAGetLastError(); }
 bool would_block(int error) { return error == WSAEWOULDBLOCK; }
 bool oversized(int error) { return error == WSAEMSGSIZE; }
 bool peer_gone(int error) { return error == WSAECONNRESET; }
+// Errors that mean the socket itself is unusable; everything else is per-send or transient.
+bool fatal(int error) {
+    return error == WSAENOTSOCK || error == WSANOTINITIALISED || error == WSAEINVAL;
+}
 void close_socket(socket_t s) { closesocket(s); }
 constexpr int kReceiveFlags = 0;
 #else
@@ -51,6 +55,8 @@ int last_error() { return errno; }
 bool would_block(int error) { return error == EWOULDBLOCK || error == EAGAIN; }
 bool oversized(int) { return false; }
 bool peer_gone(int error) { return error == ECONNREFUSED; }
+// Errors that mean the socket itself is unusable; everything else is per-send or transient.
+bool fatal(int error) { return error == ENOTSOCK || error == EBADF || error == EINVAL; }
 void close_socket(socket_t s) { ::close(s); }
 // MSG_TRUNC reports the datagram's real length, so an oversized one is dropped
 // here as Windows and the link drop it.
@@ -122,18 +128,30 @@ std::unique_ptr<UdpSocket> UdpSocket::open(std::uint16_t port, std::string& erro
     }
 #ifdef _WIN32
     u_long non_blocking = 1;
-    ioctlsocket(handle, FIONBIO, &non_blocking);
+    if (ioctlsocket(handle, FIONBIO, &non_blocking) != 0) {
+        error = "cannot make the socket non-blocking: " + error_text(last_error());
+        close_socket(handle);
+        return nullptr;
+    }
     // Without this, an ICMP port-unreachable from a peer that went away makes
     // the next recvfrom fail with WSAECONNRESET.
     BOOL report = FALSE;
     DWORD returned = 0;
     WSAIoctl(handle, SIO_UDP_CONNRESET, &report, sizeof(report), nullptr, 0, &returned, nullptr, nullptr);
 #else
-    fcntl(handle, F_SETFL, fcntl(handle, F_GETFL, 0) | O_NONBLOCK);
+    if (fcntl(handle, F_SETFL, fcntl(handle, F_GETFL, 0) | O_NONBLOCK) != 0) {
+        error = "cannot make the socket non-blocking: " + error_text(last_error());
+        close_socket(handle);
+        return nullptr;
+    }
 #endif
     sockaddr_in6 bound;
     socklen_t length = sizeof(bound);
-    getsockname(handle, reinterpret_cast<sockaddr*>(&bound), &length);
+    if (getsockname(handle, reinterpret_cast<sockaddr*>(&bound), &length) != 0) {
+        error = "cannot read the socket's port: " + error_text(last_error());
+        close_socket(handle);
+        return nullptr;
+    }
     std::unique_ptr<UdpSocket> socket(new UdpSocket());
     socket->handle_ = static_cast<std::uintptr_t>(handle);
     socket->port_ = ntohs(bound.sin6_port);
@@ -153,7 +171,7 @@ bool UdpSocket::send(const Address& to, const std::uint8_t* bytes, std::size_t l
     if (sent < 0) {
         const int error = last_error();
         if (would_block(error) || peer_gone(error)) return false;
-        failed_ = true;
+        if (fatal(error)) failed_ = true;
         return false;
     }
     return true;
@@ -170,7 +188,7 @@ std::size_t UdpSocket::receive(Address& from, std::uint8_t* buffer, std::size_t 
             const int error = last_error();
             if (would_block(error)) return 0;
             if (oversized(error) || peer_gone(error)) continue;   // that datagram is gone; look for the next
-            failed_ = true;
+            if (fatal(error)) failed_ = true;
             return 0;
         }
         if (static_cast<std::size_t>(got) > capacity) continue;   // MSG_TRUNC: oversized, dropped

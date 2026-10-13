@@ -45,6 +45,7 @@ bool parse_ipv4(std::string_view text, std::array<std::uint8_t, 16>& bytes) {
         if (text[i] < '0' || text[i] > '9') return false;
         value = value * 10 + static_cast<unsigned>(text[i] - '0');
         ++digits;
+        if (digits > 3 || value > 255) return false;
     }
     if (count != 4) return false;
     for (int i = 0; i < 4; ++i) bytes[i] = static_cast<std::uint8_t>(parts[i]);

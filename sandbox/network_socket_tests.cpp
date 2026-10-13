@@ -45,6 +45,16 @@ TEST_CASE("N20 addresses parse, print, and compare", "[network][socket]") {
     REQUIRE_FALSE(Address::parse("1.2.3.4").has_value());
     REQUIRE_FALSE(Address::parse("1.2.3.4:70000").has_value());
     REQUIRE(Address::loopback(5) == Address::ipv4(127, 0, 0, 1, 5));
+    for (const char* bad : {"4294967297.0.0.1:1", "256.1.1.1:1", "1.2.3:1", "1.2.3.4.5:1", "1..3.4:1", "1.2.3.4:"}) {
+        CAPTURE(bad);
+        REQUIRE_FALSE(Address::parse(bad).has_value());
+    }
+    for (const char* text : {"[::]:1", "[1::]:2", "[fe80::1:2]:3"}) {
+        CAPTURE(text);
+        const auto parsed = Address::parse(text);
+        REQUIRE(parsed.has_value());
+        REQUIRE(parsed->to_string() == text);
+    }
 }
 
 TEST_CASE("N21 the link hub delivers datagrams by address, in order, and nothing to a stranger", "[network][socket]") {

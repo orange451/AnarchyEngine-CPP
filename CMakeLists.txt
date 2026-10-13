@@ -658,6 +658,7 @@ add_library(engine_core STATIC
     src/engine_core/CurveJson.cpp
     src/engine_core/ParticleBursts.cpp
     src/engine_core/particles/ParticleShapes.cpp
+    src/engine_core/particles/EmitterSim.cpp
     src/engine_core/InstanceRef.cpp
     src/engine_core/LuaReflect.cpp
     src/engine_core/ScriptBindings.cpp
@@ -1082,6 +1083,7 @@ add_executable(sandbox
     sandbox/curve_tests.cpp
     sandbox/particle_emitter_tests.cpp
     sandbox/particle_shape_tests.cpp
+    sandbox/particle_sim_tests.cpp
     sandbox/physics_tests.cpp
     sandbox/pose_blend_tests.cpp
     sandbox/physics_game_object_tests.cpp

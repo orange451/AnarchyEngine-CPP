@@ -62,7 +62,8 @@ void BoundItem(const DrawItem& item, Sphere& sphere, std::uint16_t& traits, Visi
     const bool banded = item.lodNear > 0.f || item.lodFar < std::numeric_limits<float>::infinity();
     traits = static_cast<std::uint16_t>(kTraitDrawable | (item.shadowOnly ? kTraitShadowOnly : 0) |
                                         (item.transparency > 0.f ? kTraitTransparent : 0) |
-                                        (banded ? kTraitBanded : 0) | (item.lod << 8));
+                                        (banded ? kTraitBanded : 0) | (item.castsShadow ? kTraitCasts : 0) |
+                                        (item.lod << 8));
     if (banded) {
         const float* origin = item.model->m + 12;
         band.x = origin[0];
@@ -106,6 +107,7 @@ void CullDraws(int count, const CameraView& camera, bool cull, VisibilityResult&
     const auto total = static_cast<std::size_t>(std::max(count, 0));
     out.opaque.clear();
     out.transparent.clear();
+    out.casters.clear();
     out.culled = 0;
     if (out.outOfBand.size() != total) {
         out.outOfBand.resize(total);
@@ -126,8 +128,10 @@ void CullDraws(int count, const CameraView& camera, bool cull, VisibilityResult&
         VisibilityResult::Block* mine = alone ? nullptr : &out.blocks[block];
         std::vector<VisibleDraw>& opaque = alone ? out.opaque : mine->opaque;
         std::vector<VisibleDraw>& transparent = alone ? out.transparent : mine->transparent;
+        std::vector<int>& casters = alone ? out.casters : mine->casters;
         opaque.clear();
         transparent.clear();
+        casters.clear();
         int culled = 0;
         for (std::size_t index = begin; index < end; ++index) {
             const std::uint16_t traits = out.traits[index];
@@ -148,6 +152,10 @@ void CullDraws(int count, const CameraView& camera, bool cull, VisibilityResult&
             }
             if (now != 0) {
                 continue;
+            }
+            // In view or not: a caster outside the view can shade what is in it.
+            if ((traits & (kTraitDrawable | kTraitCasts)) == (kTraitDrawable | kTraitCasts)) {
+                casters.push_back(static_cast<int>(index));
             }
             if ((traits & kTraitDrawable) == 0 || (traits & kTraitShadowOnly) != 0) {
                 continue;
@@ -178,6 +186,7 @@ void CullDraws(int count, const CameraView& camera, bool cull, VisibilityResult&
     for (const VisibilityResult::Block& block : out.blocks) {
         out.opaque.insert(out.opaque.end(), block.opaque.begin(), block.opaque.end());
         out.transparent.insert(out.transparent.end(), block.transparent.begin(), block.transparent.end());
+        out.casters.insert(out.casters.end(), block.casters.begin(), block.casters.end());
         out.culled += block.culled;
     }
 }

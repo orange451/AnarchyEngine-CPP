@@ -270,6 +270,11 @@ bool ShadowRenderer::draw(const std::vector<ShadowRequest>& requests, const Mesh
         castersMeshes_ = meshes;
         casterView_ = CasterView{total,           spheres, casterOwners_.data(), casterFingerprints_.data(),
                                  hidden_,         casterRevision_};
+        // Only when it covers these casters: drawn items, from the same draws.
+        if (live_ != nullptr && items_ != nullptr) {
+            casterView_.live = live_->data();
+            casterView_.liveCount = live_->size();
+        }
     }
 
     ShadowPlan plan = planner_.planView(requests, casterView_, camera, settings);

@@ -389,7 +389,8 @@ ShadowPlan ShadowPlanner::planView(const std::vector<ShadowRequest>& requests, c
         hash.add(request.radius);
         hash.add(record.size);
         const Sphere reachSphere{request.position, request.radius};
-        for (std::size_t c = 0; c < casters.count; ++c) {
+        for (std::size_t k = 0, span = CasterSpan(casters); k < span; ++k) {
+            const std::size_t c = CasterAt(casters, k);
             if (CastsNothing(casters, c) || !SpheresTouch(reachSphere, casters.bounds[c]) ||
                 (request.owner != 0 && casters.owners[c] == request.owner)) {
                 continue;
@@ -504,7 +505,8 @@ ShadowPlan ShadowPlanner::planView(const std::vector<ShadowRequest>& requests, c
             draw.tile = record.tiles[face];
             draw.viewProjection = matrices[face];
             const Frustum tileView = MakeFrustum(matrices[face]);
-            for (std::size_t c = 0; c < casters.count; ++c) {
+            for (std::size_t k = 0, span = CasterSpan(casters); k < span; ++k) {
+                const std::size_t c = CasterAt(casters, k);
                 if (CastsNothing(casters, c) || (request.owner != 0 && casters.owners[c] == request.owner)) {
                     continue;
                 }
@@ -602,15 +604,18 @@ std::vector<CascadeDraw> ShadowPlanner::planCascadesView(const SunRequest* sun, 
     // testing it against a cascade is comparing it with the box's six sides:
     // the same test as the frustum's six planes, without them.
     const engine_core::Matrix4 lightView = CascadeLightView(sun->shine);
-    const std::size_t casterCount = casters.count;
+    // Only the casters that can cast, when the view knows them: the same plan,
+    // as the rest add nothing to a pull, a box, or the hash.
+    const std::size_t casterCount = CasterSpan(casters);
     lit_.resize(casterCount);
     // Blocks of casters on worker threads, each pass joined in block order,
     // so the lists and the hash come out as one loop would make them.
     cascadeBlocks_.resize(BlockCount(casterCount, grain));
     ParallelBlocks(casterCount, grain, [&](std::size_t, std::size_t begin, std::size_t end) {
-        for (std::size_t c = begin; c < end; ++c) {
+        for (std::size_t k = begin; k < end; ++k) {
+            const std::size_t c = CasterAt(casters, k);
             const engine_core::Vec3 at = engine_core::matrix4_point(lightView, casters.bounds[c].center);
-            lit_[c] = LitCaster{at.x, at.y, -at.z, casters.bounds[c].radius};
+            lit_[k] = LitCaster{at.x, at.y, -at.z, casters.bounds[c].radius};
         }
     });
     const auto in_box = [](const LitCaster& lit, const CascadeFit& box, bool ignoreNear) {
@@ -631,11 +636,11 @@ std::vector<CascadeDraw> ShadowPlanner::planCascadesView(const SunRequest* sun, 
     ParallelBlocks(casterCount, grain, [&](std::size_t block, std::size_t begin, std::size_t end) {
         float* pull = cascadeBlocks_[block].pull;
         std::fill(pull, pull + kMaxCascades, 0.f);
-        for (std::size_t c = begin; c < end; ++c) {
-            if (own(c)) {
+        for (std::size_t k = begin; k < end; ++k) {
+            if (own(CasterAt(casters, k))) {
                 continue;
             }
-            const LitCaster& lit = lit_[c];
+            const LitCaster& lit = lit_[k];
             const float nearest = lit.depth - lit.radius;
             for (int i = 0; i < count; ++i) {
                 if (in_box(lit, boxes[i], true)) {
@@ -658,12 +663,13 @@ std::vector<CascadeDraw> ShadowPlanner::planCascadesView(const SunRequest* sun, 
             mine.inside[i].clear();
             mine.hashes[i].clear();
         }
-        for (std::size_t c = begin; c < end; ++c) {
+        for (std::size_t k = begin; k < end; ++k) {
+            const std::size_t c = CasterAt(casters, k);
             if (own(c)) {
                 continue;
             }
             for (int i = 0; i < count; ++i) {
-                if (!in_box(lit_[c], fits[i], false)) {
+                if (!in_box(lit_[k], fits[i], false)) {
                     continue;
                 }
                 mine.inside[i].push_back(static_cast<int>(c));

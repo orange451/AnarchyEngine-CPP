@@ -60,10 +60,12 @@ public:
     void setDrawItems(const DrawItem* items) { items_ = items; }
     // One per mesh, nonzero for one that casts nothing this frame
     // (VisibilityResult::outOfBand), or null. Set before draw and drawSun.
-    // hidden, and its revision (VisibilityResult::outOfBandRevision).
-    void setHidden(const std::uint8_t* hidden, std::uint64_t revision) {
+    // hidden, and its revision (VisibilityResult::outOfBandRevision); live,
+    // when given, is every caster that can cast (VisibilityResult::casters).
+    void setHidden(const std::uint8_t* hidden, std::uint64_t revision, const std::vector<int>* live = nullptr) {
         hidden_ = hidden;
         hiddenRevision_ = revision;
+        live_ = live;
     }
     // Which meshes changed since the last frame's (Renderer::findVisible's
     // changed draws), or all of them. Kept until draw reads them, so a frame
@@ -124,6 +126,8 @@ private:
     // Not owned: setHidden's.
     const std::uint8_t* hidden_ = nullptr;
     std::uint64_t hiddenRevision_ = 0;
+    // Not owned: setHidden's.
+    const std::vector<int>* live_ = nullptr;
     // Moves on when a caster's owner or fingerprint really changes, not when
     // the same draw is only written again (as terrain is, every paint).
     std::uint64_t casterRevision_ = 1;

@@ -2210,6 +2210,7 @@ void Renderer::findVisible(const MeshDraw* meshes, int count, const CameraView& 
                 item.lodNear = draw.lodNear;
                 item.lodFar = draw.lodFar;
                 item.billboard = draw.billboard;
+                item.castsShadow = draw.castsShadow;
                 // As the passes have always skipped: no mesh, not uploaded, or wholly see-through.
                 item.drawable = draw.mesh != nullptr && draw.mesh->valid() &&
                                 (draw.terrainLook != 0 || !(draw.transparency >= 1.f));
@@ -2300,7 +2301,7 @@ bool Renderer::shadowPass(const MeshDraw* meshes, int count, const CameraView& c
     }
     // What is outside its LOD band casts nothing, as it is not drawn.
     shadows_.setHidden(visibility_.outOfBand.empty() ? nullptr : visibility_.outOfBand.data(),
-                       visibility_.outOfBandRevision);
+                       visibility_.outOfBandRevision, &visibility_.casters);
     if (!shadows_.draw(shadowRequests_, meshes, count, visibility_.spheres.data(), camera, shadowSettings_)) {
         return false;
     }

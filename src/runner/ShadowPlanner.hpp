@@ -189,7 +189,19 @@ struct CasterView {
     // Moves on whenever any of the above changes; 0 is never one, so a view
     // without it is never taken for unchanged.
     std::uint64_t revision = 0;
+    // When live is set: every caster that can cast, ascending, liveCount of
+    // them. The rest cast nothing, so the planner looks at these alone.
+    const int* live = nullptr;
+    std::size_t liveCount = 0;
 };
+
+// The casters a planner looks at: live's, or every one.
+inline std::size_t CasterSpan(const CasterView& casters) {
+    return casters.live != nullptr ? casters.liveCount : casters.count;
+}
+inline std::size_t CasterAt(const CasterView& casters, std::size_t k) {
+    return casters.live != nullptr ? static_cast<std::size_t>(casters.live[k]) : k;
+}
 
 // What a light's or a cascade's map folds in for caster: which geometry,
 // which upload of it, how it is posed, and where. Never 0.

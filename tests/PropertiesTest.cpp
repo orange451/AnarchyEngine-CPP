@@ -1537,6 +1537,48 @@ void TestCurveRows() {
     Expect(rig.game.history().can_undo().second == "Set Color", "named Set Color");
 }
 
+// Escape on a gradient stop's color puts the stop back, in the emitter and on screen.
+void TestGradientColorCancel() {
+    Rig rig;
+    const InstanceId id = rig.add<engine_core::ParticleEmitter>("Emitter");
+    auto* emitter = dynamic_cast<engine_core::ParticleEmitter*>(rig.game.instance(id));
+    std::string error;
+    const auto red_to_blue = engine_core::ColorCurve::gradient(
+        {engine_core::ColorKey{0.f, engine_core::ColorRgb{1.f, 0.f, 0.f, 1.f}, 0.f},
+         engine_core::ColorKey{1.f, engine_core::ColorRgb{0.f, 0.f, 1.f, 1.f}, 0.f}},
+        error);
+    Expect(red_to_blue && !emitter->set_color(*red_to_blue).has_value(), "a red to blue gradient");
+    rig.game.history().reset_waypoints();
+    rig.select({id});
+    rig.frame();
+    rig.panel.scroll_pane()->setVvalue(rig.panel.scroll_pane()->getVmax());
+    rig.frame();
+    rig.click(rig.panel.editor("Color", 4));
+    rig.frame();
+    rig.frame();
+    rig.panel.scroll_pane()->setVvalue(rig.panel.scroll_pane()->getVmax());
+    rig.frame();
+    auto* gradient = dynamic_cast<ide::GradientEditor*>(rig.panel.editor("Color", 1));
+    auto* picker = dynamic_cast<jadefx::ColorPicker*>(rig.panel.editor("Color", 2));
+    Expect(gradient != nullptr && picker != nullptr && picker->isVisible(), "the gradient editor and its stop color show");
+    if (gradient == nullptr || picker == nullptr || !picker->isVisible()) {
+        return;
+    }
+    rig.click(picker);
+    rig.frame();
+    Expect(picker->isShowing(), "a click opens the chooser");
+    Pick(*picker, 0, 255, 0);
+    rig.frame();
+    Expect(SameColor(emitter->color().keys_a()[0].color, 0.f, 1.f, 0.f), "the stop takes the color while the chooser is open");
+    rig.key(jadefx::Key::Escape);
+    for (int i = 0; i < 4; ++i) {
+        rig.frame();
+    }
+    Expect(SameColor(emitter->color().keys_a()[0].color, 1.f, 0.f, 0.f), "Escape puts the stop back");
+    Expect(SameColor(gradient->model().curve().keys_a()[0].color, 1.f, 0.f, 0.f), "and the editor shows it again");
+    Expect(rig.undoDepth() == 0, "and records nothing");
+}
+
 // Bursts: typed as "time: count" pairs, a count being a number or two as 1 - 3.
 void TestBurstsRow() {
     const auto parsed = ide::parse_bursts_text("1.5: 10 - 20, 0: 50");
@@ -2201,6 +2243,7 @@ int main() {
     TestParticleEmitterRows();
     TestCurveEditModel();
     TestCurveRows();
+    TestGradientColorCancel();
     TestBurstsRow();
     TestCollisionGroupDropdown();
     TestAssetReferencePicker();

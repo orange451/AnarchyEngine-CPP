@@ -664,6 +664,7 @@ int ScriptBindings::instance_destroy(lua_State* state) {
 }
 
 int ScriptBindings::instance_clone(lua_State* state) {
+    PROFILE_SCOPE("Clone", profiler::Group::Engine);
     return lua_guard(state, [&] {
         auto* ud = static_cast<InstanceUd*>(luaL_checkudata(state, 1, kInstanceMeta));
         ScriptRuntime* runtime = runtime_from(state);

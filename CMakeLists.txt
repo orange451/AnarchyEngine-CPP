@@ -1127,6 +1127,7 @@ add_executable(sandbox
     sandbox/draw_batches_tests.cpp
     sandbox/parallel_render_tests.cpp
     sandbox/lod_tests.cpp
+    sandbox/guid_index_tests.cpp
     sandbox/event_args_tests.cpp
     sandbox/core_tests.cpp
     sandbox/archivable_tests.cpp

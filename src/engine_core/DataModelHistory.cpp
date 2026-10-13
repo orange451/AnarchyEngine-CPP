@@ -294,6 +294,7 @@ AuthoredRecord DataModel::capture_record(InstanceId id, bool subtree) const {
 void DataModel::apply_record_fields(const AuthoredRecord& record) {
     if (DataModel* object = instance(record.id)) {
         object->guid_ = record.guid.empty() ? make_guid() : record.guid;
+        index_guid(id_slot(record.id), object->guid_);
         object->extras_ = record.extras;
         // A reference to this GUID may have been waiting for it.
         state_->assemblies.guids_may_have_returned();

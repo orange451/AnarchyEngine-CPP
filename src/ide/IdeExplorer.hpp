@@ -96,9 +96,10 @@ protected:
     void layoutChildren() override;
 
 private:
-    // Preorder encoding of the live hierarchy. ids[0] is the explorer root.
-    // children[child_begins[i] .. + child_counts[i]] are that node's direct children.
-    // labels[i] is that instance's Name, copied while the read lock is held.
+    // Preorder encoding of the live hierarchy, as far down as rows are open.
+    // ids[0] is the explorer root. children[child_begins[i] .. + child_counts[i]]
+    // are that node's direct children. labels[i] is that instance's Name,
+    // copied while the read lock is held.
     struct Snapshot {
         std::vector<engine_core::InstanceId> ids;
         std::vector<std::uint32_t> child_counts;
@@ -107,6 +108,9 @@ private:
         std::vector<std::string> labels;
         // Class name of ids[i], copied while the read lock is held.
         std::vector<std::string> classes;
+        // 1 for a closed row with children, which are not read: its row holds
+        // a placeholder, so it can still be opened.
+        std::vector<std::uint8_t> closed;
 
         void clear();
         bool same_shape(const Snapshot& other) const;
@@ -127,6 +131,14 @@ private:
     void open_matches();
     // Opens the branches above each selected row, then place_reveal scrolls to one.
     void open_selection();
+    // Opens every branch above each of ids, found from the place's parents: a
+    // row already made now, one not made yet when the next read makes it.
+    void open_above(const std::vector<engine_core::InstanceId>& ids);
+    // Whether read_hierarchy reads id's children: always while filtering, for
+    // the root, and for an open row (or one to be made open).
+    bool reads_children(engine_core::InstanceId id, const engine_core::DataModel* object) const;
+    // Gives a closed row with unread children its one placeholder row.
+    void set_placeholder(jadefx::TreeItem& item, engine_core::InstanceId id);
     void place_reveal();
     bool find_id(const jadefx::TreeItem* item, engine_core::InstanceId& id) const;
     bool actions_for(engine_core::InstanceId id, std::vector<engine_core::ContextAction>& out) const;
@@ -186,6 +198,15 @@ private:
     std::unordered_map<engine_core::InstanceId, std::shared_ptr<jadefx::TreeItem>> items_;
     // items_ the other way round, so a click finds its instance without a scan.
     std::unordered_map<const jadefx::TreeItem*, engine_core::InstanceId> item_ids_;
+    // Each closed row's placeholder, kept so the row is not edited every read.
+    std::unordered_map<engine_core::InstanceId, std::shared_ptr<jadefx::TreeItem>> placeholders_;
+    // Rows to make open: ones dropped while open (their parent closed), and the
+    // branches above a selected instance that has no row yet.
+    std::unordered_set<engine_core::InstanceId> open_ids_;
+    // A row opened or closed since the last read, which reads the tree again.
+    bool open_changed_ = false;
+    // Frames open_selection has waited for selected rows to be read.
+    int reveal_tries_ = 0;
     std::unordered_set<engine_core::InstanceId> seen_;
     std::vector<engine_core::InstanceId> pending_;
     // sort_children's keys, kept to reuse their storage.

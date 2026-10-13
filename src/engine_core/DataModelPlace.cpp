@@ -178,7 +178,7 @@ void DataModel::retire_slot(std::uint32_t index, bool bump_generation) {
         part.instance->guid_.clear();
         part.instance->extras_.clear();
     }
-    release_to_pool(part);
+    release_to_pool(index, part);
     part.parent = kNoParent;
     part.first_child = 0;
     part.last_child = 0;
@@ -240,6 +240,7 @@ void DataModel::restore_record(const PlaceRecord& record) {
     set_tag(ecs_world(), live.entity, state_->ecs_ids.visual_only, record.visual_only);
     live.instance->name_ = record.name;
     live.instance->guid_ = record.guid;
+    index_guid(index, live.instance->guid_);
     live.instance->archivable_ = record.archivable;
     live.instance->extras_ = record.extras;
     const std::byte* bytes = record.extra.empty() ? nullptr : record.extra.data();

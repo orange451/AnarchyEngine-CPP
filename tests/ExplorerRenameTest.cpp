@@ -1203,6 +1203,50 @@ void TestEmptySpaceInsertsUnderTheRoot() {
 
 }  // namespace
 
+// The first row named name under item, at any depth.
+jadefx::TreeItem* find_row(jadefx::TreeItem& item, const std::string& name) {
+    for (const std::shared_ptr<jadefx::TreeItem>& child : item.getChildren().items()) {
+        if (child->getValue() == name) {
+            return child.get();
+        }
+        if (jadefx::TreeItem* found = find_row(*child, name)) {
+            return found;
+        }
+    }
+    return nullptr;
+}
+
+// A closed folder's children are not read: a thousand of them make no rows
+// until it opens, and none again once it closes.
+void TestClosedFolderReadsNothingUnderIt() {
+    Rig rig;
+    for (int i = 0; i < 1000; ++i) {
+        engine_core::Folder& leaf = rig.game.create<engine_core::Folder>();
+        rig.game.set_name(leaf.id(), "Leaf" + std::to_string(i));
+        rig.game.set_parent(leaf.id(), rig.ids[0]);
+    }
+    rig.frame(0.1);
+    jadefx::TreeView* tree = rig.tree();
+    jadefx::TreeItem* alpha = tree != nullptr ? find_row(*tree->getRoot(), "Alpha") : nullptr;
+    Expect(alpha != nullptr && !alpha->isExpanded(), "Alpha starts closed");
+    if (alpha == nullptr) {
+        return;
+    }
+    Expect(!alpha->isLeaf() && alpha->getChildren().size() == 1,
+           "closed, it holds one placeholder row, so it can still open");
+    Expect(find_row(*tree->getRoot(), "Leaf0") == nullptr, "and no row for any child");
+    alpha->setExpanded(true);
+    rig.frame(0.2);
+    rig.frame(0.3);
+    Expect(alpha->getChildren().size() == 1000, "opened, it reads its children");
+    Expect(rig.cell("Leaf0") != nullptr, "and shows them");
+    alpha->setExpanded(false);
+    rig.frame(0.4);
+    rig.frame(0.5);
+    Expect(alpha->getChildren().size() == 1 && find_row(*tree->getRoot(), "Leaf0") == nullptr,
+           "closed again, it drops them");
+}
+
 int main() {
     TestSlowClickRenames();
     TestEscapeCancels();
@@ -1256,6 +1300,7 @@ int main() {
     insert_list_suits_registered_parents();
     insert_refused_leaves_nothing();
     add_prefab_instance_places_named_game_object();
+    TestClosedFolderReadsNothingUnderIt();
     if (gFailures == 0) {
         std::printf("explorer tests passed\n");
         return 0;

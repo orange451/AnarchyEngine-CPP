@@ -791,9 +791,13 @@ private:
     static std::uint32_t take_storage(InstancePool& pool);
     // The object for id at storage: the one released there, reused, or a new one.
     DataModel* pooled_object(InstancePool& pool, std::uint32_t storage, InstanceId id);
-    // Gives a slot's object back to its pool and deletes its entity. The slot
-    // is no longer alive.
-    void release_to_pool(Slot& part);
+    // Gives slot index's object back to its pool and deletes its entity. The
+    // slot is no longer alive, and out of the GUID index.
+    void release_to_pool(std::uint32_t index, Slot& part);
+    // Puts slot index in the GUID index under guid, out from under the one it had.
+    void index_guid(std::uint32_t index, const std::string& guid);
+    // Takes slot index out of the GUID index.
+    void unindex_guid(std::uint32_t index);
     // Creates part's entity for id. Runs before the object is constructed or
     // reused, so construction can write its components.
     void issue_entity(Slot& part, InstanceId id);

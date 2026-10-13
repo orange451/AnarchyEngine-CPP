@@ -26,6 +26,20 @@ bool valid_guid(std::string_view guid) {
     return true;
 }
 
+namespace {
+
+// FNV-1a over a GUID's characters. Never 0, which marks a slot not in the index.
+std::uint64_t guid_hash(std::string_view guid) {
+    std::uint64_t hash = 1469598103934665603ull;
+    for (const char c : guid) {
+        hash ^= static_cast<unsigned char>(c);
+        hash *= 1099511628211ull;
+    }
+    return hash != 0 ? hash : 1;
+}
+
+}  // namespace
+
 std::string make_guid() {
     // One generator per thread. Seeded from the device, the clock, and the
     // thread, so two processes started together still diverge.
@@ -576,7 +590,40 @@ DataModel* DataModel::pooled_object(InstancePool& pool, std::uint32_t storage, I
     return object;
 }
 
-void DataModel::release_to_pool(Slot& part) {
+void DataModel::index_guid(std::uint32_t index, const std::string& guid) {
+    unindex_guid(index);
+    if (guid.empty()) {
+        return;
+    }
+    State& world = *state_;
+    if (world.slot_guid_hash.size() <= index) {
+        world.slot_guid_hash.resize(static_cast<std::size_t>(index) + 1, 0);
+    }
+    const std::uint64_t hash = guid_hash(guid);
+    const auto [found, added] = world.guid_slots.try_emplace(hash, index);
+    if (!added && found->second != index) {
+        // Another live slot holds this hash: the newer one is found by it, the
+        // other by a walk.
+        world.guid_index_exact = false;
+        found->second = index;
+    }
+    world.slot_guid_hash[index] = hash;
+}
+
+void DataModel::unindex_guid(std::uint32_t index) {
+    State& world = *state_;
+    if (index >= world.slot_guid_hash.size() || world.slot_guid_hash[index] == 0) {
+        return;
+    }
+    const auto found = world.guid_slots.find(world.slot_guid_hash[index]);
+    if (found != world.guid_slots.end() && found->second == index) {
+        world.guid_slots.erase(found);
+    }
+    world.slot_guid_hash[index] = 0;
+}
+
+void DataModel::release_to_pool(std::uint32_t index, Slot& part) {
+    unindex_guid(index);
     if (part.instance != nullptr) {
         part.instance->on_release();
     }
@@ -677,6 +724,7 @@ DataModel& DataModel::spawn(const SpawnOps& ops) {
     object->name_ = label != nullptr ? label : std::string();
     // Assigned once. A project load replaces it with the GUID from disk.
     object->guid_ = make_guid();
+    index_guid(index, object->guid_);
     object->extras_.clear();
     Slot& part = world.slots[index];
     part.pool = pool_index;
@@ -736,7 +784,7 @@ void DataModel::destroy(InstanceId id) {
     const std::vector<InstanceId> orphans = state_->script_host != nullptr ? get_children(id) : std::vector<InstanceId>{};
     detach_links(id, *part);
     release_signals(id);
-    release_to_pool(*part);
+    release_to_pool(index, *part);
     if (part->generation != kMaxGeneration) {
         ++part->generation;
         // A captured instance's slot waits for Stop, which brings it back there.
@@ -2248,6 +2296,9 @@ void DataModel::set_guid(InstanceId id, std::string guid) {
         return;
     }
     object->guid_ = std::move(guid);
+    if (id != 0) {
+        index_guid(id_slot(id), object->guid_);
+    }
     note_unrecorded_edit(id);
     state_->assemblies.guids_may_have_returned();
 }
@@ -2258,6 +2309,16 @@ std::optional<InstanceId> DataModel::find_guid(std::string_view guid) const {
     }
     if (state_->root != nullptr && state_->root->guid_ == guid) {
         return InstanceId{0};
+    }
+    const auto found = state_->guid_slots.find(guid_hash(guid));
+    if (found != state_->guid_slots.end()) {
+        const Slot& part = state_->slots[found->second];
+        if (part.alive && part.instance != nullptr && part.instance->guid_ == guid) {
+            return make_instance_id(part.generation, found->second);
+        }
+    }
+    if (state_->guid_index_exact) {
+        return std::nullopt;
     }
     const std::uint32_t count = slot_count();
     for (std::uint32_t index = 0; index < count; ++index) {

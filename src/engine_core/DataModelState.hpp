@@ -196,6 +196,14 @@ struct DataModel::State {
     // A Slot never moves: code may hold a Slot& while another instance is made.
     StableArray<Slot> slots;
     std::vector<std::uint32_t> free_list;
+    // The live instances by GUID, for find_guid: the slot holding each GUID,
+    // keyed by the GUID's hash, and the hash each slot was put in under (0 for
+    // none), so a slot comes out whatever its GUID reads by then. A hit is
+    // checked against the instance's own GUID. Once two live slots have shared
+    // a hash (one GUID twice, or two that collide), a miss walks every slot.
+    std::unordered_map<std::uint64_t, std::uint32_t> guid_slots;
+    std::vector<std::uint64_t> slot_guid_hash;
+    bool guid_index_exact = true;
     // How many instances this place may hold (DataModel::set_instance_capacity).
     std::size_t capacity = DataModel::kMaxInstances;
     // Declared before the pools so their destructors still see history.

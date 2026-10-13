@@ -594,6 +594,7 @@ add_library(anarchy_network STATIC
     src/network/Bits.cpp
     src/network/Packet.cpp
     src/network/Conditioner.cpp
+    src/network/Connection.cpp
     src/network/FlowControl.cpp
     src/network/PacketRing.cpp
     src/network/ReliableChannel.cpp
@@ -1198,6 +1199,7 @@ add_executable(sandbox
     sandbox/network_conditioner_tests.cpp
     sandbox/network_flow_tests.cpp
     sandbox/network_reliable_tests.cpp
+    sandbox/network_connection_tests.cpp
 )
 target_link_libraries(sandbox PRIVATE studio_core anarchy_network Catch2::Catch2WithMain)
 # The dense views tests check flecs state the engine keeps private.

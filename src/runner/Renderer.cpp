@@ -1324,19 +1324,21 @@ bool Renderer::draw(double x, double y, double width, double height, double scen
         skyReady_ = false;
         skyVisible_ = false;
         bool cubesReady = true;
-        PROFILE_SCOPE("Sky prepare", profiler::Group::Render);
-        if (hasSky && dynamicSkyDrawn()) {
-            skyReady_ = updateDynamicSkyLighting();
-            // Drawn straight from the shader every frame it is due, whether
-            // or not its lighting cube (skyReady_) is ready yet.
-            skyVisible_ = true;
-            prepareSky();
-        } else if (hasSky) {
-            const SceneSky& sky = lighting_.sky;
-            cubesReady = environment_.update(sky.image, sky.imageRevision, emptyVao_);
-            skyReady_ = cubesReady;
-            skyVisible_ = skyReady_;
-            prepareSky();
+        {
+            PROFILE_SCOPE("Sky prepare", profiler::Group::Render);
+            if (hasSky && dynamicSkyDrawn()) {
+                skyReady_ = updateDynamicSkyLighting();
+                // Drawn straight from the shader every frame it is due, whether
+                // or not its lighting cube (skyReady_) is ready yet.
+                skyVisible_ = true;
+                prepareSky();
+            } else if (hasSky) {
+                const SceneSky& sky = lighting_.sky;
+                cubesReady = environment_.update(sky.image, sky.imageRevision, emptyVao_);
+                skyReady_ = cubesReady;
+                skyVisible_ = skyReady_;
+                prepareSky();
+            }
         }
         glEnable(RT_GL_TEXTURE_CUBE_MAP_SEAMLESS);
 

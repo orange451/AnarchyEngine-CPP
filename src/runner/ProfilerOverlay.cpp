@@ -1,5 +1,8 @@
 #include "ProfilerOverlay.hpp"
 
+#include "ShaderFile.hpp"
+#include "gl.hpp"
+
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -383,8 +386,10 @@ void ProfilerOverlay::drawGraph(jadefx::Painter& painter, const profiler::Histor
         longest = std::max(longest, profiler::frame_ms(frame));
     }
     const double scale = std::ceil(longest / 5.0) * 5.0;
-    painter.fillRect(static_cast<float>(graph.x), static_cast<float>(graph.y), static_cast<float>(graph.w),
-                     static_cast<float>(graph.h), Color::rgb8(255, 255, 255, 8));
+    // The selection's marks reach a pixel past the bars and two below the graph.
+    RectCanvas& canvas = graphCanvas_;
+    canvas.begin(painter.pixelsPerPoint());
+    canvas.fill(graph.x, graph.y, graph.w, graph.h, Color::rgb8(255, 255, 255, 8));
     const std::size_t selected = follow_ ? count : selectedIn(history);
     for (std::size_t index = 0; index < count; ++index) {
         const double ms = profiler::frame_ms(history.frames[index]);
@@ -395,20 +400,19 @@ void ProfilerOverlay::drawGraph(jadefx::Painter& painter, const profiler::Histor
         if (hover) {
             color = kBarHover;
         }
-        const float bar_width = static_cast<float>(std::max(1.0, bar.w - (bar.w > 2.5 ? 1.0 : 0.0)));
-        painter.fillRect(static_cast<float>(bar.x), static_cast<float>(graph.y + graph.h - height), bar_width,
-                         static_cast<float>(height), color);
+        const double bar_width = std::max(1.0, bar.w - (bar.w > 2.5 ? 1.0 : 0.0));
+        canvas.fill(bar.x, graph.y + graph.h - height, bar_width, height, color);
         if (index == selected) {
-            painter.fillRect(static_cast<float>(bar.x) - 1, static_cast<float>(graph.y), bar_width + 2, 2, kText);
-            painter.fillRect(static_cast<float>(bar.x) - 1, static_cast<float>(graph.y + graph.h), bar_width + 2, 2,
-                             kText);
+            canvas.fill(bar.x - 1, graph.y, bar_width + 2, 2, kText);
+            canvas.fill(bar.x - 1, graph.y + graph.h, bar_width + 2, 2, kText);
         }
     }
     // The 16.6 ms budget, dashed.
     const double budget_y = graph.y + graph.h - std::min(1.0, profiler::kBudgetMs / scale) * graph.h;
     for (double dash = graph.x; dash < graph.x + graph.w; dash += 8) {
-        painter.fillRect(static_cast<float>(dash), static_cast<float>(budget_y), 4, 1, kBudget);
+        canvas.fill(dash, budget_y, 4, 1, kBudget);
     }
+    canvas.draw(painter);
     const double gutter = getAbsoluteX() + 6;
     label(painter, gutter, budget_y - 7, format("%.1f", profiler::kBudgetMs), kBudget, 10.f);
     label(painter, gutter, graph.y - 2, format("%.0f ms", scale), kMuted, 10.f);
@@ -457,16 +461,18 @@ void ProfilerOverlay::drawTimeline(jadefx::Painter& painter, const profiler::His
     painter.pushClip(static_cast<float>(plot.x), static_cast<float>(lower.y), static_cast<float>(plot.w),
                      static_cast<float>(lower.h));
     const std::size_t selected = selectedIn(history);
+    RectCanvas& canvas = timelineCanvas_;
+    canvas.begin(painter.pixelsPerPoint());
+    blockLabels_.clear();
     for (auto it = first_frame; it != history.frames.end() && it->start_ns < end; ++it) {
         const double fx = to_x(static_cast<double>(it->start_ns));
         for (double dash = plot.y; dash < plot.y + plot.h; dash += 6) {
-            painter.fillRect(static_cast<float>(fx), static_cast<float>(dash), 1, 3, Color::rgb8(242, 177, 52, 110));
+            canvas.fill(fx, dash, 1, 3, Color::rgb8(242, 177, 52, 110));
         }
         const std::size_t index = static_cast<std::size_t>(it - history.frames.begin());
         const double width = to_x(static_cast<double>(it->end_ns)) - fx;
         if (!follow_ && index == selected) {
-            painter.fillRect(static_cast<float>(fx), static_cast<float>(plot.y), static_cast<float>(width),
-                             static_cast<float>(plot.h), Color::rgb8(255, 255, 255, 10));
+            canvas.fill(fx, plot.y, width, plot.h, Color::rgb8(255, 255, 255, 10));
         }
         if (width > 60) {
             label(painter, fx + 3, plot.y + 1, format("%.1f ms", profiler::frame_ms(*it)),
@@ -524,11 +530,10 @@ void ProfilerOverlay::drawTimeline(jadefx::Painter& painter, const profiler::His
                 record.scope < history.scopes.size() ? history.scopes[record.scope].group : profiler::Group::Engine;
             const bool lit = highlight_ && record.scope == highlight_scope_ && record.cause == highlight_cause_;
             const Color color = blockColor(group, highlight_ && !lit);
-            painter.fillRect(static_cast<float>(x0), static_cast<float>(by), static_cast<float>(bw), kLane - 1, color);
+            canvas.fill(x0, by, bw, kLane - 1, color);
             if (lit) {
-                painter.fillRect(static_cast<float>(x0), static_cast<float>(by), static_cast<float>(bw), 1, kText);
-                painter.fillRect(static_cast<float>(x0), static_cast<float>(by + kLane - 2), static_cast<float>(bw), 1,
-                                 kText);
+                canvas.fill(x0, by, bw, 1, kText);
+                canvas.fill(x0, by + kLane - 2, bw, 1, kText);
             }
             if (bw > 26 && record.scope < history.scopes.size()) {
                 std::string text = history.scopes[record.scope].name;
@@ -540,14 +545,82 @@ void ProfilerOverlay::drawTimeline(jadefx::Painter& painter, const profiler::His
                     text = fits > 2 ? text.substr(0, fits - 1) + "\xE2\x80\xA6" : std::string();
                 }
                 if (!text.empty()) {
-                    painter.text(static_cast<float>(x0 + 3), static_cast<float>(by + 1), text, kFamily, 10.f,
-                                 labelColor(color));
+                    blockLabels_.push_back({x0 + 3, by + 1, std::move(text), labelColor(color)});
                 }
             }
             blocks_.push_back({{x0, by, bw, kLane - 1}, record, it->start_ns});
         }
     }
+    canvas.draw(painter);
+    for (const Label& label : blockLabels_) {
+        painter.text(static_cast<float>(label.x), static_cast<float>(label.y), label.text, kFamily, 10.f, label.color);
+    }
     painter.popClip();
+}
+
+void ProfilerOverlay::RectCanvas::begin(float pixelsPerPoint) {
+    scale_ = pixelsPerPoint > 0.f ? pixelsPerPoint : 1.f;
+    vertices_.clear();
+    rects_.clear();
+}
+
+void ProfilerOverlay::RectCanvas::fill(double x, double y, double w, double h, const Color& color) {
+    if (!(w > 0.0) || !(h > 0.0) || !(color.a > 0.f)) {
+        return;
+    }
+    rects_.push_back({static_cast<float>(x), static_cast<float>(y), static_cast<float>(w), static_cast<float>(h), color});
+    // On whole pixels, at least one each way.
+    const auto edge = [&](double at) { return static_cast<float>(std::lround(at * scale_)); };
+    const float x0 = edge(x);
+    const float y0 = edge(y);
+    const float x1 = std::max(edge(x + w), x0 + 1.f);
+    const float y1 = std::max(edge(y + h), y0 + 1.f);
+    const float corners[6][2] = {{x0, y0}, {x1, y0}, {x1, y1}, {x0, y0}, {x1, y1}, {x0, y1}};
+    for (const auto& corner : corners) {
+        vertices_.insert(vertices_.end(), {corner[0], corner[1], color.r, color.g, color.b, color.a});
+    }
+}
+
+void ProfilerOverlay::RectCanvas::draw(jadefx::Painter& painter) {
+    if (vertices_.empty()) {
+        return;
+    }
+    if (program_ == 0 && !failed_) {
+        program_ = LinkProgram(LoadShader("pipeline/overlay_rects.vert"), LoadShader("pipeline/overlay_rects.frag"),
+                               "Profiler rectangles");
+        failed_ = program_ == 0;
+        if (!failed_) {
+            viewport_ = glGetUniformLocation(program_, "uViewport");
+            glGenVertexArrays(1, &vao_);
+            glGenBuffers(1, &vbo_);
+            glBindVertexArray(vao_);
+            glBindBuffer(GL_ARRAY_BUFFER, vbo_);
+            const auto stride = static_cast<GLsizei>(6 * sizeof(float));
+            glEnableVertexAttribArray(0);
+            glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, stride, nullptr);
+            glEnableVertexAttribArray(1);
+            glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, stride, reinterpret_cast<const void*>(2 * sizeof(float)));
+            glBindVertexArray(0);
+        }
+    }
+    if (failed_) {
+        for (const Rect& rect : rects_) {
+            painter.fillRect(rect.x, rect.y, rect.w, rect.h, rect.color);
+        }
+        return;
+    }
+    // The UI's viewport is its framebuffer; its clip is the scissor, which holds here too.
+    GLint viewport[4] = {0, 0, 1, 1};
+    glGetIntegerv(GL_VIEWPORT, viewport);
+    glUseProgram(program_);
+    glUniform2f(viewport_, static_cast<float>(std::max(viewport[2], 1)), static_cast<float>(std::max(viewport[3], 1)));
+    glBindVertexArray(vao_);
+    glBindBuffer(GL_ARRAY_BUFFER, vbo_);
+    glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(vertices_.size() * sizeof(float)), vertices_.data(),
+                 RT_GL_STREAM_DRAW);
+    glBlendFunc(RT_GL_SRC_ALPHA, RT_GL_ONE_MINUS_SRC_ALPHA);
+    glDrawArrays(GL_TRIANGLES, 0, static_cast<GLsizei>(vertices_.size() / 6));
+    glBindVertexArray(0);
 }
 
 void ProfilerOverlay::drawTooltip(jadefx::Painter& painter, const profiler::History& history) {

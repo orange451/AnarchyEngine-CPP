@@ -129,6 +129,8 @@ set(STUDIO_SOURCES
     src/ide/IdePrefabEditor.cpp
     src/ide/IdeTerrainEditor.cpp
     src/ide/CollisionGroupsModel.cpp
+    src/ide/CurveEditModel.cpp
+    src/ide/CurveEditor.cpp
     src/ide/IdeCollisionGroups.cpp
     src/ide/PrefabModels.cpp
     src/ide/TerrainMaterials.cpp

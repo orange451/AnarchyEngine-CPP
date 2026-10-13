@@ -3,6 +3,7 @@
 #include "Assemblies.hpp"
 #include "AssetPicker.hpp"
 #include "ChangeFlag.hpp"
+#include "CurveEditor.hpp"
 #include "IdeIcons.hpp"
 #include "IdeResources.hpp"
 #include "LockWaits.hpp"
@@ -49,6 +50,10 @@ using engine_core::InstanceId;
 
 constexpr double kPad = 6;
 constexpr double kRowHeight = 24;
+
+// A row with an editor that opens under it.
+
+bool is_curve(PropertyKind kind) { return kind == PropertyKind::NumberCurve || kind == PropertyKind::ColorCurve; }
 constexpr double kRowGap = 2;
 constexpr double kIndent = 10;
 constexpr double kAxisGap = 4;
@@ -534,6 +539,9 @@ struct RowView {
     // A Transform's fold arrow, and the names of its Position and Orientation lines.
     std::shared_ptr<PropertyDisclosure> disclosure;
     std::shared_ptr<jadefx::Label> lines[2];
+    // A NumberCurve's or ColorCurve's editor, under the row while it is open.
+    std::shared_ptr<CurveEditor> curve;
+    std::shared_ptr<GradientEditor> gradient;
     bool tip_installed = false;
     // Where the last layout put the row in body, which scrolls.
     double top = 0;
@@ -546,7 +554,9 @@ struct RowView {
                                    static_cast<jadefx::Node*>(choice.get()),
                                    static_cast<jadefx::Node*>(disclosure.get()),
                                    static_cast<jadefx::Node*>(lines[0].get()),
-                                   static_cast<jadefx::Node*>(lines[1].get())}) {
+                                   static_cast<jadefx::Node*>(lines[1].get()),
+                                   static_cast<jadefx::Node*>(curve.get()),
+                                   static_cast<jadefx::Node*>(gradient.get())}) {
             if (node != nullptr) {
                 out.push_back(node);
             }
@@ -628,6 +638,8 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
     // Transform rows folded by name. A row is open until folded, and stays
     // folded across selections for the session.
     std::set<std::string> folded;
+    // The NumberCurve and ColorCurve rows whose editors are open, by name. Closed until opened.
+    std::set<std::string> opened_curves;
 
     // The page holds scroller, and scroller body, which holds every widget.
     std::shared_ptr<jadefx::ScrollPane> scroller;
@@ -1168,6 +1180,116 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
             }
             break;
         }
+        case PropertyKind::NumberCurve:
+        case PropertyKind::ColorCurve: {
+            // The arrow and the name open the editor under the row.
+            auto fold = [weak_self, weak_view](const jadefx::MouseEvent&) {
+                const auto self = weak_self.lock();
+                const auto row_view = weak_view.lock();
+                if (self && row_view) {
+                    self->toggle_fold(*row_view);
+                }
+            };
+            view->disclosure = jadefx::make<PropertyDisclosure>();
+            view->disclosure->open = opened_curves.count(row.name) != 0;
+            view->disclosure->setOnMouseClicked(fold);
+            body->getChildren().add(view->disclosure);
+            view->name->setCursor(jadefx::Cursor::Pointer);
+            view->name->setOnMouseClicked(fold);
+            // A NumberCurve's field takes "5" or "1 - 3"; a ColorCurve's only shows.
+            view->field = make_field(view, !row.writable || row.kind == PropertyKind::ColorCurve);
+            if (row.kind == PropertyKind::NumberCurve) {
+                view->curve = jadefx::make<CurveEditor>();
+                view->curve->setDisable(!row.writable);
+                view->curve->on_edit = [weak_self, weak_view](bool done) {
+                    const auto self = weak_self.lock();
+                    const auto row_view = weak_view.lock();
+                    if (self && row_view) {
+                        self->curve_edited(*row_view, done);
+                    }
+                };
+                view->curve->on_select = [weak_self, weak_view]() {
+                    const auto self = weak_self.lock();
+                    const auto row_view = weak_view.lock();
+                    if (self && row_view) {
+                        self->show_row(*row_view, row_view->row);
+                    }
+                };
+                body->getChildren().add(view->curve);
+                view->lines[0] = jadefx::make<jadefx::Label>("Key time, value");
+                view->lines[0]->getClassList().add("properties-name");
+                body->getChildren().add(view->lines[0]);
+                for (int axis = 0; axis < 2; ++axis) {
+                    view->axes[axis] = make_field(view, !row.writable, kFieldStyle);
+                }
+            } else {
+                view->gradient = jadefx::make<GradientEditor>();
+                view->gradient->setDisable(!row.writable);
+                view->gradient->on_edit = [weak_self, weak_view](bool done) {
+                    const auto self = weak_self.lock();
+                    const auto row_view = weak_view.lock();
+                    if (self && row_view) {
+                        self->gradient_edited(*row_view, done);
+                    }
+                };
+                view->gradient->on_select = [weak_self, weak_view]() {
+                    const auto self = weak_self.lock();
+                    const auto row_view = weak_view.lock();
+                    if (self && row_view) {
+                        self->show_row(*row_view, row_view->row);
+                    }
+                };
+                body->getChildren().add(view->gradient);
+                const char* const names[2] = {"Stop color", "Stop transparency"};
+                for (int line = 0; line < 2; ++line) {
+                    view->lines[line] = jadefx::make<jadefx::Label>(names[line]);
+                    view->lines[line]->getClassList().add("properties-name");
+                    body->getChildren().add(view->lines[line]);
+                }
+                view->color = jadefx::make<PropertyColor>();
+                view->color->setDisable(!row.writable);
+                view->color->on_live = [weak_self, weak_view]() {
+                    const auto self = weak_self.lock();
+                    const auto row_view = weak_view.lock();
+                    if (self && row_view) {
+                        self->stop_color(*row_view, false, true);
+                    }
+                };
+                view->color->on_done = [weak_self, weak_view](bool picked) {
+                    const auto self = weak_self.lock();
+                    const auto row_view = weak_view.lock();
+                    if (self && row_view) {
+                        self->stop_color(*row_view, true, picked);
+                    }
+                };
+                body->getChildren().add(view->color);
+                view->slider = jadefx::make<PropertySlider>(0.0, 1.0);
+                view->slider->setDisable(!row.writable);
+                view->slider->on_move = [weak_self, weak_view]() {
+                    const auto self = weak_self.lock();
+                    const auto row_view = weak_view.lock();
+                    if (self && row_view) {
+                        self->stop_transparency(*row_view, false, true);
+                    }
+                };
+                view->slider->on_done = [weak_self, weak_view](bool moved) {
+                    const auto self = weak_self.lock();
+                    const auto row_view = weak_view.lock();
+                    if (self && row_view) {
+                        self->stop_transparency(*row_view, true, moved);
+                    }
+                };
+                view->slider->on_commit = [weak_self, weak_view]() {
+                    const auto self = weak_self.lock();
+                    const auto row_view = weak_view.lock();
+                    if (self && row_view) {
+                        self->stop_transparency(*row_view, true, true);
+                    }
+                };
+                body->getChildren().add(view->slider);
+            }
+            break;
+        }
         case PropertyKind::Enum: {
             view->choice = jadefx::make<jadefx::ComboBox>();
             view->choice->getClassList().add("properties-choice");
@@ -1325,6 +1447,7 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
     // Whether a row's fields show: its category is open, and a Transform is unfolded.
     bool open(const RowView& view) const {
         return !folded_groups.count(view.row.group) &&
+               (!is_curve(view.row.kind) || opened_curves.count(view.row.name) != 0) &&
                (view.row.kind != PropertyKind::Transform || !folded.count(view.row.name));
     }
 
@@ -1403,6 +1526,13 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
 
     // Folding a row leaves any field in it, keeping what was typed.
     void toggle_fold(RowView& view) {
+        if (is_curve(view.row.kind)) {
+            if (opened_curves.erase(view.row.name) == 0) {
+                opened_curves.insert(view.row.name);
+            }
+            view.disclosure->open = open(view);
+            return;
+        }
         if (folded.erase(view.row.name) == 0) {
             folded.insert(view.row.name);
             for (PropertyField* field : view.fields()) {
@@ -1488,6 +1618,44 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
             view.check->setSelected(!row.mixed && row.value.flag);
             view.check->setIndeterminate(row.mixed);
             break;
+        case PropertyKind::NumberCurve: {
+            put(*view.field, row.mixed ? std::string() : row.value.text);
+            if (row.value.number_curve && !row.mixed) {
+                view.curve->show(*row.value.number_curve);
+            }
+            // The selected key's time and value, or nothing with none selected.
+            const CurveEditor& editor = *view.curve;
+            const auto& curve = editor.model().curve();
+            const auto& keys = editor.selected_which() == 1 ? curve.keys_b() : curve.keys_a();
+            const int key = editor.selected_key();
+            const bool keyed = key >= 0 && key < static_cast<int>(keys.size()) &&
+                               (curve.mode() == engine_core::NumberCurveMode::Curve ||
+                                curve.mode() == engine_core::NumberCurveMode::CurveRange);
+            put(*view.axes[0], keyed ? format_number(keys[static_cast<std::size_t>(key)].time) : std::string());
+            put(*view.axes[1], keyed ? format_number(keys[static_cast<std::size_t>(key)].value) : std::string());
+            break;
+        }
+        case PropertyKind::ColorCurve: {
+            put(*view.field, row.mixed ? std::string() : row.value.text);
+            if (row.value.color_curve && !row.mixed) {
+                view.gradient->show(*row.value.color_curve);
+            }
+            const GradientEditor& editor = *view.gradient;
+            const auto& curve = editor.model().curve();
+            const auto& keys = editor.selected_which() == 1 ? curve.keys_b() : curve.keys_a();
+            const int stop = editor.selected_stop();
+            if (stop >= 0 && stop < static_cast<int>(keys.size())) {
+                const engine_core::ColorKey& key = keys[static_cast<std::size_t>(stop)];
+                if (!view.color->isShowing()) {
+                    view.color->mixed = false;
+                    view.color->setValue(jadefx::Color::rgba(key.color.r, key.color.g, key.color.b, 1.f));
+                }
+                if (!view.slider->held()) {
+                    view.slider->show(key.transparency);
+                }
+            }
+            break;
+        }
         case PropertyKind::Color3:
             // An open chooser keeps the color being picked.
             if (view.color->isShowing()) {
@@ -1646,11 +1814,116 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
             target = {part == 0 ? value : 0.f, part == 1 ? value : 0.f, part == 2 ? value : 0.f};
             break;
         }
+        case PropertyKind::NumberCurve: {
+            const int axis = axis_of(view, field);
+            if (axis < 0) {
+                // The row's own field: a number, or two as 1 - 3.
+                auto curve = parse_curve_text(text);
+                if (!curve) {
+                    status = view.row.name + " takes a number, or two as 1 - 3";
+                    field.show(view.row.value.text);
+                    return;
+                }
+                edit.value.number_curve = std::make_shared<const engine_core::NumberCurve>(std::move(*curve));
+                break;
+            }
+            // The selected key's time (axis 0) or value (axis 1).
+            double typed = 0;
+            CurveEditor& editor = *view.curve;
+            const auto& curve = editor.model().curve();
+            const auto& keys = editor.selected_which() == 1 ? curve.keys_b() : curve.keys_a();
+            const int key = editor.selected_key();
+            if (!parse_number(text, typed) || key < 0 || key >= static_cast<int>(keys.size())) {
+                status = "A key's time and value are numbers";
+                show_row(view, view.row);
+                return;
+            }
+            const engine_core::NumberKey& now = keys[static_cast<std::size_t>(key)];
+            editor.model().move_key(editor.selected_which(), key, axis == 0 ? static_cast<float>(typed) : now.time,
+                                    axis == 1 ? static_cast<float>(typed) : now.value);
+            editor.sent();
+            edit.value.number_curve = std::make_shared<const engine_core::NumberCurve>(editor.model().curve());
+            break;
+        }
         default:
             return;
         }
         field.stack.reset(text);
         submit(view.ids, edit);
+    }
+
+    // The curve editor changed its curve: shown on the instances as a drag
+    // goes, one undo step when it ends.
+    void curve_edited(RowView& view, bool done) {
+        if (!view.row.writable) {
+            return;
+        }
+        PropertyEdit edit;
+        edit.property = view.row.name;
+        edit.kind = PropertyKind::NumberCurve;
+        edit.value.number_curve = std::make_shared<const engine_core::NumberCurve>(view.curve->model().curve());
+        if (done) {
+            finish_live(view.ids, edit, true);
+        } else {
+            preview(view.ids, edit);
+        }
+        show_row(view, view.row);
+    }
+
+    void gradient_edited(RowView& view, bool done) {
+        if (!view.row.writable) {
+            return;
+        }
+        PropertyEdit edit;
+        edit.property = view.row.name;
+        edit.kind = PropertyKind::ColorCurve;
+        edit.value.color_curve = std::make_shared<const engine_core::ColorCurve>(view.gradient->model().curve());
+        if (done) {
+            finish_live(view.ids, edit, true);
+        } else {
+            preview(view.ids, edit);
+        }
+        show_row(view, view.row);
+    }
+
+    // The selected stop takes the color picker's color: live while it is
+    // open, one step when it closes on a pick (commit), or back when not.
+    void stop_color(RowView& view, bool done, bool commit) {
+        if (!view.row.writable) {
+            return;
+        }
+        GradientEditor& editor = *view.gradient;
+        const jadefx::Color c = view.color->getValue();
+        editor.model().set_color(editor.selected_which(), editor.selected_stop(), engine_core::ColorRgb{c.r, c.g, c.b, 1.f});
+        editor.sent();
+        PropertyEdit edit;
+        edit.property = view.row.name;
+        edit.kind = PropertyKind::ColorCurve;
+        edit.value.color_curve = std::make_shared<const engine_core::ColorCurve>(editor.model().curve());
+        if (done) {
+            finish_live(view.ids, edit, commit);
+        } else {
+            preview(view.ids, edit);
+        }
+    }
+
+    void stop_transparency(RowView& view, bool done, bool commit) {
+        if (!view.row.writable) {
+            return;
+        }
+        GradientEditor& editor = *view.gradient;
+        editor.model().set_transparency(editor.selected_which(), editor.selected_stop(),
+                                        static_cast<float>(view.slider->getValue()));
+        editor.sent();
+        PropertyEdit edit;
+        edit.property = view.row.name;
+        edit.kind = PropertyKind::ColorCurve;
+        edit.value.color_curve = std::make_shared<const engine_core::ColorCurve>(editor.model().curve());
+        if (done) {
+            finish_live(view.ids, edit, commit);
+        } else {
+            preview(view.ids, edit);
+        }
     }
 
     void cancel_field(RowView& view, PropertyField& field) {
@@ -2120,6 +2393,48 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
                 }
                 break;
             }
+            case PropertyKind::NumberCurve:
+            case PropertyKind::ColorCurve: {
+                // The field on the name's line; open, the editor and the
+                // selected key's or stop's lines follow.
+                place(*view->disclosure, left + kPad + kIndent - kDisclosureWidth - 1, kDisclosureWidth, kRowHeight);
+                place(*view->field, editor_x, editor_width, kRowHeight);
+                const bool shown = open(*view);
+                jadefx::Node* editor = view->curve ? static_cast<jadefx::Node*>(view->curve.get())
+                                                   : static_cast<jadefx::Node*>(view->gradient.get());
+                const double editor_height = view->curve ? CurveEditor::kHeight : GradientEditor::kHeight;
+                if (!shown) {
+                    editor->setVisible(false);
+                    for (const auto& line : view->lines) {
+                        if (line) {
+                            line->setVisible(false);
+                        }
+                    }
+                    for (int axis = 0; axis < 2 && view->curve; ++axis) {
+                        view->axes[axis]->setVisible(false);
+                    }
+                    if (view->gradient) {
+                        view->color->setVisible(false);
+                        view->slider->setVisible(false);
+                    }
+                    break;
+                }
+                y += kRowHeight + kRowGap;
+                place(*editor, left + kPad + kIndent, inner - kIndent, editor_height);
+                y += editor_height + kRowGap;
+                place(*view->lines[0], left + kPad + 2 * kIndent, name_width - 2 * kIndent - 4, kRowHeight);
+                if (view->curve) {
+                    const double half = (editor_width - kAxisGap) / 2;
+                    place(*view->axes[0], editor_x, half, kRowHeight);
+                    place(*view->axes[1], editor_x + half + kAxisGap, half, kRowHeight);
+                } else {
+                    place(*view->color, editor_x, editor_width, kRowHeight);
+                    y += kRowHeight + kRowGap;
+                    place(*view->lines[1], left + kPad + 2 * kIndent, name_width - 2 * kIndent - 4, kRowHeight);
+                    place(*view->slider, editor_x, editor_width, kRowHeight);
+                }
+                break;
+            }
             case PropertyKind::Bool:
                 place(*view->check, editor_x, std::min(editor_width, kRowHeight), kRowHeight);
                 break;
@@ -2386,6 +2701,18 @@ jadefx::Node* PropertiesPanel::editor(const std::string& property, int part) con
             return part == 0 ? view->check.get() : nullptr;
         case PropertyKind::Enum:
             return part == 0 ? view->choice.get() : nullptr;
+        case PropertyKind::NumberCurve: {
+            // The field, the editor, the key's time and value, then the arrow.
+            jadefx::Node* const parts[] = {view->field.get(), view->curve.get(), view->axes[0].get(),
+                                           view->axes[1].get(), view->disclosure.get()};
+            return part >= 0 && part < 5 ? parts[part] : nullptr;
+        }
+        case PropertyKind::ColorCurve: {
+            // The field, the editor, the stop's color and transparency, then the arrow.
+            jadefx::Node* const parts[] = {view->field.get(), view->gradient.get(), view->color.get(),
+                                           view->slider.get(), view->disclosure.get()};
+            return part >= 0 && part < 5 ? parts[part] : nullptr;
+        }
         case PropertyKind::Color3:
             return part == 0 ? view->color.get() : nullptr;
         case PropertyKind::Ref:

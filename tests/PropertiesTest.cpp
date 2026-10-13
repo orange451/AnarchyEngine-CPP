@@ -2,6 +2,8 @@
 #include "ChangeHistoryService.hpp"
 #include "ide/PropertiesPanel.hpp"
 #include "ide/PropertySheet.hpp"
+#include "ide/CurveEditModel.hpp"
+#include "ide/CurveEditor.hpp"
 #include "SelectionService.hpp"
 
 #include "AssetInstances.hpp"
@@ -1376,6 +1378,153 @@ void TestInstanceDragIds() {
 
 // PhysicsObject's Shape is an Enum row, a dropdown of Enum.PhysicsShape's
 // items, and its Mesh row shows only while Shape is Hull.
+// The curve and gradient editors' model: keys added, moved, removed, and
+// modes switched, with nothing on screen.
+void TestCurveEditModel() {
+    using engine_core::CurveInterp;
+    using engine_core::NumberCurve;
+    using engine_core::NumberCurveMode;
+    std::string error;
+    ide::CurveEditModel model(*NumberCurve::keys({{0.f, 0.f}, {1.f, 1.f}}, error));
+    const int added = model.add_key(0, 0.5f, 3.f);
+    Expect(added == 1 && model.curve().keys_a().size() == 3, "add_key inserts in time order");
+    Expect(model.hit(0.5f, 3.f, 0.02f, 0.1f).key == 1, "hit finds the key under the pointer");
+    Expect(model.hit(0.25f, 1.5f, 0.02f, 0.1f).key == -1, "hit misses empty space");
+    const int moved = model.move_key(0, 1, 0.9f, 2.f);
+    Expect(moved == 1 && model.curve().keys_a()[1].time == 0.9f, "move_key moves a key");
+    const int passed = model.move_key(0, 1, 0.f, 2.f);
+    Expect(model.curve().keys_a()[passed].value == 2.f, "a key dragged past another keeps its index by value");
+    model.move_key(0, passed, 1.5f, 2.f);
+    Expect(model.curve().keys_a().back().time <= 1.f, "move_key keeps time within 0 to 1");
+    model.set_interp(0, 0, CurveInterp::Smooth);
+    Expect(model.curve().keys_a()[0].interp == CurveInterp::Smooth, "set_interp changes one key");
+    model.delete_key(0, 0);
+    model.delete_key(0, 0);
+    model.delete_key(0, 0);
+    Expect(model.curve().keys_a().size() == 1, "the last key is never deleted");
+
+    model.set_mode(NumberCurveMode::Range);
+    Expect(model.curve().mode() == NumberCurveMode::Range, "the mode converts to a Range");
+    model.set_mode(NumberCurveMode::CurveRange);
+    Expect(model.curve().mode() == NumberCurveMode::CurveRange && !model.curve().keys_b().empty(),
+           "a curve range gets two curves");
+    float low = 0;
+    float high = 0;
+    model.fit(low, high);
+    Expect(high - low >= 1.f, "fit is at least one unit tall");
+    model.set_mode(NumberCurveMode::Constant);
+    Expect(model.curve().mode() == NumberCurveMode::Constant, "and back to a Constant");
+
+    const auto five = ide::parse_curve_text("5");
+    Expect(five && *five == NumberCurve::constant(5.f), "typing a number makes a Constant");
+    const auto range = ide::parse_curve_text(" 1.5 - 3 ");
+    Expect(range && *range == NumberCurve::range(1.5f, 3.f), "typing two numbers makes a Range");
+    const auto negative = ide::parse_curve_text("-2 - -1");
+    Expect(negative && *negative == NumberCurve::range(-2.f, -1.f), "negative ends parse");
+    Expect(!ide::parse_curve_text("fast"), "words are refused");
+
+    using engine_core::ColorCurve;
+    ide::GradientEditModel gradient(ColorCurve::constant(engine_core::ColorRgb{1.f, 0.f, 0.f, 1.f}, 0.f));
+    gradient.set_mode(engine_core::ColorCurveMode::Gradient);
+    Expect(gradient.curve().mode() == engine_core::ColorCurveMode::Gradient && gradient.curve().keys_a().size() == 2,
+           "a gradient starts with two stops");
+    const int stop = gradient.add_stop(0, 0.5f);
+    Expect(gradient.curve().keys_a().size() == 3 && gradient.curve().keys_a()[stop].time == 0.5f, "add_stop");
+    gradient.set_color(0, stop, engine_core::ColorRgb{0.f, 1.f, 0.f, 1.f});
+    gradient.set_transparency(0, stop, 0.5f);
+    Expect(gradient.curve().keys_a()[stop].color.g == 1.f && gradient.curve().keys_a()[stop].transparency == 0.5f,
+           "a stop's color and transparency change");
+    Expect(gradient.hit(0, 0.5f, 0.02f) == stop, "hit finds a stop");
+    gradient.delete_stop(0, stop);
+    gradient.delete_stop(0, 0);
+    Expect(gradient.curve().keys_a().size() == 1, "the last stop stays");
+}
+
+// A curve row: typed numbers, its editor's mode tabs and graph, and a
+// gradient row's tabs, each one undo step.
+void TestCurveRows() {
+    Rig rig;
+    const InstanceId id = rig.add<engine_core::ParticleEmitter>("Emitter");
+    auto* emitter = dynamic_cast<engine_core::ParticleEmitter*>(rig.game.instance(id));
+    rig.select({id});
+    rig.frame();
+    // Size and Color sit near the bottom of an emitter's rows: scrolled into view.
+    const auto bottom = [&rig] {
+        rig.panel.scroll_pane()->setVvalue(rig.panel.scroll_pane()->getVmax());
+        rig.frame();
+    };
+    bottom();
+    rig.typeInto("Size", "2 - 4");
+    rig.enter();
+    rig.frame();
+    rig.frame();
+    Expect(emitter->size() == engine_core::NumberCurve::range(2.f, 4.f), "typing 2 - 4 makes a Range");
+    Expect(rig.game.history().can_undo().second == "Set Size", "one step named Set Size");
+    rig.typeInto("Size", "fast");
+    rig.enter();
+    rig.frame();
+    Expect(emitter->size() == engine_core::NumberCurve::range(2.f, 4.f), "words change nothing");
+
+    auto* editor = dynamic_cast<ide::CurveEditor*>(rig.panel.editor("Size", 1));
+    Expect(editor != nullptr && !editor->isVisible(), "the curve editor starts closed");
+    rig.click(rig.panel.editor("Size", 4));
+    rig.frame();
+    rig.frame();
+    bottom();
+    Expect(editor != nullptr && editor->isVisible(), "the arrow opens it");
+    if (editor == nullptr || !editor->isVisible()) {
+        return;
+    }
+    const ide::CurveEditor::Rect tab = editor->mode_tab(2);
+    rig.scene->noteButton(0, true, tab.x + tab.w / 2, tab.y + tab.h / 2);
+    rig.scene->noteButton(0, false, tab.x + tab.w / 2, tab.y + tab.h / 2);
+    rig.frame();
+    rig.frame();
+    Expect(emitter->size().mode() == engine_core::NumberCurveMode::Curve, "the Curve tab makes a Curve");
+    const std::size_t keys = emitter->size().keys_a().size();
+    bottom();
+    // A double-click on the graph adds a key there.
+    const ide::CurveEditor::Rect graph = editor->graph();
+    const double gx = graph.x + graph.w * 0.5;
+    const double gy = graph.y + graph.h * 0.4;   // a positive Size
+    for (int click = 0; click < 2; ++click) {
+        rig.scene->noteButton(0, true, gx, gy);
+        rig.scene->noteButton(0, false, gx, gy);
+    }
+    rig.frame();
+    rig.frame();
+    Expect(emitter->size().keys_a().size() == keys + 1, "a double-click adds a key");
+    Expect(rig.text("Size", 2) == "0.5", "the new key's time shows");
+    rig.typeInto("Size", "3", 3);
+    rig.enter();
+    rig.frame();
+    rig.frame();
+    bool typed = false;
+    for (const engine_core::NumberKey& key : emitter->size().keys_a()) {
+        typed = typed || (key.time == 0.5f && key.value == 3.f);
+    }
+    Expect(typed, "typing a value moves the key");
+    rig.game.history().undo();
+    Expect(emitter->size().keys_a().size() == keys + 1, "undo takes back only the typed value");
+
+    rig.click(rig.panel.editor("Color", 4));
+    rig.frame();
+    rig.frame();
+    bottom();
+    auto* gradient = dynamic_cast<ide::GradientEditor*>(rig.panel.editor("Color", 1));
+    Expect(gradient != nullptr && gradient->isVisible(), "the Color row opens its gradient editor");
+    if (gradient == nullptr || !gradient->isVisible()) {
+        return;
+    }
+    const ide::GradientEditor::Rect gtab = gradient->mode_tab(2);
+    rig.scene->noteButton(0, true, gtab.x + gtab.w / 2, gtab.y + gtab.h / 2);
+    rig.scene->noteButton(0, false, gtab.x + gtab.w / 2, gtab.y + gtab.h / 2);
+    rig.frame();
+    rig.frame();
+    Expect(emitter->color().mode() == engine_core::ColorCurveMode::Gradient, "the Gradient tab makes a gradient");
+    Expect(rig.game.history().can_undo().second == "Set Color", "named Set Color");
+}
+
 // A ParticleEmitter's curve rows show, its rules hide and grey rows, and a
 // greyed row cannot be edited from the panel.
 void TestParticleEmitterRows() {
@@ -2006,6 +2155,8 @@ int main() {
     TestSoundPreviewStops();
     TestEnumRowAndShownWhen();
     TestParticleEmitterRows();
+    TestCurveEditModel();
+    TestCurveRows();
     TestCollisionGroupDropdown();
     TestAssetReferencePicker();
     TestR1SingleSelectionEditsName();

@@ -1,6 +1,7 @@
 #include "PropertySheet.hpp"
 
 #include "ChangeHistoryService.hpp"
+#include "CurveJson.hpp"
 #include "ParticleBursts.hpp"
 #include "LuaApi.hpp"
 #include "PropertyBag.hpp"
@@ -162,6 +163,14 @@ bool read_value(DataModel& world, DataModel& object, const LuaField& field, Prop
         }
         out.ref = slot.id;
         return slot.kind == LuaSlot::Kind::Instance;
+    case PropertyKind::NumberCurve:
+        out.number_curve = slot.number_curve;
+        out.text = slot.number_curve ? curve_summary(*slot.number_curve) : std::string();
+        return slot.kind == LuaSlot::Kind::NumberCurve && slot.number_curve != nullptr;
+    case PropertyKind::ColorCurve:
+        out.color_curve = slot.color_curve;
+        out.text = slot.color_curve ? color_curve_summary(*slot.color_curve) : std::string();
+        return slot.kind == LuaSlot::Kind::ColorCurve && slot.color_curve != nullptr;
     case PropertyKind::ReadOnlyText:
         if (field.type_name != nullptr && std::string_view(field.type_name) == "ParticleBursts") {
             std::string error;
@@ -205,6 +214,14 @@ void merge(PropertyRow& row, const PropertyValue& next) {
     case PropertyKind::String:
     case PropertyKind::ReadOnlyText:
         row.mixed = row.mixed || row.value.text != next.text;
+        break;
+    case PropertyKind::NumberCurve:
+        row.mixed = row.mixed || !(row.value.number_curve && next.number_curve &&
+                                   *row.value.number_curve == *next.number_curve);
+        break;
+    case PropertyKind::ColorCurve:
+        row.mixed = row.mixed || !(row.value.color_curve && next.color_curve &&
+                                   *row.value.color_curve == *next.color_curve);
         break;
     case PropertyKind::Bool:
         row.mixed = row.mixed || row.value.flag != next.flag;
@@ -317,6 +334,12 @@ std::vector<InstanceId> instance_drag_ids(std::string_view text) {
     return out;
 }
 
+// Both empty, or both holding equal curves.
+template <class Curve>
+bool same_curve(const std::shared_ptr<const Curve>& a, const std::shared_ptr<const Curve>& b) {
+    return a == b || (a && b && *a == *b);
+}
+
 bool PropertyRow::operator==(const PropertyRow& other) const {
     if (!same_slot(other) || writable != other.writable || enabled != other.enabled || mixed != other.mixed ||
         label != other.label || path != other.path || choices != other.choices || choices_more != other.choices_more) {
@@ -333,7 +356,8 @@ bool PropertyRow::operator==(const PropertyRow& other) const {
            value.color.b == other.value.color.b && value.ref == other.value.ref &&
            engine_core::same_matrix4(value.transform, other.value.transform) &&
            value.orientation.x == other.value.orientation.x && value.orientation.y == other.value.orientation.y &&
-           value.orientation.z == other.value.orientation.z;
+           value.orientation.z == other.value.orientation.z && same_curve(value.number_curve, other.value.number_curve) &&
+           same_curve(value.color_curve, other.value.color_curve);
 }
 
 bool PropertyRow::same_slot(const PropertyRow& other) const {
@@ -371,8 +395,12 @@ bool property_kind_for(const std::string& type_name, PropertyKind& out) {
         out = PropertyKind::Transform;
     } else if (type_name == "EnumItem") {
         out = PropertyKind::Enum;
-    } else if (type_name == "NumberCurve" || type_name == "ColorCurve" || type_name == "ParticleBursts") {
-        // Shown as a summary until the curve editors take them.
+    } else if (type_name == "NumberCurve") {
+        out = PropertyKind::NumberCurve;
+    } else if (type_name == "ColorCurve") {
+        out = PropertyKind::ColorCurve;
+    } else if (type_name == "ParticleBursts") {
+        // Shown as a summary until the Bursts row takes it.
         out = PropertyKind::ReadOnlyText;
     } else {
         return false;
@@ -742,6 +770,18 @@ EditResult write_edit(DataModel& world, const std::vector<InstanceId>& ids, cons
                 slot.kind = LuaSlot::Kind::Instance;
                 slot.id = edit.value.ref;
             }
+            break;
+        case PropertyKind::NumberCurve:
+            if (!edit.value.number_curve) {
+                continue;
+            }
+            slot = engine_core::number_curve_slot(*edit.value.number_curve);
+            break;
+        case PropertyKind::ColorCurve:
+            if (!edit.value.color_curve) {
+                continue;
+            }
+            slot = engine_core::color_curve_slot(*edit.value.color_curve);
             break;
         case PropertyKind::ReadOnlyText:
             continue;

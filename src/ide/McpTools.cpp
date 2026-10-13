@@ -1,5 +1,7 @@
 #include "McpTools.hpp"
 
+#include "CurveJson.hpp"
+
 #include "profiler/ProfileJson.hpp"
 #include "profiler/Profiler.hpp"
 
@@ -281,6 +283,10 @@ const char* KindName(PropertyKind kind) {
             return "string";
         case PropertyKind::Enum:
             return "EnumItem";
+        case PropertyKind::NumberCurve:
+            return "NumberCurve";
+        case PropertyKind::ColorCurve:
+            return "ColorCurve";
     }
     return "string";
 }
@@ -292,6 +298,10 @@ JsonValue FloatTriple(engine_core::Vec3 value) {
 
 JsonValue RowValue(const DataModel& world, const PropertyRow& row) {
     switch (row.kind) {
+        case PropertyKind::NumberCurve:
+            return row.value.number_curve ? engine_core::number_curve_to_json(*row.value.number_curve) : JsonValue();
+        case PropertyKind::ColorCurve:
+            return row.value.color_curve ? engine_core::color_curve_to_json(*row.value.color_curve) : JsonValue();
         case PropertyKind::String:
         case PropertyKind::ReadOnlyText:
             return JsonValue::string(row.value.text);
@@ -488,6 +498,28 @@ PropertyEdit EditFor(const DataModel& world, const PropertyRow& row, const JsonV
                 throw std::runtime_error(row.name + " takes one of: " + names + ".");
             }
             edit.value.number = item;
+            break;
+        }
+        case PropertyKind::NumberCurve: {
+            // A number is a Constant; otherwise the curve as a project file holds it.
+            std::string why;
+            auto curve = value.is_number()
+                             ? std::optional<engine_core::NumberCurve>(
+                                   engine_core::NumberCurve::constant(static_cast<float>(value.as_number())))
+                             : engine_core::number_curve_from_json(value, why);
+            if (!curve) {
+                throw std::runtime_error(row.name + " takes a number or a NumberCurve object: " + why + ".");
+            }
+            edit.value.number_curve = std::make_shared<const engine_core::NumberCurve>(std::move(*curve));
+            break;
+        }
+        case PropertyKind::ColorCurve: {
+            std::string why;
+            auto curve = engine_core::color_curve_from_json(value, why);
+            if (!curve) {
+                throw std::runtime_error(row.name + " takes a ColorCurve object: " + why + ".");
+            }
+            edit.value.color_curve = std::make_shared<const engine_core::ColorCurve>(std::move(*curve));
             break;
         }
     }

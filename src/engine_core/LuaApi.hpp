@@ -350,8 +350,11 @@ void lua_class_operators(const char* class_name, std::vector<LuaOperator>& out);
 // Base members first. A derived field with the same name replaces the base one.
 void lua_class_members(const char* class_name, std::vector<LuaField>& out);
 // The saved properties (lua_saved_property) of a class and its bases, in
-// lua_class_members order. Kept per class until the registry moves, since a
-// place capture asks for every instance. Any thread.
+// lua_class_members order: one shared list per class until the registry
+// moves, so a place capture or a project read, which ask for every
+// instance, copy nothing. Any thread.
+std::shared_ptr<const std::vector<LuaField>> lua_saved_field_list(const char* class_name);
+// lua_saved_field_list's fields, copied.
 std::vector<LuaField> lua_saved_fields(const char* class_name);
 // Fields registered on this class only. Inherited fields are not included.
 void lua_class_own_members(const char* class_name, std::vector<LuaField>& out);

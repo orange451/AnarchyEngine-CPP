@@ -228,7 +228,8 @@ void remap_references(DataModel& world, const CopyMap& map) {
             named1 = !rigid->pv_instance1_ref().guid().empty();
             named2 = !rigid->pv_instance2_ref().guid().empty();
         }
-        for (const LuaField& field : lua_saved_fields(object->class_name())) {
+        const std::shared_ptr<const std::vector<LuaField>> fields = lua_saved_field_list(object->class_name());
+        for (const LuaField& field : *fields) {
             if (field.read == nullptr || field.write == nullptr || reference_class(field.type_name).empty()) {
                 continue;
             }

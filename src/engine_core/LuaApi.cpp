@@ -230,11 +230,11 @@ void lua_class_members(const char* class_name, std::vector<LuaField>& out) {
     collect(class_name, out, 0);
 }
 
-std::vector<LuaField> lua_saved_fields(const char* class_name) {
+std::shared_ptr<const std::vector<LuaField>> lua_saved_field_list(const char* class_name) {
     struct Cache {
         std::mutex mu;
         std::uint64_t revision = ~std::uint64_t{0};
-        std::unordered_map<std::string, std::vector<LuaField>> by_class;
+        std::unordered_map<std::string, std::shared_ptr<const std::vector<LuaField>>> by_class;
     };
     static Cache cache;
     const std::string key = class_name != nullptr ? class_name : "";
@@ -250,15 +250,17 @@ std::vector<LuaField> lua_saved_fields(const char* class_name) {
     }
     std::vector<LuaField> members;
     collect(class_name, members, 0);
-    std::vector<LuaField> saved;
+    auto saved = std::make_shared<std::vector<LuaField>>();
     for (const LuaField& field : members) {
         if (field.saved && !field.method && field.read != nullptr && field.write != nullptr) {
-            saved.push_back(field);
+            saved->push_back(field);
         }
     }
     cache.by_class.emplace(key, saved);
     return saved;
 }
+
+std::vector<LuaField> lua_saved_fields(const char* class_name) { return *lua_saved_field_list(class_name); }
 
 const LuaField* lua_class_find(const char* class_name, std::string_view name) {
     const ClassRecord* record = find_class_const(class_name);

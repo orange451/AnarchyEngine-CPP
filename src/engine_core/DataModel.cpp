@@ -2375,13 +2375,13 @@ bool write_saved(DataModel& world, DataModel& object, const LuaField& field, con
 }  // namespace
 
 void DataModel::write_place(std::vector<std::byte>& out) const {
-    const std::vector<LuaField> fields = lua_saved_fields(class_name());
-    if (fields.empty()) {
+    const std::shared_ptr<const std::vector<LuaField>> fields = lua_saved_field_list(class_name());
+    if (fields->empty()) {
         return;
     }
     // Every saved property, defaults too, as the JSON a file would hold.
     JsonValue values = JsonValue::object();
-    for (const LuaField& field : fields) {
+    for (const LuaField& field : *fields) {
         JsonValue value;
         if (saved_value(*state_->root, *this, field, value)) {
             values.set(field.name, std::move(value));
@@ -2393,8 +2393,8 @@ void DataModel::write_place(std::vector<std::byte>& out) const {
 }
 
 void DataModel::read_place(const std::byte* data, std::size_t size) {
-    const std::vector<LuaField> fields = lua_saved_fields(class_name());
-    if (fields.empty()) {
+    const std::shared_ptr<const std::vector<LuaField>> fields = lua_saved_field_list(class_name());
+    if (fields->empty()) {
         return;
     }
     JsonValue values = JsonValue::object();
@@ -2402,7 +2402,7 @@ void DataModel::read_place(const std::byte* data, std::size_t size) {
     if (data != nullptr && size != 0) {
         parse_json(std::string(reinterpret_cast<const char*>(data), size), values, message);
     }
-    for (const LuaField& field : fields) {
+    for (const LuaField& field : *fields) {
         const JsonValue* value = values.is_object() ? values.find(field.name) : nullptr;
         std::string error;
         write_saved(*state_->root, *this, field, value != nullptr ? *value : saved_default(field), error);
@@ -2410,7 +2410,8 @@ void DataModel::read_place(const std::byte* data, std::size_t size) {
 }
 
 void DataModel::save_properties(PropertyBag& out) const {
-    for (const LuaField& field : lua_saved_fields(class_name())) {
+    const std::shared_ptr<const std::vector<LuaField>> fields = lua_saved_field_list(class_name());
+    for (const LuaField& field : *fields) {
         JsonValue value;
         if (saved_value(*state_->root, *this, field, value) && !(value == saved_default(field))) {
             bag_set(out, field.name, std::move(value));
@@ -2429,7 +2430,8 @@ void DataModel::save_properties(PropertyBag& out) const {
 }
 
 void DataModel::default_properties(PropertyBag& out) const {
-    for (const LuaField& field : lua_saved_fields(class_name())) {
+    const std::shared_ptr<const std::vector<LuaField>> fields = lua_saved_field_list(class_name());
+    for (const LuaField& field : *fields) {
         bag_set(out, field.name, saved_default(field));
     }
     const Slot* part = slot(id_);
@@ -2441,7 +2443,8 @@ void DataModel::default_properties(PropertyBag& out) const {
 }
 
 bool DataModel::load_property(const std::string& key, const JsonValue& value, std::string& error) {
-    for (const LuaField& field : lua_saved_fields(class_name())) {
+    const std::shared_ptr<const std::vector<LuaField>> fields = lua_saved_field_list(class_name());
+    for (const LuaField& field : *fields) {
         if (key == field.name) {
             write_saved(*state_->root, *this, field, value, error);
             return true;

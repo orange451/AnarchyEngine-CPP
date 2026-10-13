@@ -8,3 +8,6 @@ build-*/
 
 # ctest scratch output.
 Testing/
+
+# Python bytecode from the tools/ scripts.
+__pycache__/

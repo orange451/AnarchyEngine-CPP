@@ -592,6 +592,8 @@ target_link_libraries(profiler PUBLIC Threads::Threads)
 # resources hash in the handshake is zstd's bundled XXH64.
 add_library(anarchy_network STATIC
     src/network/Bits.cpp
+    src/network/Packet.cpp
+    src/network/PacketRing.cpp
 )
 target_include_directories(anarchy_network PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src/network")
 target_compile_features(anarchy_network PUBLIC cxx_std_17)
@@ -1186,6 +1188,7 @@ add_executable(sandbox
     sandbox/animation_tests.cpp
     sandbox/animator_tests.cpp
     sandbox/network_bits_tests.cpp
+    sandbox/network_ring_tests.cpp
 )
 target_link_libraries(sandbox PRIVATE studio_core anarchy_network Catch2::Catch2WithMain)
 # The dense views tests check flecs state the engine keeps private.

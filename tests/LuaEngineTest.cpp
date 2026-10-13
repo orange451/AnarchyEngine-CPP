@@ -261,6 +261,40 @@ void expectChunkError(runner::Runner& runner, const char* source, const char* ne
 }
 
 // Roblox's Color3: constructors, channels, conversions, and a Color property taking one.
+void testCurves() {
+    runner::Runner runner;
+    runner.start();
+    expectPrinted(runner, "local c = NumberCurve.new(5) print(c.Mode, c:Evaluate(0.3), typeof(c))",
+                  "Constant\t5\tNumberCurve", "NumberCurve.new is a constant");
+    expectPrinted(runner, "print(NumberCurve.range(1, 3):Evaluate(0, 0.5), NumberCurve.range(1, 3).Max)", "2\t3",
+                  "a range blends");
+    expectPrinted(runner,
+                  "local c = NumberCurve.keys({{1, 0}, {0, 0}, {0.5, 4, 'Step'}}) "
+                  "print(#c.Keys, c.Keys[1].Time, c:Evaluate(0.75), c.Keys[2].Interpolation)",
+                  "3\t0\t4\tStep", "keys sort and step holds");
+    expectPrinted(runner, "print(NumberCurve.keysRange({{0, 0}}, {{0, 10}}):Evaluate(0.5, 0.25))", "2.5",
+                  "a curve range blends its curves");
+    expectPrinted(runner, "print(NumberCurve.new(1) == NumberCurve.new(1), NumberCurve.new(1) == NumberCurve.new(2))",
+                  "true\tfalse", "curves compare by value");
+    expectChunkError(runner, "NumberCurve.keys({})", "at least one key", "no keys is refused");
+    expectChunkError(runner, "NumberCurve.keys({{2, 0}})", "between 0 and 1", "a time outside 0..1 is refused");
+    expectChunkError(runner, "NumberCurve.keys({{0, 0, 'Wobbly'}})", "interpolation", "an unknown interpolation");
+    expectChunkError(runner, "NumberCurve.keys({{0, 0/0}})", "finite", "NaN is refused");
+    expectChunkError(runner, "NumberCurve.keys({5})", "key 1", "a key that is not a table");
+    expectChunkError(runner, "local c = NumberCurve.new(1) c.Mode = 'Range'", "cannot be assigned",
+                     "NumberCurve is read-only");
+    expectPrinted(runner,
+                  "local g = ColorCurve.gradient({{0, Color3.new(1, 0, 0)}, {1, Color3.new(0, 0, 1), 1}}) "
+                  "local c, t = g:Evaluate(0.5) print(c.R, c.B, t, typeof(g), g.Mode, #g.Keys)",
+                  "0.5\t0.5\t0.5\tColorCurve\tGradient\t2", "a gradient blends color and transparency");
+    expectPrinted(runner,
+                  "local b = ColorCurve.between(Color3.new(1, 0, 0), 0, Color3.new(0, 1, 0), 0) "
+                  "local c = b:Evaluate(0, 1) print(c.G, b.Mode, ColorCurve.new(Color3.new(1, 1, 1)).Mode)",
+                  "1\tRandomBetween\tConstant", "between and new");
+    expectChunkError(runner, "ColorCurve.gradient({{0, 5}})", "Color3", "a key needs a Color3");
+    runner.stop();
+}
+
 void testColor3() {
     runner::Runner runner;
     runner.start();
@@ -486,6 +520,7 @@ int main() {
         testMemory();
         testRunner();
         testColor3();
+        testCurves();
         testMatrix4();
         testContextActions();
         testInsertInstance();

@@ -583,6 +583,7 @@ target_link_libraries(profiler PUBLIC Threads::Threads)
 add_library(engine_datatypes STATIC
     src/engine_datatypes/Color3.cpp
     src/engine_datatypes/Curve.cpp
+    src/engine_datatypes/CurveLua.cpp
     src/engine_datatypes/Enum.cpp
     src/engine_datatypes/Matrix4.cpp
     src/engine_datatypes/Vector2.cpp

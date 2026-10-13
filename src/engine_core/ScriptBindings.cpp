@@ -9,6 +9,8 @@
 #include "Camera.hpp"
 #include "ChangeHistoryService.hpp"
 #include "Contract.hpp"
+#include "CurveJson.hpp"
+#include "CurveLua.hpp"
 #include "DynamicSky.hpp"
 #include "Enum.hpp"
 #include "Folder.hpp"
@@ -435,6 +437,12 @@ void push_registered(lua_State* state, ScriptRuntime* runtime, const LuaSlot& sl
     case LuaSlot::Kind::TouchObject:
         push_touch_object(state, slot.touch);
         return;
+    case LuaSlot::Kind::NumberCurve:
+        push_number_curve(state, slot.number_curve);
+        return;
+    case LuaSlot::Kind::ColorCurve:
+        push_color_curve(state, slot.color_curve);
+        return;
     case LuaSlot::Kind::Signal: {
         auto* signal = static_cast<SignalUd*>(lua_newuserdata(state, sizeof(SignalUd)));
         *signal = SignalUd{};
@@ -577,6 +585,29 @@ int ScriptBindings::instance_newindex(lua_State* state) {
                 luaL_error(state, "%s expects a Color3", field->name);
             }
             slot.kind = LuaSlot::Kind::Color;
+        } else if (type == "NumberCurve") {
+            // A number is a Constant, so `emitter.Rate = 50` works.
+            auto curve = to_number_curve(state, 3);
+            if (!curve && lua_isnumber(state, 3)) {
+                curve = std::make_shared<const NumberCurve>(NumberCurve::constant(static_cast<float>(lua_tonumber(state, 3))));
+            }
+            if (!curve) {
+                luaL_error(state, "%s expects a NumberCurve", field->name);
+            }
+            slot.kind = LuaSlot::Kind::NumberCurve;
+            slot.number_curve = std::move(curve);
+        } else if (type == "ColorCurve") {
+            // A Color3 is a Constant, opaque.
+            auto curve = to_color_curve(state, 3);
+            ColorRgb color;
+            if (!curve && read_color3(state, 3, color)) {
+                curve = std::make_shared<const ColorCurve>(ColorCurve::constant(color, 0.f));
+            }
+            if (!curve) {
+                luaL_error(state, "%s expects a ColorCurve", field->name);
+            }
+            slot.kind = LuaSlot::Kind::ColorCurve;
+            slot.color_curve = std::move(curve);
         } else if (type == "Matrix4") {
             const Matrix4* value = to_matrix4(state, 3);
             if (value == nullptr) {

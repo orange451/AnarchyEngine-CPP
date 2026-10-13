@@ -819,6 +819,47 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
         false, {P("goal", "Color3"), P("alpha", "number")});
     add("Color3", "ToHSV", "The hue, saturation, and value, each 0 to 1.", "number,number,number", false, {});
     add("Color3", "ToHex", "The hex code, RRGGBB in capitals without #.", "string", false, {});
+    add("", "NumberCurve",
+        "A number that is fixed, random within a range, keyed over time 0 to 1, or a random blend of two keyed "
+        "curves. new, range, keys, and keysRange build one. Read-only.",
+        nullptr, false, {});
+    add("NumberCurve", "new", "A number that is always value.", "NumberCurve", false, {P("value", "number")});
+    add("NumberCurve", "range", "A number picked at random between min and max, once per use, such as once per particle.",
+        "NumberCurve", false, {P("min", "number"), P("max", "number")});
+    add("NumberCurve", "keys",
+        "A curve through keys, each {time, value, interpolation?}: time from 0 to 1, interpolation \"Linear\" "
+        "(the default), \"Smooth\", or \"Step\". Keys are sorted by time; any number of keys is allowed.",
+        "NumberCurve", false, {P("keys", "{any}")});
+    add("NumberCurve", "keysRange", "Two curves, with a random blend between them picked once per use.",
+        "NumberCurve", false, {P("keys", "{any}"), P("keys2", "{any}")});
+    add("NumberCurve", "Mode", "\"Constant\", \"Range\", \"Curve\", or \"CurveRange\".", "string", false, {});
+    add("NumberCurve", "Min", "A Constant's value, or a Range's low end.", "number", false, {});
+    add("NumberCurve", "Max", "A Constant's value, or a Range's high end.", "number", false, {});
+    add("NumberCurve", "Keys", "The keys, as {Time, Value, Interpolation} tables. Empty for a Constant or Range.",
+        "{any}", false, {});
+    add("NumberCurve", "Keys2", "A CurveRange's second curve's keys.", "{any}", false, {});
+    add("NumberCurve", "Evaluate",
+        "The value at time t. blend, 0 to 1, picks within a Range or between a CurveRange's curves.", "number", false,
+        {P("t", "number"), P("blend", "number?")});
+    add("", "ColorCurve",
+        "A color and transparency that is fixed, one of two, keyed over time 0 to 1, or a random blend of two "
+        "gradients. new, between, gradient, and gradientRange build one. Read-only.",
+        nullptr, false, {});
+    add("ColorCurve", "new", "A color that is always color, with transparency 0 unless given.", "ColorCurve", false,
+        {P("color", "Color3"), P("transparency", "number?")});
+    add("ColorCurve", "between", "A color picked at random between two, once per use, such as once per particle.",
+        "ColorCurve", false,
+        {P("a", "Color3"), P("transparencyA", "number"), P("b", "Color3"), P("transparencyB", "number")});
+    add("ColorCurve", "gradient",
+        "A gradient through keys, each {time, Color3, transparency?}, time from 0 to 1. Keys are sorted by time.",
+        "ColorCurve", false, {P("keys", "{any}")});
+    add("ColorCurve", "gradientRange", "Two gradients, with a random blend between them picked once per use.",
+        "ColorCurve", false, {P("keys", "{any}"), P("keys2", "{any}")});
+    add("ColorCurve", "Mode", "\"Constant\", \"RandomBetween\", \"Gradient\", or \"GradientRange\".", "string", false, {});
+    add("ColorCurve", "Keys", "The keys, as {Time, Color, Transparency} tables.", "{any}", false, {});
+    add("ColorCurve", "Keys2", "The second color or gradient's keys.", "{any}", false, {});
+    add("ColorCurve", "Evaluate", "The Color3 and the transparency at time t; blend as NumberCurve:Evaluate.", nullptr,
+        false, {P("t", "number"), P("blend", "number?")});
 
     add("", "Vector2", "A 2D vector, such as a point on the screen. new builds one. Omitted components are 0.", nullptr, false,
         {});

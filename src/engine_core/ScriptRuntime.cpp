@@ -7,6 +7,7 @@
 
 #include "ChangeHistoryService.hpp"
 #include "Contract.hpp"
+#include "CurveLua.hpp"
 #include "Enum.hpp"
 #include "Folder.hpp"
 #include "GameObject.hpp"
@@ -779,6 +780,8 @@ void open_host_libraries(lua_State* state) {
 
     open_enum(state);
     open_color3(state);
+    open_number_curve(state);
+    open_color_curve(state);
     open_vector2(state);
     open_vector3(state);
     open_matrix4(state);

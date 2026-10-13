@@ -114,6 +114,11 @@ std::unique_ptr<UdpSocket> UdpSocket::open(std::uint16_t port, std::string& erro
         error = error_text(last_error());
         return nullptr;
     }
+    // Best effort: a busy server drains a burst of full packets per tick, and the default
+    // buffers would drop some of them.
+    const int buffer_bytes = 4 * 1024 * 1024;
+    setsockopt(handle, SOL_SOCKET, SO_RCVBUF, reinterpret_cast<const char*>(&buffer_bytes), sizeof(buffer_bytes));
+    setsockopt(handle, SOL_SOCKET, SO_SNDBUF, reinterpret_cast<const char*>(&buffer_bytes), sizeof(buffer_bytes));
     int off = 0;
     setsockopt(handle, IPPROTO_IPV6, IPV6_V6ONLY, reinterpret_cast<const char*>(&off), sizeof(off));
     sockaddr_in6 bind_address;
@@ -191,7 +196,8 @@ std::size_t UdpSocket::receive(Address& from, std::uint8_t* buffer, std::size_t 
             if (fatal(error)) failed_ = true;
             return 0;
         }
-        if (static_cast<std::size_t>(got) > capacity) continue;   // MSG_TRUNC: oversized, dropped
+        // MSG_TRUNC: oversized, dropped. An empty datagram is skipped too, since 0 means "nothing waiting".
+        if (got == 0 || static_cast<std::size_t>(got) > capacity) continue;
         from = from_sockaddr(address);
         return static_cast<std::size_t>(got);
     }

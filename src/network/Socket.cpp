@@ -202,7 +202,9 @@ public:
         while (slot != nullptr && !slot->queue.empty()) {
             LinkHub::State::Datagram datagram = std::move(slot->queue.front());
             slot->queue.pop_front();
-            if (datagram.bytes.size() > capacity) continue;   // dropped, as a socket drops an oversized datagram
+            // Dropped, as a socket drops an oversized datagram; an empty one is skipped too,
+            // since 0 means "nothing waiting" to the caller.
+            if (datagram.bytes.size() > capacity || datagram.bytes.empty()) continue;
             from = datagram.from;
             std::copy(datagram.bytes.begin(), datagram.bytes.end(), buffer);
             return datagram.bytes.size();

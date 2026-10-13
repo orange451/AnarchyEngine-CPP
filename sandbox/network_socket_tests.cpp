@@ -127,3 +127,34 @@ TEST_CASE("N24 opening a port twice fails with a message", "[network][socket]") 
     REQUIRE_FALSE(b);
     REQUIRE_FALSE(error.empty());
 }
+
+TEST_CASE("N25 the link skips a zero-length datagram instead of reporting nothing waiting", "[network][socket]") {
+    LinkHub hub;
+    auto a = hub.open(Address::loopback(1));
+    auto b = hub.open(Address::loopback(2));
+    const std::uint8_t three[3] = {7, 8, 9};
+    REQUIRE(a->send(Address::loopback(2), three, 0));
+    REQUIRE(a->send(Address::loopback(2), three, 3));
+    Address from;
+    std::uint8_t buffer[16];
+    REQUIRE(b->receive(from, buffer, sizeof(buffer)) == 3);
+    REQUIRE(std::memcmp(buffer, three, 3) == 0);
+}
+
+TEST_CASE("N26 a real UDP socket skips a zero-length datagram", "[network][socket]") {
+    std::string error;
+    auto a = UdpSocket::open(0, error);
+    if (!a) {
+        WARN("no socket: " << error);
+        return;
+    }
+    auto b = UdpSocket::open(0, error);
+    REQUIRE(b);
+    const std::uint8_t three[3] = {7, 8, 9};
+    REQUIRE(a->send(Address::loopback(b->port()), three, 0));
+    REQUIRE(a->send(Address::loopback(b->port()), three, 3));
+    Address from;
+    std::uint8_t buffer[16];
+    REQUIRE(wait_receive(*b, from, buffer, sizeof(buffer)) == 3);
+    REQUIRE(std::memcmp(buffer, three, 3) == 0);
+}

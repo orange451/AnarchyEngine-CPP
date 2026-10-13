@@ -1974,7 +1974,7 @@ bool IdeLayout::close_page(IdePane* page) {
     return false;
 }
 
-void IdeLayout::sync_plugin_widgets() {
+bool IdeLayout::sync_plugin_widgets(std::chrono::milliseconds wait) {
     // What Core's plugins hold now: each DockWidget directly under a plugin's root.
     struct Seen {
         std::string name;
@@ -1990,9 +1990,9 @@ void IdeLayout::sync_plugin_widgets() {
         engine_core::Engine& engine = runner_.simulation();
         engine_core::DataModel& game = engine.datamodel();
         // The simulation may be inside a step. Skip this frame rather than wait.
-        engine_core::DataModelLock lock(game, engine_core::DataModelLock::Read, std::chrono::milliseconds(1));
+        engine_core::DataModelLock lock(game, engine_core::DataModelLock::Read, wait);
         if (!lock.owns()) {
-            return;
+            return false;
         }
         const engine_core::InstanceId core = game.core();
         for (engine_core::InstanceId root = core != 0 ? game.first_child(core) : 0; root != 0;
@@ -2208,6 +2208,7 @@ void IdeLayout::sync_plugin_widgets() {
     if (spots_changed) {
         save_plugin_spots();
     }
+    return true;
 }
 
 void IdeLayout::fill_plugins_menu() {

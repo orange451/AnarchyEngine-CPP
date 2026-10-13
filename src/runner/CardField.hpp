@@ -1,0 +1,64 @@
+#pragma once
+
+#include "DrawBatches.hpp"
+#include "InstanceBuffer.hpp"
+#include "Visibility.hpp"
+
+#include <cstdint>
+#include <vector>
+
+namespace runner {
+
+struct MeshDraw;
+
+// The scene's opaque billboard cards, kept on the GPU from paint to paint:
+// each card slot's instances in a buffer of their own, written again only
+// where the draws changed. Neither culling nor batching sees them, so a
+// forest of cards costs the CPU nothing a paint, still or moving. The
+// geometry pass draws each slot in one call; the vertex shader leaves out
+// the cards outside the slot's band, and the rasterizer the ones out of view.
+class CardField {
+public:
+    // A card the field draws: an opaque, uploaded billboard, drawn as itself
+    // (not only for shadows, which cards never cast).
+    static bool Holds(const MeshDraw& draw);
+
+    // Brought up to date with meshes, count long: every draw when all, else
+    // only the ranges (sorted, apart), as Renderer::findVisible works them out.
+    void update(const MeshDraw* meshes, int count, bool all, const std::vector<DrawRange>& changed);
+    // Sends each slot whose cards changed. Needs the GL context.
+    void upload();
+
+    struct Slot {
+        // One instance a card, and the MeshDraw each came from this paint.
+        std::vector<InstanceData> rows;
+        std::vector<int> draws;
+        // Its band, squared, from the camera to each card's origin.
+        float nearSquared = 0.f;
+        float farSquared = 0.f;
+        InstanceBuffer buffer;
+        bool dirty = false;
+    };
+    // By slot number; most are empty.
+    const std::vector<Slot>& slots() const { return slots_; }
+    // Cards held.
+    int cards() const { return cards_; }
+    // Whether draw index is one of them.
+    bool holds(int index) const {
+        return index >= 0 && static_cast<std::size_t>(index) < slotOf_.size() && slotOf_[index] >= 0;
+    }
+    void destroy();
+
+private:
+    void add(const MeshDraw& draw, int index);
+    void remove(int index);
+
+    std::vector<Slot> slots_;
+    // Per draw index: its slot and row, or -1.
+    std::vector<int> slotOf_;
+    std::vector<int> rowOf_;
+    int cards_ = 0;
+    bool stale_ = true;
+};
+
+}  // namespace runner

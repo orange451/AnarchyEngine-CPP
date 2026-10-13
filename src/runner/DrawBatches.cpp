@@ -2,6 +2,7 @@
 
 #include "ColorSpace.hpp"
 #include "ParallelBlocks.hpp"
+#include "profiler/Profiler.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -126,21 +127,24 @@ void BuildBatches(const DrawItem* items, const VisibilityResult& visible, const 
     out.instances.resize(opaqueCount + transparentCount);
     std::vector<DrawBatches::Entry>& order = out.order;
     order.resize(opaqueCount);
-    ParallelBlocks(opaqueCount, grain, [&](std::size_t, std::size_t begin, std::size_t end) {
-        for (std::size_t i = begin; i < end; ++i) {
-            const VisibleDraw& draw = visible.opaque[i];
-            const DrawItem& item = items[draw.index];
-            DrawBatches::Entry& entry = order[i];
-            // A billboard is turned to face the camera whatever its model: never mirrored.
-            entry.key = BatchKey(item.slot, draw.lod, Mirrored(*item.model) && !item.billboard);
-            entry.depth = item.terrain && item.boundsMin != nullptr && item.boundsMax != nullptr
-                              ? BoundsViewDepth(view, item)
-                              : ViewDepth(view, *item.model);
-            entry.index = draw.index;
-            entry.lod = draw.lod;
-            entry.terrain = item.terrain;
-        }
-    });
+    {
+        PROFILE_SCOPE("Batch keys", profiler::Group::Render);
+        ParallelBlocks(opaqueCount, grain, [&](std::size_t, std::size_t begin, std::size_t end) {
+            for (std::size_t i = begin; i < end; ++i) {
+                const VisibleDraw& draw = visible.opaque[i];
+                const DrawItem& item = items[draw.index];
+                DrawBatches::Entry& entry = order[i];
+                // A billboard is turned to face the camera whatever its model: never mirrored.
+                entry.key = BatchKey(item.slot, draw.lod, Mirrored(*item.model) && !item.billboard);
+                entry.depth = item.terrain && item.boundsMin != nullptr && item.boundsMax != nullptr
+                                  ? BoundsViewDepth(view, item)
+                                  : ViewDepth(view, *item.model);
+                entry.index = draw.index;
+                entry.lod = draw.lod;
+                entry.terrain = item.terrain;
+            }
+        });
+    }
     // A total order, index last, so sorting in blocks puts them where one sort would.
     const auto before = [](const DrawBatches::Entry& a, const DrawBatches::Entry& b) {
         // Terrain chunks last, so the geometry pass changes program once.
@@ -155,24 +159,33 @@ void BuildBatches(const DrawItem* items, const VisibilityResult& visible, const 
         }
         return a.index < b.index;
     };
-    ParallelSort(order, grain, before);
-    for (std::size_t i = 0; i < order.size(); ++i) {
-        const DrawBatches::Entry& entry = order[i];
-        // The key's top half is the draw's slot: slot 0 never joins a run.
-        const bool joins = i > 0 && (entry.key >> 32) != 0 && !entry.terrain && !order[i - 1].terrain &&
-                           order[i - 1].key == entry.key;
-        if (!joins) {
-            DrawRun run;
-            run.first = static_cast<int>(i);
-            run.draw = entry.index;
-            run.lod = entry.lod;
-            run.mirrored = (entry.key & 1u) != 0;
-            out.runs.push_back(run);
+    {
+        PROFILE_SCOPE("Batch sort", profiler::Group::Render);
+        ParallelSort(order, grain, before);
+    }
+    {
+        PROFILE_SCOPE("Batch runs", profiler::Group::Render);
+        for (std::size_t i = 0; i < order.size(); ++i) {
+            const DrawBatches::Entry& entry = order[i];
+            // The key's top half is the draw's slot: slot 0 never joins a run.
+            const bool joins = i > 0 && (entry.key >> 32) != 0 && !entry.terrain && !order[i - 1].terrain &&
+                               order[i - 1].key == entry.key;
+            if (!joins) {
+                DrawRun run;
+                run.first = static_cast<int>(i);
+                run.draw = entry.index;
+                run.lod = entry.lod;
+                run.mirrored = (entry.key & 1u) != 0;
+                out.runs.push_back(run);
+            }
+            ++out.runs.back().count;
         }
-        ++out.runs.back().count;
     }
     out.opaqueRuns = static_cast<int>(out.runs.size());
-    WriteInstances(items, order, out.instances.data(), grain);
+    {
+        PROFILE_SCOPE("Batch instances", profiler::Group::Render);
+        WriteInstances(items, order, out.instances.data(), grain);
+    }
 
     // See-through: farthest first by the Transform's depth, as the pass always sorted them.
     order.clear();

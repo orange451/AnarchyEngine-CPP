@@ -5,6 +5,7 @@
 #include "AssetInstances.hpp"
 #include "Game.hpp"
 #include "Project.hpp"
+#include "PropertyBag.hpp"
 #include "SnapshotPump.hpp"
 
 #define GLFW_INCLUDE_NONE
@@ -24,6 +25,11 @@
 // LodLayer named Card from distance on, and saves the project. A look by hand
 // at many cards at once. It writes to the project: run it on a copy.
 //   billboard-bake <project> <folder under Prefabs, such as Vegetation/Trees> <distance> [height]
+// With --files it writes only the card images, under the project's
+// resources where a studio's disk checks do not look, and a JSON list of
+// what each Prefab's card Material needs, for a studio with the project
+// open to make the instances itself. The project's own files stay as they are.
+//   billboard-bake <project> <folder under Prefabs> --files <out.json> [height]
 namespace {
 
 using engine_core::InstanceId;
@@ -42,14 +48,19 @@ void collect(const engine_core::DataModel& game, InstanceId id, std::vector<Inst
 }  // namespace
 
 int main(int argc, char** argv) {
-    if (argc < 4) {
-        std::fprintf(stderr, "usage: billboard-bake <project> <folder under Prefabs> <distance> [height]\n");
+    const bool files_only = argc > 3 && std::string(argv[3]) == "--files";
+    if (argc < 4 || (files_only && argc < 5)) {
+        std::fprintf(stderr,
+                     "usage: billboard-bake <project> <folder under Prefabs> <distance> [height]\n"
+                     "       billboard-bake <project> <folder under Prefabs> --files <out.json> [height]\n");
         return 2;
     }
     const std::filesystem::path root = std::filesystem::u8path(argv[1]);
     const std::string folder = argv[2];
-    const double distance = std::atof(argv[3]);
-    const int height = argc > 4 ? std::atoi(argv[4]) : 512;
+    const double distance = files_only ? 0.0 : std::atof(argv[3]);
+    const std::filesystem::path files_out = files_only ? std::filesystem::u8path(argv[4]) : std::filesystem::path();
+    const int at_height = files_only ? 5 : 4;
+    const int height = argc > at_height ? std::atoi(argv[at_height]) : 512;
     engine_core::set_thread_role(engine_core::ThreadRole::Simulation);
     engine_core::Game game;
     engine_core::Project project = engine_core::Project::load(root, game);
@@ -92,6 +103,7 @@ int main(int argc, char** argv) {
     collect(game, at, prefabs);
     const std::filesystem::path resources = game.resources_root();
     int baked = 0;
+    std::vector<engine_core::JsonValue> listed;
     {
         ide::BillboardBaker baker(height);
         baker.setRoot(resources);
@@ -123,6 +135,29 @@ int main(int argc, char** argv) {
                 std::printf("%-28s %s\n", game.name(id).c_str(), why.c_str());
                 continue;
             }
+            files.height = ide::card_frame(low, high).height;
+            files.width = files.height * static_cast<float>(card.color.width) / static_cast<float>(card.color.height);
+            if (files_only) {
+                using engine_core::JsonValue;
+                JsonValue row = JsonValue::object();
+                row.set("guid", JsonValue::string(game.guid(id)));
+                row.set("name", JsonValue::string(game.name(id)));
+                row.set("color", JsonValue::string(files.color));
+                row.set("normal", JsonValue::string(files.normal));
+                row.set("roughness_map", JsonValue::string(files.roughness_map));
+                row.set("metalness_map", JsonValue::string(files.metalness_map));
+                row.set("emissive", JsonValue::string(files.emissive));
+                row.set("roughness", JsonValue::number_from_float(files.roughness));
+                row.set("metalness", JsonValue::number_from_float(files.metalness));
+                row.set("reflectivity", JsonValue::number_from_float(files.reflectivity));
+                row.set("width", JsonValue::number_from_float(files.width));
+                row.set("height", JsonValue::number_from_float(files.height));
+                listed.push_back(std::move(row));
+                ++baked;
+                std::printf("%-28s %4d x %-4d %6.2f x %6.2f units\n", game.name(id).c_str(), card.color.width,
+                            card.color.height, files.width, files.height);
+                continue;
+            }
             // Its Card layer, made the first time.
             InstanceId layer = game.find_first_child(id, "Card");
             if (dynamic_cast<const engine_core::LodLayer*>(game.instance(layer)) == nullptr) {
@@ -132,8 +167,6 @@ int main(int argc, char** argv) {
             }
             ide::run_set_lod_kind(game, layer, engine_core::LodKind::Billboard);
             ide::run_set_lod_distance(game, layer, distance);
-            files.height = ide::card_frame(low, high).height;
-            files.width = files.height * static_cast<float>(card.color.width) / static_cast<float>(card.color.height);
             if (std::optional<std::string> error = ide::run_set_lod_card(game, layer, files)) {
                 std::printf("%-28s %s\n", game.name(id).c_str(), error->c_str());
                 continue;
@@ -147,8 +180,14 @@ int main(int argc, char** argv) {
         }
         baker.release();
     }
-    project.save();
-    std::printf("baked %d of %zu Prefabs, saved\n", baked, prefabs.size());
+    if (files_only) {
+        std::ofstream(files_out, std::ios::binary) << engine_core::write_json(engine_core::JsonValue::array(listed));
+        std::printf("baked %d of %zu Prefabs, card files only, listed in %s\n", baked, prefabs.size(),
+                    files_out.u8string().c_str());
+    } else {
+        project.save();
+        std::printf("baked %d of %zu Prefabs, saved\n", baked, prefabs.size());
+    }
     glfwDestroyWindow(window);
     glfwTerminate();
     return 0;

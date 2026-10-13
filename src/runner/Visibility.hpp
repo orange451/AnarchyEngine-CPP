@@ -54,6 +54,8 @@ struct DrawItem {
     // A billboard (MeshDraw::billboard): its instance carries model as it is,
     // which the vertex shader turns to face the camera, and no normal matrix.
     bool billboard = false;
+    // It may cast a shadow (MeshDraw::castsShadow).
+    bool castsShadow = false;
 };
 
 // A drawable mesh the camera may see.
@@ -86,6 +88,11 @@ struct VisibilityResult {
     // One per DrawItem, set by CullDraws: 1 for a banded one the camera is
     // outside the band of, which is neither visible nor casts a shadow.
     std::vector<std::uint8_t> outOfBand;
+    // Moves on whenever an outOfBand flag changes, or their count.
+    std::uint64_t outOfBandRevision = 0;
+    // The drawable items that may cast and are in their band, in item order:
+    // the only ones a shadow can take in, for the shadow planner.
+    std::vector<int> casters;
     // In DrawItem order.
     std::vector<VisibleDraw> opaque;
     std::vector<VisibleDraw> transparent;
@@ -96,6 +103,7 @@ struct VisibilityResult {
     struct Block {
         std::vector<VisibleDraw> opaque;
         std::vector<VisibleDraw> transparent;
+        std::vector<int> casters;
         int culled = 0;
     };
     std::vector<Block> blocks;
@@ -110,6 +118,8 @@ constexpr std::uint16_t kTraitShadowOnly = 2;
 constexpr std::uint16_t kTraitTransparent = 4;
 // It draws only in a distance band (DrawItem::lodNear, lodFar).
 constexpr std::uint16_t kTraitBanded = 8;
+// It may cast a shadow (DrawItem::castsShadow).
+constexpr std::uint16_t kTraitCasts = 16;
 
 // The spheres and traits of the items in ranges (normalized), or of every
 // item when all, into out's, which are sized count; the others are kept as

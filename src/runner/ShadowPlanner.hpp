@@ -186,7 +186,22 @@ struct CasterView {
     // Null, or nonzero for a caster that casts nothing this frame: one whose
     // LOD band the camera is outside (VisibilityResult::outOfBand).
     const std::uint8_t* hidden = nullptr;
+    // Moves on whenever any of the above changes; 0 is never one, so a view
+    // without it is never taken for unchanged.
+    std::uint64_t revision = 0;
+    // When live is set: every caster that can cast, ascending, liveCount of
+    // them. The rest cast nothing, so the planner looks at these alone.
+    const int* live = nullptr;
+    std::size_t liveCount = 0;
 };
+
+// The casters a planner looks at: live's, or every one.
+inline std::size_t CasterSpan(const CasterView& casters) {
+    return casters.live != nullptr ? casters.liveCount : casters.count;
+}
+inline std::size_t CasterAt(const CasterView& casters, std::size_t k) {
+    return casters.live != nullptr ? static_cast<std::size_t>(casters.live[k]) : k;
+}
 
 // What a light's or a cascade's map folds in for caster: which geometry,
 // which upload of it, how it is posed, and where. Never 0.
@@ -323,6 +338,25 @@ private:
     CascadeShadow cascade_;
     std::uint64_t cascadeHash_ = 0;
     bool cascadeReady_ = false;
+    // What the last cascade plan was made from. The same again, with the
+    // cascades still ready, plans nothing without sweeping a caster.
+    struct CascadeInputs {
+        engine_core::Matrix4 world{};
+        float fovYDegrees = 0.f;
+        float aspect = 0.f;
+        float nearZ = 0.f;
+        engine_core::Vec3 shine{};
+        float shadowDistance = 0.f;
+        std::uint64_t owner = 0;
+        int cascadeCount = 0;
+        float cascadeLambda = 0.f;
+        int cascadeSize = 0;
+        float cascadePullLimit = 0.f;
+        std::size_t casterCount = 0;
+        std::uint64_t casterRevision = 0;
+    };
+    CascadeInputs cascadeInputs_;
+    bool cascadeInputsKept_ = false;
     CascadeShadow pendingCascade_;
     std::uint64_t pendingCascadeHash_ = 0;
     bool cascadePending_ = false;

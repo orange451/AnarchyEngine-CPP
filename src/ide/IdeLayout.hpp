@@ -210,11 +210,13 @@ public:
     // toast. False when files holds none of them.
     bool import_instance_files(const std::vector<std::string>& files);
     // Shows the plugins' toolbars on the Plugins tab when they changed.
-    void refresh_plugin_ribbon();
+    // Each reads the place, waiting at most wait for the engine to let go of
+    // it; false when it did not, and so did nothing.
+    bool refresh_plugin_ribbon(std::chrono::milliseconds wait);
     // Makes, titles, opens, closes, and drops the plugins' dock widget pages to
     // match their DockWidgets, once a frame. A page the user closes clears its
     // widget's Enabled.
-    void sync_plugin_widgets();
+    bool sync_plugin_widgets(std::chrono::milliseconds wait);
     // Closes the tab showing page. False when none does.
     bool close_page(IdePane* page);
     // The dock a plugin page opens in for side: the one sitting there in the main
@@ -738,6 +740,8 @@ private:
     // What the last poll listed, and the scene time the next one waits for.
     std::vector<PluginStamp> plugin_stamps_;
     double plugin_poll_at_ = 0;
+    // A plugin ribbon and widget sync is waiting for the next frame's start.
+    bool plugin_sync_posted_ = false;
     // The ribbon, and the PluginUi revision its Plugins tab last showed.
     PluginRibbon* plugin_ribbon_ = nullptr;
     // The JadeFX menu bar, and what macOS's native bar moves or replaces.

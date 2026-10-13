@@ -57,6 +57,8 @@ set(STUDIO_CORE_SOURCES
     src/runner/Visibility.cpp
     src/runner/TerrainSelection.cpp
     src/runner/DrawBatches.cpp
+    src/runner/CardField.cpp
+    src/runner/FileWatch.cpp
     src/runner/ParallelBlocks.cpp
     src/runner/BonePalette.cpp
     src/runner/GamePack.cpp

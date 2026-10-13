@@ -578,21 +578,22 @@ void GrowToFit(const jadefx::Node* area, jadefx::Scene* scene, const std::functi
 }
 }  // namespace
 
-void IdeLayout::refresh_plugin_ribbon() {
+bool IdeLayout::refresh_plugin_ribbon(std::chrono::milliseconds wait) {
     if (plugin_ribbon_ == nullptr) {
-        return;
+        return true;
     }
     engine_core::Engine& engine = runner_.simulation();
     // The simulation may be inside a step. Skip this frame rather than wait.
-    engine_core::DataModelLock lock(engine.datamodel(), engine_core::DataModelLock::Read, std::chrono::milliseconds(1));
+    engine_core::DataModelLock lock(engine.datamodel(), engine_core::DataModelLock::Read, wait);
     if (!lock.owns()) {
-        return;
+        return false;
     }
     const engine_core::PluginUi& ui = engine.scripts().plugin_ui();
     if (ui.revision() != plugin_ui_revision_) {
         plugin_ui_revision_ = ui.revision();
         plugin_ribbon_->setToolbars(ui.toolbars());
     }
+    return true;
 }
 
 void IdeLayout::flushFrame() {
@@ -632,32 +633,67 @@ void IdeLayout::flushFrame() {
             saved_splits_.clear();
         }
     }
-    poll_plugins(false);
-    refresh_plugin_ribbon();
-    sync_plugin_widgets();
+    {
+        PROFILE_SCOPE("Tail plugins", profiler::Group::Engine);
+        poll_plugins(false);
+        // Now if the place is free. The Scene View has just woken the engine,
+        // though, whose step holds the place for a millisecond or two, so
+        // rather than wait that out here every frame, a busy place is read at
+        // the start of the next frame, when the step is long done.
+        const bool ribbon = refresh_plugin_ribbon(std::chrono::milliseconds(0));
+        const bool widgets = sync_plugin_widgets(std::chrono::milliseconds(0));
+        if ((!ribbon || !widgets) && !plugin_sync_posted_) {
+            plugin_sync_posted_ = true;
+            jadefx::runLater([this, alive = std::weak_ptr<int>(alive_), ribbon, widgets] {
+                if (alive.expired()) {
+                    return;
+                }
+                plugin_sync_posted_ = false;
+                PROFILE_SCOPE("Plugin sync", profiler::Group::Engine);
+                if (!ribbon) {
+                    refresh_plugin_ribbon(std::chrono::milliseconds(1));
+                }
+                if (!widgets) {
+                    sync_plugin_widgets(std::chrono::milliseconds(1));
+                }
+            });
+        }
+    }
     // A pane is laid out only when something in it changed, and a script's
     // writes to its GUI change nothing there until it reads them, so each
     // open plugin page reads them once a frame.
-    for (const auto& [name, widget] : plugin_widgets_) {
-        if (widget.pane && dockContaining(widget.pane.get()) != nullptr) {
-            widget.pane->sync();
+    {
+        PROFILE_SCOPE("Tail plugin pages", profiler::Group::Engine);
+        for (const auto& [name, widget] : plugin_widgets_) {
+            if (widget.pane && dockContaining(widget.pane.get()) != nullptr) {
+                widget.pane->sync();
+            }
         }
     }
-    refresh_modified();
+    {
+        PROFILE_SCOPE("Tail modified", profiler::Group::Engine);
+        refresh_modified();
+    }
     // A tab that is not showing, or a closed page kept for reopening, is not
     // laid out, so Problems would stop counting. Its tick keeps the list and
     // the title current and leaves the rows until it shows again. It does
     // nothing a layout this frame already did.
-    if (problems_window_ != nullptr && problems_window_->pane) {
-        if (auto* problems = dynamic_cast<IdeProblems*>(problems_window_->pane.get())) {
-            problems->tick(scene_ != nullptr ? scene_->timeSeconds() : 0);
-            show_problem_count(problems->list().total);
+    {
+        PROFILE_SCOPE("Tail problems", profiler::Group::Engine);
+        if (problems_window_ != nullptr && problems_window_->pane) {
+            if (auto* problems = dynamic_cast<IdeProblems*>(problems_window_->pane.get())) {
+                problems->tick(scene_ != nullptr ? scene_->timeSeconds() : 0);
+                show_problem_count(problems->list().total);
+            }
         }
     }
-    show_cursor_position();
-    show_frame_time();
-    show_zoom();
-    show_ai_client();
+    {
+        PROFILE_SCOPE("Tail status bar", profiler::Group::Engine);
+        show_cursor_position();
+        show_frame_time();
+        show_zoom();
+        show_ai_client();
+    }
     const std::vector<std::shared_ptr<IdeDock>> pending = std::move(pendingEmpty_);
     pendingEmpty_.clear();
     for (const std::shared_ptr<IdeDock>& dock : pending) {

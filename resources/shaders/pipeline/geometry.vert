@@ -25,6 +25,10 @@ uniform mat4 uProjection;
 // 1 while drawing billboards (runner::MeshDraw::billboard): each instance's
 // card is turned about its up axis to face the camera.
 uniform int uBillboard;
+// The card field's band (runner::CardField), squared, from the camera to a
+// card's origin: a card outside [x, y) draws nothing. Off while y is 0, as
+// for every draw the CPU already chose by band.
+uniform vec2 uCardBand;
 // Three RGBA32F texels a bone, the first three rows of its skinning matrix,
 // 1024 texels to a row (runner::BoneTexture).
 uniform sampler2D uBones;
@@ -71,6 +75,18 @@ void billboard() {
     // The camera's position: the view only turns and moves.
     vec3 eye = -(transpose(mat3(uView)) * uView[3].xyz);
     vec3 toward = eye - origin;
+    if (uCardBand.y > 0.0) {
+        float squared = dot(toward, toward);
+        if (squared < uCardBand.x || !(squared < uCardBand.y)) {
+            // Outside the clip volume at every corner: clipped away whole.
+            vViewNormal = vec3(0.0, 0.0, 1.0);
+            vViewPosition = vec3(0.0);
+            vUv = vec2(0.0);
+            vColor = vec4(0.0);
+            gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+            return;
+        }
+    }
     toward -= up * dot(toward, up);
     float across = length(toward);
     // Straight above or below, it keeps its own facing.

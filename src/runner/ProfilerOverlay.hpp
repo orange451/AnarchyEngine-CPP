@@ -56,6 +56,9 @@ private:
 // geometry, so it works before the first paint.
 class ProfilerOverlay : public jadefx::Region {
 public:
+    // Its GL objects deleted while their context is current, as the view
+    // leaves its window: a window of its own has a context of its own.
+    void releaseGraphics();
     struct Rect {
         double x = 0;
         double y = 0;
@@ -141,6 +144,47 @@ private:
     profiler::ScopeId highlight_scope_ = 0;
     profiler::CauseId highlight_cause_ = profiler::kNoCause;
     std::size_t table_scroll_ = 0;
+
+    // Flat rectangles drawn in one call: the graph's bars and the timeline's
+    // dashes and blocks are hundreds to thousands a paint, and the UI makes
+    // each rectangle a draw call of its own.
+    class RectCanvas {
+    public:
+        // Starts a batch at the pane's pixels per point.
+        void begin(float pixelsPerPoint);
+        // A rectangle in points, snapped to whole pixels, over what came before it.
+        void fill(double x, double y, double w, double h, const jadefx::Color& color);
+        // The batch, in one draw, inside the painter's clip. Needs the GL context.
+        void draw(jadefx::Painter& painter);
+        // Its GL objects deleted, with the context that made them current;
+        // the next draw makes them again.
+        void release();
+
+    private:
+        struct Rect {
+            float x, y, w, h;
+            jadefx::Color color;
+        };
+        float scale_ = 1.f;
+        // Two triangles a rectangle: pixel x, y and straight RGBA per vertex.
+        std::vector<float> vertices_;
+        // As given, for Painter::fillRect when the shader cannot be made.
+        std::vector<Rect> rects_;
+        unsigned program_ = 0;
+        int viewport_ = -1;
+        unsigned vao_ = 0;
+        unsigned vbo_ = 0;
+        bool failed_ = false;
+    };
+    RectCanvas graphCanvas_;
+    RectCanvas timelineCanvas_;
+    struct Label {
+        double x = 0;
+        double y = 0;
+        std::string text;
+        jadefx::Color color;
+    };
+    std::vector<Label> blockLabels_;
 
     // From the last paint, for hovering.
     std::vector<Block> blocks_;

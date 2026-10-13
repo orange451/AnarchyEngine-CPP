@@ -5,7 +5,36 @@
 per frame or less, still and moving, on the RTX 3070, without visual loss, and scaling down to
 low-end machines.
 
-## Where the time goes today
+## Progress (2026-10-13)
+
+The benchmark (`perf_bench.py` in the session scratchpad): the saved 100k place, Release, uncapped
+(`JADEFX_MAX_FPS=0`), profiler overlay hidden, a pointer over the view; per paint.
+
+| View | Before | Now |
+|---|---|---|
+| User's worst, still | 16.8 ms | 6.4-8.6 ms |
+| User's worst, moving | 18.3 ms | 8.0-8.3 ms |
+| Corner, still | 18.7 ms | 7.2-7.4 ms |
+| Corner, moving | 22.3 ms | 7.3-7.7 ms |
+
+Done:
+- Phase 0: per-paint numbers in get_profile (`per_call_ms`, `paint`), scopes inside Batches and
+  around the upload, mesh collection, GL state, the probe; render stats print upload bytes and cards.
+- Phase 1: the card field (95bce546). 143k cards: Batches 8-11 to 0.05 ms, the 10 MB upload to 0.
+- Found and fixed on the way: the cursor depth probe read the depth attachment into a pixel buffer,
+  which made NVIDIA wait for the whole frame: 3.8 ms whenever the cursor was over the view. It copies
+  the texel to a 1x1 float target and reads that behind a fence now (95bce546).
+- The far corner draws: kSceneFar 4000 to 16384.
+- Phase 2: the cascade plan returns at once when nothing changed (Shadows 0.8 to 0.03 ms still); asset
+  files are watched on a thread (the twice-a-second 6-17 ms Snapshot read hitches are gone, max under
+  2 ms); TextureCache lookups allocate nothing (Prefab draws 0.45 to 0.2 ms) (8d33543d). The profiler
+  overlay draws its rectangles in one call (1.2-1.6 to 1.0 ms while shown) (253121c6).
+
+Left, per paint, at the user's view moving: Visibility 0.5, Cascade plan while moving 0.4-0.7,
+Terrain 0.4, Cards 0.3, Snapshot read 0.5, terrain and prefab draws 0.4, the JadeFX UI about 1.2 and
+the frame tail 0.5-1.0, Swap about 1 (the present to the Intel adapter), GPU about 3.5.
+
+## Where the time went (before)
 
 Measured with the Release studio, focused, in the user's view. Per paint, not per engine tick: the
 profiler's `avg_ms` is per engine tick, so per-paint cost is `avg_ms / calls_per_frame`.

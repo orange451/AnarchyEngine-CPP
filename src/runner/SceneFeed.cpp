@@ -60,6 +60,8 @@ void SceneFeed::perform(const engine_core::VisualSnapshot& front) {
     out->wire_lines = front.wire_lines;
     // Each Terrain's chunks and look, shared by pointer.
     out->terrains = front.terrains;
+    // Each emitter's particles, shared by pointer.
+    out->particles = front.particles;
     out->brushes = front.brushes;
     out->resources_root = front.resources_root;
     // Each ViewportPane's scene, shared by pointer.

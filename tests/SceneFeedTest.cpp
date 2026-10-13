@@ -170,6 +170,15 @@ int RunSceneFeedTests() {
                drawn.draggers[0].hovered == engine_core::DraggerHandle::Y,
            "the Dragger rows reach the view");
 
+    // Particle blocks cross by pointer.
+    engine_core::VisualSnapshot sparks = Frame(4001, 1);
+    engine_core::ParticleDraw particles;
+    particles.particles = std::make_shared<std::vector<engine_core::particles::ParticleVertex>>(3);
+    sparks.particles.push_back(particles);
+    feed.perform(sparks);
+    Expect(feed.latest().particles.size() == 1 && feed.latest().particles[0].particles == particles.particles,
+           "the particle blocks reach the view");
+
     TestHeldFramesAreNotWrittenOver();
     return gFailures;
 }

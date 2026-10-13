@@ -242,3 +242,4 @@ Where the implementation differs from the sections above, and why:
 - **Soft edges** read a copy of scene depth (`glBlitFramebuffer`, newly loaded), since the see-through target has the depth attached.
 - **World collision** gives each emitter's particles rays in a rotating window, from 512 rays a frame shared by all emitters; a particle whose turn has not come tests the plane its last ray hit.
 - **Shape size** of a PhysicsObject or Brush ignores a driving GameObject's `Scale`.
+- **Measured cost** (Release, RTX 3070, warmed a minute, 10 emitters held at `ParticleBudget` 20000, 19856 live): the engine thread's `Particles` scope averaged 0.91 ms (max 1.8 ms) with Additive emitters, which skip sorting, and 2.1 ms (max 3.1 ms) with Normal ones, sorted back to front each frame; the GPU's whole 3D scene was 0.83 ms. The sort recomputes each particle's distance per comparison, an easy later saving.

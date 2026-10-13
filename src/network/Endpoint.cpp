@@ -62,6 +62,7 @@ bool Endpoint::connect(const Address& server, double now) {
 void Endpoint::disconnect(PeerId id, double now) {
     (void)now;
     if (id >= peers_.size() || !peers_[id].used) return;
+    if (peers_[id].pending_drop) return;
     if (peers_[id].state == ConnectionState::Connected) send_disconnect(peers_[id]);
     drop_peer(id, DisconnectReason::Requested, DenyReason::None);
 }
@@ -171,7 +172,7 @@ void Endpoint::receive_as_server(const Address& from, const PacketHeader& header
         drop_peer(id, DisconnectReason::Requested, DenyReason::None);
         return;
     }
-    peer->connection->read_packet(header, reader, buffer_, length, now);
+    read_connection(id, header, reader, length, now);
 }
 
 void Endpoint::receive_as_client(const Address& from, const PacketHeader& header, BitReader& reader, std::size_t length, double now) {
@@ -227,7 +228,18 @@ void Endpoint::receive_as_client(const Address& from, const PacketHeader& header
         drop_peer(0, DisconnectReason::Requested, DenyReason::None);
         return;
     }
-    peer.connection->read_packet(header, reader, buffer_, length, now);
+    read_connection(0, header, reader, length, now);
+}
+
+void Endpoint::read_connection(PeerId id, const PacketHeader& header, BitReader& reader, std::size_t length, double now) {
+    reading_ = id;
+    peers_[id].connection->read_packet(header, reader, buffer_, length, now);
+    reading_ = kNoPeer;
+    Peer& peer = peers_[id];
+    if (peer.pending_drop) {
+        peer.pending_drop = false;
+        drop_peer(id, peer.pending_reason, peer.pending_deny);
+    }
 }
 
 void Endpoint::open_connection(PeerId id, double now) {
@@ -238,20 +250,29 @@ void Endpoint::open_connection(PeerId id, double now) {
     peer.connection->set_session(session_of(peer));
     Connection& connection = *peer.connection;
     connection.callbacks.on_message = [this, id](const std::uint8_t* bytes, std::size_t length) {
-        if (callbacks_.on_message) callbacks_.on_message(id, bytes, length);
+        if (!peers_[id].pending_drop && callbacks_.on_message) callbacks_.on_message(id, bytes, length);
     };
     connection.callbacks.on_payload = [this, id](std::uint16_t sequence, const std::uint8_t* bytes, std::size_t length) {
-        if (callbacks_.on_payload) callbacks_.on_payload(id, sequence, bytes, length);
+        if (!peers_[id].pending_drop && callbacks_.on_payload) callbacks_.on_payload(id, sequence, bytes, length);
     };
     connection.callbacks.on_delivered = [this, id](std::uint16_t sequence, std::uint32_t tag) {
-        if (callbacks_.on_delivered) callbacks_.on_delivered(id, sequence, tag);
+        if (!peers_[id].pending_drop && callbacks_.on_delivered) callbacks_.on_delivered(id, sequence, tag);
     };
 }
 
 void Endpoint::drop_peer(PeerId id, DisconnectReason reason, DenyReason deny) {
     Peer& peer = peers_[id];
     if (!peer.used) return;
+    if (id == reading_) {
+        // Its connection is mid-read; release the slot once the packet is done.
+        peer.pending_drop = true;
+        peer.pending_reason = reason;
+        peer.pending_deny = deny;
+        peer.state = ConnectionState::Disconnected;
+        return;
+    }
     peer.used = false;
+    peer.pending_drop = false;
     peer.state = ConnectionState::Disconnected;
     peer.connection.reset();
     if (callbacks_.on_disconnected) callbacks_.on_disconnected(id, reason, deny);

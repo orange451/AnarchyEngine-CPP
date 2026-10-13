@@ -439,3 +439,50 @@ TEST_CASE("N69b a callback that disconnects another peer does not disturb the pa
     REQUIRE(logs[1].disconnected.size() == 1);
     REQUIRE(std::get<1>(logs[1].disconnected[0]) == DisconnectReason::Requested);
 }
+
+TEST_CASE("N69c a callback that disconnects the peer being read is deferred and fires on_disconnected once", "[network][endpoint]") {
+    network::LinkHub hub;
+    Log server_log;
+    Endpoint* server_ptr = nullptr;
+    double clock = 0.0;
+    int server_messages = 0;
+    EndpointCallbacks server_callbacks = server_log.callbacks();
+    server_callbacks.on_message = [&](PeerId peer, const std::uint8_t*, std::size_t) {
+        ++server_messages;
+        server_ptr->disconnect(peer, clock);
+    };
+    EndpointConfig server_config;
+    server_config.identity = identity();
+    Endpoint server(hub.open(kServer), server_config, server_callbacks);
+    server_ptr = &server;
+    Log client_log;
+    EndpointConfig client_config;
+    client_config.role = Role::Client;
+    client_config.identity = identity();
+    Endpoint client(hub.open(client_address(0)), client_config, client_log.callbacks());
+    auto tick = [&](double now) {
+        clock = now;
+        server.receive(now);
+        client.receive(now);
+        server.send(now);
+        client.send(now);
+    };
+    client.connect(kServer, 0.0);
+    double now = 0.0;
+    for (int i = 0; i < 12; ++i) tick(now += 1.0 / 60.0);
+    REQUIRE(server.peers().size() == 1);
+    const std::uint8_t one = 1, two = 2;
+    const std::uint8_t state[3] = {4, 5, 6};
+    REQUIRE(client.send_message(0, &one, 1));
+    REQUIRE(client.send_message(0, &two, 1));
+    REQUIRE(client.send_payload(0, state, 3, 1).has_value());
+    for (int i = 0; i < 12; ++i) tick(now += 1.0 / 60.0);
+    REQUIRE(server_messages == 1);
+    REQUIRE(server_log.payloads.empty());
+    REQUIRE(server_log.disconnected.size() == 1);
+    REQUIRE(std::get<1>(server_log.disconnected[0]) == DisconnectReason::Requested);
+    REQUIRE(server.peers().empty());
+    REQUIRE(server.state(0) == ConnectionState::Disconnected);
+    REQUIRE(client_log.disconnected.size() == 1);
+    REQUIRE(std::get<1>(client_log.disconnected[0]) == DisconnectReason::Requested);
+}

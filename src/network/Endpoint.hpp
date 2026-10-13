@@ -37,7 +37,9 @@ struct EndpointConfig {
 };
 
 // Set once; the engine's tree may be touched from inside them, since the
-// pump runs under its lock.
+// pump runs under its lock. A callback may disconnect any peer, including the
+// one it was called for: that peer's remaining callbacks for the packet being
+// read are swallowed and on_disconnected fires once, after the packet.
 struct EndpointCallbacks {
     std::function<void(PeerId)> on_connected;
     std::function<void(PeerId, DisconnectReason, DenyReason)> on_disconnected;
@@ -89,6 +91,9 @@ private:
         double state_time = 0.0;
         double last_request = -1.0;
         std::unique_ptr<Connection> connection;
+        bool pending_drop = false;   // disconnect requested while its packet was being read
+        DisconnectReason pending_reason = DisconnectReason::None;
+        DenyReason pending_deny = DenyReason::None;
     };
 
     Peer* find(const Address& address);
@@ -102,6 +107,8 @@ private:
     void send_accept(const Peer& peer);
     void send_deny(const Address& to, DenyReason reason);
     void send_disconnect(const Peer& peer);
+    // Reads one packet on a peer's connection; a disconnect requested by a callback inside it is carried out after.
+    void read_connection(PeerId id, const PacketHeader& header, BitReader& reader, std::size_t length, double now);
     static std::uint16_t session_of(const Peer& peer) {
         return static_cast<std::uint16_t>((peer.client_salt ^ peer.server_salt) & 0xFFFF);
     }
@@ -115,6 +122,7 @@ private:
     EndpointStats stats_;
     std::string denied_version_;
     bool failed_ = false;
+    PeerId reading_ = kNoPeer;   // the peer whose packet is inside read_packet
     std::uint8_t buffer_[kMaxPacketBytes];        // receive only: callbacks may send while a packet is read
     std::uint8_t send_buffer_[kMaxPacketBytes];
 };

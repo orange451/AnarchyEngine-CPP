@@ -22,24 +22,13 @@ bool is_part(const engine_core::DataModel* object, ModelPart part) {
 }
 
 PartView read_part(const engine_core::DataModel& world, const engine_core::Model& model, ModelPart part) {
-    const engine_core::LuaSlot slot = model.reference(part_index(part));
-    PartView view;
-    if (slot.kind == engine_core::LuaSlot::Kind::Instance && slot.id != 0) {
-        view.id = slot.id;
-        view.name = world.name(slot.id);
-        // Folder names up to and including the category, joined top down.
-        const engine_core::InstanceId category = world.service(part == ModelPart::Mesh ? "Meshes" : "Materials");
-        for (engine_core::InstanceId at = world.parent(slot.id);
-             at != 0 && at != engine_core::DataModel::kNoParent && world.alive(at); at = world.parent(at)) {
-            view.where = view.where.empty() ? world.name(at) : world.name(at) + "/" + view.where;
-            if (at == category) {
-                break;
-            }
-        }
-    } else {
-        view.missing = !slot.text.empty();
-    }
-    return view;
+    return read_asset_part(world, model.reference(part_index(part)), part == ModelPart::Mesh ? "Meshes" : "Materials");
+}
+
+// A Prefab, or a LodLayer: what holds Models.
+bool holds_models(const engine_core::DataModel* object) {
+    return dynamic_cast<const engine_core::Prefab*>(object) != nullptr ||
+           dynamic_cast<const engine_core::LodLayer*>(object) != nullptr;
 }
 
 // name is base, or base and a space and a number: what unique_name makes from base.
@@ -57,9 +46,31 @@ bool named_from(const std::string& name, const std::string& base) {
                        [](unsigned char c) { return std::isdigit(c) != 0; });
 }
 
-// base, or "base 2", "base 3", and on, whichever no child of parent but skip has.
-std::string unique_name(const engine_core::DataModel& world, engine_core::InstanceId parent, const std::string& base,
-                        engine_core::InstanceId skip = 0) {
+}  // namespace
+
+PartView read_asset_part(const engine_core::DataModel& world, const engine_core::LuaSlot& slot,
+                         const char* category_name) {
+    PartView view;
+    if (slot.kind == engine_core::LuaSlot::Kind::Instance && slot.id != 0) {
+        view.id = slot.id;
+        view.name = world.name(slot.id);
+        // Folder names up to and including the category, joined top down.
+        const engine_core::InstanceId category = world.service(category_name);
+        for (engine_core::InstanceId at = world.parent(slot.id);
+             at != 0 && at != engine_core::DataModel::kNoParent && world.alive(at); at = world.parent(at)) {
+            view.where = view.where.empty() ? world.name(at) : world.name(at) + "/" + view.where;
+            if (at == category) {
+                break;
+            }
+        }
+    } else {
+        view.missing = !slot.text.empty();
+    }
+    return view;
+}
+
+std::string unique_child_name(const engine_core::DataModel& world, engine_core::InstanceId parent,
+                              const std::string& base, engine_core::InstanceId skip) {
     std::vector<std::string> taken;
     for (engine_core::InstanceId child : world.get_children(parent)) {
         if (child != skip) {
@@ -72,8 +83,6 @@ std::string unique_name(const engine_core::DataModel& world, engine_core::Instan
     }
     return name;
 }
-
-}  // namespace
 
 const char* model_part_name(ModelPart part) { return part == ModelPart::Mesh ? "Mesh" : "Material"; }
 
@@ -117,12 +126,12 @@ const char* model_status_text(ModelStatus status) {
     return "";
 }
 
-std::vector<ModelView> read_models(const engine_core::DataModel& world, engine_core::InstanceId prefab) {
+std::vector<ModelView> read_models(const engine_core::DataModel& world, engine_core::InstanceId holder) {
     std::vector<ModelView> models;
-    if (dynamic_cast<const engine_core::Prefab*>(world.instance(prefab)) == nullptr) {
+    if (!holds_models(world.instance(holder))) {
         return models;
     }
-    for (engine_core::InstanceId child : world.get_children(prefab)) {
+    for (engine_core::InstanceId child : world.get_children(holder)) {
         const auto* model = dynamic_cast<const engine_core::Model*>(world.instance(child));
         if (model == nullptr) {
             continue;
@@ -154,10 +163,10 @@ DraggedParts dragged_parts(const engine_core::DataModel& world, const std::vecto
     return parts;
 }
 
-engine_core::InstanceId add_model(engine_core::DataModel& world, engine_core::InstanceId prefab,
+engine_core::InstanceId add_model(engine_core::DataModel& world, engine_core::InstanceId holder,
                                   engine_core::InstanceId mesh, engine_core::InstanceId material, std::string& error) {
-    if (!world.alive(prefab) || dynamic_cast<engine_core::Prefab*>(world.instance(prefab)) == nullptr) {
-        error = "That Prefab no longer exists";
+    if (!world.alive(holder) || !holds_models(world.instance(holder))) {
+        error = "That Prefab or LOD no longer exists";
         return 0;
     }
     if (world.room_left() == 0) {
@@ -166,8 +175,8 @@ engine_core::InstanceId add_model(engine_core::DataModel& world, engine_core::In
     }
     engine_core::Model& model = world.create<engine_core::Model>();
     const std::string base = mesh != 0 && world.alive(mesh) ? world.name(mesh) : std::string(kDefaultModelName);
-    world.set_name(model.id(), unique_name(world, prefab, base));
-    world.set_parent(model.id(), prefab);
+    world.set_name(model.id(), unique_child_name(world, holder, base));
+    world.set_parent(model.id(), holder);
     for (const auto& [part, target] : {std::pair{ModelPart::Mesh, mesh}, std::pair{ModelPart::Material, material}}) {
         if (target == 0) {
             continue;
@@ -206,8 +215,8 @@ std::optional<std::string> set_model_part(engine_core::DataModel& world, engine_
     if (part == ModelPart::Mesh && target != 0) {
         const std::string name = world.name(model_id);
         if (named_from(name, kDefaultModelName) || named_from(name, old_base)) {
-            const engine_core::InstanceId prefab = world.parent(model_id);
-            world.set_name(model_id, unique_name(world, prefab, world.name(target), model_id));
+            const engine_core::InstanceId holder = world.parent(model_id);
+            world.set_name(model_id, unique_child_name(world, holder, world.name(target), model_id));
         }
     }
     return std::nullopt;

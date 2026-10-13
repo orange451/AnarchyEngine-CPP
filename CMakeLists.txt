@@ -134,6 +134,7 @@ set(STUDIO_SOURCES
     src/ide/CurveEditor.cpp
     src/ide/IdeCollisionGroups.cpp
     src/ide/PrefabModels.cpp
+    src/ide/PrefabLods.cpp
     src/ide/TerrainMaterials.cpp
     src/ide/AssetChoices.cpp
     src/ide/AssetPicker.cpp

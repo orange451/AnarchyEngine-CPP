@@ -10,7 +10,10 @@
 #include "StretchRow.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
+#include <cstdlib>
+#include <iterator>
 #include <utility>
 
 namespace ide {
@@ -245,6 +248,111 @@ constexpr const char* kEditorRules = R"CSS(
 .pe-canvas.drop {
     background-color: var(--selection-color);
 }
+.pe-secondary {
+    background-color: var(--surface-color);
+    border-width: 1px;
+    border-style: solid;
+    border-color: var(--border-color);
+    border-radius: 7px;
+    color: var(--ide-text-color);
+    font-weight: bold;
+    padding: 6px 13px 6px 9px;
+    transition: border-color 120ms;
+}
+.pe-secondary:hover {
+    border-color: var(--accent-color);
+}
+.pe-secondary image-view {
+    image-color: var(--accent-color);
+}
+.pe-band {
+    padding: 20px 20px 0 20px;
+    spacing: 10px;
+}
+.pe-band-title {
+    color: var(--ide-text-color);
+    font-size: 11px;
+    font-weight: bold;
+}
+.pe-band-hint {
+    color: var(--ide-muted-text-color);
+    font-size: 12px;
+}
+.pe-lods {
+    padding: 14px 20px 24px 20px;
+    spacing: 14px;
+}
+.pe-lod {
+    background-color: var(--surface-color);
+    border-width: 1px;
+    border-style: solid;
+    border-color: var(--border-color);
+    border-radius: 12px;
+    padding: 14px;
+    spacing: 14px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+    transition: border-color 120ms, box-shadow 160ms;
+}
+.pe-lod:hover {
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.14);
+}
+.pe-lod.selected {
+    border-color: var(--accent-color);
+    box-shadow: 0 0 0 1px var(--accent-color);
+}
+.pe-lod:hover .pe-lod-delete, .pe-lod.selected .pe-lod-delete {
+    opacity: 1;
+}
+.pe-lod-range {
+    color: var(--ide-muted-text-color);
+    font-size: 11px;
+}
+.pe-lod-range.covered {
+    color: var(--warning-color);
+}
+.pe-lod-word {
+    color: var(--ide-muted-text-color);
+    font-size: 12px;
+}
+.pe-number {
+    font-size: 13px;
+    padding: 3px 6px;
+    border-radius: 6px;
+}
+.pe-kinds {
+    background-color: var(--background-color);
+    border-width: 1px;
+    border-style: solid;
+    border-color: var(--border-color);
+    border-radius: 8px;
+    padding: 2px;
+    spacing: 2px;
+}
+.pe-kind {
+    background-color: rgba(0, 0, 0, 0);
+    border-width: 0;
+    border-radius: 6px;
+    color: var(--ide-muted-text-color);
+    font-size: 12px;
+    padding: 4px 11px;
+    transition: background-color 120ms;
+}
+.pe-kind:hover {
+    background-color: var(--row-hover-color);
+    color: var(--ide-text-color);
+}
+.pe-kind.selected {
+    background-color: var(--accent-color);
+    color: var(--surface-color);
+    font-weight: bold;
+}
+.pe-lod-note {
+    color: var(--ide-muted-text-color);
+    font-size: 12px;
+}
+.pe-lod-billboard {
+    spacing: 24px;
+}
 )CSS";
 std::shared_ptr<jadefx::Label> text_label(const std::string& text, const char* style_class) {
     auto label = jadefx::make<jadefx::Label>(text);
@@ -345,6 +453,197 @@ private:
     std::function<void()> cancel_;
 };
 
+// A number typed in place: Enter, or leaving the field, applies it, and
+// Escape puts back what it showed. A number below min, or at it when above,
+// is refused: the field shows its value again.
+class NumberField : public jadefx::TextField {
+public:
+    NumberField(double min, bool above, std::function<void(double)> apply)
+        : min_(min), above_(above), apply_(std::move(apply)) {
+        getClassList().add("pe-number");
+        setCapturesKeys(true);
+        setOnAction([this](jadefx::ActionEvent&) { commit(); });
+    }
+
+    // Shows value, unless the person is typing in the field.
+    void show(double value) {
+        const std::string text = distance_text(value);
+        if (text != shown_) {
+            shown_ = text;
+            sent_.clear();
+        }
+        if (!isFocused() && getText() != shown_) {
+            setText(shown_);
+        }
+    }
+
+protected:
+    void handleKey(jadefx::KeyEvent& event) override {
+        if (event.pressed && event.key == jadefx::Key::Escape) {
+            event.consume();
+            setText(shown_);
+            return;
+        }
+        TextField::handleKey(event);
+    }
+
+    void handleFocusLost() override {
+        TextField::handleFocusLost();
+        commit();
+    }
+
+private:
+    void commit() {
+        std::string text = getText();
+        const auto space = [](unsigned char c) { return std::isspace(c) != 0; };
+        text.erase(text.begin(), std::find_if_not(text.begin(), text.end(), space));
+        text.erase(std::find_if_not(text.rbegin(), text.rend(), space).base(), text.end());
+        char* end = nullptr;
+        const double value = std::strtod(text.c_str(), &end);
+        const bool number = !text.empty() && end != nullptr && *end == '\0' && std::isfinite(value);
+        if (!number || value < min_ || (above_ && value <= min_)) {
+            setText(shown_);
+            return;
+        }
+        const std::string tidy = distance_text(value);
+        if (getText() != tidy) {
+            setText(tidy);
+        }
+        // Sent once: the place catches up on the simulation thread.
+        if (tidy == shown_ || tidy == sent_) {
+            return;
+        }
+        sent_ = tidy;
+        apply_(value);
+    }
+
+    double min_ = 0.0;
+    bool above_ = false;
+    std::function<void(double)> apply_;
+    std::string shown_;
+    std::string sent_;
+};
+
+// A slot's widgets: a thumb, the asset's name over its folder, and clear.
+struct SlotWidgets {
+    std::shared_ptr<jadefx::HBox> root;
+    std::shared_ptr<jadefx::StackPane> thumb;
+    std::shared_ptr<jadefx::Label> text;
+    std::shared_ptr<jadefx::Label> sub;
+    std::shared_ptr<jadefx::StackPane> clear;
+    PartView shown;
+    bool filled = false;
+};
+
+// Makes slot's widgets: icon in the thumb until it is filled, and clear on its × button.
+void build_slot(SlotWidgets& slot, const char* icon, const std::string& element_id, const std::string& clear_tip,
+                std::function<void()> clear) {
+    // The text takes what is left, so a long name ends in an ellipsis.
+    slot.root = std::make_shared<StretchRow>(1);
+    slot.root->getClassList().add("pe-slot");
+    slot.root->setElementId(element_id);
+    slot.thumb = icon_box(icon, 18, kThumbSize, "pe-thumb");
+    slot.root->getChildren().add(slot.thumb);
+    auto text = jadefx::make<jadefx::VBox>();
+    text->setMouseTransparent(true);
+    text->setAlignment(jadefx::Pos::CenterLeft);
+    text->setStyle("width: 100%;");
+    text->setMinSize(0, 0);
+    slot.text = text_label("", "pe-slot-text");
+    slot.sub = text_label("", "pe-slot-sub");
+    // A VBox lays each out at its text's width; a full width lets it end in an ellipsis instead.
+    slot.text->setMinSize(0, 0);
+    slot.sub->setMinSize(0, 0);
+    slot.text->setStyle("width: 100%;");
+    slot.sub->setStyle("width: 100%;");
+    text->getChildren().add(slot.text);
+    text->getChildren().add(slot.sub);
+    slot.root->getChildren().add(text);
+    slot.clear = icon_button("Cross.png", clear_tip, "pe-slot-clear", std::move(clear));
+    slot.root->getChildren().add(slot.clear);
+}
+
+// slot shows view: the asset's detailed icon, else icon, with its name and
+// folder; a missing asset; or what the slot asks for. word names what it
+// takes ("mesh"), property the property that holds it ("Mesh").
+void show_slot(SlotWidgets& slot, const char* icon, const char* word, const char* property, const PartView& view) {
+    const bool filled = view.id != 0;
+    if (slot.shown == view && slot.text->getText().size() > 0) {
+        return;
+    }
+    slot.shown = view;
+    set_class(*slot.root, "empty", !filled && !view.missing);
+    set_class(*slot.root, "missing", view.missing);
+    // The thumb shows the asset's detailed icon, else the slot's icon when
+    // filled, and a plus when it asks for one.
+    slot.thumb->getChildren().clear();
+    const std::string file = filled ? icon : view.missing ? "Warning.png" : "Plus.png";
+    if (std::shared_ptr<jadefx::Node> detailed = filled ? AssetPicker::detailedIcon(view.id, kThumbSize - 2) : nullptr) {
+        slot.thumb->getChildren().add(std::move(detailed));
+    } else if (std::shared_ptr<jadefx::ImageView> image = icon_file(file)) {
+        image->setPrefSize(18, 18);
+        image->setMinSize(18, 18);
+        image->setMaxSize(18, 18);
+        image->setMouseTransparent(true);
+        slot.thumb->getChildren().add(std::move(image));
+    }
+    if (filled) {
+        slot.text->setText(view.name);
+        slot.sub->setText(view.where.empty() ? std::string(property) : view.where);
+    } else if (view.missing) {
+        slot.text->setText(std::string("Missing ") + word);
+        slot.sub->setText("Its asset was deleted. Choose another.");
+    } else {
+        slot.text->setText(std::string("Choose a ") + word);
+        slot.sub->setText("Click, or drop one from Assets");
+    }
+    slot.clear->setVisible(filled || view.missing);
+    slot.filled = filled;
+}
+
+constexpr engine_core::LodKind kLodKinds[] = {engine_core::LodKind::Model, engine_core::LodKind::Billboard,
+                                              engine_core::LodKind::None};
+
+const char* lod_kind_tip(engine_core::LodKind kind) {
+    switch (kind) {
+    case engine_core::LodKind::Model:
+        return "Swap in other Models from this distance";
+    case engine_core::LodKind::Billboard:
+        return "Draw a card with a texture, turned to face the camera, from this distance";
+    case engine_core::LodKind::None:
+        return "Draw nothing from this distance";
+    }
+    return "";
+}
+
+// The icon a LOD card shows for its kind.
+const char* lod_kind_icon(engine_core::LodKind kind) {
+    switch (kind) {
+    case engine_core::LodKind::Model:
+        return "Model.png";
+    case engine_core::LodKind::Billboard:
+        return "billboard.png";
+    case engine_core::LodKind::None:
+        return "EyeClosed.png";
+    }
+    return "Model.png";
+}
+
+// box shows file's icon at size, in place of what it showed.
+void set_icon(jadefx::StackPane& box, const std::string& file, double size) {
+    box.getChildren().clear();
+    if (std::shared_ptr<jadefx::ImageView> icon = icon_file(file)) {
+        icon->setPrefSize(size, size);
+        icon->setMinSize(size, size);
+        icon->setMaxSize(size, size);
+        icon->setMouseTransparent(true);
+        box.getChildren().add(std::move(icon));
+    }
+}
+
+// A word beside a field, such as "units".
+std::shared_ptr<jadefx::Label> field_word(const std::string& text) { return text_label(text, "pe-lod-word"); }
+
 }  // namespace
 
 // One Model's card and the widgets that change with it.
@@ -355,20 +654,39 @@ struct IdePrefabEditor::Card {
     std::shared_ptr<NameField> rename;
     std::shared_ptr<jadefx::HBox> status;
     std::shared_ptr<jadefx::Label> status_text;
-    struct Slot {
-        std::shared_ptr<jadefx::HBox> root;
-        std::shared_ptr<jadefx::StackPane> thumb;
-        std::shared_ptr<jadefx::Label> text;
-        std::shared_ptr<jadefx::Label> sub;
-        std::shared_ptr<jadefx::StackPane> clear;
-        PartView shown;
-        bool filled = false;
-    };
+    using Slot = SlotWidgets;
     Slot slots[2];
     // Set by a button inside the card, so the click it bubbles to the card or slot next does nothing more.
     bool swallow = false;
 
     Slot& slot(ModelPart part) { return slots[part == ModelPart::Mesh ? 0 : 1]; }
+};
+
+// One LodLayer's card: where it takes over, its kind, and what it draws.
+struct IdePrefabEditor::LodCard {
+    engine_core::InstanceId id = 0;
+    std::shared_ptr<jadefx::VBox> root;
+    // Its kind's icon.
+    std::shared_ptr<jadefx::StackPane> icon;
+    engine_core::LodKind icon_kind = engine_core::LodKind::Model;
+    std::shared_ptr<jadefx::Label> name;
+    std::shared_ptr<jadefx::Label> range;
+    std::shared_ptr<NumberField> distance;
+    // In kLodKinds order.
+    std::shared_ptr<jadefx::Button> kinds[3];
+    // Holds the one of these its kind shows.
+    std::shared_ptr<jadefx::VBox> body;
+    // Model: its Models' cards, and its New Model tile.
+    std::shared_ptr<jadefx::FlowPane> grid;
+    std::shared_ptr<jadefx::Node> new_tile;
+    // Billboard: its Texture, and its width and height.
+    std::shared_ptr<jadefx::HBox> billboard;
+    SlotWidgets texture;
+    std::shared_ptr<NumberField> size[2];
+    // None.
+    std::shared_ptr<jadefx::Label> none;
+    // Set by a control inside the card, so the click it bubbles to the card does nothing more.
+    bool swallow = false;
 };
 
 IdePrefabEditor::IdePrefabEditor(engine_core::DataModel& world, engine_core::InstanceId prefab, PrefabEditorHost host)
@@ -404,32 +722,49 @@ IdePrefabEditor::IdePrefabEditor(engine_core::DataModel& world, engine_core::Ins
     add_button_->setOnAction([this](jadefx::ActionEvent&) { addModel(); });
     jadefx::Tooltip::install(add_button_.get(),
                              jadefx::make<jadefx::Tooltip>("Add a Model, then pick its Mesh and Material"));
+    add_lod_button_ = jadefx::make<jadefx::Button>("Add LOD");
+    add_lod_button_->getClassList().add("pe-secondary");
+    if (std::shared_ptr<jadefx::ImageView> plus = icon_graphic("Plus.png")) {
+        add_lod_button_->setGraphic(std::move(plus));
+    }
+    add_lod_button_->setGraphicTextGap(6);
+    add_lod_button_->setOnAction([this](jadefx::ActionEvent&) { addLod(); });
+    jadefx::Tooltip::install(add_lod_button_.get(),
+                             jadefx::make<jadefx::Tooltip>("Add what this Prefab draws instead, farther away"));
+    header->getChildren().add(add_lod_button_);
     header->getChildren().add(add_button_);
 
-    // The cards, and the New Model tile after them.
+    // The page: the Models, drawn up close, and the New Model tile after
+    // them; then, once there are any, the LodLayers that take over farther out,
+    // each band under its heading.
     grid_ = jadefx::make<jadefx::FlowPane>(kGap, kGap);
     grid_->getClassList().add("pe-grid");
-    auto tile = jadefx::make<jadefx::VBox>();
-    tile->getClassList().add("pe-new");
-    tile->setAlignment(jadefx::Pos::Center);
-    tile->setPrefSize(kCardWidth, kTileHeight);
-    tile->setMinSize(kCardWidth, kTileHeight);
-    if (std::shared_ptr<jadefx::StackPane> plus = icon_box("Plus.png", 22, 30, "pe-new-plus")) {
-        tile->getChildren().add(std::move(plus));
-    }
-    tile->getChildren().add(text_label("New Model", "pe-new-title"));
-    tile->getChildren().add(text_label("or drop a Mesh or Material here", "pe-new-hint"));
-    tile->setOnMouseClicked([this](const jadefx::MouseEvent& event) {
-        took_click_ = true;
-        if (event.button == 0) {
-            addModel();
-        }
-    });
-    new_tile_ = tile;
-    accept_drops(*tile, 0, nullptr);
-    grid_->getChildren().add(tile);
+    grid_->setStyle("width: 100%;");
+    new_tile_ = make_new_tile(0);
+    grid_->getChildren().add(new_tile_);
+    base_heading_ = jadefx::make<jadefx::HBox>();
+    base_heading_->getClassList().add("pe-band");
+    base_heading_->setAlignment(jadefx::Pos::CenterLeft);
+    base_heading_->setStyle("width: 100%;");
+    base_heading_->setMouseTransparent(true);
+    base_heading_->getChildren().add(text_label("UP CLOSE", "pe-band-title"));
+    base_range_ = text_label("", "pe-band-hint");
+    base_heading_->getChildren().add(base_range_);
+    lod_heading_ = jadefx::make<jadefx::HBox>();
+    lod_heading_->getClassList().add("pe-band");
+    lod_heading_->setAlignment(jadefx::Pos::CenterLeft);
+    lod_heading_->setStyle("width: 100%;");
+    lod_heading_->setMouseTransparent(true);
+    lod_heading_->getChildren().add(text_label("FARTHER AWAY", "pe-band-title"));
+    lod_heading_->getChildren().add(text_label("What it draws instead, nearest first", "pe-band-hint"));
+    lod_section_ = jadefx::make<jadefx::VBox>();
+    lod_section_->getClassList().add("pe-lods");
+    lod_section_->setStyle("width: 100%;");
+    page_ = jadefx::make<jadefx::VBox>();
+    page_->setStyle("width: 100%;");
+    page_->getChildren().add(grid_);
 
-    scroll_ = jadefx::make<jadefx::ScrollPane>(grid_);
+    scroll_ = jadefx::make<jadefx::ScrollPane>(page_);
     scroll_->getClassList().add("pe-scroll");
     scroll_->setFitToWidth(true);
     scroll_->setHbarPolicy(jadefx::ScrollBarPolicy::Never);
@@ -520,8 +855,7 @@ void IdePrefabEditor::layoutChildren() {
                 const engine_core::InstanceId made = pending_add_->id.load(std::memory_order_relaxed);
                 if (made != 0) {
                     world_.selection().set({made});
-                    // The new card is last: bring it into view, and ask for what it still needs.
-                    scroll_->setVvalue(scroll_->getVmax());
+                    // Ask for what it still needs, once its card is in view.
                     const ModelView* view = model_view(made);
                     if (view == nullptr || view->mesh.id == 0) {
                         pending_picker_ = PendingPicker{made, ModelPart::Mesh, true};
@@ -532,6 +866,17 @@ void IdePrefabEditor::layoutChildren() {
                     host_.notice(pending_add_->error);
                 }
                 pending_add_.reset();
+            }
+            if (pending_lod_ && pending_lod_->done.load(std::memory_order_acquire)) {
+                const engine_core::InstanceId made = pending_lod_->id.load(std::memory_order_relaxed);
+                if (made != 0) {
+                    world_.selection().set({made});
+                    reveal_lod_ = made;
+                    reveal_waited_ = 0;
+                } else if (host_.notice && !pending_lod_->error.empty()) {
+                    host_.notice(pending_lod_->error);
+                }
+                pending_lod_.reset();
             }
         }
     }
@@ -547,12 +892,26 @@ void IdePrefabEditor::layoutChildren() {
         jadefx::Node* slot = slotNode(pending_picker_->model, pending_picker_->part);
         const bool placed = slot != nullptr && slot->getWidth() > 0 && slot->getAbsoluteY() >= scroll_->getAbsoluteY() &&
                             slot->getAbsoluteY() + slot->getHeight() <= scroll_->getAbsoluteY() + scroll_->getHeight();
+        // Laid out but out of view: scrolled to, and placed next frame.
+        if (!placed && slot != nullptr && slot->getWidth() > 0) {
+            reveal(*slot);
+        }
         if (placed || ++pending_picker_->waited > kPickerWaitFrames) {
             const PendingPicker pending = *pending_picker_;
             pending_picker_.reset();
             if (slot != nullptr) {
                 openPicker(pending.model, pending.part, pending.guided);
             }
+        }
+    }
+    // A new layer's card comes into view once it is laid out.
+    if (reveal_lod_ != 0) {
+        const LodCard* card = lod_card(reveal_lod_);
+        if (card != nullptr && card->root->getHeight() > 0) {
+            reveal(*card->root);
+            reveal_lod_ = 0;
+        } else if (++reveal_waited_ > kPickerWaitFrames) {
+            reveal_lod_ = 0;
         }
     }
     // The prefab and the selection change on their own, so the editor checks them again next frame.
@@ -570,21 +929,31 @@ void IdePrefabEditor::refresh() {
     const engine_core::DataModel* object = world_.instance(prefab_);
     prefab_alive_ = dynamic_cast<const engine_core::Prefab*>(object) != nullptr;
     std::vector<ModelView> models;
+    std::vector<LodView> lods;
     if (prefab_alive_) {
         prefab_name_ = world_.name(prefab_);
         setTitle(prefab_name_);
         models = read_models(world_, prefab_);
+        lods = read_lods(world_, prefab_);
     }
+    // Every Model and layer shown, so an edit to any of them reads them again.
     std::vector<engine_core::InstanceId> watched;
     for (const ModelView& view : models) {
         watched.push_back(view.id);
+    }
+    for (const LodView& lod : lods) {
+        watched.push_back(lod.id);
+        for (const ModelView& view : lod.models) {
+            watched.push_back(view.id);
+        }
     }
     if (watched != watched_) {
         watched_ = watched;
         world_.set_watched(watch_, std::move(watched));
     }
-    if (models != models_) {
+    if (models != models_ || lods != lods_) {
         models_ = std::move(models);
+        lods_ = std::move(lods);
         sync_cards();
         show_selection();
     }
@@ -596,43 +965,366 @@ void IdePrefabEditor::show_header() {
     std::string summary;
     if (!prefab_alive_) {
         summary = "Deleted";
-    } else if (models_.empty()) {
+    } else if (models_.empty() && lods_.empty()) {
         summary = "No models yet";
     } else {
-        const std::size_t attention = static_cast<std::size_t>(std::count_if(
-            models_.begin(), models_.end(), [](const ModelView& view) { return view.status() != ModelStatus::Ready; }));
+        const auto needing = [](const std::vector<ModelView>& views) {
+            return static_cast<std::size_t>(std::count_if(views.begin(), views.end(), [](const ModelView& view) {
+                return view.status() != ModelStatus::Ready;
+            }));
+        };
+        std::size_t attention = needing(models_);
+        for (const LodView& lod : lods_) {
+            if (lod.kind == engine_core::LodKind::Model) {
+                attention += needing(lod.models);
+            }
+        }
         summary = std::to_string(models_.size()) + (models_.size() == 1 ? " model" : " models");
+        if (!lods_.empty()) {
+            summary += "  ·  " + std::to_string(lods_.size()) + (lods_.size() == 1 ? " LOD" : " LODs");
+        }
         summary += attention == 0 ? std::string("  ·  All ready")
                                   : "  ·  " + std::to_string(attention) + (attention == 1 ? " needs" : " need") +
                                         " attention";
     }
     subtitle_->setText(summary);
     add_button_->setDisable(!prefab_alive_);
+    add_lod_button_->setDisable(!prefab_alive_);
     gone_->setVisible(!prefab_alive_);
-    empty_->setVisible(prefab_alive_ && models_.empty());
-    scroll_->setVisible(prefab_alive_ && !models_.empty());
+    empty_->setVisible(prefab_alive_ && models_.empty() && lods_.empty());
+    scroll_->setVisible(prefab_alive_ && (!models_.empty() || !lods_.empty()));
 }
 
 void IdePrefabEditor::sync_cards() {
-    // Keeps the card of a Model still here, so a rename or a pick in it survives.
+    // Every grid empties first, so a Model moved from one layer to another
+    // takes its card along.
+    grid_->getChildren().clear();
+    for (const std::shared_ptr<LodCard>& card : lod_cards_) {
+        card->grid->getChildren().clear();
+    }
+    // Keeps the card of a Model or layer still here, so a rename, a pick, or typing in it survives.
     std::vector<std::shared_ptr<Card>> kept;
-    for (const ModelView& view : models_) {
-        auto found = std::find_if(cards_.begin(), cards_.end(),
-                                  [&view](const std::shared_ptr<Card>& card) { return card->id == view.id; });
-        std::shared_ptr<Card> card = found != cards_.end() ? *found : make_card(view);
-        fill_card(*card, view);
-        kept.push_back(std::move(card));
+    sync_grid(*grid_, models_, new_tile_, kept);
+    std::vector<std::shared_ptr<LodCard>> lods;
+    for (const LodView& view : lods_) {
+        auto found = std::find_if(lod_cards_.begin(), lod_cards_.end(),
+                                  [&view](const std::shared_ptr<LodCard>& card) { return card->id == view.id; });
+        std::shared_ptr<LodCard> card = found != lod_cards_.end() ? *found : make_lod_card(view);
+        fill_lod_card(*card, view, kept);
+        lods.push_back(std::move(card));
     }
     if (renaming_ != 0 && std::none_of(kept.begin(), kept.end(),
                                        [this](const std::shared_ptr<Card>& card) { return card->id == renaming_; })) {
         renaming_ = 0;
     }
     cards_ = std::move(kept);
-    grid_->getChildren().clear();
-    for (const std::shared_ptr<Card>& card : cards_) {
-        grid_->getChildren().add(card->root);
+    lod_cards_ = std::move(lods);
+    lod_section_->getChildren().clear();
+    for (const std::shared_ptr<LodCard>& card : lod_cards_) {
+        lod_section_->getChildren().add(card->root);
     }
-    grid_->getChildren().add(new_tile_);
+    // The bands' headings and the LOD section show while there are LODs.
+    page_->getChildren().clear();
+    if (!lods_.empty()) {
+        const double first = lods_.front().distance;
+        base_range_->setText(first > 0.0 ? "Drawn up to " + distance_text(first) + " units"
+                                         : "Never drawn: the nearest LOD starts at 0 units");
+        page_->getChildren().add(base_heading_);
+    }
+    page_->getChildren().add(grid_);
+    if (!lods_.empty()) {
+        page_->getChildren().add(lod_heading_);
+        page_->getChildren().add(lod_section_);
+    }
+}
+
+void IdePrefabEditor::sync_grid(jadefx::FlowPane& grid, const std::vector<ModelView>& models,
+                                const std::shared_ptr<jadefx::Node>& tile, std::vector<std::shared_ptr<Card>>& kept) {
+    grid.getChildren().clear();
+    for (const ModelView& view : models) {
+        auto found = std::find_if(cards_.begin(), cards_.end(),
+                                  [&view](const std::shared_ptr<Card>& card) { return card->id == view.id; });
+        std::shared_ptr<Card> card = found != cards_.end() ? *found : make_card(view);
+        fill_card(*card, view);
+        grid.getChildren().add(card->root);
+        kept.push_back(std::move(card));
+    }
+    grid.getChildren().add(tile);
+}
+
+std::shared_ptr<jadefx::Node> IdePrefabEditor::make_new_tile(engine_core::InstanceId holder) {
+    auto tile = jadefx::make<jadefx::VBox>();
+    tile->getClassList().add("pe-new");
+    tile->setAlignment(jadefx::Pos::Center);
+    tile->setPrefSize(kCardWidth, kTileHeight);
+    tile->setMinSize(kCardWidth, kTileHeight);
+    if (holder != 0) {
+        tile->setElementId("pe-new:" + std::to_string(holder));
+    }
+    if (std::shared_ptr<jadefx::StackPane> plus = icon_box("Plus.png", 22, 30, "pe-new-plus")) {
+        tile->getChildren().add(std::move(plus));
+    }
+    tile->getChildren().add(text_label("New Model", "pe-new-title"));
+    tile->getChildren().add(text_label("or drop a Mesh or Material here", "pe-new-hint"));
+    tile->setOnMouseClicked([this, holder](const jadefx::MouseEvent& event) {
+        took_click_ = true;
+        if (event.button == 0) {
+            addModel(holder);
+        }
+    });
+    accept_drops(*tile, 0, nullptr, holder);
+    return tile;
+}
+
+std::shared_ptr<IdePrefabEditor::LodCard> IdePrefabEditor::make_lod_card(const LodView& view) {
+    auto card = std::make_shared<LodCard>();
+    card->id = view.id;
+    const engine_core::InstanceId id = view.id;
+    LodCard* raw = card.get();
+
+    card->root = jadefx::make<jadefx::VBox>();
+    card->root->getClassList().add("pe-lod");
+    card->root->setStyle("width: 100%;");
+    card->root->setElementId("pe-lod:" + std::to_string(id));
+
+    // Icon, name over its range; the distance it takes over from; its kind; delete.
+    // The heading takes what is left, so a long name ends in an ellipsis.
+    auto top = std::make_shared<StretchRow>(1);
+    top->setSpacing(12);
+    card->icon = icon_box(lod_kind_icon(view.kind), 18, 32, "pe-card-icon");
+    card->icon_kind = view.kind;
+    top->getChildren().add(card->icon);
+    auto heading = jadefx::make<jadefx::VBox>();
+    heading->setSpacing(2);
+    heading->setStyle("width: 100%;");
+    heading->setMinSize(0, 0);
+    heading->setMouseTransparent(true);
+    card->name = text_label(view.name, "pe-name");
+    card->range = text_label("", "pe-lod-range");
+    for (const std::shared_ptr<jadefx::Label>& label : {card->name, card->range}) {
+        label->setMinSize(0, 0);
+        label->setStyle("width: 100%;");
+        heading->getChildren().add(label);
+    }
+    top->getChildren().add(heading);
+
+    auto from = jadefx::make<jadefx::HBox>();
+    from->setSpacing(6);
+    from->setAlignment(jadefx::Pos::CenterLeft);
+    from->getChildren().add(field_word("From"));
+    card->distance = std::make_shared<NumberField>(0.0, false, [this, id](double value) {
+        if (host_.set_lod_distance) {
+            host_.set_lod_distance(id, value);
+        }
+    });
+    card->distance->setElementId("pe-lod-distance:" + std::to_string(id));
+    card->distance->setPrefWidth(70);
+    card->distance->setMinSize(70, 0);
+    jadefx::Tooltip::install(card->distance.get(),
+                             jadefx::make<jadefx::Tooltip>("How far from the camera this LOD takes over, in units"));
+    from->getChildren().add(card->distance);
+    from->getChildren().add(field_word("units"));
+    top->getChildren().add(from);
+
+    auto kinds = jadefx::make<jadefx::HBox>();
+    kinds->getClassList().add("pe-kinds");
+    kinds->setAlignment(jadefx::Pos::CenterLeft);
+    for (std::size_t index = 0; index < std::size(kLodKinds); ++index) {
+        const engine_core::LodKind kind = kLodKinds[index];
+        auto button = jadefx::make<jadefx::Button>(lod_kind_text(kind));
+        button->getClassList().add("pe-kind");
+        button->setElementId("pe-lod-kind:" + std::to_string(id) + ":" + lod_kind_text(kind));
+        button->setOnAction([this, id, kind](jadefx::ActionEvent&) {
+            const LodView* shown = lod_view(id);
+            if (shown != nullptr && shown->kind != kind && host_.set_lod_kind) {
+                host_.set_lod_kind(id, kind);
+            }
+        });
+        jadefx::Tooltip::install(button.get(), jadefx::make<jadefx::Tooltip>(lod_kind_tip(kind)));
+        kinds->getChildren().add(button);
+        card->kinds[index] = std::move(button);
+    }
+    top->getChildren().add(kinds);
+    top->getChildren().add(icon_button("Cross.png", "Delete LOD", "pe-lod-delete", [this, raw, id] {
+        raw->swallow = true;
+        if (host_.remove) {
+            host_.remove({id});
+        }
+    }));
+    card->root->getChildren().add(top);
+
+    card->body = jadefx::make<jadefx::VBox>();
+    card->body->setStyle("width: 100%;");
+    card->root->getChildren().add(card->body);
+
+    // Model: its Models' cards, then its New Model tile. Drops on the grid add to it.
+    card->grid = jadefx::make<jadefx::FlowPane>(kGap, kGap);
+    card->grid->setStyle("width: 100%;");
+    card->new_tile = make_new_tile(id);
+    accept_drops(*card->grid, 0, nullptr, id);
+
+    // Billboard: its Texture and its size. A Texture dropped anywhere on it fills the slot.
+    card->billboard = jadefx::make<jadefx::HBox>();
+    card->billboard->getClassList().add("pe-lod-billboard");
+    card->billboard->setAlignment(jadefx::Pos::TopLeft);
+    auto texture = jadefx::make<jadefx::VBox>();
+    texture->getClassList().add("pe-section");
+    texture->setPrefWidth(kCardWidth);
+    texture->setMinSize(kCardWidth, 0);
+    texture->getChildren().add(text_label("TEXTURE", "pe-slot-label"));
+    build_slot(card->texture, "Texture.png", "pe-lod-texture:" + std::to_string(id), "Clear Texture", [this, raw, id] {
+        raw->swallow = true;
+        if (host_.set_lod_texture) {
+            host_.set_lod_texture(id, 0);
+        }
+    });
+    card->texture.root->setOnMouseClicked([this, raw, id](const jadefx::MouseEvent& event) {
+        if (event.button != 0 || raw->swallow) {
+            return;
+        }
+        raw->swallow = true;
+        world_.selection().set({id});
+        requestFocus();
+        openTexturePicker(id);
+    });
+    texture->getChildren().add(card->texture.root);
+    card->billboard->getChildren().add(texture);
+    auto size = jadefx::make<jadefx::VBox>();
+    size->getClassList().add("pe-section");
+    size->getChildren().add(text_label("SIZE", "pe-slot-label"));
+    auto size_row = jadefx::make<jadefx::HBox>();
+    size_row->setSpacing(6);
+    size_row->setAlignment(jadefx::Pos::CenterLeft);
+    for (int axis = 0; axis < 2; ++axis) {
+        card->size[axis] = std::make_shared<NumberField>(0.0, true, [this, id, axis](double value) {
+            const LodView* shown = lod_view(id);
+            if (shown == nullptr || !host_.set_lod_size) {
+                return;
+            }
+            host_.set_lod_size(id, axis == 0 ? static_cast<float>(value) : shown->width,
+                               axis == 1 ? static_cast<float>(value) : shown->height);
+        });
+        card->size[axis]->setElementId("pe-lod-size:" + std::to_string(id) + ":" + std::to_string(axis));
+        card->size[axis]->setPrefWidth(56);
+        card->size[axis]->setMinSize(56, 0);
+        jadefx::Tooltip::install(card->size[axis].get(),
+                                 jadefx::make<jadefx::Tooltip>(axis == 0 ? "The card's width, in units"
+                                                                         : "The card's height, in units"));
+        size_row->getChildren().add(card->size[axis]);
+        if (axis == 0) {
+            size_row->getChildren().add(field_word("by"));
+        }
+    }
+    size_row->getChildren().add(field_word("units"));
+    size->getChildren().add(size_row);
+    card->billboard->getChildren().add(size);
+    accept_texture_drops(*card->billboard, id);
+
+    // None: what it saves.
+    card->none = text_label("", "pe-lod-note");
+
+    card->root->setOnMouseClicked([this, raw, id](const jadefx::MouseEvent& event) {
+        // A Model card, a tile, or a control inside took this click already.
+        if (raw->swallow || took_click_) {
+            raw->swallow = false;
+            return;
+        }
+        took_click_ = true;
+        if (event.button == 0) {
+            clicked_lod(id, event);
+        }
+    });
+    return card;
+}
+
+void IdePrefabEditor::fill_lod_card(LodCard& card, const LodView& view, std::vector<std::shared_ptr<Card>>& kept) {
+    if (card.name->getText() != view.name) {
+        card.name->setText(view.name);
+    }
+    if (card.icon_kind != view.kind) {
+        card.icon_kind = view.kind;
+        set_icon(*card.icon, lod_kind_icon(view.kind), 18);
+    }
+    const std::string from = distance_text(view.distance);
+    std::string range;
+    if (view.covered) {
+        range = "Never drawn: the next LOD starts at " + from + " units too";
+    } else if (view.until) {
+        range = from + " to " + distance_text(*view.until) + " units";
+    } else {
+        range = from + " units and beyond";
+    }
+    card.range->setText(range);
+    set_class(*card.range, "covered", view.covered);
+    card.distance->show(view.distance);
+    for (std::size_t index = 0; index < std::size(kLodKinds); ++index) {
+        set_class(*card.kinds[index], "selected", kLodKinds[index] == view.kind);
+    }
+    // The body shows what its kind draws.
+    std::shared_ptr<jadefx::Node> body;
+    switch (view.kind) {
+    case engine_core::LodKind::Model:
+        sync_grid(*card.grid, view.models, card.new_tile, kept);
+        body = card.grid;
+        break;
+    case engine_core::LodKind::Billboard:
+        show_slot(card.texture, "Texture.png", "texture", "Texture", view.texture);
+        card.size[0]->show(view.width);
+        card.size[1]->show(view.height);
+        body = card.billboard;
+        break;
+    case engine_core::LodKind::None:
+        card.none->setText("Draws nothing from " + from + " units on, so far-off copies cost nothing to draw.");
+        body = card.none;
+        break;
+    }
+    const auto& shown = card.body->getChildren().items();
+    if (shown.size() != 1 || shown.front() != body) {
+        card.body->getChildren().clear();
+        card.body->getChildren().add(body);
+    }
+}
+
+void IdePrefabEditor::clicked_lod(engine_core::InstanceId layer, const jadefx::MouseEvent& event) {
+    // Typing in one of its fields keeps the focus there.
+    const jadefx::Scene* scene = getScene();
+    if (scene == nullptr || dynamic_cast<const jadefx::TextField*>(scene->focusedNode()) == nullptr) {
+        requestFocus();
+    }
+    std::vector<engine_core::InstanceId> ids = selected_;
+    if (event.shortcut()) {
+        const auto found = std::find(ids.begin(), ids.end(), layer);
+        if (found != ids.end()) {
+            ids.erase(found);
+        } else {
+            ids.push_back(layer);
+        }
+    } else {
+        ids = {layer};
+    }
+    world_.selection().set(ids);
+}
+
+void IdePrefabEditor::reveal(const jadefx::Node& node) {
+    const double viewport = scroll_->getHeight();
+    const double range = page_->getHeight() - viewport;
+    const double span = scroll_->getVmax() - scroll_->getVmin();
+    if (range <= 0.0 || span <= 0.0) {
+        return;
+    }
+    const double offset = (scroll_->getVvalue() - scroll_->getVmin()) / span * range;
+    const double top = node.getAbsoluteY() - page_->getAbsoluteY();
+    const double bottom = top + node.getHeight();
+    double wanted = offset;
+    if (top < offset) {
+        wanted = top - kGap;
+    } else if (bottom > offset + viewport) {
+        wanted = std::min(top - kGap, bottom - viewport + kGap);
+    }
+    wanted = std::clamp(wanted, 0.0, range);
+    if (wanted != offset) {
+        scroll_->setVvalue(scroll_->getVmin() + span * wanted / range);
+    }
 }
 
 std::shared_ptr<IdePrefabEditor::Card> IdePrefabEditor::make_card(const ModelView& view) {
@@ -703,35 +1395,13 @@ std::shared_ptr<IdePrefabEditor::Card> IdePrefabEditor::make_card(const ModelVie
         auto section = jadefx::make<jadefx::VBox>();
         section->getClassList().add("pe-section");
         section->getChildren().add(text_label(part == ModelPart::Mesh ? "MESH" : "MATERIAL", "pe-slot-label"));
-        // The text takes what is left, so a long name ends in an ellipsis.
-        slot.root = std::make_shared<StretchRow>(1);
-        slot.root->getClassList().add("pe-slot");
-        slot.root->setElementId(std::string("pe-slot:") + std::to_string(id) + ":" + model_part_name(part));
-        slot.thumb = icon_box(part_icon(part), 18, kThumbSize, "pe-thumb");
-        slot.root->getChildren().add(slot.thumb);
-        auto text = jadefx::make<jadefx::VBox>();
-        text->setMouseTransparent(true);
-        text->setAlignment(jadefx::Pos::CenterLeft);
-        text->setStyle("width: 100%;");
-        text->setMinSize(0, 0);
-        slot.text = text_label("", "pe-slot-text");
-        slot.sub = text_label("", "pe-slot-sub");
-        // A VBox lays each out at its text's width; a full width lets it end in an ellipsis instead.
-        slot.text->setMinSize(0, 0);
-        slot.sub->setMinSize(0, 0);
-        slot.text->setStyle("width: 100%;");
-        slot.sub->setStyle("width: 100%;");
-        text->getChildren().add(slot.text);
-        text->getChildren().add(slot.sub);
-        slot.root->getChildren().add(text);
-        slot.clear = icon_button("Cross.png", std::string("Clear ") + model_part_name(part), "pe-slot-clear",
-                                 [this, raw, id, part] {
-                                     raw->swallow = true;
-                                     if (host_.set_part) {
-                                         host_.set_part(id, part, 0);
-                                     }
-                                 });
-        slot.root->getChildren().add(slot.clear);
+        build_slot(slot, part_icon(part), std::string("pe-slot:") + std::to_string(id) + ":" + model_part_name(part),
+                   std::string("Clear ") + model_part_name(part), [this, raw, id, part] {
+                       raw->swallow = true;
+                       if (host_.set_part) {
+                           host_.set_part(id, part, 0);
+                       }
+                   });
         slot.root->setOnMouseClicked([this, raw, id, part](const jadefx::MouseEvent& event) {
             if (event.button != 0 || raw->swallow) {
                 return;
@@ -777,45 +1447,18 @@ void IdePrefabEditor::fill_card(Card& card, const ModelView& view) {
 }
 
 void IdePrefabEditor::fill_slot(Card& card, ModelPart part, const PartView& view) {
-    Card::Slot& slot = card.slot(part);
-    const bool filled = view.id != 0;
-    if (slot.shown == view && slot.text->getText().size() > 0) {
-        return;
-    }
-    slot.shown = view;
-    set_class(*slot.root, "empty", !filled && !view.missing);
-    set_class(*slot.root, "missing", view.missing);
-    // The thumb shows the asset's detailed icon, else the part's icon when
-    // filled, and a plus when it asks for one.
-    slot.thumb->getChildren().clear();
-    const std::string file = filled ? part_icon(part) : view.missing ? "Warning.png" : "Plus.png";
-    if (std::shared_ptr<jadefx::Node> detailed = filled ? AssetPicker::detailedIcon(view.id, kThumbSize - 2) : nullptr) {
-        slot.thumb->getChildren().add(std::move(detailed));
-    } else if (std::shared_ptr<jadefx::ImageView> icon = icon_file(file)) {
-        icon->setPrefSize(18, 18);
-        icon->setMinSize(18, 18);
-        icon->setMaxSize(18, 18);
-        icon->setMouseTransparent(true);
-        slot.thumb->getChildren().add(std::move(icon));
-    }
-    if (filled) {
-        slot.text->setText(view.name);
-        slot.sub->setText(view.where.empty() ? std::string(model_part_name(part)) : view.where);
-    } else if (view.missing) {
-        slot.text->setText(std::string("Missing ") + part_word(part));
-        slot.sub->setText("Its asset was deleted. Choose another.");
-    } else {
-        slot.text->setText(std::string("Choose a ") + part_word(part));
-        slot.sub->setText("Click, or drop one from Assets");
-    }
-    slot.clear->setVisible(filled || view.missing);
-    slot.filled = filled;
+    show_slot(card.slot(part), part_icon(part), part_word(part), model_part_name(part), view);
 }
 
 void IdePrefabEditor::show_selection() {
+    const auto on = [this](engine_core::InstanceId id) {
+        return std::find(selected_.begin(), selected_.end(), id) != selected_.end();
+    };
     for (const std::shared_ptr<Card>& card : cards_) {
-        const bool on = std::find(selected_.begin(), selected_.end(), card->id) != selected_.end();
-        set_class(*card->root, "selected", on);
+        set_class(*card->root, "selected", on(card->id));
+    }
+    for (const std::shared_ptr<LodCard>& card : lod_cards_) {
+        set_class(*card->root, "selected", on(card->id));
     }
 }
 
@@ -891,13 +1534,45 @@ void IdePrefabEditor::show_card_menu(engine_core::InstanceId model, double x, do
     menu_->show(*scene, x, y);
 }
 
-void IdePrefabEditor::addModel() {
+void IdePrefabEditor::addModel(engine_core::InstanceId holder) {
     if (!prefab_alive_ || !host_.add_model || pending_add_) {
         return;
     }
     closePicker();
     pending_add_ = std::make_shared<InsertResult>();
-    host_.add_model(prefab_, 0, 0, pending_add_);
+    host_.add_model(holder != 0 ? holder : prefab_, 0, 0, pending_add_);
+}
+
+void IdePrefabEditor::addLod() {
+    if (!prefab_alive_ || !host_.add_lod || pending_lod_) {
+        return;
+    }
+    closePicker();
+    pending_lod_ = std::make_shared<InsertResult>();
+    host_.add_lod(prefab_, pending_lod_);
+}
+
+void IdePrefabEditor::openTexturePicker(engine_core::InstanceId layer) {
+    const LodCard* card = lod_card(layer);
+    const LodView* view = lod_view(layer);
+    if (card == nullptr || view == nullptr || !picker_ || view->kind != engine_core::LodKind::Billboard) {
+        return;
+    }
+    std::vector<AssetChoice> choices;
+    {
+        engine_core::DataModelLock lock(world_, engine_core::DataModelLock::Read, kActionLockWait);
+        if (!lock.owns()) {
+            return;
+        }
+        choices = texture_choices(world_);
+    }
+    picker_->open(*card->texture.root, "Texture", std::move(choices), view->texture.id,
+                  [this, layer](engine_core::InstanceId asset) {
+                      const LodView* now = lod_view(layer);
+                      if (now != nullptr && now->texture.id != asset && host_.set_lod_texture) {
+                          host_.set_lod_texture(layer, asset);
+                      }
+                  });
 }
 
 void IdePrefabEditor::openPicker(engine_core::InstanceId model, ModelPart part, bool guided) {
@@ -978,10 +1653,20 @@ void IdePrefabEditor::finish_rename(bool apply) {
 }
 
 std::vector<engine_core::InstanceId> IdePrefabEditor::selected_models() const {
+    // The selected Models and layers this Prefab has, as the page shows them.
     std::vector<engine_core::InstanceId> ids;
+    const auto take = [this, &ids](engine_core::InstanceId id) {
+        if (std::find(selected_.begin(), selected_.end(), id) != selected_.end()) {
+            ids.push_back(id);
+        }
+    };
     for (const ModelView& view : models_) {
-        if (std::find(selected_.begin(), selected_.end(), view.id) != selected_.end()) {
-            ids.push_back(view.id);
+        take(view.id);
+    }
+    for (const LodView& lod : lods_) {
+        take(lod.id);
+        for (const ModelView& view : lod.models) {
+            take(view.id);
         }
     }
     return ids;
@@ -1017,7 +1702,8 @@ std::vector<engine_core::InstanceId> IdePrefabEditor::dragged(const jadefx::Drag
     return instance_drag_ids(event.dragboard->get(kInstanceDragFormat));
 }
 
-void IdePrefabEditor::accept_drops(jadefx::Node& node, engine_core::InstanceId model, const ModelPart* part) {
+void IdePrefabEditor::accept_drops(jadefx::Node& node, engine_core::InstanceId model, const ModelPart* part,
+                                   engine_core::InstanceId holder) {
     jadefx::Node* raw = &node;
     node.setOnDragOver([this, raw, model, part](jadefx::DragEvent& event) {
         const std::vector<engine_core::InstanceId> ids = dragged(event);
@@ -1047,13 +1733,52 @@ void IdePrefabEditor::accept_drops(jadefx::Node& node, engine_core::InstanceId m
             mark_drop(nullptr);
         }
     });
-    node.setOnDragDropped([this, model, part](jadefx::DragEvent& event) {
+    node.setOnDragDropped([this, model, part, holder](jadefx::DragEvent& event) {
         const std::vector<engine_core::InstanceId> ids = dragged(event);
         if (ids.empty()) {
             return;
         }
         mark_drop(nullptr);
-        event.setDropCompleted(dropOnto(ids, model, part));
+        event.setDropCompleted(dropOnto(ids, model, part, holder));
+        event.consume();
+    });
+}
+
+void IdePrefabEditor::accept_texture_drops(jadefx::Node& node, engine_core::InstanceId layer) {
+    jadefx::Node* raw = &node;
+    node.setOnDragOver([this, raw](jadefx::DragEvent& event) {
+        const std::vector<engine_core::InstanceId> ids = dragged(event);
+        if (ids.empty() || !prefab_alive_) {
+            return;
+        }
+        engine_core::InstanceId texture = 0;
+        {
+            // A busy place refuses this over; the next one asks again.
+            engine_core::DataModelLock lock(world_, engine_core::DataModelLock::Read, kActionLockWait);
+            if (!lock.owns()) {
+                return;
+            }
+            texture = dragged_texture(world_, ids);
+        }
+        if (texture == 0) {
+            return;
+        }
+        event.acceptTransferModes(jadefx::TransferMode::Link);
+        event.consume();
+        mark_drop(raw);
+    });
+    node.setOnDragExited([this, raw](jadefx::DragEvent&) {
+        if (drop_mark_ == raw) {
+            mark_drop(nullptr);
+        }
+    });
+    node.setOnDragDropped([this, layer](jadefx::DragEvent& event) {
+        const std::vector<engine_core::InstanceId> ids = dragged(event);
+        if (ids.empty()) {
+            return;
+        }
+        mark_drop(nullptr);
+        event.setDropCompleted(dropTexture(ids, layer));
         event.consume();
     });
 }
@@ -1071,8 +1796,30 @@ void IdePrefabEditor::mark_drop(jadefx::Node* node) {
     }
 }
 
+bool IdePrefabEditor::dropTexture(const std::vector<engine_core::InstanceId>& ids, engine_core::InstanceId layer) {
+    engine_core::InstanceId texture = 0;
+    {
+        engine_core::DataModelLock lock(world_, engine_core::DataModelLock::Read, kDropLockWait);
+        if (!lock.owns()) {
+            return false;
+        }
+        texture = dragged_texture(world_, ids);
+    }
+    if (texture == 0) {
+        if (host_.notice) {
+            host_.notice("Only a Texture goes on a billboard");
+        }
+        return false;
+    }
+    if (!host_.set_lod_texture) {
+        return false;
+    }
+    host_.set_lod_texture(layer, texture);
+    return true;
+}
+
 bool IdePrefabEditor::dropOnto(const std::vector<engine_core::InstanceId>& ids, engine_core::InstanceId model,
-                               const ModelPart* part) {
+                               const ModelPart* part, engine_core::InstanceId holder) {
     DraggedParts parts;
     {
         engine_core::DataModelLock lock(world_, engine_core::DataModelLock::Read, kDropLockWait);
@@ -1095,7 +1842,7 @@ bool IdePrefabEditor::dropOnto(const std::vector<engine_core::InstanceId>& ids, 
             return false;
         }
         pending_add_ = std::make_shared<InsertResult>();
-        host_.add_model(prefab_, parts.mesh, parts.material, pending_add_);
+        host_.add_model(holder != 0 ? holder : prefab_, parts.mesh, parts.material, pending_add_);
         return true;
     }
     if (!host_.set_part) {
@@ -1126,6 +1873,31 @@ const ModelView* IdePrefabEditor::model_view(engine_core::InstanceId model) cons
     for (const ModelView& view : models_) {
         if (view.id == model) {
             return &view;
+        }
+    }
+    for (const LodView& lod : lods_) {
+        for (const ModelView& view : lod.models) {
+            if (view.id == model) {
+                return &view;
+            }
+        }
+    }
+    return nullptr;
+}
+
+const LodView* IdePrefabEditor::lod_view(engine_core::InstanceId layer) const {
+    for (const LodView& view : lods_) {
+        if (view.id == layer) {
+            return &view;
+        }
+    }
+    return nullptr;
+}
+
+const IdePrefabEditor::LodCard* IdePrefabEditor::lod_card(engine_core::InstanceId layer) const {
+    for (const std::shared_ptr<LodCard>& card : lod_cards_) {
+        if (card->id == layer) {
+            return card.get();
         }
     }
     return nullptr;
@@ -1159,6 +1931,47 @@ jadefx::Node* IdePrefabEditor::slotClearNode(engine_core::InstanceId model, Mode
 }
 
 jadefx::Node* IdePrefabEditor::addButton() const { return add_button_.get(); }
+jadefx::Node* IdePrefabEditor::addLodButton() const { return add_lod_button_.get(); }
+
+jadefx::Node* IdePrefabEditor::lodCard(engine_core::InstanceId layer) const {
+    const LodCard* card = lod_card(layer);
+    return card != nullptr ? card->root.get() : nullptr;
+}
+
+jadefx::TextField* IdePrefabEditor::lodDistanceField(engine_core::InstanceId layer) const {
+    const LodCard* card = lod_card(layer);
+    return card != nullptr ? card->distance.get() : nullptr;
+}
+
+jadefx::Node* IdePrefabEditor::lodKindButton(engine_core::InstanceId layer, engine_core::LodKind kind) const {
+    const LodCard* card = lod_card(layer);
+    for (std::size_t index = 0; card != nullptr && index < std::size(kLodKinds); ++index) {
+        if (kLodKinds[index] == kind) {
+            return card->kinds[index].get();
+        }
+    }
+    return nullptr;
+}
+
+jadefx::Node* IdePrefabEditor::lodTextureSlot(engine_core::InstanceId layer) const {
+    const LodCard* card = lod_card(layer);
+    const LodView* view = lod_view(layer);
+    return card != nullptr && view != nullptr && view->kind == engine_core::LodKind::Billboard
+               ? card->texture.root.get()
+               : nullptr;
+}
+
+jadefx::TextField* IdePrefabEditor::lodSizeField(engine_core::InstanceId layer, int axis) const {
+    const LodCard* card = lod_card(layer);
+    return card != nullptr && (axis == 0 || axis == 1) ? card->size[axis].get() : nullptr;
+}
+
+jadefx::Node* IdePrefabEditor::lodNewModelTile(engine_core::InstanceId layer) const {
+    const LodCard* card = lod_card(layer);
+    const LodView* view = lod_view(layer);
+    return card != nullptr && view != nullptr && view->kind == engine_core::LodKind::Model ? card->new_tile.get()
+                                                                                           : nullptr;
+}
 jadefx::Node* IdePrefabEditor::emptyState() const { return empty_->isVisible() ? empty_.get() : nullptr; }
 
 jadefx::TextField* IdePrefabEditor::pickerField() const { return pickerOpen() ? picker_->field() : nullptr; }

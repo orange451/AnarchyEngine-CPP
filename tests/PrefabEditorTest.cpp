@@ -1,5 +1,7 @@
 #include "ide/IdePrefabEditor.hpp"
+#include "ide/PrefabLods.hpp"
 #include "ide/PrefabModels.hpp"
+#include "ChangeHistoryService.hpp"
 #include "SelectionService.hpp"
 
 #include "AssetInstances.hpp"
@@ -21,6 +23,7 @@
 namespace {
 
 using engine_core::InstanceId;
+using engine_core::LodKind;
 using ide::ModelPart;
 
 int gFailures = 0;
@@ -42,8 +45,9 @@ struct SimRole {
 };
 
 // A place whose Meshes hold Rock and, in a Folder Props, Lid; whose Materials
-// hold Wood and Metal; and whose Prefabs hold Crate, with no Models yet. The
-// host writes straight to the game, standing in for the simulation thread.
+// hold Wood and Metal; whose Textures hold Bark; and whose Prefabs hold Crate,
+// with no Models yet. The host writes straight to the game, standing in for
+// the simulation thread.
 struct Rig {
     SimRole role;
     engine_core::ScriptRuntime runtime;
@@ -52,6 +56,7 @@ struct Rig {
     InstanceId lid = 0;
     InstanceId wood = 0;
     InstanceId metal = 0;
+    InstanceId bark = 0;
     InstanceId crate = 0;
     std::vector<std::string> notices;
     std::vector<std::pair<InstanceId, std::string>> renames;
@@ -68,6 +73,7 @@ struct Rig {
         lid = make<engine_core::Mesh>("Lid", make<engine_core::Folder>("Props", meshes));
         wood = make<engine_core::Material>("Wood", game.service("Materials"));
         metal = make<engine_core::Material>("Metal", game.service("Materials"));
+        bark = make<engine_core::Texture>("Bark", game.service("Textures"));
         crate = make<engine_core::Prefab>("Crate", game.service("Prefabs"));
 
         ide::PrefabEditorHost host;
@@ -96,6 +102,29 @@ struct Rig {
             }
         };
         host.notice = [this](std::string text) { notices.push_back(std::move(text)); };
+        host.add_lod = [this](InstanceId prefab, std::shared_ptr<ide::InsertResult> result) {
+            std::string error;
+            result->id = ide::run_add_lod(game, prefab, error);
+            result->error = error;
+            result->done = true;
+        };
+        const auto said = [this](std::optional<std::string> error) {
+            if (error) {
+                notices.push_back(*error);
+            }
+        };
+        host.set_lod_distance = [this, said](InstanceId layer, double distance) {
+            said(ide::run_set_lod_distance(game, layer, distance));
+        };
+        host.set_lod_kind = [this, said](InstanceId layer, LodKind kind) {
+            said(ide::run_set_lod_kind(game, layer, kind));
+        };
+        host.set_lod_texture = [this, said](InstanceId layer, InstanceId texture) {
+            said(ide::run_set_lod_texture(game, layer, texture));
+        };
+        host.set_lod_size = [this, said](InstanceId layer, float width, float height) {
+            said(ide::run_set_lod_size(game, layer, width, height));
+        };
         editor = jadefx::make<ide::IdePrefabEditor>(game, crate, std::move(host));
         editor->setPrefWidthRatio(1);
         editor->setPrefHeightRatio(1);
@@ -148,6 +177,41 @@ struct Rig {
     }
 
     InstanceId last_model() const { return editor->models().empty() ? 0 : editor->models().back().id; }
+
+    const ide::LodView* lod(InstanceId layer) const {
+        for (const ide::LodView& v : editor->lods()) {
+            if (v.id == layer) {
+                return &v;
+            }
+        }
+        return nullptr;
+    }
+
+    // Types text into field and presses Enter, as a person would.
+    void type(jadefx::TextField* field, const std::string& text) {
+        Expect(field != nullptr, "the field to type in is on screen");
+        if (field == nullptr) {
+            return;
+        }
+        field->requestFocus();
+        field->setText(text);
+        key(jadefx::Key::Enter);
+        frames();
+    }
+
+    // Presses and releases near the top edge of node, away from what is inside it.
+    void click_edge(jadefx::Node* node) {
+        Expect(node != nullptr, "the node to click is on screen");
+        if (node == nullptr) {
+            return;
+        }
+        const double x = node->getAbsoluteX() + node->getWidth() * 0.5;
+        const double y = node->getAbsoluteY() + 4;
+        scene->noteMove(x, y);
+        scene->noteButton(0, true, x, y);
+        scene->noteButton(0, false, x, y);
+        frames();
+    }
 };
 
 void model_logic() {
@@ -345,6 +409,139 @@ void deleted_prefab() {
     Expect(rig.adds == 0, "and Add Model does nothing");
 }
 
+// The LOD logic: adding, reading in draw order, and each write one undo step.
+void lod_logic() {
+    Rig rig;
+    engine_core::Game& game = rig.game;
+    std::string error;
+    const InstanceId near_layer = ide::run_add_lod(game, rig.crate, error);
+    const InstanceId far_layer = ide::run_add_lod(game, rig.crate, error);
+    Expect(game.name(near_layer) == "LOD" && game.name(far_layer) == "LOD 2", "new LODs are LOD, then LOD 2");
+    std::vector<ide::LodView> lods = ide::read_lods(game, rig.crate);
+    Expect(lods.size() == 2 && lods[0].distance == 100.0 && lods[1].distance == 200.0,
+           "the first LOD is at 100 units, the next twice the farthest");
+    Expect(lods.size() == 2 && lods[0].until == std::optional<double>(200.0) && !lods[1].until,
+           "each runs until the next; the last runs on");
+    Expect(ide::run_add_lod(game, rig.rock, error) == 0 && !error.empty(), "only a Prefab takes a LOD");
+
+    Expect(!ide::run_set_lod_distance(game, near_layer, 300.0), "a distance is set");
+    lods = ide::read_lods(game, rig.crate);
+    Expect(lods.size() == 2 && lods[0].id == far_layer && lods[1].id == near_layer, "they read nearest first");
+    Expect(!ide::run_set_lod_distance(game, far_layer, 300.0), "two may share a distance");
+    lods = ide::read_lods(game, rig.crate);
+    Expect(lods.size() == 2 && lods[0].covered && !lods[1].covered,
+           "of two at one distance, the earlier one is covered");
+    Expect(ide::run_set_lod_distance(game, far_layer, -5.0).has_value(), "a negative distance is refused");
+
+    Expect(!ide::run_set_lod_kind(game, near_layer, LodKind::Billboard), "a kind is set");
+    Expect(ide::run_set_lod_texture(game, near_layer, rig.rock).has_value(), "a Mesh is refused as a Texture");
+    Expect(!ide::run_set_lod_texture(game, near_layer, rig.bark), "a Texture is set");
+    Expect(!ide::run_set_lod_size(game, near_layer, 3.f, 9.f), "a size is set");
+    Expect(ide::run_set_lod_size(game, near_layer, 0.f, 9.f).has_value(), "a zero width is refused");
+    // The LOD a list holds with id.
+    const auto find = [](const std::vector<ide::LodView>& list, InstanceId id) {
+        const auto found = std::find_if(list.begin(), list.end(), [id](const ide::LodView& v) { return v.id == id; });
+        return found != list.end() ? *found : ide::LodView{};
+    };
+    const ide::LodView billboard = find(ide::read_lods(game, rig.crate), near_layer);
+    Expect(billboard.kind == LodKind::Billboard && billboard.texture.id == rig.bark &&
+               billboard.texture.where == "Textures" && billboard.width == 3.f && billboard.height == 9.f,
+           "read_lods reads a billboard's Texture and size");
+
+    // Each write is its own step.
+    game.history().undo();
+    const ide::LodView sized = find(ide::read_lods(game, rig.crate), near_layer);
+    Expect(sized.width == 4.f && sized.texture.id == rig.bark, "undo takes back the size alone");
+    game.history().undo();
+    Expect(find(ide::read_lods(game, rig.crate), near_layer).texture.id == 0, "then the Texture");
+    game.history().undo();
+    Expect(find(ide::read_lods(game, rig.crate), near_layer).kind == LodKind::Model, "then the kind");
+    game.history().redo();
+    Expect(find(ide::read_lods(game, rig.crate), near_layer).kind == LodKind::Billboard, "and redo puts it back");
+
+    // A Model-kind layer holds Models, as the Prefab does.
+    const InstanceId low = ide::add_model(game, far_layer, rig.lid, rig.wood, error);
+    Expect(low != 0 && game.parent(low) == far_layer, "a LOD takes a Model");
+    const ide::LodView holder = find(ide::read_lods(game, rig.crate), far_layer);
+    Expect(holder.models.size() == 1 && holder.models[0].name == "Lid", "read_lods reads a layer's Models");
+    Expect(ide::read_models(game, rig.crate).empty(), "the Prefab's own Models are only its own");
+    Expect(ide::dragged_texture(game, {rig.rock, rig.bark}) == rig.bark, "a drag's first Texture counts");
+    Expect(ide::distance_text(250.0) == "250" && ide::distance_text(62.5) == "62.5", "distances read plainly");
+}
+
+// The LOD section: Add LOD, the distance typed in place, the kind, a
+// billboard's Texture and size, a layer's own Models, and Delete.
+void lod_section() {
+    Rig rig;
+    rig.click(rig.editor->addLodButton());
+    rig.frames(3);
+    Expect(rig.editor->lods().size() == 1, "Add LOD adds a LOD");
+    const InstanceId layer = rig.editor->lods().empty() ? 0 : rig.editor->lods()[0].id;
+    Expect(rig.editor->lodCard(layer) != nullptr, "its card shows");
+    Expect(rig.editor->emptyState() == nullptr, "a Prefab with a LOD and no Models is not empty");
+    Expect(rig.game.selection().get() == std::vector<InstanceId>{layer}, "the new LOD is selected");
+    jadefx::TextField* distance = rig.editor->lodDistanceField(layer);
+    Expect(distance != nullptr && distance->getText() == "100", "its distance shows in place");
+
+    rig.type(distance, "250");
+    Expect(rig.lod(layer) != nullptr && rig.lod(layer)->distance == 250.0, "a distance typed and entered is set");
+    rig.type(distance, "-3");
+    Expect(rig.lod(layer)->distance == 250.0 && distance->getText() == "250",
+           "a negative distance is refused, and the field shows the distance again");
+
+    rig.click(rig.editor->lodKindButton(layer, LodKind::Billboard));
+    rig.frames();
+    Expect(rig.lod(layer)->kind == LodKind::Billboard, "Billboard makes it a billboard");
+    Expect(rig.editor->lodTextureSlot(layer) != nullptr && rig.editor->lodNewModelTile(layer) == nullptr,
+           "a billboard shows a Texture slot, not Models");
+    jadefx::TextField* width = rig.editor->lodSizeField(layer, 0);
+    Expect(width != nullptr && width->getText() == "4", "its width shows");
+    rig.type(width, "6");
+    Expect(rig.lod(layer)->width == 6.f && rig.lod(layer)->height == 8.f, "a width typed is set, the height kept");
+    Expect(rig.editor->dropTexture({rig.bark}, layer), "a Texture dropped on it is taken");
+    rig.frames();
+    Expect(rig.lod(layer)->texture.id == rig.bark, "it fills the Texture slot");
+    rig.notices.clear();
+    Expect(!rig.editor->dropTexture({rig.rock}, layer) && !rig.notices.empty(),
+           "a Mesh dropped on it is refused, with a notice");
+
+    rig.click(rig.editor->lodKindButton(layer, LodKind::None));
+    rig.frames();
+    Expect(rig.lod(layer)->kind == LodKind::None && rig.editor->lodTextureSlot(layer) == nullptr,
+           "None draws nothing, and shows no slot");
+
+    rig.click(rig.editor->lodKindButton(layer, LodKind::Model));
+    rig.frames();
+    Expect(rig.editor->lodNewModelTile(layer) != nullptr, "a Model LOD shows a New Model tile");
+    rig.click(rig.editor->lodNewModelTile(layer));
+    rig.frames(3);
+    const InstanceId swap = rig.lod(layer) != nullptr && !rig.lod(layer)->models.empty()
+                                ? rig.lod(layer)->models[0].id
+                                : 0;
+    Expect(swap != 0 && rig.game.parent(swap) == layer, "its tile adds a Model to the LOD");
+    Expect(rig.editor->cardNode(swap) != nullptr && rig.editor->models().empty(),
+           "the Model's card shows in the LOD, not up close");
+    // The picker starts with the last Mesh search; an empty one lists them all.
+    if (jadefx::TextField* search = rig.editor->pickerField()) {
+        search->setText("");
+        rig.frames();
+    }
+    Expect(rig.editor->pickerOpen() && rig.editor->pickerRow(rig.rock) != nullptr,
+           "and its Mesh picker opens");
+    rig.click(rig.editor->pickerRow(rig.rock));
+    rig.frames(2);
+    rig.editor->closePicker();
+    Expect(rig.lod(layer)->models[0].mesh.id == rig.rock, "a pick fills the LOD's Model");
+
+    rig.click_edge(rig.editor->lodCard(layer));
+    Expect(rig.game.selection().get() == std::vector<InstanceId>{layer}, "a click on a LOD's card selects it");
+    rig.key(jadefx::Key::Delete);
+    rig.frames();
+    Expect(rig.removed == std::vector<InstanceId>{layer} && rig.editor->lods().empty() &&
+               rig.editor->lodCard(layer) == nullptr,
+           "Delete removes the selected LOD");
+}
+
 }  // namespace
 
 // A long Model or asset name ends in an ellipsis inside its card.
@@ -389,6 +586,8 @@ int main() {
     drops();
     deleted_prefab();
     long_names_fit();
+    lod_logic();
+    lod_section();
     if (gFailures != 0) {
         std::fprintf(stderr, "%d failed\n", gFailures);
         return 1;

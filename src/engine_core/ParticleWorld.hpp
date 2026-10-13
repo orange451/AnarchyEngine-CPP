@@ -59,6 +59,8 @@ public:
     const std::vector<ParticleDraw>& draws() const { return draws_; }
     std::size_t live_total() const { return live_total_; }
     std::size_t emitter_count() const { return emitters_.size(); }
+    // The Box3D rays every World-collision emitter shares in one step.
+    static constexpr int kRaysPerStep = 512;
     // Box3D rays World collision cast last step, for tests.
     int rays_last_step() const;
 

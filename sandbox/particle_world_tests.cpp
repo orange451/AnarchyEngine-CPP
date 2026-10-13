@@ -350,3 +350,91 @@ TEST_CASE("PW12 huge rates, tiny lifetimes, and zero budgets stay bounded", "[pa
     rig.steps(1);
     REQUIRE(e.particle_count() == 0);
 }
+
+#include "Brush.hpp"
+#include "CollisionGroups.hpp"
+#include "Terrain.hpp"
+#include "TerrainMaterial.hpp"
+#include "terrain/ShapeDistance.hpp"
+
+TEST_CASE("PW13 Terrain collision stops particles at voxel ground", "[particle-world]") {
+    ParticleRig rig;
+    Terrain& terrain = rig.game.create<Terrain>();
+    rig.game.set_parent(terrain.id(), workspace_of(rig.game));
+    TerrainMaterial* entry = nullptr;
+    REQUIRE_FALSE(terrain.add_material(0, entry).has_value());
+    terrain::Shape slab;
+    slab.kind = terrain::Shape::Kind::Block;
+    slab.size = Vec3{40.f, 10.f, 40.f};
+    slab.frame = matrix4_translation(0.f, -5.f, 0.f);   // solid below y = 0
+    terrain::prepare_shape(slab);
+    REQUIRE_FALSE(terrain.volume().fill(slab, static_cast<std::uint8_t>(entry->material_id())).has_value());
+    Attachment& above = rig.attachment_at(0.f, 6.f, 0.f);
+    ParticleEmitter& e = rig.emitter(above.id());
+    REQUIRE_FALSE(e.set_emit_speed(NumberCurve::constant(0.f)).has_value());
+    REQUIRE_FALSE(e.set_acceleration(Vec3{0.f, -50.f, 0.f}).has_value());
+    REQUIRE_FALSE(e.set_lifetime(NumberCurve::constant(10.f)).has_value());
+    REQUIRE_FALSE(e.set_collision(static_cast<int>(ParticleCollision::Terrain)).has_value());
+    REQUIRE_FALSE(e.set_collision_response(static_cast<int>(ParticleCollisionResponse::Stick)).has_value());
+    REQUIRE_FALSE(e.set_playing(false).has_value());
+    e.request_emit(20);
+    rig.steps(120);
+    REQUIRE(e.particle_count() == 20);
+    for (const auto& p : *rig.world.draws().front().particles) {
+        REQUIRE(p.position[1] > -1.f);   // within a voxel of the surface
+        REQUIRE(p.position[1] < 0.6f);
+    }
+    // Without collision they fall through.
+    REQUIRE_FALSE(e.set_collision(static_cast<int>(ParticleCollision::None)).has_value());
+    e.request_emit(1);
+    rig.steps(60);
+    float lowest = 0.f;
+    for (const auto& p : *rig.world.draws().front().particles) {
+        lowest = std::min(lowest, p.position[1]);
+    }
+    REQUIRE(lowest < -5.f);
+}
+
+TEST_CASE("PW14 World collision hits a Brush, obeys CollisionGroup, and keeps to the ray budget",
+          "[particle-world]") {
+    ParticleRig rig;
+    Brush& floor = rig.game.create<Brush>();   // a 4-unit box: its top at y = 2
+    rig.game.set_parent(floor.id(), workspace_of(rig.game));
+    floor.set_anchored(true);
+    Attachment& above = rig.attachment_at(0.f, 8.f, 0.f);
+    ParticleEmitter& e = rig.emitter(above.id());
+    REQUIRE_FALSE(e.set_emit_speed(NumberCurve::constant(0.f)).has_value());
+    REQUIRE_FALSE(e.set_acceleration(Vec3{0.f, -40.f, 0.f}).has_value());
+    REQUIRE_FALSE(e.set_lifetime(NumberCurve::constant(10.f)).has_value());
+    REQUIRE_FALSE(e.set_collision(static_cast<int>(ParticleCollision::World)).has_value());
+    REQUIRE_FALSE(e.set_collision_response(static_cast<int>(ParticleCollisionResponse::Stick)).has_value());
+    REQUIRE_FALSE(e.set_playing(false).has_value());
+    e.request_emit(10);
+    rig.steps(90);
+    REQUIRE(e.particle_count() == 10);
+    for (const auto& p : *rig.world.draws().front().particles) {
+        REQUIRE(p.position[1] == Approx(2.f).margin(0.05f));
+    }
+    REQUIRE(rig.world.rays_last_step() >= 0);
+
+    // A group that does not collide with the floor's: they fall through.
+    CollisionGroups& groups = rig.game.collision_groups();
+    REQUIRE_FALSE(groups.register_group("Particles", CollisionGroups::FilterType::Exclude).has_value());
+    REQUIRE_FALSE(groups.set_collidable("Particles", "Default", false).has_value());
+    e.request_clear();
+    REQUIRE_FALSE(e.set_collision_group("Particles").has_value());
+    e.request_emit(5);
+    rig.steps(90);
+    for (const auto& p : *rig.world.draws().front().particles) {
+        REQUIRE(p.position[1] < -5.f);
+    }
+
+    // Thousands of particles in one step cast no more than the budget's rays.
+    REQUIRE_FALSE(e.set_collision_group("Default").has_value());
+    REQUIRE_FALSE(e.set_max_particles(5000).has_value());
+    e.request_clear();
+    e.request_emit(5000);
+    rig.steps(2);
+    REQUIRE(rig.world.rays_last_step() > 0);
+    REQUIRE(rig.world.rays_last_step() <= ParticleWorld::kRaysPerStep);
+}

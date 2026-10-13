@@ -10,6 +10,7 @@
 #include "PhysicsObject.hpp"
 #include "PVInstance.hpp"
 #include "SceneService.hpp"
+#include "particles/ParticleColliders.hpp"
 #include "particles/ParticleMath.hpp"
 
 #include <algorithm>
@@ -30,11 +31,24 @@ struct ParticleWorld::Entry {
     bool seen = false;
     std::uint64_t pass = 0;
     bool finished_pending = false;   // a one-shot ended; Finished fires once its last particle dies
+    particles::WorldCollider world;   // its ray turns and hit planes, for World collision
 };
 
-// Task 11 fills this in.
+// What particles hit this step: the Terrains, prepared on first need, and the
+// ray budget World emitters share.
 struct ParticleWorld::Colliders {
+    particles::TerrainCollider terrain;
+    bool terrain_ready = false;
+    int budget = 0;
     int rays = 0;
+
+    particles::TerrainCollider& ground(DataModel& game) {
+        if (!terrain_ready) {
+            terrain.prepare(game);
+            terrain_ready = true;
+        }
+        return terrain;
+    }
 };
 
 namespace {
@@ -314,12 +328,23 @@ void ParticleWorld::step(DataModel& game, double dt) {
     // Pass 2: step, store what scripts read, fire Finished, and pack draws.
     draws_.clear();
     live_total_ = 0;
+    colliders_->terrain_ready = false;
+    colliders_->budget = kRaysPerStep;
+    colliders_->rays = 0;
     for (Pending& p : pending_) {
         ParticleEmitter& e = *p.emitter;
         Entry& entry = *p.entry;
         // An Emit that cannot fit is dropped, not carried.
         const int emits = std::min(p.emits, p.allowance);
-        entry.sim.step(p.frame, e.playing(), emits, p.allowance, nullptr);
+        particles::ParticleCollider* collider = nullptr;
+        if (e.collision() == ParticleCollision::Terrain) {
+            collider = &colliders_->ground(game);
+        } else if (e.collision() == ParticleCollision::World) {
+            entry.world.prepare(game, colliders_->ground(game), e.collision_group(), &colliders_->budget,
+                                &colliders_->rays);
+            collider = &entry.world;
+        }
+        entry.sim.step(p.frame, e.playing(), emits, p.allowance, collider);
         entry.last_frame = p.frame.current;
         entry.seen = true;
         if (entry.sim.take_cycle_ended()) {

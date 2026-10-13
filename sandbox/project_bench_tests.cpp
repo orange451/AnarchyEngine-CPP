@@ -27,6 +27,13 @@ TEST_CASE("BENCH a project's load, disk scan and focus check", "[.bench][project
     }
     SimRole role;
     auto start = std::chrono::steady_clock::now();
+    {
+        // As the studio opens a project: into a world it replaces.
+        engine_core::Game world;
+        engine_core::Project opened = engine_core::Project::load(*path, world);
+        std::printf("load into world %8.2f s  (as the studio opens it)\n", seconds_since(start));
+    }
+    start = std::chrono::steady_clock::now();
     engine_core::Project project = engine_core::Project::load(*path);
     std::printf("load            %8.2f s\n", seconds_since(start));
     start = std::chrono::steady_clock::now();

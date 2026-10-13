@@ -50,6 +50,7 @@
 #include <set>
 #include <sstream>
 #include <system_error>
+#include <thread>
 #include <tuple>
 #include <string_view>
 #include <unordered_map>
@@ -433,6 +434,33 @@ bool split_stem(const std::string& stem, std::string& guid) {
     return valid_guid(guid);
 }
 
+// Calls work(i) for every i in [0, count): on this thread and up to
+// hardware_concurrency - 1 others, each taking the next i. work must not throw.
+template <class Work>
+void parallel_for(std::size_t count, const Work& work) {
+    std::atomic<std::size_t> next{0};
+    const auto run = [&] {
+        for (std::size_t i = next.fetch_add(1); i < count; i = next.fetch_add(1)) {
+            work(i);
+        }
+    };
+    const unsigned hardware = std::max(1u, std::thread::hardware_concurrency());
+    const std::size_t helpers = std::min<std::size_t>(hardware, count) - (count > 0 ? 1 : 0);
+    std::vector<std::thread> threads;
+    threads.reserve(helpers);
+    for (std::size_t t = 0; t < helpers; ++t) {
+        try {
+            threads.emplace_back(run);
+        } catch (const std::system_error&) {
+            break;  // fewer threads: the ones started, and this one, take every i
+        }
+    }
+    run();
+    for (std::thread& thread : threads) {
+        thread.join();
+    }
+}
+
 class PlanReader {
 public:
     PlanReader(const fs::path& root, const Layout& layout) : root_(root), layout_(layout) {}
@@ -454,7 +482,21 @@ public:
         }
         claim(root.guid, init);
         nodes_.push_back(std::move(root));
-        scan(src, 0);
+        // The tree's shape first, reading no file: each instance's place, in
+        // the order the walk finds them, and where the walk had to stop.
+        // Then every file read and parsed at once, on all cores. Then each
+        // instance taken in walk order, so a project with something wrong
+        // fails on the first thing, as when each file was read in turn.
+        jobs_.resize(1);
+        try {
+            scan(src, 0);
+        } catch (const WalkStopped&) {
+            // The instance limit: settle fails at the node that passed it.
+        } catch (const ProjectError& stop) {
+            stop_ = std::string(stop.what());
+        }
+        read_queued();
+        settle();
         for (PlanNode& node : nodes_) {
             order_children(node);
         }
@@ -464,6 +506,73 @@ public:
     }
 
 private:
+    // What the walk queued for one node: its files, read by read_queued.
+    struct Job {
+        std::string props;
+        std::string guid;
+        // Its .luau, or empty for none.
+        std::string source;
+        // Past the instance limit: the walk stopped here.
+        bool over_limit = false;
+        // Why its files did not read, or empty.
+        std::string error;
+    };
+    struct WalkStopped {};
+
+    // A node in walk order, its files read later by read_queued.
+    std::size_t queue(const std::string& props, const std::string& guid, const std::string& source,
+                      std::size_t parent) {
+        const std::size_t index = nodes_.size();
+        nodes_.emplace_back();
+        nodes_[parent].children.push_back(index);
+        Job& job = jobs_.emplace_back();
+        job.props = props;
+        job.guid = guid;
+        job.source = source;
+        // Building more would stop the studio at the world's capacity. The
+        // root, nodes_[0], takes no instance slot.
+        if (index > Project::instance_limit()) {
+            job.over_limit = true;
+            throw WalkStopped{};
+        }
+        return index;
+    }
+
+    void read_queued() {
+        parallel_for(nodes_.size() - 1, [this](std::size_t i) {
+            const std::size_t index = i + 1;
+            Job& job = jobs_[index];
+            try {
+                read_props(nodes_[index], job.props, job.guid);
+                if (!job.source.empty()) {
+                    read_source(nodes_[index], job.source);
+                }
+            } catch (const std::exception& error) {
+                job.error = error.what();
+            }
+        });
+    }
+
+    // Each node in walk order as one read would have taken it: its files,
+    // its GUID, the limit; then why the walk stopped, if it did.
+    void settle() {
+        for (std::size_t index = 1; index < nodes_.size(); ++index) {
+            const Job& job = jobs_[index];
+            if (!job.error.empty()) {
+                fail(job.error);
+            }
+            claim(nodes_[index].guid, job.props);
+            if (job.over_limit) {
+                fail(layout_.src + " holds more than " + std::to_string(Project::instance_limit()) +
+                     " instances, the most a place can hold");
+            }
+        }
+        if (stop_) {
+            fail(*stop_);
+        }
+        jobs_.clear();
+    }
+
     void claim(const std::string& guid, const std::string& path) {
         const auto found = seen_.find(guid);
         if (found != seen_.end()) {
@@ -533,19 +642,6 @@ private:
         node.source = node.source_bytes;
     }
 
-    std::size_t add(PlanNode node, std::size_t parent) {
-        // Building more would stop the studio at the world's capacity. The root,
-        // nodes_[0], takes no instance slot.
-        const std::size_t limit = Project::instance_limit();
-        if (nodes_.size() > limit) {
-            fail(layout_.src + " holds more than " + std::to_string(limit) + " instances, the most a place can hold");
-        }
-        const std::size_t index = nodes_.size();
-        nodes_.push_back(std::move(node));
-        nodes_[parent].children.push_back(index);
-        return index;
-    }
-
     void scan(const std::string& dir, std::size_t parent) {
         std::vector<std::pair<std::string, bool>> entries;
         std::error_code error;
@@ -601,10 +697,7 @@ private:
                 if (!split_stem(name.substr(0, name.size() - 5), guid)) {
                     fail(path + ": a filename must be <Name>.<guid>.json");
                 }
-                PlanNode node;
-                read_props(node, path, guid);
-                claim(guid, path);
-                add(std::move(node), parent);
+                queue(path, guid, std::string(), parent);
             }
         }
         // A script is its .meta.json and its .luau, paired by GUID, never by Name.
@@ -613,11 +706,7 @@ private:
             if (source == luau.end()) {
                 fail(path + ": no .luau file with GUID " + guid);
             }
-            PlanNode node;
-            read_props(node, path, guid);
-            read_source(node, source->second);
-            claim(guid, path);
-            add(std::move(node), parent);
+            queue(path, guid, source->second, parent);
             luau.erase(source);
         }
         for (const auto& [guid, path] : luau) {
@@ -642,14 +731,8 @@ private:
         if (!plain && !meta) {
             fail(dir + ": a folder instance needs init.json");
         }
-        PlanNode node;
         const std::string props = join(dir, plain ? "init.json" : "init.meta.json");
-        read_props(node, props, guid);
-        if (meta) {
-            read_source(node, join(dir, "init.luau"));
-        }
-        claim(guid, props);
-        const std::size_t index = add(std::move(node), parent);
+        const std::size_t index = queue(props, guid, meta ? join(dir, "init.luau") : std::string(), parent);
         scan(dir, index);
     }
 
@@ -797,6 +880,10 @@ private:
     const fs::path& root_;
     const Layout& layout_;
     std::vector<PlanNode> nodes_;
+    // One per node while the walk's files are read; index 0, the root, is read first.
+    std::vector<Job> jobs_;
+    // What stopped the walk early, reported once the nodes before it are settled.
+    std::optional<std::string> stop_;
     std::unordered_map<std::string, std::string> seen_;
 };
 
@@ -1190,7 +1277,9 @@ public:
     void finish() {
         // The old place's Terrain voxels are no longer named by any place bytes.
         terrain::TerrainStash::clear();
-        world_.capture_place();
+        // The old place's snapshot is no use to Stop any more. Play captures
+        // the place as it starts, so the read need not copy all of it now.
+        world_.forget_place();
         world_.history().reset_waypoints();
         world_.clear_authored_dirty();
         world_.history().mark_saved();

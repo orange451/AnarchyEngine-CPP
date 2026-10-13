@@ -295,6 +295,10 @@ public:
     // Script analysis hears of both after simulation_running changes: it checks
     // only the authored tree.
     void capture_place();
+    // Drops the place snapshot, so nothing restores a place that is gone: the
+    // next start_simulation captures the place as it is then. SimulationThread,
+    // while stopped.
+    void forget_place();
     void start_simulation();
     void stop_simulation();
     void set_stop_hook(std::function<void()> hook);

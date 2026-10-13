@@ -22,6 +22,19 @@ void DataModel::capture_place() {
     capture_place_unlocked();
 }
 
+void DataModel::forget_place() {
+    if (!gameplay_thread()) {
+        contract_fail("forget_place runs on SimulationThread");
+    }
+    if (state_->simulation_running) {
+        contract_fail("forget_place while simulation is running");
+    }
+    DataModelLock lock(*this, DataModelLock::Write);
+    state_->place = PlaceSnapshot{};
+    state_->place_slots.clear();
+    state_->place_captured = false;
+}
+
 void DataModel::start_simulation() {
     if (!gameplay_thread()) {
         contract_fail("start_simulation runs on SimulationThread");

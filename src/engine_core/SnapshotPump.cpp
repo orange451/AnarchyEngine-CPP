@@ -397,57 +397,107 @@ void fill_visual_material(const DataModel& game, const Material* material, Visua
     out.transparency = unit(material != nullptr ? material->transparency() : Material::kDefaultTransparency);
 }
 
+namespace {
+
+// The Models under holder, in child order, into meshes from used on. The first
+// Mesh with bones names skeleton when names_skeleton; skinned means a Mesh has
+// skeleton's bones. A Model with no Mesh, or a Mesh with neither a Path nor
+// session geometry, adds nothing.
+void fill_models(const DataModel& game, InstanceId holder, bool names_skeleton,
+                 std::shared_ptr<const Skeleton>& skeleton, std::vector<VisualMesh>& meshes) {
+    std::size_t used = 0;
+    for (InstanceId child = game.first_child(holder); child != 0; child = game.next_sibling(child)) {
+        const auto* model = dynamic_cast<const Model*>(game.instance(child));
+        if (model == nullptr) {
+            continue;
+        }
+        const LuaSlot mesh_ref = model->reference(Model::kMeshReference);
+        const auto* mesh =
+            mesh_ref.kind == LuaSlot::Kind::Instance ? dynamic_cast<const Mesh*>(game.instance(mesh_ref.id)) : nullptr;
+        if (mesh == nullptr) {
+            continue;
+        }
+        Mesh::SessionGeometry session = mesh->session_geometry();
+        if (session.data == nullptr && mesh->path().empty()) {
+            continue;
+        }
+        if (used == meshes.size()) {
+            meshes.emplace_back();
+        }
+        // Assigned in place, so an unchanged Prefab reuses last frame's strings.
+        VisualMesh& mesh_out = meshes[used++];
+        const std::shared_ptr<const Skeleton> own = mesh->skeleton();
+        if (skeleton == nullptr && names_skeleton) {
+            skeleton = own;
+        }
+        mesh_out.skinned = own != nullptr && skeleton != nullptr && own->signature == skeleton->signature;
+        mesh_out.mesh = mesh->id();
+        mesh_out.revision = session.revision;
+        if (session.data != nullptr) {
+            mesh_out.path.clear();
+            mesh_out.session = std::move(session.data);
+        } else {
+            mesh_out.path = mesh->path();
+            mesh_out.session.reset();
+        }
+        fill_visual_material(game, ReferencedAs<Material>(game, *model, Model::kMaterialReference), mesh_out);
+    }
+    meshes.resize(used);
+}
+
+}  // namespace
+
 void fill_visual_prefab(const DataModel& game, const std::string& guid, InstanceId& cached, VisualPrefab& out) {
-    std::vector<VisualMesh>& meshes = out.meshes;
     // The first Model whose Mesh has bones names the skeleton, as prefab_skeleton finds it.
     std::shared_ptr<const Skeleton>& skeleton = out.skeleton;
     skeleton.reset();
-    std::size_t used = 0;
     // A Prefab undone, loaded, or brought back by Stop holds its GUID again, maybe under a new id.
     if (cached == 0 || !game.alive(cached) || game.guid(cached) != guid) {
         const std::optional<InstanceId> found = game.find_guid(guid);
         cached = found ? *found : 0;
     }
-    if (dynamic_cast<const Prefab*>(game.instance(cached)) != nullptr) {
-        for (InstanceId child = game.first_child(cached); child != 0; child = game.next_sibling(child)) {
-            const auto* model = dynamic_cast<const Model*>(game.instance(child));
-            if (model == nullptr) {
-                continue;
-            }
-            const LuaSlot mesh_ref = model->reference(Model::kMeshReference);
-            const auto* mesh = mesh_ref.kind == LuaSlot::Kind::Instance
-                                   ? dynamic_cast<const Mesh*>(game.instance(mesh_ref.id))
-                                   : nullptr;
-            if (mesh == nullptr) {
-                continue;
-            }
-            Mesh::SessionGeometry session = mesh->session_geometry();
-            if (session.data == nullptr && mesh->path().empty()) {
-                continue;
-            }
-            if (used == meshes.size()) {
-                meshes.emplace_back();
-            }
-            // Assigned in place, so an unchanged Prefab reuses last frame's strings.
-            VisualMesh& mesh_out = meshes[used++];
-            const std::shared_ptr<const Skeleton> own = mesh->skeleton();
-            if (skeleton == nullptr) {
-                skeleton = own;
-            }
-            mesh_out.skinned = own != nullptr && own->signature == skeleton->signature;
-            mesh_out.mesh = mesh->id();
-            mesh_out.revision = session.revision;
-            if (session.data != nullptr) {
-                mesh_out.path.clear();
-                mesh_out.session = std::move(session.data);
-            } else {
-                mesh_out.path = mesh->path();
-                mesh_out.session.reset();
-            }
-            fill_visual_material(game, ReferencedAs<Material>(game, *model, Model::kMaterialReference), mesh_out);
+    if (dynamic_cast<const Prefab*>(game.instance(cached)) == nullptr) {
+        out.meshes.clear();
+        out.lods.clear();
+        return;
+    }
+    // The base layer: the Prefab's own Models. Only they name the skeleton.
+    fill_models(game, cached, true, skeleton, out.meshes);
+    // Its LodLayers, nearest first; two at one distance stay in child order.
+    std::vector<const LodLayer*> layers;
+    for (InstanceId child = game.first_child(cached); child != 0; child = game.next_sibling(child)) {
+        if (const auto* layer = dynamic_cast<const LodLayer*>(game.instance(child))) {
+            layers.push_back(layer);
         }
     }
-    meshes.resize(used);
+    std::stable_sort(layers.begin(), layers.end(),
+                     [](const LodLayer* a, const LodLayer* b) { return a->distance() < b->distance(); });
+    out.lods.resize(layers.size());
+    for (std::size_t index = 0; index < layers.size(); ++index) {
+        const LodLayer& layer = *layers[index];
+        VisualLod& lod = out.lods[index];
+        lod.distance = static_cast<float>(layer.distance());
+        lod.kind = layer.kind();
+        if (lod.kind == LodKind::Model) {
+            fill_models(game, layer.id(), false, skeleton, lod.meshes);
+        } else {
+            lod.meshes.clear();
+        }
+        const Texture* texture = lod.kind == LodKind::Billboard
+                                     ? ReferencedAs<Texture>(game, layer, LodLayer::kTextureReference)
+                                     : nullptr;
+        if (texture != nullptr) {
+            lod.texture = texture->path();
+            lod.texture_flip_y = texture->flip_y();
+            lod.texture_always_loaded = texture->streaming() == TextureStreaming::AlwaysLoaded;
+        } else {
+            lod.texture.clear();
+            lod.texture_flip_y = false;
+            lod.texture_always_loaded = false;
+        }
+        lod.width = layer.size().x;
+        lod.height = layer.size().y;
+    }
 }
 
 void SnapshotPump::resolve_prefabs(DataModel& game) {
@@ -460,6 +510,7 @@ void SnapshotPump::resolve_prefabs(DataModel& game) {
         } else {
             prefab.skeleton.reset();
             prefab.meshes.clear();
+            prefab.lods.clear();
         }
     }
 }

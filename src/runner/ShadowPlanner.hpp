@@ -183,6 +183,9 @@ struct CasterView {
     const std::uint64_t* owners = nullptr;
     // ShadowCasterFingerprint's, or 0.
     const std::uint64_t* fingerprints = nullptr;
+    // Null, or nonzero for a caster that casts nothing this frame: one whose
+    // LOD band the camera is outside (VisibilityResult::outOfBand).
+    const std::uint8_t* hidden = nullptr;
 };
 
 // What a light's or a cascade's map folds in for caster: which geometry,

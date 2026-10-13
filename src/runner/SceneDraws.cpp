@@ -6,14 +6,18 @@
 
 #include <algorithm>
 #include <cstring>
+#include <limits>
 
 namespace runner {
 
 using engine_core::texture::Usage;
 
-void LoadPrefabDraws(const engine_core::VisualPrefab& prefab, MeshCache& meshes, TextureCache& textures,
-                     std::uint32_t& nextSlot, std::vector<MeshDraw>& out) {
-    for (const engine_core::VisualMesh& source : prefab.meshes) {
+namespace {
+
+// sources as templates drawn from lodNear up to lodFar.
+void LoadMeshDraws(const std::vector<engine_core::VisualMesh>& sources, float lodNear, float lodFar,
+                   MeshCache& meshes, TextureCache& textures, std::uint32_t& nextSlot, std::vector<MeshDraw>& out) {
+    for (const engine_core::VisualMesh& source : sources) {
         // A play session's geometry, while it lasts, else the Mesh's file.
         const anarchy::amesh::GpuMesh* mesh = source.session != nullptr
                                                   ? meshes.getSession(source.mesh, *source.session, source.revision)
@@ -40,6 +44,52 @@ void LoadPrefabDraws(const engine_core::VisualPrefab& prefab, MeshCache& meshes,
         draw.reflectivity = source.reflectivity;
         draw.transparency = source.transparency;
         draw.skinned = source.skinned;
+        draw.lodNear = lodNear;
+        draw.lodFar = lodFar;
+        draw.slot = nextSlot++;
+        out.push_back(draw);
+    }
+}
+
+}  // namespace
+
+void LoadPrefabDraws(const engine_core::VisualPrefab& prefab, MeshCache& meshes, TextureCache& textures,
+                     std::uint32_t& nextSlot, std::vector<MeshDraw>& out) {
+    constexpr float kForever = std::numeric_limits<float>::infinity();
+    // The Prefab's own Models up to its first LodLayer; each layer from its
+    // distance up to the next one's, the last forever. Of two at one
+    // distance, the later one draws.
+    LoadMeshDraws(prefab.meshes, 0.f, prefab.lods.empty() ? kForever : prefab.lods.front().distance, meshes,
+                  textures, nextSlot, out);
+    for (std::size_t index = 0; index < prefab.lods.size(); ++index) {
+        const engine_core::VisualLod& lod = prefab.lods[index];
+        const float lodFar = index + 1 < prefab.lods.size() ? prefab.lods[index + 1].distance : kForever;
+        if (!(lod.distance < lodFar)) {
+            continue;
+        }
+        if (lod.kind == engine_core::LodKind::Model) {
+            LoadMeshDraws(lod.meshes, lod.distance, lodFar, meshes, textures, nextSlot, out);
+            continue;
+        }
+        if (lod.kind != engine_core::LodKind::Billboard) {
+            continue;  // None: nothing drawn in its band.
+        }
+        const anarchy::amesh::GpuMesh* quad = meshes.billboardQuad();
+        if (quad == nullptr) {
+            continue;
+        }
+        // A card: its texture on a quad turned to the camera, casting nothing.
+        MeshDraw draw;
+        draw.mesh = quad;
+        draw.texture = textures.get(lod.texture, Usage::Color, lod.texture_flip_y, lod.texture_always_loaded);
+        draw.roughness = 1.f;
+        draw.reflectivity = 0.f;
+        draw.castsShadow = false;
+        draw.billboard = true;
+        draw.billboardSize[0] = lod.width;
+        draw.billboardSize[1] = lod.height;
+        draw.lodNear = lod.distance;
+        draw.lodFar = lodFar;
         draw.slot = nextSlot++;
         out.push_back(draw);
     }
@@ -104,6 +154,13 @@ engine_core::Matrix4 ScaledWorld(const engine_core::VisualInstance& row) {
 void MakeRowDraw(const engine_core::VisualInstance& row, const engine_core::Matrix4& scaled, float opacity,
                  MeshDraw& draw) {
     draw.model = scaled;
+    // A billboard's quad is a unit square: its width along the row's x, its height along its up.
+    if (draw.billboard) {
+        for (int axis = 0; axis < 3; ++axis) {
+            draw.model.m[axis] *= draw.billboardSize[0];
+            draw.model.m[4 + axis] *= draw.billboardSize[1];
+        }
+    }
     draw.owner = row.id;
     draw.tint[0] = row.color.r;
     draw.tint[1] = row.color.g;
@@ -198,7 +255,8 @@ bool SameDraw(const MeshDraw& a, const MeshDraw& b) {
            a.terrainSurfaceB == b.terrainSurfaceB && a.terrainSurfaceC == b.terrainSurfaceC &&
            a.terrainLayerCount == b.terrainLayerCount && a.skinned == b.skinned && a.bones == b.bones &&
            a.poseRevision == b.poseRevision && a.boneCount == b.boneCount && SameBits(a.poseMin, b.poseMin) &&
-           SameBits(a.poseMax, b.poseMax);
+           SameBits(a.poseMax, b.poseMax) && SameBits(a.lodNear, b.lodNear) && SameBits(a.lodFar, b.lodFar) &&
+           a.billboard == b.billboard && SameBits(a.billboardSize, b.billboardSize);
 }
 
 void RowDrawCache::update(const engine_core::VisualRows& rows, const std::vector<std::vector<MeshDraw>>& templates,

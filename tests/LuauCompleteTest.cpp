@@ -1229,7 +1229,7 @@ void testInsertFilter() {
         "BillboardGui", "ScreenGui",
         "HBox", "ImagePane", "Pane", "VBox", "ViewportPane",
         "AssetPicker", "Button", "Label", "Slider", "TextField",
-        "Animation", "Dragger", "Material", "Mesh", "Prefab", "Texture", "WireframeAdornment"};
+        "Animation", "Dragger", "LodLayer", "Material", "Mesh", "Prefab", "Texture", "WireframeAdornment"};
     if (shown != expected) {
         std::string listed;
         for (const std::string& name : shown) {

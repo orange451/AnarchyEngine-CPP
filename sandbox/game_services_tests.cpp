@@ -76,7 +76,7 @@ TEST_CASE("GS1 the placement rules, by class name", "[GS1]") {
 
     // A Prefab takes only Models, and a Model goes only in a Prefab.
     REQUIRE_FALSE(placement_error("Prefab", "Model", "Body"));
-    REQUIRE(reason(placement_error("Prefab", "Folder", "Parts")) == "A Prefab holds only Models");
+    REQUIRE(reason(placement_error("Prefab", "Folder", "Parts")) == "A Prefab holds only Models and LodLayers");
     REQUIRE(reason(placement_error("Workspace", "Model", "Body")) == "A Model must be in a Prefab");
     REQUIRE(reason(placement_error("Prefabs", "Model", "Body")) == "Prefabs holds Prefabs and Folders");
 
@@ -208,7 +208,7 @@ TEST_CASE("GS4 each category takes its class and Folders", "[GS4]") {
     const InstanceId crate = make(game, "Prefab", "Crate", game.service("Prefabs"));
     const InstanceId body = make(game, "Model", "Body", crate);
     REQUIRE(game.parent(body) == crate);
-    REQUIRE(reason(game.parent_error(folder, crate)) == "A Prefab holds only Models");
+    REQUIRE(reason(game.parent_error(folder, crate)) == "A Prefab holds only Models and LodLayers");
     REQUIRE(reason(game.parent_error(body, game.service("Workspace"))) == "A Model must be in a Prefab");
     REQUIRE(reason(game.parent_error(body, game.service("Prefabs"))) == "Prefabs holds Prefabs and Folders");
     // Out of the tree is always allowed.

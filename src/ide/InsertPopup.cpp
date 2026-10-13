@@ -58,6 +58,7 @@ const char* describe_class(const std::string& name) {
         {"Sound", "An audio asset."},
         {"Animation", "A clip that moves a skinned object's bones."},
         {"Prefab", "A reusable object template."},
+        {"LodLayer", "What a Prefab draws from a distance on: other Models, a billboard, or nothing."},
         {"WeldConstraint", "Holds two objects together where they are."},
         {"RigidConstraint", "Snaps one object's pivot onto another's and holds it there. The root stays put."},
         {"ViewportPane", "Shows the 3D objects inside it, seen from its CurrentCamera."},

@@ -59,25 +59,76 @@ struct LinearTint {
     }
 };
 
-InstanceData MakeInstance(const DrawItem& item, LinearTint& linear) {
+float Dot(const float* a, const float* b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; }
+
+// model turned about its up axis (its second column) so its +Z faces eye,
+// each axis keeping its length. As it was with eye straight above or below.
+void FaceCamera(engine_core::Matrix4& model, const float* eye) {
+    float* x = model.m;
+    const float* y = model.m + 4;
+    float* z = model.m + 8;
+    const float* origin = model.m + 12;
+    const float height = std::sqrt(Dot(y, y));
+    if (!(height > 0.f)) {
+        return;
+    }
+    const float up[3] = {y[0] / height, y[1] / height, y[2] / height};
+    float toward[3] = {eye[0] - origin[0], eye[1] - origin[1], eye[2] - origin[2]};
+    const float along = Dot(toward, up);
+    for (int axis = 0; axis < 3; ++axis) {
+        toward[axis] -= up[axis] * along;
+    }
+    const float flat = std::sqrt(Dot(toward, toward));
+    if (!(flat > 1e-6f)) {
+        return;
+    }
+    for (float& value : toward) {
+        value /= flat;
+    }
+    float right[3];
+    Cross(up, toward, right);
+    const float width = std::sqrt(Dot(x, x));
+    const float depth = std::sqrt(Dot(z, z));
+    for (int axis = 0; axis < 3; ++axis) {
+        x[axis] = right[axis] * width;
+        z[axis] = toward[axis] * depth;
+    }
+}
+
+InstanceData MakeInstance(const DrawItem& item, const float* eye, LinearTint& linear) {
     InstanceData data{};
-    std::copy(item.model->m, item.model->m + 16, data.model);
-    NormalMatrix(*item.model, data.normal);
+    if (item.billboard) {
+        engine_core::Matrix4 faced = *item.model;
+        FaceCamera(faced, eye);
+        std::copy(faced.m, faced.m + 16, data.model);
+        NormalMatrix(faced, data.normal);
+    } else {
+        std::copy(item.model->m, item.model->m + 16, data.model);
+        NormalMatrix(*item.model, data.normal);
+    }
     const float* tint = linear.of(item.tint);
     std::copy(tint, tint + 3, data.tint);
     data.boneBase = static_cast<float>(item.boneBase);
     return data;
 }
 
-// Each entry's instance, at its place in order.
-void WriteInstances(const DrawItem* items, const std::vector<DrawBatches::Entry>& order, InstanceData* out,
-                    std::size_t grain) {
+// Each entry's instance, at its place in order, billboards facing eye.
+void WriteInstances(const DrawItem* items, const std::vector<DrawBatches::Entry>& order, const float* eye,
+                    InstanceData* out, std::size_t grain) {
     ParallelBlocks(order.size(), grain, [&](std::size_t, std::size_t begin, std::size_t end) {
         LinearTint linear;
         for (std::size_t i = begin; i < end; ++i) {
-            out[i] = MakeInstance(items[order[i].index], linear);
+            out[i] = MakeInstance(items[order[i].index], eye, linear);
         }
     });
+}
+
+// Where view sees from: its inverse's translation, for a view that only turns and moves.
+void ViewEye(const engine_core::Matrix4& view, float eye[3]) {
+    const float* v = view.m;
+    for (int axis = 0; axis < 3; ++axis) {
+        eye[axis] = -(v[axis * 4] * v[12] + v[axis * 4 + 1] * v[13] + v[axis * 4 + 2] * v[14]);
+    }
 }
 
 }  // namespace
@@ -117,6 +168,8 @@ void BuildBatches(const DrawItem* items, const VisibilityResult& visible, const 
                   DrawBatches& out, std::size_t grain) {
     out.runs.clear();
     out.opaqueRuns = 0;
+    float eye[3];
+    ViewEye(view, eye);
     const std::size_t opaqueCount = visible.opaque.size();
     const std::size_t transparentCount = visible.transparent.size();
     // One instance per visible draw: the opaque ones in sorted order, then the see-through ones.
@@ -128,7 +181,8 @@ void BuildBatches(const DrawItem* items, const VisibilityResult& visible, const 
             const VisibleDraw& draw = visible.opaque[i];
             const DrawItem& item = items[draw.index];
             DrawBatches::Entry& entry = order[i];
-            entry.key = BatchKey(item.slot, draw.lod, Mirrored(*item.model));
+            // A billboard is turned to face the camera whatever its model, never mirrored.
+            entry.key = BatchKey(item.slot, draw.lod, Mirrored(*item.model) && !item.billboard);
             entry.depth = item.terrain && item.boundsMin != nullptr && item.boundsMax != nullptr
                               ? BoundsViewDepth(view, item)
                               : ViewDepth(view, *item.model);
@@ -168,7 +222,7 @@ void BuildBatches(const DrawItem* items, const VisibilityResult& visible, const 
         ++out.runs.back().count;
     }
     out.opaqueRuns = static_cast<int>(out.runs.size());
-    WriteInstances(items, order, out.instances.data(), grain);
+    WriteInstances(items, order, eye, out.instances.data(), grain);
 
     // See-through: farthest first by the Transform's depth, as the pass always sorted them.
     order.clear();
@@ -188,10 +242,10 @@ void BuildBatches(const DrawItem* items, const VisibilityResult& visible, const 
         run.count = 1;
         run.draw = entry.index;
         run.lod = entry.lod;
-        run.mirrored = Mirrored(*items[entry.index].model);
+        run.mirrored = Mirrored(*items[entry.index].model) && !items[entry.index].billboard;
         out.runs.push_back(run);
     }
-    WriteInstances(items, order, out.instances.data() + opaqueCount, grain);
+    WriteInstances(items, order, eye, out.instances.data() + opaqueCount, grain);
 }
 
 }  // namespace runner

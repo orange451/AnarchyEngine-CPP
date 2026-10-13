@@ -6,6 +6,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <vector>
 
 namespace runner {
@@ -46,6 +47,13 @@ struct DrawItem {
     bool shadowOnly = false;
     // Which of its mesh's LODs it draws (MeshDraw::lod), copied into its VisibleDraw.
     std::uint8_t lod = 0;
+    // The distance band it draws in (MeshDraw::lodNear, lodFar), from the
+    // camera to model's origin. Outside it, it is neither seen nor casts.
+    float lodNear = 0.f;
+    float lodFar = std::numeric_limits<float>::infinity();
+    // A billboard (MeshDraw::billboard): each frame's instance is turned
+    // about model's up axis to face the camera.
+    bool billboard = false;
 };
 
 // A drawable mesh the camera may see.
@@ -65,6 +73,19 @@ struct VisibilityResult {
     // One per DrawItem, beside its sphere: what culling reads of it, the
     // kTrait bits and its LOD in the high byte.
     std::vector<std::uint16_t> traits;
+    // One per DrawItem, beside its sphere: a banded one's band, measured
+    // from its model's origin, ends squared. Read only with kTraitBanded.
+    struct Band {
+        float x = 0.f;
+        float y = 0.f;
+        float z = 0.f;
+        float nearSquared = 0.f;
+        float farSquared = 0.f;
+    };
+    std::vector<Band> bands;
+    // One per DrawItem, set by CullDraws: 1 for a banded one the camera is
+    // outside the band of, which is neither visible nor casts a shadow.
+    std::vector<std::uint8_t> outOfBand;
     // In DrawItem order.
     std::vector<VisibleDraw> opaque;
     std::vector<VisibleDraw> transparent;
@@ -87,6 +108,8 @@ constexpr std::size_t kVisibilityGrain = 8192;
 constexpr std::uint16_t kTraitDrawable = 1;
 constexpr std::uint16_t kTraitShadowOnly = 2;
 constexpr std::uint16_t kTraitTransparent = 4;
+// It draws only in a distance band (DrawItem::lodNear, lodFar).
+constexpr std::uint16_t kTraitBanded = 8;
 
 // The spheres and traits of the items in ranges (normalized), or of every
 // item when all, into out's, which are sized count; the others are kept as

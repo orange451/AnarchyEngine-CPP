@@ -74,6 +74,10 @@ public:
     static constexpr double kTerrainNodeGraceSeconds = 5.0;
     // How many node uploads the cache holds, for tests.
     std::size_t terrainNodeCount() const { return nodes_.size(); }
+    // A quad one unit wide and tall standing on its origin and facing +Z: x
+    // from -0.5 to 0.5, y from 0 to 1, the texture's top row at the top.
+    // Billboards draw it. Uploaded once.
+    const anarchy::amesh::GpuMesh* billboardQuad();
     // Deletes every mesh.
     void clear();
 
@@ -120,6 +124,7 @@ private:
     std::unordered_map<engine_core::InstanceId, SessionEntry> sessions_;
     std::unordered_map<std::uint64_t, SessionEntry> brushes_;
     std::unordered_map<NodeCacheKey, NodeEntry, NodeCacheKeyHash> nodes_;
+    SessionEntry quad_;
 };
 
 }  // namespace runner

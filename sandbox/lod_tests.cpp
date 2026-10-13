@@ -9,11 +9,20 @@
 #include "LuaApi.hpp"
 #include "Project.hpp"
 #include "PropertyBag.hpp"
+#include "runner/DrawBatches.hpp"
+#include "runner/RenderMath.hpp"
+#include "runner/ShadowPlanner.hpp"
+#include "runner/Visibility.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
+#include <cmath>
+#include <cstdint>
 #include <filesystem>
+#include <limits>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -194,4 +203,120 @@ TEST_CASE("LOD4 a Prefab's LodLayers, their Models and Texture survive a save an
     REQUIRE(billboard->size().x == 5.f);
     REQUIRE(billboard->size().y == 11.f);
     REQUIRE(billboard->reference(LodLayer::kTextureReference).id == *loaded.instance_for(texture_guid));
+}
+
+namespace {
+
+const float kUnitMin[3] = {-0.5f, -0.5f, -0.5f};
+const float kUnitMax[3] = {0.5f, 0.5f, 0.5f};
+
+// From eye toward target, 60 degrees tall, square.
+runner::CameraView LookFrom(engine_core::Vec3 eye, engine_core::Vec3 target) {
+    runner::CameraView camera;
+    camera.world = engine_core::matrix4_look_at(eye, target, {0.f, 1.f, 0.f});
+    camera.viewProjection = engine_core::matrix4_multiply(runner::Perspective(60.f, 1.f, 0.1f, 1000.f),
+                                                          runner::LookAtView(eye, target, {0.f, 1.f, 0.f}));
+    camera.fovYDegrees = 60.f;
+    camera.aspect = 1.f;
+    camera.nearZ = 0.1f;
+    camera.paneHeight = 100;
+    return camera;
+}
+
+runner::DrawItem Banded(const engine_core::Matrix4& model, float lodNear, float lodFar) {
+    runner::DrawItem item;
+    item.model = &model;
+    item.boundsMin = kUnitMin;
+    item.boundsMax = kUnitMax;
+    item.drawable = true;
+    item.lodNear = lodNear;
+    item.lodFar = lodFar;
+    return item;
+}
+
+// Whether a is b, give or take float rounding.
+bool Near(float a, float b) { return std::abs(a - b) < 1e-5f; }
+
+std::vector<int> Seen(const runner::VisibilityResult& out) {
+    std::vector<int> seen;
+    for (const runner::VisibleDraw& draw : out.opaque) {
+        seen.push_back(draw.index);
+    }
+    return seen;
+}
+
+}  // namespace
+
+TEST_CASE("LOD5 a banded draw is seen and casts only while the camera is in its band", "[lod]") {
+    constexpr float kForever = std::numeric_limits<float>::infinity();
+    const engine_core::Matrix4 origin = engine_core::matrix4_translation(0.f, 0.f, 0.f);
+    // The base layer up to 50, a layer from 50 on, and a draw with no band.
+    const runner::DrawItem items[3] = {Banded(origin, 0.f, 50.f), Banded(origin, 50.f, kForever),
+                                       Banded(origin, 0.f, kForever)};
+    runner::VisibilityResult out;
+    runner::FindVisible(items, 3, LookFrom({0.f, 0.f, 10.f}, {0.f, 0.f, 0.f}), true, out);
+    REQUIRE(Seen(out) == std::vector<int>{0, 2});
+    REQUIRE(out.outOfBand == std::vector<std::uint8_t>{0, 1, 0});
+    // At 60 units the far layer takes over, culling on or off.
+    const runner::CameraView far = LookFrom({0.f, 0.f, 60.f}, {0.f, 0.f, 0.f});
+    runner::FindVisible(items, 3, far, false, out);
+    REQUIRE(Seen(out) == std::vector<int>{1, 2});
+    REQUIRE(out.outOfBand == std::vector<std::uint8_t>{1, 0, 0});
+    REQUIRE(out.culled == 0);
+
+    // What is outside its band casts nothing for the sun.
+    const std::vector<std::uint64_t> owners = {1, 2, 3};
+    const std::vector<std::uint64_t> fingerprints = {11, 12, 13};
+    const runner::CasterView hidden{3, out.spheres.data(), owners.data(), fingerprints.data(), out.outOfBand.data()};
+    const runner::CasterView all{3, out.spheres.data(), owners.data(), fingerprints.data()};
+    runner::SunRequest sun;
+    sun.shine = runner::Normalize({0.4f, -1.f, 0.3f});
+    sun.shadowDistance = 120.f;
+    const runner::ShadowSettings settings;
+    runner::ShadowPlanner withHidden;
+    runner::ShadowPlanner withAll;
+    const std::vector<runner::CascadeDraw> drawn = withHidden.planCascadesView(&sun, hidden, far, settings, 500);
+    const std::vector<runner::CascadeDraw> every = withAll.planCascadesView(&sun, all, far, settings, 500);
+    // Every caster any cascade draws.
+    const auto castersOf = [](const std::vector<runner::CascadeDraw>& cascades) {
+        std::vector<int> found;
+        for (const runner::CascadeDraw& cascade : cascades) {
+            found.insert(found.end(), cascade.casters.begin(), cascade.casters.end());
+        }
+        std::sort(found.begin(), found.end());
+        found.erase(std::unique(found.begin(), found.end()), found.end());
+        return found;
+    };
+    REQUIRE(castersOf(every) == std::vector<int>{0, 1, 2});
+    REQUIRE(castersOf(drawn) == std::vector<int>{1, 2});
+}
+
+TEST_CASE("LOD6 a billboard's instance turns about its up axis to face the camera, keeping its size", "[lod]") {
+    // A 4 by 8 card at (10, 0, 0) (MakeRowDraw's axes), seen from above and to its side.
+    engine_core::Matrix4 card = engine_core::matrix4_translation(10.f, 0.f, 0.f);
+    card.m[0] = 4.f;
+    card.m[5] = 8.f;
+    const engine_core::Matrix4 view = runner::LookAtView({0.f, 30.f, 0.f}, {10.f, 0.f, 0.f}, {0.f, 1.f, 0.f});
+    runner::DrawItem item;
+    item.model = &card;
+    item.boundsMin = kUnitMin;
+    item.boundsMax = kUnitMax;
+    item.drawable = true;
+    item.slot = 1;
+    item.billboard = true;
+    runner::VisibilityResult visible;
+    visible.opaque.push_back(runner::VisibleDraw{});
+    runner::DrawBatches out;
+    runner::BuildBatches(&item, visible, view, out);
+    REQUIRE(out.instances.size() == 1);
+    const float* m = out.instances[0].model;
+    // Its face (+Z) points level at the camera, -X; its width runs across, its height stays up.
+    REQUIRE(Near(m[8], -1.f));
+    REQUIRE(Near(m[9], 0.f));
+    REQUIRE(Near(m[10], 0.f));
+    REQUIRE(Near(m[0], 0.f));
+    REQUIRE(Near(m[2], 4.f));
+    REQUIRE(Near(m[5], 8.f));
+    REQUIRE(m[12] == 10.f);
+    REQUIRE_FALSE(out.runs[0].mirrored);
 }

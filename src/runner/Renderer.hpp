@@ -19,6 +19,7 @@
 #include "types.hpp"
 
 #include <cstdint>
+#include <limits>
 #include <initializer_list>
 #include <memory>
 #include <optional>
@@ -125,6 +126,18 @@ struct MeshDraw {
     // in place of the mesh's box.
     float poseMin[3] = {0.f, 0.f, 0.f};
     float poseMax[3] = {0.f, 0.f, 0.f};
+    // The distance band it draws in: from lodNear up to lodFar, in units from
+    // the camera to its row's origin (model's translation). A Prefab's base
+    // layer starts at 0 and its last layer runs forever (LodLayer); anything
+    // else is never banded.
+    float lodNear = 0.f;
+    float lodFar = std::numeric_limits<float>::infinity();
+    // A billboard (LodKind::Billboard): mesh is MeshCache::billboardQuad, and
+    // model the row's with the billboard's width and height in its axes. The
+    // instance a frame draws is turned about model's up axis to face the camera.
+    bool billboard = false;
+    // A billboard's width and height in units, before the row's Scale.
+    float billboardSize[2] = {0.f, 0.f};
 };
 
 // A Terrain's look table: a 256 x 4 GL_RGBA32F texture, GL_NEAREST, from

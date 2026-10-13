@@ -190,3 +190,65 @@ TEST_CASE("N36 a malformed section is refused and bytes_due counts what is waiti
     BitReader short_reader(buffer, cut.bytes_written());
     REQUIRE_FALSE(channel.read(short_reader));
 }
+
+namespace {
+
+// Appends one hand-built entry; the bytes are zeros.
+void put_entry(BitWriter& writer, std::uint16_t id, std::uint16_t fragment_count, std::uint16_t index, std::size_t length) {
+    writer.boolean(true);
+    writer.bits(id, 16);
+    writer.bits(fragment_count, 16);
+    if (fragment_count > 0) writer.bits(index, 16);
+    writer.bits(static_cast<std::uint32_t>(length), 16);
+    writer.align();
+    const std::vector<std::uint8_t> zeros(length, 0);
+    writer.bytes(zeros.data(), length);
+}
+
+}  // namespace
+
+TEST_CASE("N37a the largest block validates and one fragment more does not", "[network][reliable]") {
+    ReliableChannel channel;
+    std::vector<std::uint8_t> buffer(1100);
+    BitWriter ok(buffer.data(), buffer.size());
+    put_entry(ok, 0, 16778, 0, 1000);
+    ok.boolean(false);
+    REQUIRE(channel.validate(BitReader(buffer.data(), ok.bytes_written())));
+    BitWriter over(buffer.data(), buffer.size());
+    put_entry(over, 0, 16779, 0, 1000);
+    over.boolean(false);
+    REQUIRE_FALSE(channel.validate(BitReader(buffer.data(), over.bytes_written())));
+}
+
+TEST_CASE("N37b blocks not yet next in line cannot hold more than 8 MB; the next one is exempt", "[network][reliable]") {
+    ReliableChannel channel;
+    std::vector<std::uint8_t> buffer(4000);
+    BitWriter many(buffer.data(), buffer.size());
+    for (std::uint16_t id = 1; id <= 3; ++id) put_entry(many, id, 4000, 0, 1000);
+    many.boolean(false);
+    BitReader reader(buffer.data(), many.bytes_written());
+    REQUIRE_FALSE(channel.validate(reader));
+    REQUIRE_FALSE(channel.read(reader));
+    int delivered = 0;
+    channel.deliver([&](const std::uint8_t*, std::size_t) { ++delivered; });
+    REQUIRE(delivered == 0);
+    BitWriter next(buffer.data(), buffer.size());
+    put_entry(next, 0, 16778, 0, 1000);
+    next.boolean(false);
+    BitReader next_reader(buffer.data(), next.bytes_written());
+    REQUIRE(channel.validate(next_reader));
+    REQUIRE(channel.read(next_reader));
+}
+
+TEST_CASE("N37c a one-fragment block and an empty last fragment are refused", "[network][reliable]") {
+    ReliableChannel channel;
+    std::vector<std::uint8_t> buffer(1100);
+    BitWriter one(buffer.data(), buffer.size());
+    put_entry(one, 0, 1, 0, 10);
+    one.boolean(false);
+    REQUIRE_FALSE(channel.validate(BitReader(buffer.data(), one.bytes_written())));
+    BitWriter empty(buffer.data(), buffer.size());
+    put_entry(empty, 0, 3, 2, 0);
+    empty.boolean(false);
+    REQUIRE_FALSE(channel.validate(BitReader(buffer.data(), empty.bytes_written())));
+}

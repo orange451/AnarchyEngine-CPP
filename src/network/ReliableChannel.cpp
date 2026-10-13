@@ -97,7 +97,9 @@ bool read_entry(BitReader& reader, std::uint16_t& id, std::uint16_t& fragment_co
     if (reader.failed() || length > kFragmentBytes) return false;
     if (fragment_count > 0) {
         if (fragment_index >= fragment_count) return false;
-        if (static_cast<std::size_t>(fragment_count) * kFragmentBytes > kMaxBlockBytes) return false;
+        // Blocks are over one fragment, and only the last fragment may be short, but never empty.
+        if (fragment_count < 2 || fragment_count > kMaxFragments) return false;
+        if (fragment_index + 1 == fragment_count && length == 0) return false;
         if (fragment_index + 1 < fragment_count && length != kFragmentBytes) return false;
     }
     reader.align();
@@ -108,11 +110,24 @@ bool read_entry(BitReader& reader, std::uint16_t& id, std::uint16_t& fragment_co
 
 bool ReliableChannel::validate(BitReader reader) const {
     std::uint8_t scratch[kFragmentBytes];
+    std::size_t new_bytes = 0;
+    std::vector<std::uint16_t> counted;   // block ids already charged to the budget in this section
     while (reader.boolean()) {
         if (reader.failed()) return false;
         std::uint16_t id, fragment_count, fragment_index;
         std::uint32_t length;
         if (!read_entry(reader, id, fragment_count, fragment_index, length)) return false;
+        if (fragment_count > 0 && id != next_deliver_) {
+            const int offset = sequence_diff(id, next_deliver_);
+            const Incoming& in = in_[id % kWindowSize];
+            const bool allocated = in.valid && in.id == id;
+            if (offset > 0 && offset < static_cast<int>(kWindowSize) && !allocated &&
+                std::find(counted.begin(), counted.end(), id) == counted.end()) {
+                counted.push_back(id);
+                new_bytes += static_cast<std::size_t>(fragment_count) * kFragmentBytes;
+                if (reassembly_bytes_ + new_bytes > kMaxReassemblyBytes) return false;
+            }
+        }
         reader.bytes(scratch, length);
     }
     return !reader.failed();
@@ -132,6 +147,8 @@ bool ReliableChannel::read(BitReader& reader) {
         }
         Incoming& in = in_[id % kWindowSize];
         if (!in.valid || in.id != id) {
+            reassembly_bytes_ -= in.block.size();
+            in.block = std::vector<std::uint8_t>();
             in.valid = true;
             in.complete = false;
             in.id = id;
@@ -141,6 +158,7 @@ bool ReliableChannel::read(BitReader& reader) {
             if (fragment_count > 0) {
                 in.block.assign(static_cast<std::size_t>(fragment_count) * kFragmentBytes, 0);
                 in.fragment_present.assign(fragment_count, 0);
+                reassembly_bytes_ += in.block.size();
             }
         }
         if (in.complete || in.fragment_count != fragment_count) {

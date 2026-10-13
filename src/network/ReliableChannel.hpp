@@ -15,6 +15,10 @@ constexpr std::size_t kFragmentBytes = 1000;
 // Messages in flight, and messages the receiver holds for ordering.
 constexpr std::size_t kWindowSize = 256;
 constexpr std::size_t kMaxBlockBytes = 16u << 20;
+constexpr std::size_t kMaxFragments = (kMaxBlockBytes + kFragmentBytes - 1) / kFragmentBytes;
+// Most bytes a peer can make us hold for blocks not yet delivered. The block
+// next in line is exempt, so ordered delivery cannot deadlock.
+constexpr std::size_t kMaxReassemblyBytes = 8u << 20;
 
 // Ordered messages delivered exactly once. Each is sent in every packet
 // that has room, until acked, no sooner than RTT × 1.25 after its last
@@ -39,6 +43,7 @@ public:
             if (!in.valid || !in.complete || in.id != next_deliver_) return;
             on_message(in.data(), in.length);
             in.valid = false;
+            reassembly_bytes_ -= in.block.size();
             in.block = std::vector<std::uint8_t>();
             in.fragment_present = std::vector<std::uint8_t>();
             ++next_deliver_;
@@ -87,6 +92,7 @@ private:
     std::uint16_t oldest_unacked_ = 0;
     std::vector<Incoming> in_ = std::vector<Incoming>(kWindowSize);
     std::uint16_t next_deliver_ = 0;
+    std::size_t reassembly_bytes_ = 0;
 };
 
 }  // namespace network

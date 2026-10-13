@@ -526,3 +526,17 @@ TEST_CASE("PW18 the ray budget is shared, so every World emitter collides", "[pa
         REQUIRE(fell_through == 0);
     }
 }
+
+TEST_CASE("PW19 a particle that does not move spends no ray", "[particle-world]") {
+    ParticleRig rig;
+    Attachment& above = rig.attachment_at(0.f, 8.f, 0.f);
+    ParticleEmitter& e = rig.emitter(above.id());
+    REQUIRE_FALSE(e.set_emit_speed(NumberCurve::constant(0.f)).has_value());
+    REQUIRE_FALSE(e.set_lifetime(NumberCurve::constant(10.f)).has_value());
+    REQUIRE_FALSE(e.set_rate(NumberCurve::constant(0.f)).has_value());
+    REQUIRE_FALSE(e.set_collision(static_cast<int>(ParticleCollision::World)).has_value());
+    e.request_emit(20);
+    rig.steps(3);
+    REQUIRE(e.particle_count() == 20);
+    REQUIRE(rig.world.rays_last_step() == 0);   // no speed, no acceleration: nothing moved
+}

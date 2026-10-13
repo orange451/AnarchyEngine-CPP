@@ -11,6 +11,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <climits>
 #include <optional>
 #include <string>
 
@@ -201,4 +202,13 @@ TEST_CASE("PE6 a Color that is not finite is refused", "[particles]") {
     REQUIRE(reason(e.set_color(ColorCurve::between(ColorRgb{INFINITY, 0.f, 0.f, 1.f}, 0.f, ColorRgb{}, 0.f))) ==
             "Color must be finite");
     REQUIRE(e.color() == ColorCurve::constant(ColorRgb{1.f, 1.f, 1.f, 1.f}, 0.f));
+}
+
+TEST_CASE("PE7 Emit requests saturate rather than overflow", "[particles]") {
+    SimRole role;
+    Game game;
+    ParticleEmitter& e = add_emitter(game, workspace_of(game));
+    e.request_emit(INT_MAX);
+    e.request_emit(INT_MAX);
+    REQUIRE(e.take_emit_requests() == INT_MAX);
 }

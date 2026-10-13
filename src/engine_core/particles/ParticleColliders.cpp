@@ -111,6 +111,10 @@ std::optional<ParticleHit> WorldCollider::test(std::size_t slot, Vec3 from, Vec3
     if (std::optional<ParticleHit> ground = terrain_->test(slot, from, to)) {
         return ground;
     }
+    const Vec3 along = sub(to, from);
+    if (!(dot(along, along) > 0.f)) {
+        return std::nullopt;   // nothing moved: nothing to hit, and no ray spent
+    }
     // In this step's window, and rays left: cast one.
     const std::size_t place = count_ > 0 ? (slot + count_ - cursor_) % count_ : 0;
     PhysicsWorld* physics = game_->physics();
@@ -119,10 +123,6 @@ std::optional<ParticleHit> WorldCollider::test(std::size_t slot, Vec3 from, Vec3
         ++*cast_;
         RayFilter filter;
         filter.collision_group = group_;
-        const Vec3 along = sub(to, from);
-        if (!(dot(along, along) > 0.f)) {
-            return std::nullopt;
-        }
         // Looks ahead to the particle's next turn, so its plane is known before it gets there.
         const std::optional<RayHit> hit = physics->raycast(*game_, from, scale(along, reach_), filter);
         if (!hit) {

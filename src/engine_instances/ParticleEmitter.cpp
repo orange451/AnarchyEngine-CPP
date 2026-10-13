@@ -465,7 +465,10 @@ std::optional<std::string> ParticleEmitter::set_draw_order(double value) {
                                std::numeric_limits<int>::max(), true, "DrawOrder must be a whole number");
 }
 
-void ParticleEmitter::request_emit(int count) { emit_requests_ += std::max(0, count); }
+void ParticleEmitter::request_emit(int count) {
+    const long long total = static_cast<long long>(emit_requests_) + std::max(0, count);
+    emit_requests_ = static_cast<int>(std::min<long long>(total, std::numeric_limits<int>::max()));
+}
 
 void ParticleEmitter::request_clear() { clear_requested_ = true; }
 

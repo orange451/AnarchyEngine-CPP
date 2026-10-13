@@ -440,7 +440,7 @@ bool Renderer::initialize() {
         buildProgram(gridBands_, "Grid bands", "pipeline/grid_band.vert", "pipeline/grid.frag", {}) &&
         buildProgram(outline_, "Outline", "pipeline/outline.vert", "pipeline/outline.frag", {}) &&
         buildProgram(handle_, "Handle", "pipeline/handle.vert", "pipeline/handle.frag", {}) &&
-        environment_.initialize() && shadows_.initialize();
+        environment_.initialize() && shadows_.initialize() && particles_.create();
     if (!built) {
         shutdown();
         return false;
@@ -1208,13 +1208,17 @@ bool Renderer::draw(double x, double y, double width, double height, double scen
     }
     // A sky whose cubes can never be made is drawn as no sky, rather than never drawing.
     const bool hasSky = environment_.available() && (dynamicSkyDrawn() || lighting_.sky.image != 0);
+    // Particles draw over the clear like meshes do, with or without meshes.
+    const bool hasParticles = !particleBatches_.empty();
     const engine_core::Matrix4 projectionMatrix =
         Perspective(fovYDegrees_, static_cast<float>(pane.width) / static_cast<float>(pane.height), kSceneNear,
                     kSceneFar);
     const float* projection = projectionMatrix.m;
     const engine_core::Matrix4 inverseProjection = engine_core::matrix4_inverse(projectionMatrix);
 
-    bool drawn = !hasMeshes && !hasSky;
+    // Whether the scene passes run and leave depth for the grid and outlines.
+    const bool sceneDrawn = hasMeshes || hasSky || hasParticles;
+    bool drawn = !sceneDrawn;
     int bloomLevels = 0;
     if (!drawn && ensureTargets(pane.width, pane.height)) {
         // The lights in view space, as every pass takes them.
@@ -1329,7 +1333,7 @@ bool Renderer::draw(double x, double y, double width, double height, double scen
         // Bloom never fails the frame: without it, the tone map draws the scene as it is.
         bloomLevels = drawn ? bloomPass(targetWidth_, targetHeight_) : 0;
     }
-    if (drawn && (hasMeshes || hasSky)) {
+    if (drawn && sceneDrawn) {
         glDisable(GL_DEPTH_TEST);
         glDisable(RT_GL_CULL_FACE);
         // The pane, with its parent's clip.
@@ -1385,12 +1389,11 @@ bool Renderer::draw(double x, double y, double width, double height, double scen
     // Over a pane that got only the clear, the grid would show through the
     // surfaces that should hide it, so it waits for a frame that draws them.
     if (drawn && gridVisible_) {
-        gridPass(hasMeshes || hasSky ? depthTexture_ : whiteTexture_, projection, inverseProjection.m, pane.width,
-                 pane.height);
+        gridPass(sceneDrawn ? depthTexture_ : whiteTexture_, projection, inverseProjection.m, pane.width, pane.height);
     }
     // Likewise the outlines, which would show at full strength through them.
     if (drawn && !outlines_.empty()) {
-        outlinePass(hasMeshes || hasSky ? depthTexture_ : whiteTexture_, projection, inverseProjection.m);
+        outlinePass(sceneDrawn ? depthTexture_ : whiteTexture_, projection, inverseProjection.m);
     }
     // The handles last, over everything, so they can always be grabbed.
     if (drawn && !handles_.empty()) {
@@ -1536,6 +1539,10 @@ void Renderer::setOutlines(const float* points, int pointCount) {
 
 void Renderer::setToolLines(const float* points, int pointCount) {
     toolLines_.assign(points, points + std::max(pointCount, 0) / 2 * 2 * 7);
+}
+
+void Renderer::setParticles(const ParticleBatch* batches, int count) {
+    particleBatches_.assign(batches, batches + (batches != nullptr ? std::max(count, 0) : 0));
 }
 
 void Renderer::outlinePass(unsigned depth, const float* projection, const float* inverseProjection) {
@@ -2568,7 +2575,8 @@ bool Renderer::transparencyPass(const MeshDraw* meshes, const float* projection,
     glBindFramebuffer(RT_GL_FRAMEBUFFER, transparencyFbo_);
     glClearColor(0.f, 0.f, 0.f, 0.f);
     glClear(GL_COLOR_BUFFER_BIT);
-    if (batches_.opaqueRuns == static_cast<int>(batches_.runs.size())) {
+    const bool seeThroughMeshes = batches_.opaqueRuns != static_cast<int>(batches_.runs.size());
+    if (!seeThroughMeshes && particleBatches_.empty()) {
         return true;
     }
 
@@ -2616,7 +2624,7 @@ bool Renderer::transparencyPass(const MeshDraw* meshes, const float* projection,
         glUniform4fv(forward_.lightCones, lightCount, cones);
     }
     glEnable(RT_GL_CULL_FACE);
-    bool asked = false;
+    bool asked = !seeThroughMeshes;
     for (std::size_t index = static_cast<std::size_t>(batches_.opaqueRuns); index < batches_.runs.size(); ++index) {
         const DrawRun& run = batches_.runs[index];
         const MeshDraw& draw = meshes[run.draw];
@@ -2637,6 +2645,36 @@ bool Renderer::transparencyPass(const MeshDraw* meshes, const float* projection,
     }
     glDisable(RT_GL_CULL_FACE);
     glCullFace(RT_GL_BACK);
+    // Particles after the see-through meshes, over them all.
+    if (!particleBatches_.empty()) {
+        ParticleFrame frame;
+        frame.view = view_.m;
+        frame.projection = projection;
+        frame.inverseProjection = inverseProjection;
+        const engine_core::Vec3 eye = engine_core::matrix4_position(engine_core::matrix4_inverse(view_));
+        frame.cameraPosition[0] = eye.x;
+        frame.cameraPosition[1] = eye.y;
+        frame.cameraPosition[2] = eye.z;
+        frame.cameraRight[0] = view_.m[0];
+        frame.cameraRight[1] = view_.m[4];
+        frame.cameraRight[2] = view_.m[8];
+        frame.cameraUp[0] = view_.m[1];
+        frame.cameraUp[1] = view_.m[5];
+        frame.cameraUp[2] = view_.m[9];
+        frame.targetWidth = targetWidth_;
+        frame.targetHeight = targetHeight_;
+        std::copy(lighting_.ambient, lighting_.ambient + 3, frame.ambient);
+        frame.lightCount = lightCount;
+        frame.lightPositionRadius = positionRadius;
+        frame.lightColorIntensity = colorIntensity;
+        frame.lightDirections = directions;
+        frame.lightCones = cones;
+        if (!particles_.draw(particleBatches_.data(), static_cast<int>(particleBatches_.size()), frame,
+                             transparencyFbo_)) {
+            return false;
+        }
+        stats_.instancedCalls += static_cast<int>(particleBatches_.size());
+    }
     glDisable(GL_BLEND);
     glDepthMask(GL_TRUE);
     return true;
@@ -2808,6 +2846,7 @@ void Renderer::setClearColor(float r, float g, float b) {
 
 void Renderer::shutdown() {
     gpu_.shutdown();
+    particles_.destroy();
     ready_ = false;
     for (Program* program :
          {&geometry_, &terrain_, &forward_, &ibl_, &light_, &sun_, &merge_, &tonemap_, &bloomDown_, &bloomUp_, &fxaa_, &ssrScene_, &ssrBlur_, &ssr_, &gtao_, &aoBlur_, &sky_, &grid_,

@@ -88,6 +88,7 @@ const GLubyte* (*rt_glGetStringi)(GLenum, GLuint) = nullptr;
 void (*rt_glFramebufferTextureLayer)(GLenum, GLenum, GLuint, GLint, GLint) = nullptr;
 void (*rt_glPolygonOffset)(GLfloat, GLfloat) = nullptr;
 void (*rt_glReadBuffer)(GLenum) = nullptr;
+void (*rt_glBlitFramebuffer)(GLint, GLint, GLint, GLint, GLint, GLint, GLint, GLint, GLbitfield, GLenum) = nullptr;
 void (*rt_glBlendFunc)(GLenum, GLenum) = nullptr;
 void (*rt_glBlendFuncSeparate)(GLenum, GLenum, GLenum, GLenum) = nullptr;
 void (*rt_glCullFace)(GLenum) = nullptr;
@@ -233,6 +234,7 @@ bool LoadGl(GlGetProcAddress get_proc) {
     LOAD(FramebufferTextureLayer);
     LOAD(PolygonOffset);
     LOAD(ReadBuffer);
+    LOAD(BlitFramebuffer);
     LOAD(BlendFunc);
     LOAD(BlendFuncSeparate);
     LOAD(CullFace);

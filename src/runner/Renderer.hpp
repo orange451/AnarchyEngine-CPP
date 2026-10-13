@@ -9,6 +9,7 @@
 #include "BonePalette.hpp"
 #include "BoneTexture.hpp"
 #include "InstanceBuffer.hpp"
+#include "ParticleRenderer.hpp"
 #include "Matrix4.hpp"
 #include "SceneDepth.hpp"
 #include "ShadowRenderer.hpp"
@@ -387,6 +388,10 @@ public:
     // A tool's own lines, drawn with the outlines: x, y, z, r, g, b, a per point,
     // two points a segment, straight alpha. Kept until replaced; call before setOutlines.
     void setToolLines(const float* points, int pointCount);
+    // The particles every draw lays into the see-through pass, after the
+    // see-through meshes, until set again. batches' draws must outlive the
+    // draw calls that use them. Needs no GL context.
+    void setParticles(const ParticleBatch* batches, int count);
     // Dragger handles draw lays over everything after the outlines, as
     // handle_mesh builds them: world-space triangles, each corner colored,
     // drawn unlit with straight alpha and no depth test, so a handle behind a
@@ -970,6 +975,8 @@ private:
     std::vector<ViewLight> viewLights_;
     DrawBatches batches_;
     InstanceBuffer instances_;
+    ParticleRenderer particles_;
+    std::vector<ParticleBatch> particleBatches_;
     // The frame's skinning matrices, packed in findVisible, and their texture.
     BonePalette bonePalette_;
     BoneTexture boneTexture_;

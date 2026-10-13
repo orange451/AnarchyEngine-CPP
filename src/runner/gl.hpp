@@ -374,6 +374,8 @@ extern void (*rt_glFramebufferTextureLayer)(GLenum target, GLenum attachment, GL
                                             GLint layer);
 extern void (*rt_glPolygonOffset)(GLfloat factor, GLfloat units);
 extern void (*rt_glReadBuffer)(GLenum mode);
+extern void (*rt_glBlitFramebuffer)(GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1, GLint dstX0, GLint dstY0,
+                                    GLint dstX1, GLint dstY1, GLbitfield mask, GLenum filter);
 extern void (*rt_glBlendFunc)(GLenum sfactor, GLenum dfactor);
 extern void (*rt_glBlendFuncSeparate)(GLenum srcRGB, GLenum dstRGB, GLenum srcAlpha, GLenum dstAlpha);
 extern void (*rt_glCullFace)(GLenum mode);
@@ -502,6 +504,7 @@ bool LoadGl(GlGetProcAddress get_proc);
 #define glFramebufferTextureLayer ::runner::rt_glFramebufferTextureLayer
 #define glPolygonOffset ::runner::rt_glPolygonOffset
 #define glReadBuffer ::runner::rt_glReadBuffer
+#define glBlitFramebuffer ::runner::rt_glBlitFramebuffer
 #define glBlendFunc ::runner::rt_glBlendFunc
 #define glBlendFuncSeparate ::runner::rt_glBlendFuncSeparate
 #define glCullFace ::runner::rt_glCullFace

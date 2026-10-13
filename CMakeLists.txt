@@ -93,6 +93,7 @@ set(STUDIO_SOURCES
     src/runner/GpuTimer.cpp
     src/runner/ShadowRenderer.cpp
     src/runner/InstanceBuffer.cpp
+    src/runner/ParticleRenderer.cpp
     src/runner/BoneTexture.cpp
     src/runner/EnvironmentMap.cpp
     src/runner/MeshCache.cpp

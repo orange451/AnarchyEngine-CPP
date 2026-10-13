@@ -181,6 +181,10 @@ private:
     void collectOutlines(const engine_core::VisualSnapshot& snapshot);
     // Builds the snapshot's Dragger handles for this view's camera and size.
     void collectHandles(const engine_core::VisualSnapshot& snapshot);
+    // The snapshot's particles, each with its texture from textures_ (0, the
+    // built-in dot, while it loads or when it has none), for the renderer.
+    void collectParticles(const engine_core::VisualSnapshot& snapshot);
+    std::vector<ParticleBatch> particleBatches_;
     // Shows the GUIs, the eye, and the camera list as the toggle, a test, and
     // the player's view want them.
     void refreshOverlays();

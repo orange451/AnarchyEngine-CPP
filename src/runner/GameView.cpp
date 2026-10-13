@@ -409,6 +409,7 @@ void GameView::collectMeshes() {
     textures_.pump();
     collectOutlines(snapshot);
     collectHandles(snapshot);
+    collectParticles(snapshot);
     // Each Prefab's meshes once, however many GameObjects draw it.
     if (prefabMeshes_.size() < snapshot.prefabs.size()) {
         prefabMeshes_.resize(snapshot.prefabs.size());
@@ -953,6 +954,22 @@ void GameView::refreshCameraList() {
     }
     // A linked Camera that is gone shows the prompt.
     cameraBox_->select(selected);
+}
+
+void GameView::collectParticles(const engine_core::VisualSnapshot& snapshot) {
+    particleBatches_.clear();
+    for (const engine_core::ParticleDraw& draw : snapshot.particles) {
+        unsigned texture = 0;
+        if (!draw.texture.empty()) {
+            texture = textures_.get(draw.texture, engine_core::texture::Usage::Color, draw.texture_flip_y,
+                                    draw.texture_always_loaded);
+            if (texture == textures_.loadingPlaceholder()) {
+                texture = 0;   // the dot, not a grey square, until it loads
+            }
+        }
+        particleBatches_.push_back(ParticleBatch{&draw, texture});
+    }
+    renderer_.setParticles(particleBatches_.data(), static_cast<int>(particleBatches_.size()));
 }
 
 void GameView::collectHandles(const engine_core::VisualSnapshot& snapshot) {

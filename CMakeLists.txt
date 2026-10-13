@@ -74,6 +74,7 @@ set(STUDIO_CORE_SOURCES
     src/ide/McpSetup.cpp
     src/ide/PluginLoader.cpp
     src/ide/PropertySheet.cpp
+    src/ide/CurveEditModel.cpp
     src/ide/RunProcess.cpp
     src/ide/ProblemsModel.cpp
     src/ide/ScriptMarks.cpp
@@ -129,7 +130,6 @@ set(STUDIO_SOURCES
     src/ide/IdePrefabEditor.cpp
     src/ide/IdeTerrainEditor.cpp
     src/ide/CollisionGroupsModel.cpp
-    src/ide/CurveEditModel.cpp
     src/ide/CurveEditor.cpp
     src/ide/IdeCollisionGroups.cpp
     src/ide/PrefabModels.cpp

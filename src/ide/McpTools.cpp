@@ -1,5 +1,6 @@
 #include "McpTools.hpp"
 
+#include "CurveEditModel.hpp"
 #include "CurveJson.hpp"
 
 #include "profiler/ProfileJson.hpp"
@@ -287,6 +288,8 @@ const char* KindName(PropertyKind kind) {
             return "NumberCurve";
         case PropertyKind::ColorCurve:
             return "ColorCurve";
+        case PropertyKind::Bursts:
+            return "ParticleBursts";
     }
     return "string";
 }
@@ -302,6 +305,8 @@ JsonValue RowValue(const DataModel& world, const PropertyRow& row) {
             return row.value.number_curve ? engine_core::number_curve_to_json(*row.value.number_curve) : JsonValue();
         case PropertyKind::ColorCurve:
             return row.value.color_curve ? engine_core::color_curve_to_json(*row.value.color_curve) : JsonValue();
+        case PropertyKind::Bursts:
+            return JsonValue::string(row.value.text);
         case PropertyKind::String:
         case PropertyKind::ReadOnlyText:
             return JsonValue::string(row.value.text);
@@ -500,6 +505,13 @@ PropertyEdit EditFor(const DataModel& world, const PropertyRow& row, const JsonV
             edit.value.number = item;
             break;
         }
+        case PropertyKind::Bursts:
+            // As the Properties field takes it: "0: 50, 1.5: 10 - 20".
+            if (!value.is_string() || !ide::parse_bursts_text(value.as_string())) {
+                throw std::runtime_error(row.name + " takes a string of time: count pairs, such as \"0: 50, 1.5: 10 - 20\".");
+            }
+            edit.value.text = value.as_string();
+            break;
         case PropertyKind::NumberCurve: {
             // A number is a Constant; otherwise the curve as a project file holds it.
             std::string why;

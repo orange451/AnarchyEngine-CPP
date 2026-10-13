@@ -1104,6 +1104,7 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
         case PropertyKind::String:
         case PropertyKind::Number:
         case PropertyKind::ReadOnlyText:
+        case PropertyKind::Bursts:
             if (row.has_choices) {
                 view->choice = jadefx::make<jadefx::ComboBox>();
                 view->choice->getClassList().add("properties-choice");
@@ -1580,6 +1581,7 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
         case PropertyKind::String:
         case PropertyKind::Number:
         case PropertyKind::ReadOnlyText:
+        case PropertyKind::Bursts:
             if (view.choice) {
                 show_text_choice(view, row);
                 break;
@@ -1776,6 +1778,14 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
         const std::string text = field.getText();
         switch (view.row.kind) {
         case PropertyKind::String:
+            edit.value.text = text;
+            break;
+        case PropertyKind::Bursts:
+            if (!parse_bursts_text(text)) {
+                status = view.row.name + " takes time: count pairs, such as 0: 50, 1.5: 10 - 20";
+                field.show(view.row.value.text);
+                return;
+            }
             edit.value.text = text;
             break;
         case PropertyKind::Number:

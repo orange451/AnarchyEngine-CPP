@@ -1,8 +1,10 @@
 #pragma once
 
 #include "Curve.hpp"
+#include "ParticleEmitter.hpp"
 
 #include <optional>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -11,6 +13,12 @@ namespace ide {
 // What a curve row's field takes: "5" is a Constant, "1 - 3" (or "1..3") a
 // Range. nullopt for anything else.
 std::optional<engine_core::NumberCurve> parse_curve_text(std::string_view text);
+
+// ParticleEmitter.Bursts as its field shows it: "0: 50, 1.5: 10 - 20", each
+// "time: count" with count a number or two as 1 - 3. Empty is no bursts.
+// nullopt for anything else, or a time or count below 0.
+std::optional<std::vector<engine_core::ParticleBurst>> parse_bursts_text(std::string_view text);
+std::string format_bursts_text(const std::vector<engine_core::ParticleBurst>& bursts);
 
 // Editing a NumberCurve's keys, with nothing on screen: the curve editor's
 // model. Graph space is time 0..1 across and value up. which is 0 for the

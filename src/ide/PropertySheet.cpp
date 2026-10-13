@@ -1,6 +1,7 @@
 #include "PropertySheet.hpp"
 
 #include "ChangeHistoryService.hpp"
+#include "CurveEditModel.hpp"
 #include "CurveJson.hpp"
 #include "ParticleBursts.hpp"
 #include "LuaApi.hpp"
@@ -163,6 +164,13 @@ bool read_value(DataModel& world, DataModel& object, const LuaField& field, Prop
         }
         out.ref = slot.id;
         return slot.kind == LuaSlot::Kind::Instance;
+    case PropertyKind::Bursts: {
+        // As the field shows them; the JSON a write takes is made from that.
+        std::string error;
+        const auto bursts = engine_core::bursts_from_slot(slot, error);
+        out.text = bursts ? format_bursts_text(*bursts) : std::string();
+        return bursts.has_value();
+    }
     case PropertyKind::NumberCurve:
         out.number_curve = slot.number_curve;
         out.text = slot.number_curve ? curve_summary(*slot.number_curve) : std::string();
@@ -172,13 +180,6 @@ bool read_value(DataModel& world, DataModel& object, const LuaField& field, Prop
         out.text = slot.color_curve ? color_curve_summary(*slot.color_curve) : std::string();
         return slot.kind == LuaSlot::Kind::ColorCurve && slot.color_curve != nullptr;
     case PropertyKind::ReadOnlyText:
-        if (field.type_name != nullptr && std::string_view(field.type_name) == "ParticleBursts") {
-            std::string error;
-            const auto bursts = engine_core::bursts_from_slot(slot, error);
-            const std::size_t count = bursts ? bursts->size() : 0;
-            out.text = count == 0 ? "None" : count == 1 ? "1 burst" : std::to_string(count) + " bursts";
-            return true;
-        }
         switch (slot.kind) {
         case LuaSlot::Kind::NumberCurve:
             out.text = slot.number_curve ? curve_summary(*slot.number_curve) : std::string();
@@ -211,6 +212,7 @@ bool same_component(float a, float b) { return a == b; }
 // Folds one more instance's value into the row. first is the first instance.
 void merge(PropertyRow& row, const PropertyValue& next) {
     switch (row.kind) {
+    case PropertyKind::Bursts:
     case PropertyKind::String:
     case PropertyKind::ReadOnlyText:
         row.mixed = row.mixed || row.value.text != next.text;
@@ -400,8 +402,7 @@ bool property_kind_for(const std::string& type_name, PropertyKind& out) {
     } else if (type_name == "ColorCurve") {
         out = PropertyKind::ColorCurve;
     } else if (type_name == "ParticleBursts") {
-        // Shown as a summary until the Bursts row takes it.
-        out = PropertyKind::ReadOnlyText;
+        out = PropertyKind::Bursts;
     } else {
         return false;
     }
@@ -771,6 +772,15 @@ EditResult write_edit(DataModel& world, const std::vector<InstanceId>& ids, cons
                 slot.id = edit.value.ref;
             }
             break;
+        case PropertyKind::Bursts: {
+            // edit.value.text is the field's text: refused unless it reads as bursts.
+            const auto bursts = parse_bursts_text(edit.value.text);
+            if (!bursts) {
+                continue;
+            }
+            slot = engine_core::bursts_slot(*bursts);
+            break;
+        }
         case PropertyKind::NumberCurve:
             if (!edit.value.number_curve) {
                 continue;

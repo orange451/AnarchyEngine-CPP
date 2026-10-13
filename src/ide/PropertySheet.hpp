@@ -26,7 +26,7 @@ std::vector<engine_core::InstanceId> instance_drag_ids(std::string_view text);
 // (LuaField::enum_type), picked from its items. Transform is a Matrix4, edited as
 // its Position and its Orientation.
 // Vector2 is a Vector3 with no Z: its value is in vec, with z 0.
-enum class PropertyKind { String, Bool, Number, Vector3, Color3, Ref, Transform, ReadOnlyText, Enum, Vector2, NumberCurve, ColorCurve };
+enum class PropertyKind { String, Bool, Number, Vector3, Color3, Ref, Transform, ReadOnlyText, Enum, Vector2, NumberCurve, ColorCurve, Bursts };
 
 // The fields a Vector2 or Vector3 row has: 2 or 3.
 inline int vector_axes(PropertyKind kind) { return kind == PropertyKind::Vector2 ? 2 : 3; }

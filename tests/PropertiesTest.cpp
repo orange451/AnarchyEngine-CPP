@@ -1525,6 +1525,38 @@ void TestCurveRows() {
     Expect(rig.game.history().can_undo().second == "Set Color", "named Set Color");
 }
 
+// Bursts: typed as "time: count" pairs, a count being a number or two as 1 - 3.
+void TestBurstsRow() {
+    const auto parsed = ide::parse_bursts_text("1.5: 10 - 20, 0: 50");
+    Expect(parsed && parsed->size() == 2 && (*parsed)[0].time == 0.f &&
+               (*parsed)[0].count == engine_core::NumberCurve::constant(50.f) &&
+               (*parsed)[1].count == engine_core::NumberCurve::range(10.f, 20.f),
+           "bursts parse and sort by time");
+    Expect(ide::parse_bursts_text("") && ide::parse_bursts_text("")->empty(), "nothing is no bursts");
+    Expect(!ide::parse_bursts_text("soon: 5") && !ide::parse_bursts_text("1: many") && !ide::parse_bursts_text("-1: 5"),
+           "bad pairs are refused");
+    Expect(ide::format_bursts_text(*parsed) == "0: 50, 1.5: 10 - 20", "and format back");
+
+    Rig rig;
+    const InstanceId id = rig.add<engine_core::ParticleEmitter>("Emitter");
+    auto* emitter = dynamic_cast<engine_core::ParticleEmitter*>(rig.game.instance(id));
+    rig.select({id});
+    rig.frame();
+    Expect(rig.text("Bursts").empty(), "no bursts shows an empty field");
+    rig.typeInto("Bursts", "0: 50, 1.5: 10 - 20");
+    rig.enter();
+    rig.frame();
+    rig.frame();
+    Expect(emitter->bursts().size() == 2 && emitter->bursts()[1].count == engine_core::NumberCurve::range(10.f, 20.f),
+           "typing writes the bursts");
+    Expect(rig.game.history().can_undo().second == "Set Bursts", "one step named Set Bursts");
+    Expect(rig.text("Bursts") == "0: 50, 1.5: 10 - 20", "the field shows them");
+    rig.typeInto("Bursts", "whenever");
+    rig.enter();
+    rig.frame();
+    Expect(emitter->bursts().size() == 2, "words change nothing");
+}
+
 // A ParticleEmitter's curve rows show, its rules hide and grey rows, and a
 // greyed row cannot be edited from the panel.
 void TestParticleEmitterRows() {
@@ -1537,7 +1569,7 @@ void TestParticleEmitterRows() {
     const ide::PropertyRow* lifetime = rig.panel.sheet().find("Lifetime");
     Expect(lifetime != nullptr && lifetime->value.text == "1 - 2", "a range shows its ends");
     const ide::PropertyRow* bursts = rig.panel.sheet().find("Bursts");
-    Expect(bursts != nullptr && bursts->value.text == "None", "an empty burst list says so");
+    Expect(bursts != nullptr && bursts->value.text.empty(), "an empty burst list shows nothing");
     Expect(rig.hasRow("Color"), "a ColorCurve row shows");
     Expect(!rig.hasRow("FlipbookGrid"), "a Static texture hides FlipbookGrid");
     Expect(!rig.hasRow("FacingAxis"), "Camera facing hides FacingAxis");
@@ -2157,6 +2189,7 @@ int main() {
     TestParticleEmitterRows();
     TestCurveEditModel();
     TestCurveRows();
+    TestBurstsRow();
     TestCollisionGroupDropdown();
     TestAssetReferencePicker();
     TestR1SingleSelectionEditsName();

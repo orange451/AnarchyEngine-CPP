@@ -1,5 +1,8 @@
 #include "CurveEditModel.hpp"
 
+#include "ParticleBursts.hpp"
+#include "PropertySheet.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
@@ -349,6 +352,56 @@ void GradientEditModel::set_transparency(int which, int index, float transparenc
     }
     list[static_cast<std::size_t>(index)].transparency = std::clamp(transparency, 0.f, 1.f);
     rebuild();
+}
+
+}  // namespace ide
+
+namespace ide {
+
+std::optional<std::vector<engine_core::ParticleBurst>> parse_bursts_text(std::string_view text) {
+    std::vector<engine_core::ParticleBurst> out;
+    std::size_t start = 0;
+    while (start <= text.size()) {
+        const std::size_t comma = text.find(',', start);
+        const std::string_view part = text.substr(start, comma == std::string_view::npos ? std::string_view::npos : comma - start);
+        start = comma == std::string_view::npos ? text.size() + 1 : comma + 1;
+        if (part.find_first_not_of(" \t") == std::string_view::npos) {
+            if (comma == std::string_view::npos && out.empty()) {
+                break;   // nothing at all: no bursts
+            }
+            return std::nullopt;
+        }
+        const std::size_t colon = part.find(':');
+        if (colon == std::string_view::npos) {
+            return std::nullopt;
+        }
+        const auto time = parse_curve_text(part.substr(0, colon));
+        const auto count = parse_curve_text(part.substr(colon + 1));
+        if (!time || time->mode() != NumberCurveMode::Constant || !count) {
+            return std::nullopt;
+        }
+        out.push_back(engine_core::ParticleBurst{time->min(), *count});
+    }
+    if (engine_core::check_bursts(out)) {
+        return std::nullopt;
+    }
+    std::stable_sort(out.begin(), out.end(),
+                     [](const engine_core::ParticleBurst& a, const engine_core::ParticleBurst& b) { return a.time < b.time; });
+    return out;
+}
+
+std::string format_bursts_text(const std::vector<engine_core::ParticleBurst>& bursts) {
+    std::string out;
+    for (const engine_core::ParticleBurst& burst : bursts) {
+        if (!out.empty()) {
+            out += ", ";
+        }
+        out += format_float(burst.time) + ": " + format_float(burst.count.min());
+        if (burst.count.mode() == NumberCurveMode::Range) {
+            out += " - " + format_float(burst.count.max());
+        }
+    }
+    return out;
 }
 
 }  // namespace ide

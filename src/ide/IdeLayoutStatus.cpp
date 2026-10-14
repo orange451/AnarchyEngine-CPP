@@ -79,10 +79,17 @@ void IdeLayout::show_play_state() {
 }
 
 void IdeLayout::show_save_state(bool unsaved) {
-    if (save_chip_ == nullptr || static_cast<int>(unsaved) == shown_unsaved_) {
+    const int state = save_thread_.joinable() ? 2 : static_cast<int>(unsaved);
+    if (save_chip_ == nullptr || state == shown_save_state_) {
         return;
     }
-    shown_unsaved_ = unsaved;
+    shown_save_state_ = state;
+    if (state == 2) {
+        save_chip_->set_icon(0, "Save.png");
+        SetText(save_state_text_, "Saving...");
+        SetTip(save_tip_, "Saving " + project_->name());
+        return;
+    }
     save_chip_->set_icon(0, unsaved ? "Unsaved.png" : "Save.png");
     SetText(save_state_text_, unsaved ? "Unsaved" : "Saved");
     if (unsaved) {

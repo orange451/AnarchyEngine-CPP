@@ -335,6 +335,7 @@ int RunConflictsTests(ide::IdeLayout& layout, jadefx::Scene& scene) {
     }
     scene.noteKey(jadefx::Key::S, true, false, jadefx::Key::ModControl);
     scene.noteKey(jadefx::Key::S, false, false, 0);
+    layout.wait_for_save();
     auto* show = dynamic_cast<jadefx::ButtonBase*>(scene.getElementById("save-conflict-show"));
     expect(show != nullptr, "Save with a conflict offers the Conflicts window");
     if (show != nullptr) {

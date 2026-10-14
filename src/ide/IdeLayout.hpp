@@ -19,6 +19,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -141,6 +142,10 @@ public:
     // saved also moves what its scratch folder holds into the project's
     // resources/. False, after an alert saying why, when it cannot.
     bool save_project_to(const std::filesystem::path& root);
+    // Ends the save running in the background, waiting for it, and shows what
+    // came of it. Whatever saves, reads the disk, or swaps the project calls
+    // this first; a test calls it after Save to see the save's result.
+    void wait_for_save();
     // True when a save would write something, or an editor holds text its
     // script's Source does not have yet.
     bool has_unsaved_changes();
@@ -321,6 +326,19 @@ private:
     // conflicts to write over; any other still asks. A failed save skips then.
     bool save_open_project(std::function<void()> then = {},
                            const std::vector<engine_core::SaveConflict>* overwrite = nullptr);
+    // Save with the project open and no test running: a worker walks the disk
+    // and writes the files while the studio goes on. The place is held only to
+    // load what changed on disk and to take what the save writes. Save pressed
+    // again while it runs saves once more after it.
+    void save_in_background();
+    struct BackgroundSave;
+    // waiting: called by wait_for_save, so a queued save runs here, not in the background.
+    void finish_background_save(bool waiting);
+    // Says what the save wrote.
+    void show_saved();
+    // Shows what a disk check found: the files it loaded, the rows it skipped,
+    // why it could not read the disk, and the rows still open.
+    void show_scan(const engine_core::DiskScan& scan, const std::string& problem);
     // Lists the files a save found changed on disk. Overwrite saves over those
     // and runs then; Cancel writes nothing.
     // Where a save gate's rows came from, which sets what it offers.
@@ -650,7 +668,13 @@ private:
     layout_detail::StatusChip* save_chip_ = nullptr;
     jadefx::Label* save_state_text_ = nullptr;
     std::shared_ptr<jadefx::Tooltip> save_tip_;
-    int shown_unsaved_ = -1;
+    // What the save chip shows: 0 saved, 1 unsaved, 2 saving.
+    int shown_save_state_ = -1;
+    // The save running in the background, and its worker.
+    std::shared_ptr<BackgroundSave> background_;
+    std::thread save_thread_;
+    // Save was pressed while the save in the background ran.
+    bool save_again_ = false;
     // Its right end: the caret, the frame time, the zoom, and the AI client.
     layout_detail::StatusChip* cursor_chip_ = nullptr;
     jadefx::Label* cursor_text_ = nullptr;

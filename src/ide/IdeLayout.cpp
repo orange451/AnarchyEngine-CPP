@@ -612,7 +612,8 @@ void IdeLayout::flushFrame() {
         }
     }
     was_focused_ = focused;
-    if (check_pending_ && !in_test() && !editing_field()) {
+    // A save in the background checks the disk itself; one due waits for it.
+    if (check_pending_ && !in_test() && !editing_field() && !save_thread_.joinable()) {
         check_disk();
     }
     // The place and size to keep while maximized: the last ones it had when it was not.
@@ -742,6 +743,10 @@ void IdeLayout::flushFrame() {
 }
 
 IdeLayout::~IdeLayout() {
+    // A save still writing finishes; what came of it is not shown.
+    if (save_thread_.joinable()) {
+        save_thread_.join();
+    }
     // The native menus' items would outlive the actions they run.
     RemoveNativeMenuBar();
     // Before anything its tools reach is torn down.
@@ -1063,6 +1068,7 @@ void IdeLayout::show_grid() {
 }
 
 void IdeLayout::start_test() {
+    wait_for_save();
     engine_core::Engine& engine = runner_.simulation();
     // A sound auditioned in Properties is not heard over the game.
     properties_->stop_sound();

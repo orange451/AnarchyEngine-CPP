@@ -139,6 +139,15 @@ public:
     // smaller one.
     static std::size_t instance_limit();
     static void set_instance_limit(std::size_t limit);
+    // On, every disk check that reads only the files that changed also reads
+    // the whole tree and fails, with a contract violation, unless both find
+    // the same rows and actions. The sandbox turns it on; so does
+    // ANARCHY_VERIFY_DISK_COMPARE=1 in the studio.
+    static void set_compare_check(bool on);
+    // How many disk checks read only the changed files, since the program started. For tests.
+    static std::size_t partial_reads();
+    // How many saves were planned from the changes alone, since the program started. For tests.
+    static std::size_t quick_saves();
 
     Project(Project&&);
     Project& operator=(Project&&);
@@ -151,7 +160,29 @@ public:
     // load or save. One that changed on disk stops the save with
     // ProjectConflict, writing nothing, unless overwrite lists that conflict:
     // then the studio's version is written over it.
-    void save(const std::vector<SaveConflict>& overwrite = {});
+    // just_checked: a disk check (scan_disk or apply_disk) ran just before,
+    // with nothing in between, so the save takes the stamp it walked instead
+    // of walking the tree again. Every file the save writes over, moves, or
+    // deletes is still checked against that stamp just before it is touched.
+    void save(const std::vector<SaveConflict>& overwrite = {}, bool just_checked = false);
+
+    // A save that writes off the place's thread. On any thread, walk_disk
+    // reads the tree's directory entries. Then, with the place to itself,
+    // apply_disk with that walk loads what changed only on disk (and finds
+    // rows, which stop the save), and begin_save takes what the save writes.
+    // write_save then writes it on any thread, while the place goes on, and
+    // end_save makes the base what was written, or gives the changes back as
+    // unsaved when nothing was. Nothing else may use the project in between.
+    class Walk;
+    class SaveJob;
+    enum class Written { Yes, Stale, Failed };
+    Walk walk_disk() const;
+    DiskScan apply_disk(const std::vector<DiskChoice>& choices, const Walk& walk);
+    SaveJob begin_save();
+    // Stale: a file the save was to touch changed since the walk; nothing was
+    // written. A save with save() then finds it as a conflict. Failed: error says why.
+    static Written write_save(SaveJob& job, std::string& error);
+    void end_save(SaveJob& job, Written written);
     // Writes the whole project under a new root, copies resources/, and binds there.
     void save_as(const std::filesystem::path& root);
 
@@ -192,6 +223,8 @@ public:
     const std::string& name() const { return name_; }
     DataModel& datamodel() { return *game_; }
     const DataModel& datamodel() const { return *game_; }
+    // Each instance's GUID and its properties file, as last loaded or saved. For benchmarks.
+    std::vector<std::pair<std::string, std::string>> base_paths_for_bench() const;
 
     // The runtime id for a GUID as of the last load or save.
     std::optional<InstanceId> instance_for(std::string_view guid) const;
@@ -210,17 +243,79 @@ private:
     // Tells the bound game where its resources folder is now.
     void publish_resources_root() const;
 
+    // A file's bytes, held once and shared by every copy. A save plans every
+    // instance's files from the base; sharing makes that a count per
+    // instance, not a copy of the whole project.
+    class SharedText {
+    public:
+        SharedText() = default;
+        SharedText(std::string text) : text_(std::make_shared<const std::string>(std::move(text))) {}
+        SharedText& operator=(std::string text) {
+            text_ = std::make_shared<const std::string>(std::move(text));
+            return *this;
+        }
+        const std::string& str() const { return text_ ? *text_ : none(); }
+        operator const std::string&() const { return str(); }
+        bool empty() const { return str().empty(); }
+        std::size_t size() const { return str().size(); }
+        // The same bytes: at once when both share them.
+        friend bool operator==(const SharedText& a, const SharedText& b) {
+            return a.text_ == b.text_ || a.str() == b.str();
+        }
+        friend bool operator!=(const SharedText& a, const SharedText& b) { return !(a == b); }
+        friend bool operator==(const SharedText& a, const std::string& b) { return a.str() == b; }
+        friend bool operator!=(const SharedText& a, const std::string& b) { return a.str() != b; }
+        friend bool operator==(const std::string& a, const SharedText& b) { return a == b.str(); }
+        friend bool operator!=(const std::string& a, const SharedText& b) { return a != b.str(); }
+
+    private:
+        static const std::string& none() {
+            static const std::string nothing;
+            return nothing;
+        }
+        std::shared_ptr<const std::string> text_;
+    };
+    // A parsed file, shared the same way: a change makes this copy its own.
+    class SharedJson {
+    public:
+        SharedJson() = default;
+        SharedJson(JsonValue doc) : doc_(std::make_shared<JsonValue>(std::move(doc))) {}
+        SharedJson& operator=(JsonValue doc) {
+            doc_ = std::make_shared<JsonValue>(std::move(doc));
+            return *this;
+        }
+        const JsonValue& get() const { return doc_ ? *doc_ : none(); }
+        operator const JsonValue&() const { return get(); }
+        const JsonValue* find(std::string_view key) const { return get().find(key); }
+        const std::vector<JsonValue::Member>& members() const { return get().members(); }
+        void set(std::string key, JsonValue value) { own().set(std::move(key), std::move(value)); }
+        bool erase(std::string_view key) { return own().erase(key); }
+
+    private:
+        JsonValue& own() {
+            if (!doc_ || doc_.use_count() > 1) {
+                doc_ = std::make_shared<JsonValue>(get());
+            }
+            return *doc_;
+        }
+        static const JsonValue& none() {
+            static const JsonValue nothing;
+            return nothing;
+        }
+        std::shared_ptr<JsonValue> doc_;
+    };
+
     // Files on disk for one instance, as last loaded or written.
     struct Files {
         std::string props_path;
-        std::string props_bytes;
+        SharedText props_bytes;
         bool has_source = false;
         std::string source_path;
-        std::string source_bytes;
+        SharedText source_bytes;
         // The properties file parsed: the base each key is compared against. A
         // key settled for the studio's side is patched here, and props_bytes
         // rewritten to match.
-        JsonValue props;
+        SharedJson props;
         // The parent's GUID. Empty for the root.
         std::string parent;
     };
@@ -230,7 +325,23 @@ private:
     // that already has content, after a dry run so a bad file leaves it as it was.
     void read_into_game(const std::filesystem::path& root, bool replace);
     void write_skeleton(const std::filesystem::path& root) const;
-    void save_tree(bool full, const std::vector<SaveConflict>& overwrite = {});
+    void save_tree(bool full, const std::vector<SaveConflict>& overwrite = {}, bool just_checked = false);
+    struct PendingSave;
+    // A save in three steps. capture_save takes from the place everything the
+    // save writes, and runs the conflict gate; write_save touches only the
+    // disk, all or nothing; finish_save makes the base what was written, or,
+    // when nothing was, gives the place's changes back as unsaved.
+    std::unique_ptr<PendingSave> capture_save(bool full, const std::vector<SaveConflict>& overwrite,
+                                              bool just_checked);
+    static void write_save(PendingSave& save);
+    void finish_save(PendingSave& save, bool written);
+    // The save planned from the changes alone: what the studio changed since
+    // the last save, what is gone, and the files under anything whose files
+    // moved. False, for a whole plan, when that cannot be done exactly.
+    bool plan_changed(const AuthoredDirty& dirty, PendingSave& save) const;
+    // With the compare check on: a contract violation unless a whole plan
+    // writes, moves, and removes exactly what save does.
+    void check_quick_save(const PendingSave& save, const AuthoredDirty& dirty, const std::string& src) const;
     // The files next would write over, delete, or put back that changed on disk
     // since the last load or save, and files it does not know inside a folder
     // it moves or deletes, sorted by path. A GUID whose files are all gone while
@@ -244,20 +355,63 @@ private:
                                               const std::map<std::string, std::vector<std::string>>& claims,
                                               std::set<std::string>& left_gone, bool in_sync) const;
     // Base, disk, and studio side by side, and what differs. Defined in Project.cpp.
-    struct Comparison;
-    Comparison compare_disk() const;
-
-    // Every file under the tree root, and project.json, reduced to a digest
-    // of each path, size and modified time (order does not matter). A file
+    // Every file under the tree root, and project.json: each path with its
+    // size and modified time. Two stamps with the same entries mean no file
+    // was added, removed, or rewritten in between, and the entries that differ
+    // name the files that were. A file
     // modified within kRacySeconds of the walk is "racy": the clock may not
     // have moved between two writes, so its stamp cannot prove it unchanged
     // (git's racy-clean problem); racy files are checked by their bytes.
     struct DiskStamp {
-        std::uint64_t digest = 0;
-        // Paths relative to root, with '/'.
+        // One file as the walk saw it.
+        struct Entry {
+            std::uintmax_t size = 0;
+            std::int64_t written = 0;
+            bool operator==(const Entry& other) const { return size == other.size && written == other.written; }
+            bool operator!=(const Entry& other) const { return !(*this == other); }
+        };
+        // Every file, by path relative to root, with '/'.
+        std::unordered_map<std::string, Entry> files;
+        // Paths relative to root, with '/', sorted.
         std::vector<std::string> racy;
     };
     static constexpr int kRacySeconds = 2;
+public:
+    class Walk {
+    private:
+        friend class Project;
+        std::optional<DiskStamp> stamp;
+    };
+    class SaveJob {
+    public:
+        SaveJob();
+        ~SaveJob();
+        SaveJob(SaveJob&&) noexcept;
+        SaveJob& operator=(SaveJob&&) noexcept;
+
+    private:
+        friend class Project;
+        std::unique_ptr<PendingSave> save;
+    };
+
+private:
+    struct Comparison;
+    // walked: the stamp of a walk just taken, so the check walks the tree once.
+    Comparison compare_disk(const std::optional<DiskStamp>* walked = nullptr) const;
+    // The disk side and the studio side, read whole: every file parsed and
+    // made in a scratch place, every instance with its properties.
+    void read_whole(Comparison& out) const;
+    // The disk side from only the files whose stamp changed since the disk
+    // last matched the base, each with the instances it is under, when that is
+    // all that changed: no file added, removed, or renamed, project.json the
+    // same, and each changed file keeps its class and its children list.
+    // False, with out untouched, when any of that does not hold. compare lists
+    // the plan indexes the rules must look at.
+    bool read_changed(Comparison& out, std::vector<std::size_t>& compare,
+                      const std::optional<DiskStamp>* walked) const;
+    // The rows and actions, over every plan index, or over only those listed.
+    void find_rows(Comparison& out, const std::vector<std::size_t>* only) const;
+
     // nullopt when the tree cannot be read. Reads directory entries only.
     std::optional<DiskStamp> disk_stamp() const;
     // The stamp as of the last moment the base matched the disk (a load, a
@@ -266,9 +420,14 @@ private:
     // nothing to load and no row to ask about, so it skips the full compare,
     // which reads and rebuilds every file.
     mutable std::optional<DiskStamp> synced_stamp_;
-    // True when the disk still matches synced_stamp_: same digest, and every
+    // True when the disk still matches synced_stamp_: the same entries, and every
     // racy file holds the bytes the base has for it.
-    bool disk_matches_base() const;
+    // walked, when given, gets the stamp the check walked, for the rest of
+    // the check to use instead of walking again.
+    bool disk_matches_base(std::optional<DiskStamp>* walked = nullptr) const;
+    // The same, against a walk already made.
+    bool disk_matches(const std::optional<DiskStamp>& now) const;
+    DiskScan apply_disk_walked(const std::vector<DiskChoice>& choices, const std::optional<DiskStamp>* given);
     // Marks the base in sync with the disk as stamped by taken, when the
     // disk still has that stamp; otherwise leaves it out of sync.
     void mark_synced(const std::optional<DiskStamp>& taken) const;

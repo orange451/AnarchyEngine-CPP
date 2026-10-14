@@ -21,6 +21,7 @@
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <iterator>
 #include <limits>
 #include <locale>
@@ -2961,4 +2962,444 @@ TEST_CASE("DS5 a save that started out of sync does not hide an outside edit it 
     REQUIRE(scan.has_disk_changes);
     project.apply_disk();
     REQUIRE(game.game_object(a)->transform().m[13] == 9.f);
+}
+
+// A disk check reads only the files whose stamp changed when no file was
+// added, removed, or renamed. The sandbox checks every such read against a
+// whole read (Project::set_compare_check), so each case here is also proof
+// that both find the same rows and actions.
+
+TEST_CASE("Q1 an outside edit to one file is read from that file alone and loads", "[Q1][disk][project]") {
+    SimRole role;
+    TempDir dir;
+    Project project = Project::create(dir.path);
+    DataModel& game = project.datamodel();
+    const InstanceId a = add_part(game, workspace_of(game), "A").id();
+    add_part(game, workspace_of(game), "B");
+    project.save();
+    edit_key(dir.path / leaf(game, a), "Transform", translated(4, 5, 6));
+    const std::size_t before = Project::partial_reads();
+    const engine_core::DiskScan scan = project.scan_disk();
+    REQUIRE(Project::partial_reads() == before + 1);
+    REQUIRE(scan.has_disk_changes);
+    REQUIRE(scan.conflicts.empty());
+    const engine_core::DiskScan applied = project.apply_disk();
+    REQUIRE(applied.conflicts.empty());
+    REQUIRE(game.game_object(a)->transform().m[13] == 5.f);
+    REQUIRE_FALSE(project.scan_disk().has_disk_changes);
+    project.save();
+}
+
+TEST_CASE("Q2 one key changed both ways is a row when read from that file alone", "[Q2][disk][project]") {
+    SimRole role;
+    TempDir dir;
+    Project project = Project::create(dir.path);
+    DataModel& game = project.datamodel();
+    engine_core::GameObject& a = add_part(game, workspace_of(game), "A");
+    project.save();
+    edit_key(dir.path / leaf(game, a.id()), "Transform", translated(0, 0, 1));
+    a.set_transform(engine_core::matrix4_translation(1.f, 0.f, 0.f));
+    const std::size_t before = Project::partial_reads();
+    const engine_core::SaveConflict& row = only_row(project.scan_disk());
+    REQUIRE(Project::partial_reads() == before + 1);
+    REQUIRE(row.key == "Transform");
+    REQUIRE(row.studio == transform_text("1, 0, 0"));
+    REQUIRE(row.disk == transform_text("0, 0, 1"));
+    // The save stops at it, as after a whole read.
+    REQUIRE_THROWS_AS(project.save(), engine_core::ProjectConflict);
+}
+
+TEST_CASE("Q3 different keys changed on each side merge when read from that file alone", "[Q3][disk][project]") {
+    SimRole role;
+    TempDir dir;
+    Project project = Project::create(dir.path);
+    DataModel& game = project.datamodel();
+    engine_core::GameObject& a = add_part(game, workspace_of(game), "A");
+    project.save();
+    edit_key(dir.path / leaf(game, a.id()), "Transform", translated(0, 7, 0));
+    game.set_name(a.id(), "Renamed");
+    const std::size_t before = Project::partial_reads();
+    const engine_core::DiskScan applied = project.apply_disk();
+    REQUIRE(Project::partial_reads() > before);
+    REQUIRE(applied.conflicts.empty());
+    REQUIRE(a.transform().m[13] == 7.f);
+    REQUIRE(game.name(a.id()) == "Renamed");
+    project.save();
+    REQUIRE_FALSE(project.scan_disk().has_disk_changes);
+}
+
+TEST_CASE("Q4 a file edited outside under a folder the studio deleted is a row", "[Q4][disk][project]") {
+    SimRole role;
+    TempDir dir;
+    Project project = Project::create(dir.path);
+    DataModel& game = project.datamodel();
+    const InstanceId box = add_part(game, workspace_of(game), "Box").id();
+    const InstanceId a = add_part(game, box, "A").id();
+    project.save();
+    edit_key(dir.path / (box_dir(game, box) + "/A." + game.guid(a) + ".json"), "Transform", translated(2, 2, 2));
+    game.destroy_tree(box);
+    const std::size_t before = Project::partial_reads();
+    const engine_core::DiskScan scan = project.scan_disk();
+    REQUIRE(Project::partial_reads() == before + 1);
+    REQUIRE_FALSE(scan.conflicts.empty());
+}
+
+TEST_CASE("Q5 a script's source edited outside is read from that file alone and loads", "[Q5][disk][project]") {
+    SimRole role;
+    TempDir dir;
+    Project project = Project::create(dir.path);
+    DataModel& game = project.datamodel();
+    engine_core::Script& main = add_script(game, workspace_of(game), "Main", "print(1)\n");
+    project.save();
+    write_file(dir.path / leaf(game, main.id(), ".luau"), "print(2)\n");
+    const std::size_t before = Project::partial_reads();
+    const engine_core::DiskScan applied = project.apply_disk();
+    REQUIRE(Project::partial_reads() > before);
+    REQUIRE(applied.conflicts.empty());
+    REQUIRE(main.source() == "print(2)\n");
+}
+
+TEST_CASE("Q6 a scene service edited outside is read from that file alone and loads", "[Q6][disk][project]") {
+    SimRole role;
+    TempDir dir;
+    Project project = Project::create(dir.path);
+    DataModel& game = project.datamodel();
+    project.save();
+    fs::path lighting;
+    for (const auto& entry : fs::recursive_directory_iterator(dir.path / "src")) {
+        if (!entry.is_regular_file()) {
+            continue;
+        }
+        const std::string name = entry.path().filename().string();
+        const std::string folder = entry.path().parent_path().filename().string();
+        if ((folder.rfind("Lighting.", 0) == 0 && name == "init.json") ||
+            (name.rfind("Lighting.", 0) == 0 && name.size() > 5 && name.compare(name.size() - 5, 5, ".json") == 0)) {
+            lighting = entry.path();
+        }
+    }
+    REQUIRE_FALSE(lighting.empty());
+    edit_key(lighting, "Brightness", engine_core::JsonValue::number(3));
+    const std::size_t before = Project::partial_reads();
+    const engine_core::DiskScan applied = project.apply_disk();
+    REQUIRE(Project::partial_reads() > before);
+    REQUIRE(applied.conflicts.empty());
+    engine_core::PropertyBag saved;
+    game.instance(game.scene_service("Lighting"))->save_properties(saved);
+    const engine_core::JsonValue* brightness = engine_core::bag_find(saved, "Brightness");
+    REQUIRE(brightness != nullptr);
+    REQUIRE(brightness->as_number() == 3.0);
+}
+
+TEST_CASE("Q7 a class changed, a file added, or children reordered on disk reads the whole tree",
+          "[Q7][disk][project]") {
+    SimRole role;
+    TempDir dir;
+    Project project = Project::create(dir.path);
+    DataModel& game = project.datamodel();
+    const InstanceId box = add_part(game, workspace_of(game), "Box").id();
+    const InstanceId a = add_part(game, box, "A").id();
+    const InstanceId b = add_part(game, box, "B").id();
+    project.save();
+    const std::size_t before = Project::partial_reads();
+    SECTION("a class") {
+        edit_key(dir.path / (box_dir(game, box) + "/A." + game.guid(a) + ".json"), "class",
+                 engine_core::JsonValue::string("Folder"));
+        REQUIRE(project.scan_disk().has_disk_changes);
+    }
+    SECTION("a file added") {
+        const std::string guid = "0123456789abcdef";
+        write_file(dir.path / (box_dir(game, box) + "/C." + guid + ".json"), meta("GameObject", guid.c_str(), "C"));
+        REQUIRE(project.scan_disk().has_disk_changes);
+    }
+    SECTION("children reordered") {
+        edit_key(dir.path / (box_dir(game, box) + "/init.json"), "children",
+                 engine_core::JsonValue::array(
+                     {engine_core::JsonValue::string(game.guid(b)), engine_core::JsonValue::string(game.guid(a))}));
+        REQUIRE(project.scan_disk().has_disk_changes);
+    }
+    REQUIRE(Project::partial_reads() == before);
+}
+
+TEST_CASE("Q8 a file rewritten with the same bytes is nothing, read from that file alone", "[Q8][disk][project]") {
+    SimRole role;
+    TempDir dir;
+    Project project = Project::create(dir.path);
+    DataModel& game = project.datamodel();
+    const InstanceId a = add_part(game, workspace_of(game), "A").id();
+    project.save();
+    const fs::path file = dir.path / leaf(game, a);
+    const std::string bytes = read_file(file);
+    write_file(file, bytes);
+    const std::size_t before = Project::partial_reads();
+    const engine_core::DiskScan scan = project.scan_disk();
+    REQUIRE(Project::partial_reads() == before + 1);
+    REQUIRE_FALSE(scan.has_disk_changes);
+    REQUIRE(scan.conflicts.empty());
+}
+
+// A save straight after a disk check takes that check's walk as its proof,
+// and checks each file it touches against it just before touching it.
+
+TEST_CASE("S1 an outside edit after the check to a file the save writes stops the save", "[S1][guard][project]") {
+    SimRole role;
+    TempDir dir;
+    Project project = Project::create(dir.path);
+    DataModel& game = project.datamodel();
+    engine_core::GameObject& a = add_part(game, workspace_of(game), "A");
+    project.save();
+    a.set_transform(engine_core::matrix4_translation(1.f, 0.f, 0.f));
+    REQUIRE(project.apply_disk().conflicts.empty());
+    // An agent writes the same file between the studio's check and its save.
+    const fs::path file = dir.path / leaf(game, a.id());
+    edit_key(file, "Transform", translated(0, 0, 9));
+    const std::string outside = read_file(file);
+    REQUIRE_THROWS_AS(project.save({}, true), engine_core::ProjectConflict);
+    REQUIRE(read_file(file) == outside);
+}
+
+TEST_CASE("S2 an outside edit after the check to a file the save leaves alone is kept and found next",
+          "[S2][guard][project]") {
+    SimRole role;
+    TempDir dir;
+    Project project = Project::create(dir.path);
+    DataModel& game = project.datamodel();
+    engine_core::GameObject& a = add_part(game, workspace_of(game), "A");
+    const InstanceId b = add_part(game, workspace_of(game), "B").id();
+    project.save();
+    a.set_transform(engine_core::matrix4_translation(1.f, 0.f, 0.f));
+    REQUIRE(project.apply_disk().conflicts.empty());
+    const fs::path other = dir.path / leaf(game, b);
+    edit_key(other, "Transform", translated(0, 0, 9));
+    const std::string outside = read_file(other);
+    project.save({}, true);
+    REQUIRE(project.last_save().written.size() == 1);
+    REQUIRE(read_file(other) == outside);
+    const engine_core::DiskScan scan = project.scan_disk();
+    REQUIRE(scan.has_disk_changes);
+    REQUIRE(scan.conflicts.empty());
+    project.apply_disk();
+    REQUIRE(game.game_object(b)->transform().m[14] == 9.f);
+}
+
+TEST_CASE("S3 after a save that followed a check, the next check finds nothing until something changes",
+          "[S3][guard][project]") {
+    SimRole role;
+    TempDir dir;
+    Project project = Project::create(dir.path);
+    DataModel& game = project.datamodel();
+    engine_core::GameObject& a = add_part(game, workspace_of(game), "A");
+    const InstanceId box = add_part(game, workspace_of(game), "Box").id();
+    add_part(game, box, "Inside");
+    const InstanceId moving = add_part(game, workspace_of(game), "Moving").id();
+    const InstanceId doomed = add_part(game, workspace_of(game), "Doomed").id();
+    project.save();
+    // A write, a move into a folder, a delete, and a new file, all in one save.
+    a.set_transform(engine_core::matrix4_translation(2.f, 0.f, 0.f));
+    game.set_parent(moving, box);
+    game.destroy(doomed);
+    const InstanceId d = add_part(game, workspace_of(game), "D").id();
+    REQUIRE(project.apply_disk().conflicts.empty());
+    project.save({}, true);
+    REQUIRE_FALSE(project.last_save().written.empty());
+    REQUIRE_FALSE(project.last_save().moved.empty());
+    REQUIRE_FALSE(project.last_save().removed.empty());
+    const engine_core::DiskScan quiet = project.scan_disk();
+    REQUIRE_FALSE(quiet.has_disk_changes);
+    REQUIRE(quiet.conflicts.empty());
+    // The files it just wrote are racy: an edit to one is still found.
+    edit_key(dir.path / leaf(game, d), "Transform", translated(0, 3, 0));
+    REQUIRE(project.scan_disk().has_disk_changes);
+}
+
+TEST_CASE("S4 a file deleted outside after the check, that the save would write, stops the save",
+          "[S4][guard][project]") {
+    SimRole role;
+    TempDir dir;
+    Project project = Project::create(dir.path);
+    DataModel& game = project.datamodel();
+    engine_core::GameObject& a = add_part(game, workspace_of(game), "A");
+    project.save();
+    a.set_transform(engine_core::matrix4_translation(1.f, 0.f, 0.f));
+    REQUIRE(project.apply_disk().conflicts.empty());
+    fs::remove(dir.path / leaf(game, a.id()));
+    REQUIRE_THROWS_AS(project.save({}, true), engine_core::ProjectConflict);
+    REQUIRE_FALSE(fs::exists(dir.path / leaf(game, a.id())));
+}
+
+// A save planned from the changes alone. The sandbox checks every such plan
+// against a whole one (Project::set_compare_check), so each case here also
+// proves both write, move, and remove the same files.
+
+namespace {
+
+// A project with a folder holding two parts and two leaves beside it, saved
+// and in sync, ready for one change and one save.
+struct QuickRig {
+    SimRole role;
+    TempDir dir;
+    Project project = Project::create(dir.path);
+    DataModel& game = project.datamodel();
+    InstanceId box = add_part(game, workspace_of(game), "Box").id();
+    InstanceId inside = add_part(game, box, "Inside").id();
+    InstanceId other = add_part(game, box, "Other").id();
+    InstanceId a = add_part(game, workspace_of(game), "A").id();
+    InstanceId b = add_part(game, workspace_of(game), "B").id();
+
+    QuickRig() {
+        project.save();
+        REQUIRE_FALSE(project.scan_disk().has_disk_changes);
+    }
+    // Saves as the studio does, after its check. True when planned from the changes alone.
+    bool save() {
+        REQUIRE(project.apply_disk().conflicts.empty());
+        const std::size_t before = Project::quick_saves();
+        project.save({}, true);
+        return Project::quick_saves() == before + 1;
+    }
+    // A fresh load of the folder has what the studio has.
+    void loads_back() {
+        engine_core::Game world;
+        Project loaded = Project::load(dir.path, world);
+        REQUIRE(Project::place_fingerprint(world) == Project::place_fingerprint(game));
+    }
+};
+
+}  // namespace
+
+TEST_CASE("P1 one property edited is saved from the changes alone", "[P1][save][project]") {
+    QuickRig rig;
+    rig.game.game_object(rig.a)->set_transform(engine_core::matrix4_translation(0.f, 4.f, 0.f));
+    REQUIRE(rig.save());
+    REQUIRE(rig.project.last_save().written == std::vector<std::string>{leaf(rig.game, rig.a)});
+    rig.loads_back();
+}
+
+TEST_CASE("P2 a rename, a new instance, and a delete are saved from the changes alone", "[P2][save][project]") {
+    QuickRig rig;
+    const std::string was = leaf(rig.game, rig.a);
+    rig.game.set_name(rig.a, "Renamed");
+    add_part(rig.game, workspace_of(rig.game), "New");
+    const std::string gone = leaf(rig.game, rig.b);
+    rig.game.destroy(rig.b);
+    REQUIRE(rig.save());
+    REQUIRE_FALSE(fs::exists(rig.dir.path / was));
+    REQUIRE(fs::exists(rig.dir.path / leaf(rig.game, rig.a)));
+    REQUIRE_FALSE(fs::exists(rig.dir.path / gone));
+    REQUIRE(rig.project.last_save().removed == std::vector<std::string>{gone});
+    rig.loads_back();
+}
+
+TEST_CASE("P3 a leaf moved into a folder and one moved out are saved from the changes alone",
+          "[P3][save][project]") {
+    QuickRig rig;
+    rig.game.set_parent(rig.a, rig.box);
+    rig.game.set_parent(rig.inside, workspace_of(rig.game));
+    REQUIRE(rig.save());
+    REQUIRE(fs::exists(rig.dir.path / leaf(rig.game, rig.a)));
+    REQUIRE(fs::exists(rig.dir.path / leaf(rig.game, rig.inside)));
+    rig.loads_back();
+}
+
+TEST_CASE("P4 a leaf that gets a child becomes a folder, saved from the changes alone", "[P4][save][project]") {
+    QuickRig rig;
+    const InstanceId child = add_part(rig.game, rig.a, "Child").id();
+    REQUIRE(rig.save());
+    REQUIRE(fs::exists(rig.dir.path / leaf(rig.game, child)));
+    rig.loads_back();
+    // Back to a leaf when the child goes: a folder's files move, which takes a whole plan.
+    rig.game.destroy(child);
+    REQUIRE_FALSE(rig.save());
+    REQUIRE(fs::exists(rig.dir.path / leaf(rig.game, rig.a)));
+    rig.loads_back();
+}
+
+TEST_CASE("P5 a script's source is saved from the changes alone", "[P5][save][project]") {
+    QuickRig rig;
+    engine_core::Script& main = add_script(rig.game, workspace_of(rig.game), "Main", "print(1)\n");
+    REQUIRE(rig.save());
+    main.set_source("print(2)\n");
+    REQUIRE(rig.save());
+    REQUIRE(read_file(rig.dir.path / leaf(rig.game, main.id(), ".luau")) == "print(2)\n");
+    rig.loads_back();
+}
+
+TEST_CASE("P6 a folder renamed, moved, or deleted is saved from a whole plan", "[P6][save][project]") {
+    QuickRig rig;
+    SECTION("renamed") {
+        rig.game.set_name(rig.box, "Crate");
+    }
+    SECTION("moved") {
+        rig.game.set_parent(rig.box, rig.a);
+    }
+    SECTION("deleted") {
+        rig.game.destroy_tree(rig.box);
+    }
+    REQUIRE_FALSE(rig.save());
+    rig.loads_back();
+}
+
+TEST_CASE("P7 an edit after a save's capture is the next save's", "[P7][save][project]") {
+    QuickRig rig;
+    rig.game.game_object(rig.a)->set_transform(engine_core::matrix4_translation(0.f, 4.f, 0.f));
+    REQUIRE(rig.save());
+    rig.game.game_object(rig.b)->set_transform(engine_core::matrix4_translation(0.f, 5.f, 0.f));
+    REQUIRE(rig.save());
+    REQUIRE(rig.project.last_save().written == std::vector<std::string>{leaf(rig.game, rig.b)});
+    rig.loads_back();
+}
+
+namespace {
+
+// A save in three steps, as the studio runs one in the background. The write
+// may be given a hook to run between the capture and the write.
+Project::Written save_in_steps(Project& project, const std::function<void()>& before_write = {}) {
+    const Project::Walk walk = project.walk_disk();
+    REQUIRE(project.apply_disk({}, walk).conflicts.empty());
+    Project::SaveJob job = project.begin_save();
+    if (before_write) {
+        before_write();
+    }
+    std::string error;
+    const Project::Written written = Project::write_save(job, error);
+    REQUIRE(error.empty());
+    project.end_save(job, written);
+    return written;
+}
+
+}  // namespace
+
+TEST_CASE("P8 a save in three steps writes what changed", "[P8][save][project]") {
+    QuickRig rig;
+    rig.game.game_object(rig.a)->set_transform(engine_core::matrix4_translation(0.f, 4.f, 0.f));
+    REQUIRE(save_in_steps(rig.project) == Project::Written::Yes);
+    REQUIRE(rig.project.last_save().written == std::vector<std::string>{leaf(rig.game, rig.a)});
+    REQUIRE_FALSE(rig.project.scan_disk().has_disk_changes);
+    rig.loads_back();
+}
+
+TEST_CASE("P9 an edit made while the save writes is the next save's", "[P9][save][project]") {
+    QuickRig rig;
+    rig.game.game_object(rig.a)->set_transform(engine_core::matrix4_translation(0.f, 4.f, 0.f));
+    REQUIRE(save_in_steps(rig.project, [&] {
+                rig.game.game_object(rig.b)->set_transform(engine_core::matrix4_translation(0.f, 5.f, 0.f));
+            }) == Project::Written::Yes);
+    REQUIRE(rig.project.last_save().written == std::vector<std::string>{leaf(rig.game, rig.a)});
+    REQUIRE(save_in_steps(rig.project) == Project::Written::Yes);
+    REQUIRE(rig.project.last_save().written == std::vector<std::string>{leaf(rig.game, rig.b)});
+    rig.loads_back();
+}
+
+TEST_CASE("P10 an outside edit while the save writes stops it, and the next save finds the row",
+          "[P10][save][project]") {
+    QuickRig rig;
+    rig.game.game_object(rig.a)->set_transform(engine_core::matrix4_translation(0.f, 4.f, 0.f));
+    const fs::path file = rig.dir.path / leaf(rig.game, rig.a);
+    std::string outside;
+    REQUIRE(save_in_steps(rig.project, [&] {
+                edit_key(file, "Transform", translated(0, 0, 9));
+                outside = read_file(file);
+            }) == Project::Written::Stale);
+    REQUIRE(read_file(file) == outside);
+    REQUIRE(rig.project.unsaved());
+    REQUIRE_FALSE(rig.project.apply_disk().conflicts.empty());
 }

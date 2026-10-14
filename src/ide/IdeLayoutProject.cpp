@@ -26,6 +26,7 @@
 #include <sstream>
 #include <fstream>
 #include <ctime>
+#include <future>
 #include <iterator>
 #include <thread>
 
@@ -605,6 +606,7 @@ void IdeLayout::select_instance(std::uint32_t id) {
 
 std::optional<std::vector<engine_core::SaveConflict>> IdeLayout::check_disk(
     const std::vector<engine_core::DiskChoice>& choices) {
+    wait_for_save();
     if (!project_) {
         check_pending_ = false;
         return std::vector<engine_core::SaveConflict>();
@@ -648,6 +650,14 @@ std::optional<std::vector<engine_core::SaveConflict>> IdeLayout::check_disk(
             problem = failure.what();
         }
     });
+    show_scan(scan, problem);
+    if (!problem.empty()) {
+        return std::nullopt;
+    }
+    return scan.conflicts;
+}
+
+void IdeLayout::show_scan(const engine_core::DiskScan& scan, const std::string& problem) {
     check_pending_ = false;
     noted_play_check_ = false;
     if (!problem.empty()) {
@@ -658,7 +668,7 @@ std::optional<std::vector<engine_core::SaveConflict>> IdeLayout::check_disk(
         if (conflicts_pane_) {
             conflicts_pane_->setProblem("Can't read the project on disk: " + problem);
         }
-        return std::nullopt;
+        return;
     }
     disk_problem_.clear();
     if (conflicts_pane_) {
@@ -673,7 +683,6 @@ std::optional<std::vector<engine_core::SaveConflict>> IdeLayout::check_disk(
     }
     conflicts_ = scan.conflicts;
     show_conflict_count();
-    return scan.conflicts;
 }
 
 void IdeLayout::refresh_modified() {
@@ -689,6 +698,7 @@ bool IdeLayout::has_unsaved_changes() {
 }
 
 void IdeLayout::confirm_discard(const std::string& question, std::function<void()> proceed) {
+    wait_for_save();
     if (prompt_open_ || dialog_open_) {
         return;
     }
@@ -738,6 +748,7 @@ void IdeLayout::confirm_discard(const std::string& question, std::function<void(
 }
 
 void IdeLayout::new_place() {
+    wait_for_save();
     if (in_test()) {
         stop_test();
     }
@@ -784,6 +795,7 @@ void IdeLayout::pick_folder(jadefx::FolderDialogOptions options, const std::stri
 }
 
 bool IdeLayout::open_project_at(const std::filesystem::path& root) {
+    wait_for_save();
     // The load replaces the tree that Stop would restore.
     if (in_test()) {
         stop_test();
@@ -818,12 +830,17 @@ bool IdeLayout::open_project_at(const std::filesystem::path& root) {
 
 bool IdeLayout::save_open_project(std::function<void()> then,
                                   const std::vector<engine_core::SaveConflict>* overwrite) {
+    wait_for_save();
     save_failure_.clear();
     // A check first: what only the disk changed loads, and what both changed
     // stops the save and asks. When the check cannot run, during a test or with
     // src/ unreadable, the save's own guard still stops at a changed file.
+    // A check that ran, with nothing in between that writes the project, is
+    // the save's proof that the disk matches: the save need not walk it again.
+    bool just_checked = false;
     if (overwrite == nullptr) {
         const std::optional<std::vector<engine_core::SaveConflict>> open = check_disk();
+        just_checked = open.has_value();
         if (open && !open->empty()) {
             confirm_overwrite(*open, std::move(then), GateRows::Checked);
             return false;
@@ -836,7 +853,7 @@ bool IdeLayout::save_open_project(std::function<void()> then,
     std::vector<engine_core::SaveConflict> conflicts;
     run_now([&](engine_core::DataModel&) {
         try {
-            project_->save(overwrite != nullptr ? *overwrite : std::vector<engine_core::SaveConflict>());
+            project_->save(overwrite != nullptr ? *overwrite : std::vector<engine_core::SaveConflict>(), just_checked);
         } catch (const engine_core::ProjectConflict& conflict) {
             conflicts = conflict.conflicts();
         } catch (const std::exception& failure) {
@@ -853,15 +870,137 @@ bool IdeLayout::save_open_project(std::function<void()> then,
         return false;
     }
     update_title();
+    show_saved();
+    if (then) {
+        then();
+    }
+    return true;
+}
+
+void IdeLayout::show_saved() {
     const engine_core::Project::SaveReport& report = project_->last_save();
     const std::size_t changed = report.written.size() + report.moved.size() + report.removed.size();
     show_toast("Saved " + project_->name() +
                (changed == 0 ? std::string(" (no changes)")
                              : " (" + std::to_string(changed) + (changed == 1 ? " file" : " files") + " changed)"));
-    if (then) {
-        then();
+}
+
+namespace {
+
+// Runs fn where edits run and waits for it. fn must not throw.
+void RunAndWait(engine_core::Engine& engine, const std::function<void()>& fn) {
+    std::promise<void> done;
+    std::future<void> ran = done.get_future();
+    engine.on_simulation([&](engine_core::DataModel&) {
+        fn();
+        done.set_value();
+    });
+    ran.wait();
+}
+
+}  // namespace
+
+// What the save in the background found and did, read once its worker is joined.
+struct IdeLayout::BackgroundSave {
+    engine_core::DiskScan scan;
+    // Why the disk could not be read. The save then runs on the UI, as before.
+    std::string problem;
+    // The rows the save's own guard stopped at.
+    std::vector<engine_core::SaveConflict> guarded;
+    engine_core::Project::Written written = engine_core::Project::Written::Failed;
+    std::string error;
+};
+
+void IdeLayout::save_in_background() {
+    if (save_thread_.joinable()) {
+        save_again_ = true;
+        return;
     }
-    return true;
+    save_failure_.clear();
+    // Typing an editor has not written yet is the studio's side.
+    flush_editors();
+    auto job = std::make_shared<BackgroundSave>();
+    background_ = job;
+    save_thread_ = std::thread([this, alive = std::weak_ptr<int>(alive_), job, project = project_.get(),
+                                engine = &runner_.simulation()] {
+        using Written = engine_core::Project::Written;
+        const engine_core::Project::Walk walk = project->walk_disk();
+        std::optional<engine_core::Project::SaveJob> save;
+        RunAndWait(*engine, [&] {
+            try {
+                job->scan = project->apply_disk({}, walk);
+            } catch (const std::exception& failure) {
+                job->problem = failure.what();
+                return;
+            }
+            if (!job->scan.conflicts.empty()) {
+                return;
+            }
+            try {
+                save = project->begin_save();
+            } catch (const engine_core::ProjectConflict& conflict) {
+                job->guarded = conflict.conflicts();
+            } catch (const std::exception& failure) {
+                job->error = failure.what();
+            }
+        });
+        if (save) {
+            job->written = engine_core::Project::write_save(*save, job->error);
+            const Written written = job->written;
+            RunAndWait(*engine, [&] { project->end_save(*save, written); });
+        }
+        jadefx::runLater([this, alive, job] {
+            if (!alive.expired() && background_ == job) {
+                finish_background_save(false);
+            }
+        });
+    });
+    refresh_modified();
+}
+
+void IdeLayout::wait_for_save() {
+    finish_background_save(true);
+}
+
+void IdeLayout::finish_background_save(bool waiting) {
+    if (!save_thread_.joinable()) {
+        return;
+    }
+    save_thread_.join();
+    const std::shared_ptr<BackgroundSave> done = std::move(background_);
+    background_.reset();
+    using Written = engine_core::Project::Written;
+    bool saved = false;
+    if (!done->problem.empty() || (done->scan.conflicts.empty() && done->guarded.empty() &&
+                                   done->written == Written::Stale)) {
+        // The disk could not be read, or changed under the write: the save
+        // on the UI checks again and asks about whatever changed.
+        saved = save_open_project();
+    } else {
+        show_scan(done->scan, std::string());
+        if (!done->scan.conflicts.empty()) {
+            confirm_overwrite(done->scan.conflicts, {}, GateRows::Checked);
+        } else if (!done->guarded.empty()) {
+            confirm_overwrite(done->guarded, {}, GateRows::Guarded);
+        } else if (done->written == Written::Failed) {
+            save_failure_ = done->error;
+            show_error("Could not save project", done->error);
+        } else {
+            saved = true;
+            update_title();
+            show_saved();
+        }
+    }
+    refresh_modified();
+    const bool again = save_again_ && saved;
+    save_again_ = false;
+    if (again) {
+        if (waiting) {
+            save_open_project();
+        } else {
+            save_project();
+        }
+    }
 }
 
 void IdeLayout::confirm_overwrite(const std::vector<engine_core::SaveConflict>& conflicts,
@@ -940,6 +1079,10 @@ void IdeLayout::save_project(std::function<void()> then) {
         save_project_as(std::move(then));
         return;
     }
+    if (!then && !in_test()) {
+        save_in_background();
+        return;
+    }
     save_open_project(std::move(then));
 }
 
@@ -968,6 +1111,7 @@ bool IdeLayout::export_needs_save() {
 }
 
 void IdeLayout::export_game() {
+    wait_for_save();
     if (exporting_ || dialog_open_ || prompt_open_) {
         return;
     }
@@ -1061,6 +1205,7 @@ void IdeLayout::export_saved_game() {
 }
 
 bool IdeLayout::save_project_to(const std::filesystem::path& root) {
+    wait_for_save();
     save_failure_.clear();
     flush_editors();
     std::string error;

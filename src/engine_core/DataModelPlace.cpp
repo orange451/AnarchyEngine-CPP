@@ -410,6 +410,53 @@ const std::vector<std::byte>* DataModel::captured_place_bytes(InstanceId id) con
     return nullptr;
 }
 
+void DataModel::authored_children(InstanceId id, std::vector<InstanceId>& out) const {
+    out.clear();
+    for (InstanceId child = first_child(id); child != 0; child = next_sibling(child)) {
+        const DataModel* object = instance(child);
+        // As authored_tree: Core and what is not archivable are not saved.
+        if (object == nullptr || child == core() || !object->archivable_) {
+            continue;
+        }
+        out.push_back(child);
+    }
+}
+
+void DataModel::authored_ids(std::vector<InstanceId>& out) const {
+    out.clear();
+    if (state_->root == nullptr || state_->simulation_running) {
+        return;
+    }
+    out.push_back(0);
+    std::vector<InstanceId> children;
+    for (std::size_t at = 0; at < out.size(); ++at) {
+        authored_children(out[at], children);
+        out.insert(out.end(), children.begin(), children.end());
+    }
+}
+
+AuthoredNode DataModel::authored_node(InstanceId id) const {
+    AuthoredNode node;
+    node.id = id;
+    const DataModel* object = id == 0 ? state_->root : instance(id);
+    if (object == nullptr) {
+        return node;
+    }
+    node.guid = object->guid_;
+    const char* label = object->class_name();
+    node.class_name = label != nullptr ? label : "";
+    node.name = object->name_;
+    node.has_properties = true;
+    node.properties = merged_properties(*object);
+    if (id != 0) {
+        if (const auto* lua = dynamic_cast<const LuaSource*>(object)) {
+            node.has_source = true;
+            node.source = lua->source();
+        }
+    }
+    return node;
+}
+
 std::vector<AuthoredNode> DataModel::authored_tree(const std::function<bool(InstanceId)>& want) const {
     std::vector<AuthoredNode> out;
     const DataModel* root = state_->root;

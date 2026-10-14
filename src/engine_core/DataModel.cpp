@@ -2560,6 +2560,14 @@ void DataModel::clear_authored_dirty() {
     state_->dirty_all = false;
 }
 
+void DataModel::mark_all_authored_dirty() {
+    if (state_->simulation_running) {
+        return;
+    }
+    state_->dirty_all = true;
+    state_->revision.fetch_add(1, std::memory_order_relaxed);
+}
+
 void DataModel::note_tree_changed() {
     if (state_->simulation_running) {
         return;

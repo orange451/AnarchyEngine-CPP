@@ -250,6 +250,19 @@ LuaField param_field() {
                               default_json(P));
 }
 
+// True while every switch in Gates is on: the settings under them only count then.
+template <JointParam... Gates>
+bool switches_on(DataModel&, DataModel& object) {
+    const auto* joint = dynamic_cast<const JointConstraint*>(&object);
+    return joint != nullptr && ((joint->param(Gates) != 0.0) && ...);
+}
+
+// param_field, greyed in Properties while a switch in Gates is off.
+template <JointParam P, JointParam... Gates>
+LuaField gated_field() {
+    return lua_enabled_when(param_field<P>(), switches_on<Gates...>);
+}
+
 LuaField reading_field(const char* name) { return lua_property(name, "number", false, read_reading, nullptr); }
 
 template <std::size_t N>
@@ -270,58 +283,72 @@ ANARCHY_LUA_REGISTER(register_joint_constraint_lua) {
     };
     // Abstract: no factory registers it.
     register_lua_class("JointConstraint", "Constraint", joint_fields, static_cast<int>(std::size(joint_fields)));
+    constexpr P Spring = P::EnableSpring;
+    constexpr P Limit = P::EnableLimit;
+    constexpr P Motor = P::EnableMotor;
     const LuaField revolute[] = {
-        lua_group("Spring"), param_field<P::EnableSpring>(), param_field<P::Hertz>(),
-        param_field<P::DampingRatio>(), param_field<P::TargetAngle>(),
-        lua_group("Limit"), param_field<P::EnableLimit>(), param_field<P::LowerAngle>(),
-        param_field<P::UpperAngle>(),
-        lua_group("Motor"), param_field<P::EnableMotor>(), param_field<P::MotorSpeed>(),
-        param_field<P::MaxMotorTorque>(),
+        lua_group("Spring"), param_field<Spring>(), gated_field<P::Hertz, Spring>(),
+        gated_field<P::DampingRatio, Spring>(), gated_field<P::TargetAngle, Spring>(),
+        lua_group("Limit"), param_field<Limit>(), gated_field<P::LowerAngle, Limit>(),
+        gated_field<P::UpperAngle, Limit>(),
+        lua_group("Motor"), param_field<Motor>(), gated_field<P::MotorSpeed, Motor>(),
+        gated_field<P::MaxMotorTorque, Motor>(),
         lua_group("State"), reading_field("Angle"),
     };
     register_joint("RevoluteConstraint", revolute);
     const LuaField prismatic[] = {
-        lua_group("Spring"), param_field<P::EnableSpring>(), param_field<P::Hertz>(),
-        param_field<P::DampingRatio>(), param_field<P::TargetTranslation>(),
-        lua_group("Limit"), param_field<P::EnableLimit>(), param_field<P::LowerTranslation>(),
-        param_field<P::UpperTranslation>(),
-        lua_group("Motor"), param_field<P::EnableMotor>(), param_field<P::MotorSpeed>(),
-        param_field<P::MaxMotorForce>(),
+        lua_group("Spring"), param_field<Spring>(), gated_field<P::Hertz, Spring>(),
+        gated_field<P::DampingRatio, Spring>(), gated_field<P::TargetTranslation, Spring>(),
+        lua_group("Limit"), param_field<Limit>(), gated_field<P::LowerTranslation, Limit>(),
+        gated_field<P::UpperTranslation, Limit>(),
+        lua_group("Motor"), param_field<Motor>(), gated_field<P::MotorSpeed, Motor>(),
+        gated_field<P::MaxMotorForce, Motor>(),
         lua_group("State"), reading_field("Translation"),
     };
     register_joint("PrismaticConstraint", prismatic);
     const LuaField distance[] = {
         lua_group("Distance"), param_field<P::Length>(),
-        lua_group("Spring"), param_field<P::EnableSpring>(), param_field<P::Hertz>(),
-        param_field<P::DampingRatio>(),
-        lua_group("Limit"), param_field<P::EnableLimit>(), param_field<P::MinLength>(),
-        param_field<P::MaxLength>(),
-        lua_group("Motor"), param_field<P::EnableMotor>(), param_field<P::MotorSpeed>(),
-        param_field<P::MaxMotorForce>(),
+        lua_group("Spring"), param_field<Spring>(), gated_field<P::Hertz, Spring>(),
+        gated_field<P::DampingRatio, Spring>(),
+        lua_group("Limit"), param_field<Limit>(), gated_field<P::MinLength, Limit>(),
+        gated_field<P::MaxLength, Limit>(),
+        lua_group("Motor"), param_field<Motor>(), gated_field<P::MotorSpeed, Motor>(),
+        gated_field<P::MaxMotorForce, Motor>(),
         lua_group("State"), reading_field("CurrentLength"),
     };
     register_joint("DistanceConstraint", distance);
     const LuaField spherical[] = {
-        lua_group("Spring"), param_field<P::EnableSpring>(), param_field<P::Hertz>(),
-        param_field<P::DampingRatio>(),
-        lua_group("Limit"), param_field<P::EnableConeLimit>(), param_field<P::ConeAngle>(),
-        param_field<P::EnableTwistLimit>(), param_field<P::LowerTwistAngle>(), param_field<P::UpperTwistAngle>(),
-        lua_group("Motor"), param_field<P::EnableMotor>(),
-        lua_saved_property("MotorVelocity", "Vector3", read_motor_velocity, write_motor_velocity,
-                           zero_vector.c_str()),
-        param_field<P::MaxMotorTorque>(),
+        lua_group("Spring"), param_field<Spring>(), gated_field<P::Hertz, Spring>(),
+        gated_field<P::DampingRatio, Spring>(),
+        lua_group("Limit"), param_field<P::EnableConeLimit>(), gated_field<P::ConeAngle, P::EnableConeLimit>(),
+        param_field<P::EnableTwistLimit>(), gated_field<P::LowerTwistAngle, P::EnableTwistLimit>(),
+        gated_field<P::UpperTwistAngle, P::EnableTwistLimit>(),
+        lua_group("Motor"), param_field<Motor>(),
+        lua_enabled_when(lua_saved_property("MotorVelocity", "Vector3", read_motor_velocity, write_motor_velocity,
+                                            zero_vector.c_str()),
+                         switches_on<Motor>),
+        gated_field<P::MaxMotorTorque, Motor>(),
     };
     register_joint("SphericalConstraint", spherical);
+    constexpr P Suspension = P::EnableSuspension;
+    constexpr P SuspensionLimit = P::EnableSuspensionLimit;
+    constexpr P Spin = P::EnableSpinMotor;
+    constexpr P Steering = P::EnableSteering;
+    constexpr P SteeringLimit = P::EnableSteeringLimit;
+    // EnableSuspension is the spring alone: the limit holds without it.
+    // Steering's limit counts only while steering is on.
     const LuaField wheel[] = {
-        lua_group("Suspension"), param_field<P::EnableSuspension>(), param_field<P::SuspensionHertz>(),
-        param_field<P::SuspensionDampingRatio>(), param_field<P::EnableSuspensionLimit>(),
-        param_field<P::LowerSuspensionLimit>(), param_field<P::UpperSuspensionLimit>(),
-        lua_group("Spin"), param_field<P::EnableSpinMotor>(), param_field<P::SpinMotorSpeed>(),
-        param_field<P::MaxSpinTorque>(),
-        lua_group("Steering"), param_field<P::EnableSteering>(), param_field<P::SteeringHertz>(),
-        param_field<P::SteeringDampingRatio>(), param_field<P::TargetSteeringAngle>(),
-        param_field<P::MaxSteeringTorque>(), param_field<P::EnableSteeringLimit>(),
-        param_field<P::LowerSteeringLimit>(), param_field<P::UpperSteeringLimit>(),
+        lua_group("Suspension"), param_field<Suspension>(), gated_field<P::SuspensionHertz, Suspension>(),
+        gated_field<P::SuspensionDampingRatio, Suspension>(), param_field<SuspensionLimit>(),
+        gated_field<P::LowerSuspensionLimit, SuspensionLimit>(),
+        gated_field<P::UpperSuspensionLimit, SuspensionLimit>(),
+        lua_group("Spin"), param_field<Spin>(), gated_field<P::SpinMotorSpeed, Spin>(),
+        gated_field<P::MaxSpinTorque, Spin>(),
+        lua_group("Steering"), param_field<Steering>(), gated_field<P::SteeringHertz, Steering>(),
+        gated_field<P::SteeringDampingRatio, Steering>(), gated_field<P::TargetSteeringAngle, Steering>(),
+        gated_field<P::MaxSteeringTorque, Steering>(), gated_field<SteeringLimit, Steering>(),
+        gated_field<P::LowerSteeringLimit, Steering, SteeringLimit>(),
+        gated_field<P::UpperSteeringLimit, Steering, SteeringLimit>(),
         lua_group("State"), reading_field("SpinSpeed"),
     };
     register_joint("WheelConstraint", wheel);

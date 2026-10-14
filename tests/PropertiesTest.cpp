@@ -15,6 +15,7 @@
 #include "Brush.hpp"
 #include "Game.hpp"
 #include "Gui.hpp"
+#include "JointConstraint.hpp"
 #include "Light.hpp"
 #include "GameObject.hpp"
 #include "LuaApi.hpp"
@@ -1652,6 +1653,65 @@ void TestParticleEmitterRows() {
     Expect(group != nullptr && group->enabled, "CollisionGroup is live for World collision");
 }
 
+// A joint's settings grey while the switch above them is off: the solver
+// ignores them then.
+void TestJointRowsGreyWithTheirSwitch() {
+    using engine_core::JointParam;
+    Rig rig;
+    const InstanceId wheel = rig.add<engine_core::WheelConstraint>("Axle");
+    auto* joint = dynamic_cast<engine_core::WheelConstraint*>(rig.game.instance(wheel));
+    rig.select({wheel});
+    rig.frame();
+    const auto live = [&](const char* name) {
+        const ide::PropertyRow* row = rig.panel.sheet().find(name);
+        return row != nullptr && row->enabled && row->writable;
+    };
+    const auto greyed = [&](const char* name) {
+        const ide::PropertyRow* row = rig.panel.sheet().find(name);
+        return row != nullptr && !row->enabled && !row->writable;
+    };
+    Expect(live("EnableSuspension") && live("SuspensionHertz") && live("SuspensionDampingRatio"),
+           "the suspension spring is on by default, its settings live");
+    Expect(live("EnableSuspensionLimit") && greyed("LowerSuspensionLimit") && greyed("UpperSuspensionLimit"),
+           "the suspension limits grey while the limit is off");
+    Expect(greyed("SpinMotorSpeed") && greyed("MaxSpinTorque"), "the spin motor's settings grey while it is off");
+    Expect(live("EnableSteering") && greyed("SteeringHertz") && greyed("SteeringDampingRatio") &&
+               greyed("TargetSteeringAngle") && greyed("MaxSteeringTorque") && greyed("EnableSteeringLimit") &&
+               greyed("LowerSteeringLimit") && greyed("UpperSteeringLimit"),
+           "every steering setting greys while steering is off");
+
+    Expect(!joint->set_param(JointParam::EnableSteering, 1.0), "steering turns on");
+    Expect(!joint->set_param(JointParam::EnableSpinMotor, 1.0), "the spin motor turns on");
+    Expect(!joint->set_param(JointParam::EnableSuspension, 0.0), "the suspension spring turns off");
+    rig.frame();
+    rig.frame();
+    Expect(live("SteeringHertz") && live("TargetSteeringAngle") && live("EnableSteeringLimit"),
+           "steering's settings come alive with it");
+    Expect(greyed("LowerSteeringLimit") && greyed("UpperSteeringLimit"), "its limits wait for EnableSteeringLimit");
+    Expect(live("SpinMotorSpeed") && live("MaxSpinTorque"), "the spin motor's settings come alive");
+    Expect(greyed("SuspensionHertz") && greyed("SuspensionDampingRatio"), "the spring's settings grey");
+    Expect(live("EnableSuspensionLimit"), "the suspension limit stands on its own");
+
+    Expect(!joint->set_param(JointParam::EnableSteeringLimit, 1.0), "the steering limit turns on");
+    rig.frame();
+    rig.frame();
+    Expect(live("LowerSteeringLimit") && live("UpperSteeringLimit"), "the steering limits come alive");
+    Expect(!joint->set_param(JointParam::EnableSteering, 0.0), "steering turns off again");
+    rig.frame();
+    rig.frame();
+    Expect(greyed("EnableSteeringLimit") && greyed("LowerSteeringLimit"),
+           "with steering off its limits grey though EnableSteeringLimit is on");
+
+    // The other joints follow the same switches.
+    const InstanceId hinge = rig.add<engine_core::RevoluteConstraint>("Hinge");
+    rig.select({hinge});
+    rig.frame();
+    Expect(greyed("Hertz") && greyed("DampingRatio") && greyed("TargetAngle"), "a hinge's spring settings grey");
+    Expect(greyed("LowerAngle") && greyed("UpperAngle"), "its limit's grey");
+    Expect(greyed("MotorSpeed") && greyed("MaxMotorTorque"), "its motor's grey");
+    Expect(live("EnableSpring") && live("EnableLimit") && live("EnableMotor"), "its switches stay live");
+}
+
 void TestEnumRowAndShownWhen() {
     Rig rig;
     const InstanceId body = rig.add<engine_core::PhysicsObject>("Body");
@@ -2241,6 +2301,7 @@ int main() {
     TestSoundPreviewStops();
     TestEnumRowAndShownWhen();
     TestParticleEmitterRows();
+    TestJointRowsGreyWithTheirSwitch();
     TestCurveEditModel();
     TestCurveRows();
     TestGradientColorCancel();

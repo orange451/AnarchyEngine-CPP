@@ -258,6 +258,24 @@ std::vector<int> Seen(const runner::VisibilityResult& out) {
 
 }  // namespace
 
+TEST_CASE("LOD5 neighbouring bands overlap across their fade so one can dither into the other", "[lod]") {
+    constexpr float kForever = std::numeric_limits<float>::infinity();
+    const engine_core::Matrix4 origin = engine_core::matrix4_translation(0.f, 0.f, 0.f);
+    const runner::DrawItem items[2] = {Banded(origin, 0.f, 50.f), Banded(origin, 50.f, kForever)};
+    runner::VisibilityResult out;
+    // Just either side of 50, both are kept.
+    runner::FindVisible(items, 2, LookFrom({0.f, 0.f, 49.f}, {0.f, 0.f, 0.f}), true, out);
+    REQUIRE(Seen(out) == std::vector<int>{0, 1});
+    runner::FindVisible(items, 2, LookFrom({0.f, 0.f, 51.f}, {0.f, 0.f, 0.f}), true, out);
+    REQUIRE(Seen(out) == std::vector<int>{0, 1});
+    // Past the fade, one alone.
+    runner::FindVisible(items, 2, LookFrom({0.f, 0.f, 50.f + runner::LodFadeMargin(50.f) + 0.1f}, {0.f, 0.f, 0.f}),
+                        true, out);
+    REQUIRE(Seen(out) == std::vector<int>{1});
+    REQUIRE(runner::LodFadeMargin(0.f) == 0.f);
+    REQUIRE(runner::LodFadeMargin(kForever) == 0.f);
+}
+
 TEST_CASE("LOD5 a banded draw is seen and casts only while the camera is in its band", "[lod]") {
     constexpr float kForever = std::numeric_limits<float>::infinity();
     const engine_core::Matrix4 origin = engine_core::matrix4_translation(0.f, 0.f, 0.f);

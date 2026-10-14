@@ -321,6 +321,7 @@ bool Renderer::buildProgram(Program& program, const char* name, const char* vert
     program.face = at("uFace");
     program.billboard = at("uBillboard");
     program.cardBand = at("uCardBand");
+    program.lodFade = at("uLodFade");
     program.probeTexel = at("uProbeTexel");
     program.sunDirection = at("uSunDirection");
     program.moonDirection = at("uMoonDirection");
@@ -2022,6 +2023,11 @@ void Renderer::bindMaterial(const Program& program, const MeshDraw& draw) {
     glUniform1f(program.emissiveMapEnabled, draw.emissiveTexture != 0 ? 1.f : 0.f);
     glUniform1f(program.transparency, std::clamp(draw.transparency, 0.f, 1.f));
     glUniform1i(program.billboard, draw.billboard ? 1 : 0);
+    // Where it fades in past lodNear and out past lodFar; 0, 0 for an end with no fade.
+    const float fadeIn = LodFadeMargin(draw.lodNear);
+    const float fadeOut = LodFadeMargin(draw.lodFar);
+    glUniform4f(program.lodFade, draw.lodNear - fadeIn, fadeIn > 0.f ? draw.lodNear + fadeIn : 0.f,
+                fadeOut > 0.f ? draw.lodFar - fadeOut : 0.f, fadeOut > 0.f ? draw.lodFar + fadeOut : 0.f);
 }
 
 void Renderer::prepareSky() {

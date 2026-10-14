@@ -2,6 +2,7 @@
 
 #include "ColorSpace.hpp"
 #include "Renderer.hpp"
+#include "Visibility.hpp"
 #include "amesh.hpp"
 #include "profiler/Profiler.hpp"
 
@@ -32,9 +33,11 @@ void CardField::add(const MeshDraw& draw, int index) {
     rowOf_[index] = static_cast<int>(slot.rows.size());
     slot.rows.push_back(row);
     slot.draws.push_back(index);
-    // Every card of a slot comes from one template, so one band.
-    slot.nearSquared = draw.lodNear * draw.lodNear;
-    slot.farSquared = std::isfinite(draw.lodFar) ? draw.lodFar * draw.lodFar : FLT_MAX;
+    // Every card of a slot comes from one template, so one band, widened for its cross-fades.
+    const float keptNear = LodKeptNear(draw.lodNear);
+    const float keptFar = LodKeptFar(draw.lodFar);
+    slot.nearSquared = keptNear * keptNear;
+    slot.farSquared = std::isfinite(keptFar) ? keptFar * keptFar : FLT_MAX;
     slot.dirty = true;
     ++cards_;
 }

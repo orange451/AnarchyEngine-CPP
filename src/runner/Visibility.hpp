@@ -4,6 +4,7 @@
 #include "ShadowMath.hpp"
 #include "ShadowPlanner.hpp"
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -48,7 +49,8 @@ struct DrawItem {
     // Which of its mesh's LODs it draws (MeshDraw::lod), copied into its VisibleDraw.
     std::uint8_t lod = 0;
     // The distance band it draws in (MeshDraw::lodNear, lodFar), from the
-    // camera to model's origin. Outside it, it is neither seen nor casts.
+    // camera to model's origin. Outside it, widened by LodFadeMargin at each
+    // end, it is neither seen nor casts.
     float lodNear = 0.f;
     float lodFar = std::numeric_limits<float>::infinity();
     // A billboard (MeshDraw::billboard): its instance carries model as it is,
@@ -108,6 +110,18 @@ struct VisibilityResult {
     };
     std::vector<Block> blocks;
 };
+
+// Half the width of the cross-fade at an LOD band's end at distance units:
+// the draws on both sides of it are kept from distance minus this to
+// distance plus this, where geometry.vert's uLodFade dithers one into the other.
+inline float LodFadeMargin(float distance) {
+    return distance > 0.f && distance < std::numeric_limits<float>::infinity() ? std::max(0.5f, distance * 0.05f)
+                                                                              : 0.f;
+}
+
+// lodNear and lodFar widened by their fade margins: where a banded draw is kept.
+inline float LodKeptNear(float lodNear) { return std::max(0.f, lodNear - LodFadeMargin(lodNear)); }
+inline float LodKeptFar(float lodFar) { return lodFar + LodFadeMargin(lodFar); }
 
 // Items FindVisible gives each worker thread at a time.
 constexpr std::size_t kVisibilityGrain = 8192;

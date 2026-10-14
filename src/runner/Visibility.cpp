@@ -69,8 +69,10 @@ void BoundItem(const DrawItem& item, Sphere& sphere, std::uint16_t& traits, Visi
         band.x = origin[0];
         band.y = origin[1];
         band.z = origin[2];
-        band.nearSquared = item.lodNear * item.lodNear;
-        band.farSquared = item.lodFar * item.lodFar;
+        const float keptNear = LodKeptNear(item.lodNear);
+        const float keptFar = LodKeptFar(item.lodFar);
+        band.nearSquared = keptNear * keptNear;
+        band.farSquared = keptFar * keptFar;
     }
 }
 

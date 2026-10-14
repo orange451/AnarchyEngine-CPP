@@ -29,6 +29,10 @@ uniform int uBillboard;
 // card's origin: a card outside [x, y) draws nothing. Off while y is 0, as
 // for every draw the CPU already chose by band.
 uniform vec2 uCardBand;
+// An LOD's cross-fades, in units from the camera to the instance's origin: it
+// fades in from x to y and out from z to w. An end whose second value is 0
+// does not fade.
+uniform vec4 uLodFade;
 // Three RGBA32F texels a bone, the first three rows of its skinning matrix,
 // 1024 texels to a row (runner::BoneTexture).
 uniform sampler2D uBones;
@@ -37,6 +41,9 @@ out vec3 vViewPosition;
 out vec3 vViewNormal;
 out vec2 vUv;
 out vec4 vColor;
+// How far the instance has faded in (x) and not yet faded out (y), 0 to 1:
+// the fragment shader dithers the rest of its pixels away.
+flat out vec2 vLodFade;
 
 vec4 boneRow(int texel) {
     return texelFetch(uBones, ivec2(texel % 1024, texel / 1024), 0);
@@ -64,6 +71,18 @@ mat4 skin() {
     return total > 0.0 ? blended / total : mat4(1.0);
 }
 
+// vLodFade for an instance with its origin at origin, the camera at eye.
+void lodFade(vec3 origin, vec3 eye) {
+    float distance = length(origin - eye);
+    vLodFade = vec2(uLodFade.y > 0.0 ? smoothstep(uLodFade.x, uLodFade.y, distance) : 1.0,
+                    uLodFade.w > 0.0 ? 1.0 - smoothstep(uLodFade.z, uLodFade.w, distance) : 1.0);
+}
+
+// The camera's position: the view only turns and moves.
+vec3 eyePosition() {
+    return -(transpose(mat3(uView)) * uView[3].xyz);
+}
+
 // A billboard's corner: the card stands on aModel's origin along its up axis
 // (the second column, as long as the card is tall), turned about it until it
 // faces the camera, as wide as the first column. Its normal faces the camera.
@@ -72,9 +91,9 @@ void billboard() {
     vec3 upAxis = aModel[1].xyz;
     float height = length(upAxis);
     vec3 up = height > 0.0 ? upAxis / height : vec3(0.0, 1.0, 0.0);
-    // The camera's position: the view only turns and moves.
-    vec3 eye = -(transpose(mat3(uView)) * uView[3].xyz);
+    vec3 eye = eyePosition();
     vec3 toward = eye - origin;
+    lodFade(origin, eye);
     if (uCardBand.y > 0.0) {
         float squared = dot(toward, toward);
         if (squared < uCardBand.x || !(squared < uCardBand.y)) {
@@ -106,6 +125,7 @@ void main() {
         billboard();
         return;
     }
+    lodFade(aModel[3].xyz, eyePosition());
     mat4 skinning = skin();
     vec4 viewPosition = uView * (aModel * (skinning * vec4(aPosition, 1.0)));
     // The view has no scale, so its rotation carries normals on.

@@ -657,6 +657,8 @@ private:
         // geometry.vert's billboards (MeshDraw::billboard).
         int billboard = -1;
         int cardBand = -1;
+        // geometry.vert's LOD cross-fade (MeshDraw::lodNear, lodFar).
+        int lodFade = -1;
         int probeTexel = -1;
         // DynamicSky (procedural_sky.glsl).
         int face = -1;

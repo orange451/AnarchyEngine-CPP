@@ -42,7 +42,7 @@ Two replication paths behind one authored tree. **Tree replication** carries ins
 | # | Name | Spec | Depends on |
 | --- | --- | --- | --- |
 | 1 | Transport | `2026-10-12-network-transport-design.md` | — |
-| 2 | Server and client | to be written | 1 |
+| 2 | Server and client | `2026-10-13-server-client-design.md` | 1 |
 | 3 | Remotes | to be written | 2 |
 | 4 | Physics state sync | to be written | 2 |
 | 5 | Prediction and rollback | to be written, after a spike | 4 |
@@ -55,13 +55,9 @@ Sub-projects 1 to 4 together make a playable networked game whose bodies react t
 
 A library under `src/network/` with no dependency on the engine: UDP sockets, packets with sequence numbers and piggybacked acks, an unreliable channel whose delivery the caller learns per packet, a reliable ordered message channel with fragmentation, flow control, a connect handshake that checks the game's identity, a network conditioner for testing, and bit-level serialization shared with the physics path. See its spec.
 
-### 2. Server and client (decided so far)
+### 2. Server and client
 
-- A headless server executable runs a project's place with no window or renderer, on the engine loop the single-engine-loop spec defines, and listens on a port. The player connects to it; Studio can be both, for testing (sub-project 6).
-- On join the client receives the whole tree (a zstd-compressed reliable block), then a stream of changes: created, reparented, destroyed, property written. Writes physics makes are not on this path.
-- Scripts are marked to run on the server or on the client. Names are Anarchy's own, not Roblox's; this spec decides them.
-- A `Players` service with a `Player` per connection, its character, and join and leave signals.
-- What a client may write: nothing in the replicated tree by default. Client scripts own client-only instances (GUIs, local effects); every change to shared state goes through a remote (3) or the physics path's inputs (4).
+`AnarchyServer` runs a place headless; `AnarchyPlayer --connect` joins it and receives the filtered tree, then one change message per tick. `Script.RunContext` (Server, Client, Any) chooses where a script runs; `ServerStorage` never replicates; a hidden `Connections` service holds a `Connection` with a UUID per client and `LocalConnection` on the client. The engine has no players, names, or characters; those are the game's. See its spec, `2026-10-13-server-client-design.md`.
 
 ### 3. Remotes (decided so far)
 

@@ -32,14 +32,18 @@ The same place still runs single-player in Studio and the player exactly as toda
 
 ```
 struct TreeChange {
-    enum class Kind : std::uint8_t { Created, Destroyed, Parented, Renamed, Property };
+    enum class Kind : std::uint8_t { Parented, Destroyed, Renamed, Property };
     Kind kind;
     InstanceId id;
-    std::uint32_t property = 0;   // the registry's property id, for Kind::Property
+    InstanceId previous_parent = 0;   // Kind::Parented: where it was (DataModel::kNoParent if nowhere)
+    Field field = Field::Name;        // Kind::Property: the changed field
+    std::uint64_t payload = 0;        // Kind::Property, Field::Reflected: lua_property_id
 };
 ```
 
-Created fires from `spawn` once the instance is fully constructed and parented; Destroyed from `retire_slot` (once per instance in a destroyed subtree, children first is not required); Parented from `set_parent`; Renamed from `set_name`; Property from `emit_change` and `note_property_change` for script, user, and load writes. Quiet writers (physics `store_simulated`, `store_pose`, `write_simulated_transform`, `store_visual_transform`, the pose blend) do not call it. The sink reads nothing else; consumers read current values from the tree when they encode.
+`create<T>()` makes an instance unparented, and every caller then sets its name and properties and parents it, so there is no "created" event: Parented fires from `set_parent` (including the first parenting out of `kNoParent`), Destroyed from `destroy`, Renamed from `set_name`, and Property from `emit_change` for every other field (script, user, and load writes, both built-in fields such as `Transform` and `Source` and `Field::Reflected` registry properties). The Replicator decides what is new: an instance that becomes replicated by a Parented change and is not yet known to clients is a create of its subtree. Quiet writers (physics `store_simulated`, `store_pose`, `write_simulated_transform`, `store_visual_transform`, the pose blend) do not call it. The sink reads nothing else; consumers read current values from the tree when they encode.
+
+Stop (`restore_place_unlocked`) and undo revival change the tree without these funnels. The server never stops play while it serves, and a client stops play only when its connection ends, so neither path runs during a session; Studio's Play does not replicate.
 
 **RunContext.** `Script` gains `RunContext` (`Enum.RunContext`: `Server`, `Client`, `Any`; default `Server`; saved like other properties). `DataModel` gains `world_role()` / `set_world_role(WorldRole)` (`Standalone` default). `ScriptRuntime::runs_here` additionally requires `context_runs(script.run_context(), world_role())`. Changing `RunContext` during play starts or stops the script as toggling `Enabled` does.
 

@@ -90,10 +90,6 @@ std::optional<std::string> Lighting::set_color(const char* property, ColorRgb& s
 
 std::optional<std::string> Lighting::set_ambient(ColorRgb color) { return set_color("Ambient", ambient_, color); }
 
-std::optional<std::string> Lighting::set_brightness(double value) {
-    return set_number("Brightness", brightness_, value);
-}
-
 std::optional<std::string> Lighting::set_exposure(double value) { return set_number("Exposure", exposure_, value); }
 
 std::optional<std::string> Lighting::set_saturation(double value) {
@@ -295,7 +291,6 @@ std::string color_json(ColorRgb color) {
 ANARCHY_LUA_REGISTER(register_lighting_lua) {
     // The defaults, as a file would hold them, from the class's own constants.
     static const std::string ambient = color_json(Lighting::kDefaultAmbient);
-    static const std::string brightness = number_json(Lighting::kDefaultBrightness);
     static const std::string exposure = number_json(Lighting::kDefaultExposure);
     static const std::string saturation = number_json(Lighting::kDefaultSaturation);
     static const std::string gamma = number_json(Lighting::kDefaultGamma);
@@ -303,8 +298,6 @@ ANARCHY_LUA_REGISTER(register_lighting_lua) {
         lua_group("Appearance"),
         lua_saved_property("Ambient", "Color3", read_color<&Lighting::ambient>, write_color<&Lighting::set_ambient>,
                            ambient.c_str()),
-        lua_saved_property("Brightness", "number", read_number<&Lighting::brightness>,
-                           write_number<&Lighting::set_brightness>, brightness.c_str()),
         lua_slider(lua_saved_property("Exposure", "number", read_number<&Lighting::exposure>,
                                       write_number<&Lighting::set_exposure>, exposure.c_str()),
                    0.0, 2.0),

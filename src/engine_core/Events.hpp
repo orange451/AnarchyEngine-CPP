@@ -28,7 +28,7 @@ enum class Field : std::uint8_t {
     Name,
     Source,
     Enabled,
-    // A property from the class registry, such as Lighting.Brightness. The
+    // A property from the class registry, such as Lighting.Exposure. The
     // event's payload is its lua_property_id.
     Reflected,
     Count

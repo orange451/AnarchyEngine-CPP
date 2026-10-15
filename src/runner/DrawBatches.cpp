@@ -60,7 +60,7 @@ struct LinearTint {
     }
 };
 
-InstanceData MakeInstance(const DrawItem& item, LinearTint& linear) {
+InstanceData MakeInstance(const DrawItem& item, float fade, LinearTint& linear) {
     InstanceData data{};
     std::copy(item.model->m, item.model->m + 16, data.model);
     // A billboard's normal is the vertex shader's, which faces the camera.
@@ -69,17 +69,19 @@ InstanceData MakeInstance(const DrawItem& item, LinearTint& linear) {
     }
     const float* tint = linear.of(item.tint);
     std::copy(tint, tint + 3, data.tint);
+    data.fade = fade;
     data.boneBase = static_cast<float>(item.boneBase);
     return data;
 }
 
 // Each entry's instance, at its place in order.
-void WriteInstances(const DrawItem* items, const std::vector<DrawBatches::Entry>& order, InstanceData* out,
-                    std::size_t grain) {
+void WriteInstances(const DrawItem* items, const std::vector<float>& fades,
+                    const std::vector<DrawBatches::Entry>& order, InstanceData* out, std::size_t grain) {
     ParallelBlocks(order.size(), grain, [&](std::size_t, std::size_t begin, std::size_t end) {
         LinearTint linear;
         for (std::size_t i = begin; i < end; ++i) {
-            out[i] = MakeInstance(items[order[i].index], linear);
+            const auto index = static_cast<std::size_t>(order[i].index);
+            out[i] = MakeInstance(items[index], index < fades.size() ? fades[index] : kLodShown, linear);
         }
     });
 }
@@ -184,7 +186,7 @@ void BuildBatches(const DrawItem* items, const VisibilityResult& visible, const 
     out.opaqueRuns = static_cast<int>(out.runs.size());
     {
         PROFILE_SCOPE("Batch instances", profiler::Group::Render);
-        WriteInstances(items, order, out.instances.data(), grain);
+        WriteInstances(items, visible.fades, order, out.instances.data(), grain);
     }
 
     // See-through: farthest first by the Transform's depth, as the pass always sorted them.
@@ -208,7 +210,7 @@ void BuildBatches(const DrawItem* items, const VisibilityResult& visible, const 
         run.mirrored = Mirrored(*items[entry.index].model) && !items[entry.index].billboard;
         out.runs.push_back(run);
     }
-    WriteInstances(items, order, out.instances.data() + opaqueCount, grain);
+    WriteInstances(items, visible.fades, order, out.instances.data() + opaqueCount, grain);
 }
 
 }  // namespace runner

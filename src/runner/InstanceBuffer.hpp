@@ -15,6 +15,8 @@ public:
     // With a mesh's vertex array bound: enables slots 7 to 14 at divisor 1,
     // reading from row first on. GL 3.3 has no base instance, so each run attaches.
     void attach(int first) const;
+    // Writes row of the last upload again, as data.
+    void patch(int row, const InstanceData& data);
     void destroy();
 
 private:

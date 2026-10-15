@@ -19,6 +19,7 @@
 #include "Visibility.hpp"
 #include "types.hpp"
 
+#include <chrono>
 #include <cstdint>
 #include <limits>
 #include <initializer_list>
@@ -657,8 +658,6 @@ private:
         // geometry.vert's billboards (MeshDraw::billboard).
         int billboard = -1;
         int cardBand = -1;
-        // geometry.vert's LOD cross-fade (MeshDraw::lodNear, lodFar).
-        int lodFade = -1;
         int probeTexel = -1;
         // DynamicSky (procedural_sky.glsl).
         int face = -1;
@@ -788,6 +787,9 @@ private:
     CameraView cameraView(const float* projection) const;
     // Fills drawItems_ from meshes and finds what the camera sees into visibility_.
     void findVisible(const MeshDraw* meshes, int count, const CameraView& camera);
+    // When findVisible last moved the LOD fades on.
+    std::chrono::steady_clock::time_point fadeClock_;
+    bool fadeClockStarted_ = false;
     // Draws this frame's due shadow maps, before the G-buffer, and fills shadowLookups_.
     bool shadowPass(const MeshDraw* meshes, int count, const CameraView& camera);
     // Points program at lookup's map, and every shadow sampler at a texture of its kind.

@@ -315,6 +315,7 @@ extern void (*rt_glGenBuffers)(GLsizei n, GLuint* buffers);
 extern void (*rt_glDeleteBuffers)(GLsizei n, const GLuint* buffers);
 extern void (*rt_glBindBuffer)(GLenum target, GLuint buffer);
 extern void (*rt_glBufferData)(GLenum target, GLsizeiptr size, const void* data, GLenum usage);
+extern void (*rt_glBufferSubData)(GLenum target, GLsizeiptr offset, GLsizeiptr size, const void* data);
 extern void (*rt_glEnableVertexAttribArray)(GLuint index);
 extern void (*rt_glVertexAttribPointer)(GLuint index, GLint size, GLenum type, GLboolean normalized, GLsizei stride, const void* pointer);
 extern void (*rt_glDrawArrays)(GLenum mode, GLint first, GLsizei count);
@@ -461,6 +462,7 @@ bool LoadGl(GlGetProcAddress get_proc);
 #define glDeleteBuffers ::runner::rt_glDeleteBuffers
 #define glBindBuffer ::runner::rt_glBindBuffer
 #define glBufferData ::runner::rt_glBufferData
+#define glBufferSubData ::runner::rt_glBufferSubData
 #define glEnableVertexAttribArray ::runner::rt_glEnableVertexAttribArray
 #define glVertexAttribPointer ::runner::rt_glVertexAttribPointer
 #define glDrawArrays ::runner::rt_glDrawArrays

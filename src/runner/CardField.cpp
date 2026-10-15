@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <cfloat>
 #include <cmath>
+#include <limits>
 
 namespace runner {
 
@@ -29,15 +30,15 @@ void CardField::add(const MeshDraw& draw, int index) {
         row.tint[channel] = engine_core::srgb_to_linear(draw.tint[channel]);
     }
     row.boneBase = -1.f;
+    row.fade = kLodShown;
     slotOf_[index] = static_cast<int>(draw.slot);
     rowOf_[index] = static_cast<int>(slot.rows.size());
     slot.rows.push_back(row);
     slot.draws.push_back(index);
-    // Every card of a slot comes from one template, so one band, widened for its cross-fades.
-    const float keptNear = LodKeptNear(draw.lodNear);
-    const float keptFar = LodKeptFar(draw.lodFar);
-    slot.nearSquared = keptNear * keptNear;
-    slot.farSquared = std::isfinite(keptFar) ? keptFar * keptFar : FLT_MAX;
+    // Every card of a slot comes from one template, so one band.
+    slot.nearSquared = draw.lodNear * draw.lodNear;
+    slot.farSquared = std::isfinite(draw.lodFar) ? draw.lodFar * draw.lodFar : FLT_MAX;
+    unsettled_ = true;
     slot.dirty = true;
     ++cards_;
 }
@@ -78,6 +79,8 @@ void CardField::update(const MeshDraw* meshes, int count, bool all, const std::v
         cards_ = 0;
         slotOf_.assign(total, -1);
         rowOf_.assign(total, -1);
+        // Kept through a rebuild: a card added again carries on fading where it was.
+        fadeOf_.resize(total, std::numeric_limits<float>::quiet_NaN());
         for (std::size_t index = 0; index < total; ++index) {
             if (Holds(meshes[index])) {
                 add(meshes[index], static_cast<int>(index));
@@ -91,6 +94,7 @@ void CardField::update(const MeshDraw* meshes, int count, bool all, const std::v
     }
     slotOf_.resize(total, -1);
     rowOf_.resize(total, -1);
+    fadeOf_.resize(total, std::numeric_limits<float>::quiet_NaN());
     for (const DrawRange& range : changed) {
         const std::size_t end = std::min(range.first + range.count, total);
         for (std::size_t index = range.first; index < end; ++index) {
@@ -102,8 +106,47 @@ void CardField::update(const MeshDraw* meshes, int count, bool all, const std::v
     }
 }
 
+void CardField::fade(const float* eye, float step) {
+    PROFILE_SCOPE("Card fades", profiler::Group::Render);
+    // Nothing fading, nothing new, and the camera still: every card stays as it is.
+    const bool moved = eye[0] != eye_[0] || eye[1] != eye_[1] || eye[2] != eye_[2];
+    if (!moved && !unsettled_ && fading_ == 0) {
+        return;
+    }
+    std::copy(eye, eye + 3, eye_);
+    unsettled_ = false;
+    fading_ = 0;
+    for (Slot& slot : slots_) {
+        for (std::size_t row = 0; row < slot.rows.size(); ++row) {
+            const float* origin = slot.rows[row].model + 12;
+            const float dx = origin[0] - eye[0];
+            const float dy = origin[1] - eye[1];
+            const float dz = origin[2] - eye[2];
+            const float squared = dx * dx + dy * dy + dz * dz;
+            float& fade = fadeOf_[static_cast<std::size_t>(slot.draws[row])];
+            fade = StepLodFade(fade, !(squared < slot.nearSquared) && squared < slot.farSquared, step);
+            // At rest a card is whole, and the vertex shader's band test alone
+            // shows or hides it; only while it fades does the shader dither it.
+            const bool resting = fade == 1.f || fade == 0.f;
+            const float sent = resting ? kLodShown : fade;
+            fading_ += resting ? 0 : 1;
+            if (slot.rows[row].fade != sent) {
+                slot.rows[row].fade = sent;
+                slot.patched.push_back(static_cast<int>(row));
+            }
+        }
+    }
+}
+
 void CardField::upload() {
     for (Slot& slot : slots_) {
+        // Rows patched since: written alone, unless the whole slot goes.
+        if (!slot.dirty) {
+            for (const int row : slot.patched) {
+                slot.buffer.patch(row, slot.rows[static_cast<std::size_t>(row)]);
+            }
+        }
+        slot.patched.clear();
         if (slot.dirty && !slot.rows.empty()) {
             slot.buffer.upload(slot.rows.data(), static_cast<int>(slot.rows.size()));
         } else if (slot.dirty) {

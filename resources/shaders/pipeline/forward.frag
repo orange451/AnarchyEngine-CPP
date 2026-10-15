@@ -7,21 +7,22 @@ in vec3 vViewPosition;
 in vec3 vViewNormal;
 in vec2 vUv;
 in vec4 vColor;
-flat in vec2 vLodFade;
+flat in float vLodFade;
 
-// An LOD fading in or out (geometry.vert's vLodFade) keeps only some pixels,
-// on a 4 by 4 Bayer pattern fixed to the screen: one LOD keeps exactly the
-// pixels the other, fading the other way, drops, so the two never both draw
-// a pixel and never leave a hole.
+// An LOD fading in or out (geometry.vert's vLodFade, runner::StepLodFade)
+// keeps only some pixels, on a 4 by 4 Bayer pattern fixed to the screen. One
+// fading in by f keeps the pixels one fading out by 1 - f drops, so the two
+// never both draw a pixel and never leave a hole.
 bool lodDithered() {
-    if (vLodFade.x >= 1.0 && vLodFade.y >= 1.0) {
+    if (vLodFade >= 1.0) {
         return false;
     }
     const float kBayer[16] = float[16](0.0, 8.0, 2.0, 10.0, 12.0, 4.0, 14.0, 6.0, 3.0, 11.0, 1.0, 9.0, 15.0, 7.0,
                                        13.0, 5.0);
     ivec2 cell = ivec2(gl_FragCoord.xy) & 3;
     float threshold = (kBayer[cell.y * 4 + cell.x] + 0.5) / 16.0;
-    return threshold < 1.0 - vLodFade.x || !(threshold < vLodFade.y);
+    // Fading in keeps the top of the pattern, fading out the bottom.
+    return vLodFade > 0.0 ? threshold < 1.0 - vLodFade : !(threshold < -vLodFade);
 }
 
 out vec4 outColor;

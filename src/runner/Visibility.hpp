@@ -5,6 +5,7 @@
 #include "ShadowPlanner.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -49,8 +50,8 @@ struct DrawItem {
     // Which of its mesh's LODs it draws (MeshDraw::lod), copied into its VisibleDraw.
     std::uint8_t lod = 0;
     // The distance band it draws in (MeshDraw::lodNear, lodFar), from the
-    // camera to model's origin. Outside it, widened by LodFadeMargin at each
-    // end, it is neither seen nor casts.
+    // camera to model's origin. Once it has faded out of it (StepLodFade),
+    // it is neither seen nor casts.
     float lodNear = 0.f;
     float lodFar = std::numeric_limits<float>::infinity();
     // A billboard (MeshDraw::billboard): its instance carries model as it is,
@@ -69,6 +70,9 @@ struct VisibleDraw {
     // Which LOD it draws: its DrawItem's.
     std::uint8_t lod = 0;
 };
+
+// VisibilityResult::fades' value for a draw that is not fading.
+constexpr float kLodShown = 1.f;
 
 // One frame's visibility, reused frame to frame so it allocates only while it grows.
 struct VisibilityResult {
@@ -90,6 +94,12 @@ struct VisibilityResult {
     // One per DrawItem, set by CullDraws: 1 for a banded one the camera is
     // outside the band of, which is neither visible nor casts a shadow.
     std::vector<std::uint8_t> outOfBand;
+    // One per DrawItem, set by CullDraws: a banded one's fade (StepLodFade),
+    // 1 for any other. NaN before its first cull.
+    std::vector<float> fades;
+    // The part of a whole fade CullDraws moves each banded draw on by: 1 jumps
+    // every fade to its end, as a band's end did before fades.
+    float fadeStep = 1.f;
     // Moves on whenever an outOfBand flag changes, or their count.
     std::uint64_t outOfBandRevision = 0;
     // The drawable items that may cast and are in their band, in item order:
@@ -111,17 +121,23 @@ struct VisibilityResult {
     std::vector<Block> blocks;
 };
 
-// Half the width of the cross-fade at an LOD band's end at distance units:
-// the draws on both sides of it are kept from distance minus this to
-// distance plus this, where geometry.vert's uLodFade dithers one into the other.
-inline float LodFadeMargin(float distance) {
-    return distance > 0.f && distance < std::numeric_limits<float>::infinity() ? std::max(0.5f, distance * 0.05f)
-                                                                              : 0.f;
-}
+// Seconds an LOD takes to dither in, or out, once the camera crosses its band's end.
+constexpr float kLodFadeSeconds = 0.4f;
 
-// lodNear and lodFar widened by their fade margins: where a banded draw is kept.
-inline float LodKeptNear(float lodNear) { return std::max(0.f, lodNear - LodFadeMargin(lodNear)); }
-inline float LodKeptFar(float lodFar) { return lodFar + LodFadeMargin(lodFar); }
+// A banded draw's fade: how much of it is drawn, signed by whether the camera
+// is in its band. Above 0 it is in, and fading in until 1; at or below 0 it
+// is out, and fading out until 0. The draws on both sides of a band's end
+// start their fades together, so one is always 1 minus the other, and the
+// fragment shaders' dither (InstanceData::fade) gives each the pixels the
+// other leaves. step is the part of a whole fade since the last; NaN, as for
+// a draw never seen, jumps to the end.
+inline float StepLodFade(float fade, bool inside, float step) {
+    if (std::isnan(fade)) {
+        return inside ? 1.f : 0.f;
+    }
+    const float shown = std::abs(fade);
+    return inside ? std::min(1.f, shown + step) : -std::max(0.f, shown - step);
+}
 
 // Items FindVisible gives each worker thread at a time.
 constexpr std::size_t kVisibilityGrain = 8192;

@@ -31,6 +31,7 @@ void (*rt_glGenBuffers)(GLsizei, GLuint*) = nullptr;
 void (*rt_glDeleteBuffers)(GLsizei, const GLuint*) = nullptr;
 void (*rt_glBindBuffer)(GLenum, GLuint) = nullptr;
 void (*rt_glBufferData)(GLenum, GLsizeiptr, const void*, GLenum) = nullptr;
+void (*rt_glBufferSubData)(GLenum, GLsizeiptr, GLsizeiptr, const void*) = nullptr;
 void (*rt_glEnableVertexAttribArray)(GLuint) = nullptr;
 void (*rt_glVertexAttribPointer)(GLuint, GLint, GLenum, GLboolean, GLsizei, const void*) = nullptr;
 void (*rt_glDrawArrays)(GLenum, GLint, GLsizei) = nullptr;
@@ -184,6 +185,7 @@ bool LoadGl(GlGetProcAddress get_proc) {
     LOAD(DeleteBuffers);
     LOAD(BindBuffer);
     LOAD(BufferData);
+    LOAD(BufferSubData);
     LOAD(EnableVertexAttribArray);
     LOAD(VertexAttribPointer);
     LOAD(DrawArrays);

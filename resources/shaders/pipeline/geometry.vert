@@ -14,8 +14,9 @@ layout (location = 7) in mat4 aModel;
 // The inverse transpose of aModel's 3 by 3, made once per instance on the CPU,
 // so normals stay square to the surface under a non-uniform scale.
 layout (location = 11) in mat3 aNormalMatrix;
-// The GameObject's Color, already linear, so it multiplies like a vertex color.
-layout (location = 14) in vec3 aTint;
+// The GameObject's Color, already linear, so it multiplies like a vertex
+// color; w its LOD fade (runner::InstanceData::fade).
+layout (location = 14) in vec4 aTint;
 // The first texel of the instance's skinning matrices in uBones, or -1 when
 // it is not skinned.
 layout (location = 15) in float aBoneBase;
@@ -29,10 +30,6 @@ uniform int uBillboard;
 // card's origin: a card outside [x, y) draws nothing. Off while y is 0, as
 // for every draw the CPU already chose by band.
 uniform vec2 uCardBand;
-// An LOD's cross-fades, in units from the camera to the instance's origin: it
-// fades in from x to y and out from z to w. An end whose second value is 0
-// does not fade.
-uniform vec4 uLodFade;
 // Three RGBA32F texels a bone, the first three rows of its skinning matrix,
 // 1024 texels to a row (runner::BoneTexture).
 uniform sampler2D uBones;
@@ -41,9 +38,8 @@ out vec3 vViewPosition;
 out vec3 vViewNormal;
 out vec2 vUv;
 out vec4 vColor;
-// How far the instance has faded in (x) and not yet faded out (y), 0 to 1:
-// the fragment shader dithers the rest of its pixels away.
-flat out vec2 vLodFade;
+// Its LOD fade, aTint.w: the fragment shader dithers away what is not shown.
+flat out float vLodFade;
 
 vec4 boneRow(int texel) {
     return texelFetch(uBones, ivec2(texel % 1024, texel / 1024), 0);
@@ -71,11 +67,12 @@ mat4 skin() {
     return total > 0.0 ? blended / total : mat4(1.0);
 }
 
-// vLodFade for an instance with its origin at origin, the camera at eye.
-void lodFade(vec3 origin, vec3 eye) {
-    float distance = length(origin - eye);
-    vLodFade = vec2(uLodFade.y > 0.0 ? smoothstep(uLodFade.x, uLodFade.y, distance) : 1.0,
-                    uLodFade.w > 0.0 ? 1.0 - smoothstep(uLodFade.z, uLodFade.w, distance) : 1.0);
+// How much of an instance its LOD fade (runner::StepLodFade) shows, signed as
+// it is. Each LOD fades at twice the pace: the one coming in over the first
+// half of the fade, the one going out over the second, so the one going out
+// stays whole until the other is all in, and the two never thin together.
+float lodFade(float fade) {
+    return sign(fade) * min(1.0, 2.0 * abs(fade));
 }
 
 // The camera's position: the view only turns and moves.
@@ -93,8 +90,9 @@ void billboard() {
     vec3 up = height > 0.0 ? upAxis / height : vec3(0.0, 1.0, 0.0);
     vec3 eye = eyePosition();
     vec3 toward = eye - origin;
-    lodFade(origin, eye);
-    if (uCardBand.y > 0.0) {
+    vLodFade = lodFade(aTint.w);
+    // A fading card is drawn wherever it is; its fade alone hides it.
+    if (uCardBand.y > 0.0 && aTint.w >= 1.0) {
         float squared = dot(toward, toward);
         if (squared < uCardBand.x || !(squared < uCardBand.y)) {
             // Outside the clip volume at every corner: clipped away whole.
@@ -111,12 +109,13 @@ void billboard() {
     // Straight above or below, it keeps its own facing.
     vec3 forward = across > 1e-6 ? toward / across : normalize(aModel[2].xyz);
     vec3 right = cross(up, forward);
-    vec3 world = origin + right * (aPosition.x * length(aModel[0].xyz)) + upAxis * aPosition.y;
+    float width = length(aModel[0].xyz);
+    vec3 world = origin + right * (aPosition.x * width) + upAxis * aPosition.y;
     vec4 viewPosition = uView * vec4(world, 1.0);
     vViewNormal = mat3(uView) * forward;
     vViewPosition = viewPosition.xyz;
     vUv = aUv;
-    vColor = aColor * vec4(aTint, 1.0);
+    vColor = aColor * vec4(aTint.rgb, 1.0);
     gl_Position = uProjection * viewPosition;
 }
 
@@ -125,13 +124,13 @@ void main() {
         billboard();
         return;
     }
-    lodFade(aModel[3].xyz, eyePosition());
+    vLodFade = lodFade(aTint.w);
     mat4 skinning = skin();
     vec4 viewPosition = uView * (aModel * (skinning * vec4(aPosition, 1.0)));
     // The view has no scale, so its rotation carries normals on.
     vViewNormal = mat3(uView) * (aNormalMatrix * (mat3(skinning) * aNormal));
     vViewPosition = viewPosition.xyz;
     vUv = aUv;
-    vColor = aColor * vec4(aTint, 1.0);
+    vColor = aColor * vec4(aTint.rgb, 1.0);
     gl_Position = uProjection * viewPosition;
 }

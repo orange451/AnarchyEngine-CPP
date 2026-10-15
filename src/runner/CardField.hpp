@@ -26,13 +26,17 @@ public:
     // Brought up to date with meshes, count long: every draw when all, else
     // only the ranges (sorted, apart), as Renderer::findVisible works them out.
     void update(const MeshDraw* meshes, int count, bool all, const std::vector<DrawRange>& changed);
-    // Sends each slot whose cards changed. Needs the GL context.
+    // Moves each card's fade (StepLodFade) on by step, the camera at eye.
+    void fade(const float* eye, float step);
+    // Sends each slot whose cards changed, and each fading card's row. Needs the GL context.
     void upload();
 
     struct Slot {
         // One instance a card, and the MeshDraw each came from this paint.
         std::vector<InstanceData> rows;
         std::vector<int> draws;
+        // Rows whose fade changed since the last upload.
+        std::vector<int> patched;
         // Its band, squared, from the camera to each card's origin.
         float nearSquared = 0.f;
         float farSquared = 0.f;
@@ -57,8 +61,15 @@ private:
     // Per draw index: its slot and row, or -1.
     std::vector<int> slotOf_;
     std::vector<int> rowOf_;
+    // Per draw index: its card's fade (StepLodFade), NaN until its first. Not
+    // per row, so it outlives the card's row being made again.
+    std::vector<float> fadeOf_;
     int cards_ = 0;
     bool stale_ = true;
+    // The camera at the last fade, cards fading then, and whether cards came since.
+    float eye_[3] = {0.f, 0.f, 0.f};
+    int fading_ = 0;
+    bool unsettled_ = true;
 };
 
 }  // namespace runner

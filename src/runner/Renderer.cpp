@@ -15,6 +15,7 @@
 #include "amesh.hpp"
 #include "gl.hpp"
 
+#include <chrono>
 #include <algorithm>
 #include <atomic>
 #include <cmath>
@@ -321,7 +322,6 @@ bool Renderer::buildProgram(Program& program, const char* name, const char* vert
     program.face = at("uFace");
     program.billboard = at("uBillboard");
     program.cardBand = at("uCardBand");
-    program.lodFade = at("uLodFade");
     program.probeTexel = at("uProbeTexel");
     program.sunDirection = at("uSunDirection");
     program.moonDirection = at("uMoonDirection");
@@ -2023,11 +2023,6 @@ void Renderer::bindMaterial(const Program& program, const MeshDraw& draw) {
     glUniform1f(program.emissiveMapEnabled, draw.emissiveTexture != 0 ? 1.f : 0.f);
     glUniform1f(program.transparency, std::clamp(draw.transparency, 0.f, 1.f));
     glUniform1i(program.billboard, draw.billboard ? 1 : 0);
-    // Where it fades in past lodNear and out past lodFar; 0, 0 for an end with no fade.
-    const float fadeIn = LodFadeMargin(draw.lodNear);
-    const float fadeOut = LodFadeMargin(draw.lodFar);
-    glUniform4f(program.lodFade, draw.lodNear - fadeIn, fadeIn > 0.f ? draw.lodNear + fadeIn : 0.f,
-                fadeOut > 0.f ? draw.lodFar - fadeOut : 0.f, fadeOut > 0.f ? draw.lodFar + fadeOut : 0.f);
 }
 
 void Renderer::prepareSky() {
@@ -2289,7 +2284,14 @@ void Renderer::findVisible(const MeshDraw* meshes, int count, const CameraView& 
         // Spheres only for the changed draws; the cull reads every draw's.
         // A draw that names its LOD (Brush Materials) keeps it: each item's goes to its VisibleDraw.
         UpdateDrawBounds(drawItems_.data(), count, all, changedDraws_, visibility_);
+        // LOD fades go by the clock, so a slow frame fades as far as a fast one would have.
+        const auto now = std::chrono::steady_clock::now();
+        const float seconds = fadeClockStarted_ ? std::chrono::duration<float>(now - fadeClock_).count() : 0.f;
+        fadeClock_ = now;
+        fadeClockStarted_ = true;
+        visibility_.fadeStep = std::clamp(seconds / kLodFadeSeconds, 0.f, 1.f);
         CullDraws(count, camera, culling_, visibility_);
+        cards_.fade(camera.world.m + 12, visibility_.fadeStep);
         stats_.draws = count;
         stats_.visible = static_cast<int>(visibility_.opaque.size() + visibility_.transparent.size());
         stats_.culled = visibility_.culled;

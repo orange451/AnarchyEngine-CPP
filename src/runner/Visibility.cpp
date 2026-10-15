@@ -69,10 +69,8 @@ void BoundItem(const DrawItem& item, Sphere& sphere, std::uint16_t& traits, Visi
         band.x = origin[0];
         band.y = origin[1];
         band.z = origin[2];
-        const float keptNear = LodKeptNear(item.lodNear);
-        const float keptFar = LodKeptFar(item.lodFar);
-        band.nearSquared = keptNear * keptNear;
-        band.farSquared = keptFar * keptFar;
+        band.nearSquared = item.lodNear * item.lodNear;
+        band.farSquared = item.lodFar * item.lodFar;
     }
 }
 
@@ -115,6 +113,8 @@ void CullDraws(int count, const CameraView& camera, bool cull, VisibilityResult&
         out.outOfBand.resize(total);
         ++out.outOfBandRevision;
     }
+    out.fades.resize(total, std::numeric_limits<float>::quiet_NaN());
+    const float step = out.fadeStep;
     std::atomic<bool> flipped{false};
     const float* eye = camera.world.m + 12;
     const Frustum frustum = MakeFrustum(camera.viewProjection);
@@ -137,16 +137,20 @@ void CullDraws(int count, const CameraView& camera, bool cull, VisibilityResult&
         int culled = 0;
         for (std::size_t index = begin; index < end; ++index) {
             const std::uint16_t traits = out.traits[index];
-            // Outside its band, whether or not culling is on: neither seen nor casting.
+            // Faded out of its band, whether or not culling is on: neither seen nor casting.
             std::uint8_t& outside = out.outOfBand[index];
             std::uint8_t now = 0;
+            float& fade = out.fades[index];
             if ((traits & kTraitBanded) != 0) {
                 const VisibilityResult::Band& band = out.bands[index];
                 const float dx = band.x - eye[0];
                 const float dy = band.y - eye[1];
                 const float dz = band.z - eye[2];
                 const float squared = dx * dx + dy * dy + dz * dz;
-                now = squared < band.nearSquared || !(squared < band.farSquared) ? 1 : 0;
+                fade = StepLodFade(fade, !(squared < band.nearSquared) && squared < band.farSquared, step);
+                now = fade == 0.f ? 1 : 0;
+            } else {
+                fade = kLodShown;
             }
             if (now != outside) {
                 outside = now;

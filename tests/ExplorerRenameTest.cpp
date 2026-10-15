@@ -1,5 +1,6 @@
 #include "ide/CutSet.hpp"
 #include "ide/IdeExplorer.hpp"
+#include "ide/QuickOpen.hpp"
 #include "DataModelLock.hpp"
 #include "SelectionService.hpp"
 
@@ -1054,6 +1055,21 @@ void insert_list_suits_the_parent() {
     Expect(!ide::insert_suits("Scripts", "PointLight"), "Scripts does not suit a light");
 }
 
+void quick_open_ranks_names_first() {
+    const std::vector<ide::QuickOpenEntry> entries = {
+        {1, "Data", "Folder", "ReplicatedFirst.GunSystem.GunController"},
+        {2, "UpdateGunConfig", "Script", "Scripts"},
+        {3, "GunControllerIntegration", "Script", "Scripts"},
+        {4, "GunController", "Script", "ReplicatedFirst.GunSystem"},
+        {5, "Sky", "Skybox", "Lighting"},
+    };
+    const std::vector<std::size_t> found = ide::quick_open_filter(entries, "guncon", 10);
+    Expect(found == std::vector<std::size_t>{3, 2, 1, 0},
+           "Quick Open lists names that start with the text, then names that hold it, then paths");
+    Expect(ide::quick_open_filter(entries, "guncon", 2).size() == 2, "Quick Open lists at most its limit");
+    Expect(ide::quick_open_filter(entries, "", 10).empty(), "An empty Quick Open lists nothing");
+}
+
 void insert_list_suits_registered_parents() {
     Expect(!ide::insert_suits("Lighting", "TestLightProbe"), "An unregistered class does not suit Lighting");
     engine_core::register_suited_parents("TestLightProbe", {"Lighting"});
@@ -1297,6 +1313,7 @@ int main() {
     rows_cluster_by_class();
     insert_list_leaves_out_assets();
     insert_list_suits_the_parent();
+    quick_open_ranks_names_first();
     insert_list_suits_registered_parents();
     insert_refused_leaves_nothing();
     add_prefab_instance_places_named_game_object();

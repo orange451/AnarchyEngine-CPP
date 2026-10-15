@@ -1,5 +1,6 @@
 #include "IdeLayout.hpp"
 #include "PluginWidgetPane.hpp"
+#include "QuickOpen.hpp"
 
 #include "IdeTerrainEditor.hpp"
 #include "runner/ProfilerOverlay.hpp"
@@ -126,6 +127,8 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight, const std::filesys
         ->setOnAction([this](jadefx::ActionEvent&) { open_search(false, scene_); });
     AddItem(*edit, "Replace in Scripts", nullptr, jadefx::Key::H, jadefx::Key::ModControl | jadefx::Key::ModShift)
         ->setOnAction([this](jadefx::ActionEvent&) { open_search(true, scene_); });
+    AddItem(*edit, "Quick Open", nullptr, jadefx::Key::T, jadefx::Key::ModControl | jadefx::Key::ModShift)
+        ->setOnAction([this](jadefx::ActionEvent&) { open_quick_open(scene_); });
 
     // The profiler keeps its tab and split here, and saves through a dialog.
     {
@@ -929,6 +932,9 @@ void IdeLayout::routeSearch(jadefx::KeyEvent& event, jadefx::Scene& scene) {
     if (chord == FindChord::FindInScripts || chord == FindChord::ReplaceInScripts) {
         event.consume();
         open_search(chord == FindChord::ReplaceInScripts, &scene);
+    } else if (chord == FindChord::QuickOpen) {
+        event.consume();
+        open_quick_open(&scene);
     }
 }
 

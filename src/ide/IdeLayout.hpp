@@ -53,6 +53,7 @@ struct PrefabEditorHost;
 struct TerrainEditorHost;
 struct CollisionGroupsHost;
 class IdeSearch;
+class QuickOpen;
 class IdeConflicts;
 class IdeProblems;
 struct ProblemCounts;
@@ -437,6 +438,10 @@ private:
     // replace hidden. A selection on one line in the focused
     // editor becomes the find text.
     void open_search(bool replace, jadefx::Scene* scene);
+    // Edit > Quick Open (Ctrl+Shift+T) lists every instance by name. Choosing a
+    // script or prefab opens its editor; anything else is selected.
+    void open_quick_open(jadefx::Scene* scene);
+    void quick_open_chosen(std::uint32_t id);
     // Adds the one-of-a-kind windows, New Scene View, and New Terminal to the Window menu.
     void fill_window_menu(jadefx::Menu& menu);
     struct WindowEntry;
@@ -642,6 +647,7 @@ private:
     // built them. Null until first made. Kept while the tab is closed, so
     // reopening Search keeps the search.
     std::shared_ptr<IdeSearch> search_;
+    std::unique_ptr<QuickOpen> quick_open_;
     std::shared_ptr<IdeConflicts> conflicts_pane_;
     // The rows the last check left open.
     std::vector<engine_core::SaveConflict> conflicts_;

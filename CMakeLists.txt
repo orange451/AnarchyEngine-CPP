@@ -143,6 +143,7 @@ set(STUDIO_SOURCES
     src/ide/AssetPicker.cpp
     src/ide/IdeScriptEditor.cpp
     src/ide/IdeSearch.cpp
+    src/ide/QuickOpen.cpp
     src/ide/IdeProblems.cpp
     src/ide/FindBar.cpp
     src/ide/IdeTheme.cpp

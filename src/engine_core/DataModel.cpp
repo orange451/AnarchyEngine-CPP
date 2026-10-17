@@ -1836,8 +1836,7 @@ void DataModel::set_parent(InstanceId id, InstanceId new_parent) {
     refresh_scope(id);
     record_parent(id, old, new_parent, old_index);
     note_tree_changed();
-    const WriteOrigin origin = current_origin();
-    emit_change(id, Field::Parent, origin);
+    // The sink hears of the move before any watcher or handler can nest another change.
     if (state_->change_sink) {
         TreeChange change;
         change.kind = TreeChange::Kind::Parented;
@@ -1845,6 +1844,8 @@ void DataModel::set_parent(InstanceId id, InstanceId new_parent) {
         change.previous_parent = old;
         state_->change_sink(change);
     }
+    const WriteOrigin origin = current_origin();
+    emit_change(id, Field::Parent, origin);
     if (old != kNoParent) {
         emit_child(old, SignalKind::ChildRemoved, id, origin);
     }
@@ -2020,8 +2021,13 @@ bool DataModel::outside_place(InstanceId id) const {
         return false;
     }
     // Connections and everything under it, at any depth: a Connection may hold what a game keeps per client.
+    // Edit-mode paths ask this per instance, and Studio and single-player have no Connection, so an
+    // empty Connections answers at once and only a server pays for the walk up.
     const InstanceId holder = connections();
-    return holder != 0 && is_under(holder, id);
+    if (holder == 0 || first_child(holder) == 0) {
+        return false;
+    }
+    return is_under(holder, id);
 }
 
 std::string DataModel::rule_class(InstanceId parent, InstanceId moved, InstanceId moved_to) const {
@@ -2207,13 +2213,14 @@ void DataModel::set_name(InstanceId id, std::string name) {
     state_->tree_revision.fetch_add(1, std::memory_order_relaxed);
     record_string(id, Field::Name, previous, object->name_);
     note_tree_changed();
-    emit_change(id, Field::Name, current_origin());
+    // The sink hears of the rename before any watcher or handler can nest another change.
     if (state_->change_sink) {
         TreeChange change;
         change.kind = TreeChange::Kind::Renamed;
         change.id = id;
         state_->change_sink(change);
     }
+    emit_change(id, Field::Name, current_origin());
     if (state_->script_host != nullptr && id != 0) {
         const InstanceId under = parent(id);
         if (under != kNoParent) {

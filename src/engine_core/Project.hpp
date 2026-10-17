@@ -18,6 +18,7 @@ namespace engine_core {
 
 namespace detail {
 struct PlanNode;
+struct PlanReaderNote;
 }  // namespace detail
 
 // Every load and save failure. The message names the file.
@@ -261,6 +262,8 @@ private:
             return *this;
         }
         const std::string& str() const { return text_ ? *text_ : none(); }
+        // The bytes as held, for a reader on another thread. Null when empty.
+        const std::shared_ptr<const std::string>& shared() const { return text_; }
         operator const std::string&() const { return str(); }
         bool empty() const { return str().empty(); }
         std::size_t size() const { return str().size(); }
@@ -382,6 +385,16 @@ private:
         std::vector<std::string> racy;
     };
     static constexpr int kRacySeconds = 2;
+    // A load writes the load pack (ProjectPack.hpp) when it read this many
+    // files from disk: the first load, or once edits outside the pack add up.
+    // A tree smaller than kPackMinFiles reads fast enough without one.
+    static constexpr std::size_t kPackRewrite = 256;
+    static constexpr std::size_t kPackMinFiles = 1000;
+    // The stamp from the files the load's read noted, with project.json.
+    std::optional<DiskStamp> stamp_from(const std::unordered_map<std::string, detail::PlanReaderNote>& noted,
+                                        std::filesystem::file_time_type racy_from) const;
+    // The load pack from the base and the stamp, written in the background.
+    void write_pack() const;
 public:
     class Walk {
     private:

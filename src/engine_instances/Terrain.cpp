@@ -19,6 +19,8 @@
 #include <fstream>
 #include <iterator>
 #include <string_view>
+#include <system_error>
+#include <thread>
 #include <utility>
 
 namespace engine_core {
@@ -349,17 +351,35 @@ void Terrain::read_data_file(std::string path) {
     }
     terrain::VoxelVolume loaded(volume_.voxel_size());
     if (!damage) {
-        std::ifstream in(file, std::ios::binary);
-        std::vector<char> bytes;
+        // One read of the whole file: a large terrain's file is hundreds of MB.
+        std::ifstream in(file, std::ios::binary | std::ios::ate);
+        std::vector<std::byte> bytes;
         if (in) {
-            bytes.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+            const std::streamoff size = in.tellg();
+            in.seekg(0);
+            if (size > 0) {
+                bytes.resize(static_cast<std::size_t>(size));
+                in.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(size));
+            }
         }
-        if (!in.is_open() || in.bad()) {
+        if (!in.is_open() || in.bad() || in.fail()) {
             damage = std::string("it could not be read");
         } else {
-            damage = terrain::decode_avox(reinterpret_cast<const std::byte*>(bytes.data()), bytes.size(), loaded);
+            // The key hashes every byte on one thread: it runs beside the
+            // decode's workers rather than after them.
+            std::uint64_t key = 0;
+            std::thread hash;
+            try {
+                hash = std::thread([&] { key = terrain::content_key_of(bytes.data(), bytes.size()); });
+            } catch (const std::system_error&) {
+                key = terrain::content_key_of(bytes.data(), bytes.size());
+            }
+            damage = terrain::decode_avox(bytes.data(), bytes.size(), loaded);
+            if (hash.joinable()) {
+                hash.join();
+            }
             if (!damage) {
-                content_key_ = terrain::content_key_of(reinterpret_cast<const std::byte*>(bytes.data()), bytes.size());
+                content_key_ = key;
             }
         }
     }

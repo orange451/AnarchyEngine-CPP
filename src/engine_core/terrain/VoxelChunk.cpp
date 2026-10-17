@@ -137,6 +137,15 @@ void ChunkData::adopt_encoded(std::vector<std::byte> frame) {
     ChunkCache::global().add_compressed(encoded_.size());
 }
 
+std::shared_ptr<const ChunkData> ChunkData::dense_from_frame(std::vector<std::byte> frame,
+                                                             const std::array<std::uint64_t, 4>& mask) {
+    auto chunk = std::make_shared<ChunkData>();
+    chunk->uniform_ = false;
+    chunk->used_ = mask;
+    chunk->adopt_encoded(std::move(frame));
+    return chunk;
+}
+
 ChunkData::~ChunkData() { ChunkCache::global().remove_compressed(encoded_.size()); }
 
 CellsPtr ChunkData::cells() const {

@@ -129,6 +129,11 @@ public:
     // A decoded chunk gets the frame it was read from, so an unchanged chunk
     // is never compressed again by the next save.
     void adopt_encoded(std::vector<std::byte> frame);
+    // A dense chunk that holds only its frame, as a load reads it: its cells
+    // are decoded on first use. mask is ids_used() of those cells, and they
+    // are not all one value.
+    static std::shared_ptr<const ChunkData> dense_from_frame(std::vector<std::byte> frame,
+                                                             const std::array<std::uint64_t, 4>& mask);
 private:
     bool uniform_ = true;
     Cell value_{};

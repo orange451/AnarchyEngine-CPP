@@ -718,6 +718,7 @@ add_library(engine_core STATIC
     src/engine_core/PropertyBag.cpp
     src/engine_core/JsonMerge.cpp
     src/engine_core/Project.cpp
+    src/engine_core/ProjectPack.cpp
     src/engine_core/Containment.cpp
     src/engine_core/Ecs.cpp
     src/engine_core/PhysicsWorld.cpp

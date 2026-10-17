@@ -11,6 +11,7 @@
 #pragma warning(pop)
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cmath>
 #include <cstring>
@@ -110,17 +111,26 @@ int predict_ptr(const Cell* cells, int i, bool x0, bool y0, bool z0) {
 // Decodes one dense chunk's frame straight into cells (32,768 of them):
 // false on any damage (wrong content size, a zstd checksum failure, or short
 // output). Any thread: cells belong only to the caller.
-bool decode_frame_into(const std::byte* frame, std::size_t frame_size, Cell* cells) {
+// What one decode thread reuses from chunk to chunk: a zstd context and the
+// payload buffer, rather than one of each per chunk.
+struct FrameScratch {
+    FrameScratch() : dctx(ZSTD_createDCtx()), payload(kFrameContentSize) {}
+    ~FrameScratch() { ZSTD_freeDCtx(dctx); }
+    FrameScratch(const FrameScratch&) = delete;
+    FrameScratch& operator=(const FrameScratch&) = delete;
+    ZSTD_DCtx* dctx;
+    std::vector<std::uint8_t> payload;
+};
+
+bool decode_frame_into(const std::byte* frame, std::size_t frame_size, Cell* cells, FrameScratch& scratch) {
     if (ZSTD_getFrameContentSize(frame, frame_size) != static_cast<unsigned long long>(kFrameContentSize)) {
         return false;
     }
-    std::vector<std::uint8_t> payload(kFrameContentSize);
-    ZSTD_DCtx* dctx = ZSTD_createDCtx();
-    if (dctx == nullptr) {
+    if (scratch.dctx == nullptr) {
         return false;  // out of memory or similar: treat like any other damage
     }
-    const std::size_t written = ZSTD_decompressDCtx(dctx, payload.data(), payload.size(), frame, frame_size);
-    ZSTD_freeDCtx(dctx);
+    std::vector<std::uint8_t>& payload = scratch.payload;
+    const std::size_t written = ZSTD_decompressDCtx(scratch.dctx, payload.data(), payload.size(), frame, frame_size);
     if (ZSTD_isError(written) || written != payload.size()) {
         return false;
     }
@@ -187,7 +197,9 @@ struct JoiningThreads {
 }  // namespace
 
 bool decode_chunk_frame(const std::byte* frame, std::size_t frame_size, Cell* cells) {
-    return decode_frame_into(frame, frame_size, cells);
+    // A chunk read again after the cache let its cells go: often, from any thread.
+    thread_local FrameScratch scratch;
+    return decode_frame_into(frame, frame_size, cells, scratch);
 }
 
 // ChunkFrame.hpp's declaration: the only part of the frame codec visible
@@ -392,7 +404,7 @@ std::optional<std::string> decode_avox(const std::byte* data, std::size_t size, 
     // finish()'s scan are each a full pass over the chunk's 32,768 cells,
     // and only run once per thread's own share this way instead of once,
     // single-threaded, after every thread has already finished decoding.
-    std::vector<std::shared_ptr<ChunkData>> built(dense_indices.size());
+    std::vector<ChunkPtr> built(dense_indices.size());
     std::atomic<bool> damaged{false};
     unsigned worker_count = threads;
     if (worker_count == 0) {
@@ -404,36 +416,48 @@ std::optional<std::string> decode_avox(const std::byte* data, std::size_t size, 
         std::max<std::size_t>(1, std::min<std::size_t>(worker_count, dense_indices.size())));
     if (!dense_indices.empty()) {
         auto work = [&](unsigned start) {
+            // Each chunk decodes into this thread's one array: only its frame
+            // stays, and its cells are decoded again when something reads them.
+            FrameScratch frame_scratch;
+            CellArray cells(static_cast<std::size_t>(kChunkCells));
             for (std::size_t j = start; j < dense_indices.size(); j += worker_count) {
                 try {
                     const IndexEntry& entry = entries[dense_indices[j]];
-                    std::shared_ptr<ChunkData> chunk = ChunkData::air()->clone_dense();
-                    if (!decode_frame_into(data + entry.offset, entry.size, chunk->dense_data())) {
+                    if (!decode_frame_into(data + entry.offset, entry.size, cells.data(), frame_scratch)) {
                         damaged.store(true, std::memory_order_relaxed);
                         continue;
                     }
-                    chunk->finish();
-                    if (chunk->is_air()) {
-                        // A dense frame that happens to decode to nothing but
-                        // air collapses the same way an edit would: dropped
-                        // rather than kept, since a missing chunk is air
-                        // already (built[j] stays null; the merge below
-                        // skips it).
+                    std::array<std::uint64_t, 4> used{};
+                    bool same = true;
+                    {
+                        bool used_flat[256] = {};
+                        const Cell first = cells[0];
+                        for (const Cell& c : cells) {
+                            if (c.distance != kAirDistance) {
+                                used_flat[c.material] = true;
+                            }
+                            if (same && !(c == first)) {
+                                same = false;
+                            }
+                        }
+                        for (int m = 0; m < 256; ++m) {
+                            if (used_flat[m]) {
+                                used[static_cast<std::size_t>(m >> 6)] |= 1ull << (m & 63);
+                            }
+                        }
+                    }
+                    if (same) {
+                        // A dense frame that decodes to one value collapses as
+                        // an edit would: air is dropped, since a missing chunk
+                        // is air already; anything else is a uniform chunk.
+                        if (cells[0].distance != kAirDistance) {
+                            built[j] = ChunkData::uniform(cells[0]);
+                        }
                         continue;
                     }
-                    if (!chunk->is_uniform()) {
-                        // Only a chunk that stays dense gets a cached frame:
-                        // encoded() must stay empty for a uniform chunk, the
-                        // same as one built by an ordinary edit.
-                        std::vector<std::byte> frame(entry.size);
-                        std::memcpy(frame.data(), data + entry.offset, entry.size);
-                        chunk->adopt_encoded(std::move(frame));
-                        // Only the frame stays resident: the cache keeps
-                        // the cells while it has room, then they are
-                        // decoded again on demand.
-                        chunk->release_cells();
-                    }
-                    built[j] = std::move(chunk);
+                    std::vector<std::byte> frame(entry.size);
+                    std::memcpy(frame.data(), data + entry.offset, entry.size);
+                    built[j] = ChunkData::dense_from_frame(std::move(frame), used);
                 } catch (...) {
                     // Any exception here (e.g. bad_alloc while cloning or
                     // decoding a chunk) is reported as damage rather than

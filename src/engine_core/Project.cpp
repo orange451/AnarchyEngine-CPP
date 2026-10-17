@@ -1,4 +1,5 @@
 #include "Project.hpp"
+#include "ProjectPack.hpp"
 
 #include "Environment.hpp"
 
@@ -53,6 +54,8 @@
 #include <set>
 #include <sstream>
 #include <system_error>
+#include <exception>
+#include <mutex>
 #include <thread>
 #include <tuple>
 #include <string_view>
@@ -454,6 +457,12 @@ struct PlanNode {
     bool made = false;
 };
 
+// One file as a load's read listed it: the stamp a disk check compares.
+struct PlanReaderNote {
+    std::uintmax_t size = 0;
+    fs::file_time_type written;
+};
+
 }  // namespace detail
 
 namespace {
@@ -499,10 +508,11 @@ void parallel_for(std::size_t count, const Work& work) {
 
 // expected_guid empty: the root, whose GUID is not in a filename.
 // The root is game, which no factory makes. Its class is checked by the caller.
+// cached, when given, is the file's bytes from the load pack.
 void read_plan_props(const fs::path& tree_root, PlanNode& node, const std::string& path, const std::string& expected_guid,
-                 bool root) {
+                 bool root, const std::string_view* cached = nullptr) {
     node.props_path = path;
-    node.props_bytes = read_file(disk_path(tree_root, path));
+    node.props_bytes = cached != nullptr ? std::string(*cached) : read_file(disk_path(tree_root, path));
     JsonValue doc;
     std::string message;
     if (!parse_json(node.props_bytes, doc, message)) {
@@ -552,10 +562,11 @@ void read_plan_props(const fs::path& tree_root, PlanNode& node, const std::strin
     }
 }
 
-void read_plan_source(const fs::path& tree_root, PlanNode& node, const std::string& path) {
+void read_plan_source(const fs::path& tree_root, PlanNode& node, const std::string& path,
+                      const std::string_view* cached = nullptr) {
     node.has_source = true;
     node.source_path = path;
-    node.source_bytes = read_file(disk_path(tree_root, path));
+    node.source_bytes = cached != nullptr ? std::string(*cached) : read_file(disk_path(tree_root, path));
     node.source = node.source_bytes;
 }
 
@@ -563,6 +574,28 @@ void read_plan_source(const fs::path& tree_root, PlanNode& node, const std::stri
 class PlanReader {
 public:
     PlanReader(const fs::path& root, const Layout& layout) : root_(root), layout_(layout) {}
+
+    // As read() lists each folder, it notes each file's size and write time,
+    // the stamp a disk check compares against, so a load walks the tree once.
+    // A file whose note matches pack's comes from pack, not from disk.
+    // racy_from: a file written since may still change with the same time.
+    PlanReader(const fs::path& root, const Layout& layout, const project_pack::Pack* pack,
+               fs::file_time_type racy_from)
+        : root_(root), layout_(layout), pack_(pack), racy_from_(racy_from), noting_(true) {
+        // The stamp names files as a walk from root does. A tree.src
+        // written another way ("./src") would name them differently.
+        std::string relative = utf8_path(disk_path(root_, layout_.src).lexically_relative(root_));
+        std::replace(relative.begin(), relative.end(), '\\', '/');
+        noted_ok_ = relative == layout_.src;
+    }
+
+    using Noted = detail::PlanReaderNote;
+    // Every file under the tree, by path relative to root with '/', as the
+    // read found it; or false when a file could not be noted.
+    bool noted_ok() const { return noting_ && noted_ok_; }
+    const std::unordered_map<std::string, Noted>& noted() const { return noted_; }
+    // How many files the read took from disk rather than the pack.
+    std::size_t disk_reads() const { return disk_reads_.load(); }
 
     std::vector<PlanNode> read() {
         const std::string src = layout_.src;
@@ -605,6 +638,54 @@ public:
     }
 
 private:
+    // A file's bytes from the pack, when its note matches and it is not racy.
+    const std::string_view* cached(const std::string& path) {
+        if (pack_ != nullptr) {
+            const auto note = noted_.find(path);
+            const auto packed = pack_->files.find(path);
+            if (note != noted_.end() && packed != pack_->files.end() && note->second.written < racy_from_ &&
+                packed->second.size == note->second.size &&
+                packed->second.written == static_cast<std::int64_t>(note->second.written.time_since_epoch().count())) {
+                return &packed->second.bytes;
+            }
+        }
+        disk_reads_.fetch_add(1);
+        return nullptr;
+    }
+
+    void note(const fs::directory_entry& entry, const std::string& path) {
+        std::error_code error;
+        Noted noted;
+        noted.size = entry.file_size(error);
+        if (!error) {
+            noted.written = entry.last_write_time(error);
+        }
+        if (error) {
+            noted_ok_ = false;
+            return;
+        }
+        noted_.emplace(path, noted);
+    }
+
+    // A folder the read skips, as .git: its files are still in the stamp.
+    void note_tree(const std::string& dir) {
+        std::error_code error;
+        for (fs::recursive_directory_iterator it(disk_path(root_, dir), error), end; it != end; it.increment(error)) {
+            if (error) {
+                break;
+            }
+            std::error_code kind;
+            if (it->is_regular_file(kind)) {
+                std::string name = utf8_path(it->path().lexically_relative(root_));
+                std::replace(name.begin(), name.end(), '\\', '/');
+                note(*it, name);
+            }
+        }
+        if (error) {
+            noted_ok_ = false;
+        }
+    }
+
     // What the walk queued for one node: its files, read by read_queued.
     struct Job {
         std::string props;
@@ -642,9 +723,9 @@ private:
             const std::size_t index = i + 1;
             Job& job = jobs_[index];
             try {
-                read_props(nodes_[index], job.props, job.guid);
+                read_plan_props(root_, nodes_[index], job.props, job.guid, false, cached(job.props));
                 if (!job.source.empty()) {
-                    read_source(nodes_[index], job.source);
+                    read_plan_source(root_, nodes_[index], job.source, cached(job.source));
                 }
             } catch (const std::exception& error) {
                 job.error = error.what();
@@ -693,7 +774,18 @@ private:
         for (fs::directory_iterator it(disk_path(root_, dir), error), end; !error && it != end; it.increment(error)) {
             const std::string name = utf8_path(it->path().filename());
             std::error_code kind;
-            entries.emplace_back(name, it->is_directory(kind));
+            const bool is_dir = it->is_directory(kind);
+            entries.emplace_back(name, is_dir);
+            if (noting_) {
+                std::error_code regular;
+                if (is_dir) {
+                    if (!name.empty() && (name[0] == '.' || ends_with(name, ".tmp"))) {
+                        note_tree(join(dir, name));
+                    }
+                } else if (it->is_regular_file(regular)) {
+                    note(*it, join(dir, name));
+                }
+            }
         }
         if (error) {
             fail("cannot list " + dir + ": " + error.message());
@@ -924,6 +1016,12 @@ private:
 
     const fs::path& root_;
     const Layout& layout_;
+    const project_pack::Pack* pack_ = nullptr;
+    fs::file_time_type racy_from_ = fs::file_time_type::min();
+    bool noting_ = false;
+    bool noted_ok_ = true;
+    std::unordered_map<std::string, Noted> noted_;
+    std::atomic<std::size_t> disk_reads_{0};
     std::vector<PlanNode> nodes_;
     // One per node while the walk's files are read; index 0, the root, is read first.
     std::vector<Job> jobs_;
@@ -1667,10 +1765,19 @@ void Project::read_into_game(const fs::path& root, bool replace) {
     ignore_texture_cache(root);
     src_ = layout.src;
     resources_ = layout.resources;
-    // Before the read: a file that changes during it then differs from this
-    // stamp, so the next check compares it rather than missing it.
-    const std::optional<DiskStamp> read_stamp = disk_stamp();
-    const std::vector<PlanNode> plan = PlanReader(root, layout).read();
+    // Each file's stamp is taken as the read lists its folder, before it reads
+    // the file: one that changes during the read then differs from its stamp,
+    // so the next check compares it rather than missing it.
+    const fs::file_time_type racy_from = fs::file_time_type::clock::now() - std::chrono::seconds(kRacySeconds);
+    const std::unique_ptr<project_pack::Pack> pack = project_pack::read(project_pack::path_for(root));
+    PlanReader reader(root, layout, pack.get(), racy_from);
+    const std::vector<PlanNode> plan = reader.read();
+    std::optional<DiskStamp> read_stamp;
+    if (reader.noted_ok()) {
+        read_stamp = stamp_from(reader.noted(), racy_from);
+    } else {
+        read_stamp = disk_stamp();
+    }
     // Replace builds a scratch place first. Its instances are each file as its
     // class stores it: the base a disk scan and a save compare against.
     std::unique_ptr<Game> scratch;
@@ -1681,19 +1788,81 @@ void Project::read_into_game(const fs::path& root, bool replace) {
         scratch->history().set_enabled(false);
         scratch_ids = build(*scratch, plan);
     }
+    // Each file as its class stores it, from the scratch place: worked out on
+    // other cores while the world builds, since nothing changes scratch now.
+    std::vector<JsonValue> disk_docs;
+    std::thread disk_reader;
+    // The first failure on a worker (out of memory), thrown here once they end.
+    std::mutex failed_lock;
+    std::exception_ptr failed;
+    const auto guarded = [&](const auto& work) {
+        try {
+            work();
+        } catch (...) {
+            const std::lock_guard<std::mutex> hold(failed_lock);
+            if (!failed) {
+                failed = std::current_exception();
+            }
+        }
+    };
+    if (scratch != nullptr) {
+        disk_docs.resize(plan.size());
+        const auto read_disk = [&] {
+            parallel_for(plan.size(), [&](std::size_t index) {
+                if (!plan[index].made) {
+                    guarded([&] { disk_docs[index] = written_doc(*scratch, scratch_ids[index], plan[index].doc); });
+                }
+            });
+        };
+        try {
+            disk_reader = std::thread(read_disk);
+        } catch (const std::system_error&) {
+            read_disk();
+        }
+    }
     std::vector<InstanceId> ids;
-    // Before the build, so a Terrain reads its voxel file as it loads.
-    publish_resources_root();
-    {
+    try {
+        // Before the build, so a Terrain reads its voxel file as it loads.
+        publish_resources_root();
         Rebuild rebuild(*game_);
         if (replace) {
             clear_world(*game_);
         }
         ids = build(*game_, plan);
         rebuild.finish();
+    } catch (...) {
+        if (disk_reader.joinable()) {
+            disk_reader.join();
+        }
+        throw;
+    }
+    if (disk_reader.joinable()) {
+        disk_reader.join();
+    }
+    // Reads alone, on every core: the world is built, and nothing else runs on it.
+    std::vector<JsonValue> live_docs(plan.size());
+    // An instance that changed itself as it loaded, as a Terrain whose voxel
+    // file is damaged takes a file of its own, differs from its file: that is
+    // the studio's change, which the next save writes.
+    std::vector<char> changed_itself(plan.size(), 0);
+    parallel_for(plan.size(), [&](std::size_t index) {
+        if (!plan[index].made) {
+            guarded([&] {
+                live_docs[index] = written_doc(*game_, ids[index], plan[index].doc);
+                if (scratch != nullptr) {
+                    changed_itself[index] = !(disk_docs[index] == live_docs[index]);
+                }
+            });
+        }
+    });
+    if (failed) {
+        std::rethrow_exception(failed);
     }
     const std::vector<std::size_t> parents = parents_of(plan);
     bool made = false;
+    id_guid_.reserve(id_guid_.size() + plan.size());
+    guid_id_.reserve(guid_id_.size() + plan.size());
+    files_.reserve(files_.size() + plan.size());
     for (std::size_t index = 0; index < plan.size(); ++index) {
         const PlanNode& node = plan[index];
         id_guid_[ids[index]] = node.guid;
@@ -1703,16 +1872,12 @@ void Project::read_into_game(const fs::path& root, bool replace) {
             made = true;
             continue;
         }
-        JsonValue live = written_doc(*game_, ids[index], node.doc);
+        JsonValue live = std::move(live_docs[index]);
         if (scratch != nullptr) {
-            // An instance that changed itself as it loaded, as a Terrain whose
-            // voxel file is damaged takes a file of its own, differs from its
-            // file: that is the studio's change, which the next save writes.
-            JsonValue disk = written_doc(*scratch, scratch_ids[index], node.doc);
-            if (!(disk == live)) {
+            if (changed_itself[index] != 0) {
                 game_->mark_authored_dirty(ids[index]);
             }
-            live = std::move(disk);
+            live = std::move(disk_docs[index]);
         }
         files_[node.guid] =
             from_disk(node, index == 0 ? std::string() : plan[parents[index]].guid, std::move(live));
@@ -1723,6 +1888,65 @@ void Project::read_into_game(const fs::path& root, bool replace) {
     }
     synced_stamp_ = read_stamp;
     publish_resources_root();
+    if (reader.disk_reads() >= kPackRewrite) {
+        write_pack();
+    }
+}
+
+std::optional<Project::DiskStamp> Project::stamp_from(
+    const std::unordered_map<std::string, detail::PlanReaderNote>& noted, fs::file_time_type racy_from) const {
+    DiskStamp stamp;
+    std::error_code error;
+    const fs::path project_json = root_ / "project.json";
+    if (fs::is_regular_file(project_json, error)) {
+        const fs::directory_entry entry(project_json, error);
+        const std::uintmax_t size = entry.file_size(error);
+        if (error) {
+            return std::nullopt;
+        }
+        const fs::file_time_type written = entry.last_write_time(error);
+        if (error) {
+            return std::nullopt;
+        }
+        if (written >= racy_from) {
+            stamp.racy.push_back("project.json");
+        }
+        stamp.files.emplace("project.json",
+                            DiskStamp::Entry{size, static_cast<std::int64_t>(written.time_since_epoch().count())});
+    }
+    stamp.files.reserve(noted.size() + 1);
+    for (const auto& [name, note] : noted) {
+        if (note.written >= racy_from) {
+            stamp.racy.push_back(name);
+        }
+        stamp.files.emplace(name,
+                            DiskStamp::Entry{note.size, static_cast<std::int64_t>(note.written.time_since_epoch().count())});
+    }
+    std::sort(stamp.racy.begin(), stamp.racy.end());
+    return stamp;
+}
+
+void Project::write_pack() const {
+    if (!synced_stamp_ || files_.size() < kPackMinFiles) {
+        return;
+    }
+    std::vector<project_pack::Source> sources;
+    sources.reserve(files_.size() + 8);
+    const std::set<std::string> racy(synced_stamp_->racy.begin(), synced_stamp_->racy.end());
+    const auto add = [&](const std::string& path, const SharedText& bytes) {
+        const auto stamped = synced_stamp_->files.find(path);
+        if (stamped == synced_stamp_->files.end() || racy.count(path) != 0 || !bytes.shared()) {
+            return;
+        }
+        sources.push_back(project_pack::Source{path, stamped->second.size, stamped->second.written, bytes.shared()});
+    };
+    for (const auto& [guid, files] : files_) {
+        add(files.props_path, files.props_bytes);
+        if (files.has_source) {
+            add(files.source_path, files.source_bytes);
+        }
+    }
+    project_pack::write_in_background(project_pack::path_for(root_), std::move(sources));
 }
 
 namespace {

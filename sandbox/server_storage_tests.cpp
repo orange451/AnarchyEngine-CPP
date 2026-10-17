@@ -27,12 +27,12 @@ void require_globals(ScriptRig& rig, std::initializer_list<const char*> names) {
 
 }  // namespace
 
-TEST_CASE("SC20 game holds ServerStorage after Gui, and GetService finds it", "[server-client][server-storage]") {
+TEST_CASE("SC20 game holds ServerStorage right after Storage, and GetService finds it", "[server-client][server-storage]") {
     ScriptRig rig;
     const engine_core::InstanceId storage = rig.game.scene_service("ServerStorage");
     REQUIRE(storage != 0);
     REQUIRE(rig.game.guid(storage) == "serverstorage");
-    REQUIRE(rig.game.next_sibling(rig.game.scene_service("Gui")) == storage);
+    REQUIRE(rig.game.next_sibling(rig.game.scene_service("Storage")) == storage);
     add_script(rig.game, rig.game.scene_service("Scripts"), "Probe",
                "_G.same = game:GetService('ServerStorage') == game.ServerStorage");
     rig.game.start_simulation();

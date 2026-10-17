@@ -39,8 +39,8 @@ TEST_CASE("SS1 a new Game holds the six scene services, in order", "[SS1]") {
     Game game;
     const std::vector<InstanceId> children = game.get_children(0);
     REQUIRE(children.size() == 9);
-    const char* const classes[] = {"Workspace", "Lighting", "Storage", "Scripts", "Gui", "ServerStorage"};
-    const char* const guids[] = {"workspace", "lighting", "storage", "scripts", "gui", "serverstorage"};
+    const char* const classes[] = {"Workspace", "Lighting", "Storage", "ServerStorage", "Scripts", "Gui"};
+    const char* const guids[] = {"workspace", "lighting", "storage", "serverstorage", "scripts", "gui"};
     for (std::size_t index = 0; index < 6; ++index) {
         INFO(classes[index]);
         const DataModel* service = game.instance(children[index]);
@@ -407,7 +407,7 @@ TEST_CASE("SS10 a place missing scene services loads with them made", "[SS10][pr
         engine_core::Project project = engine_core::Project::load(dir.path);
         DataModel& game = project.datamodel();
         REQUIRE(child_names(game, 0) ==
-                std::vector<std::string>{"Workspace", "Lighting", "Storage", "Scripts", "Gui", "ServerStorage", "Assets", "Core", "Connections"});
+                std::vector<std::string>{"Workspace", "Lighting", "Storage", "ServerStorage", "Scripts", "Gui", "Assets", "Core", "Connections"});
         const InstanceId workspace = game.scene_service("Workspace");
         REQUIRE(child_names(game, workspace) == std::vector<std::string>{"Part", "Main", "Box"});
         REQUIRE(child_names(game, *game.find_guid("cccc")) == std::vector<std::string>{"Inner"});

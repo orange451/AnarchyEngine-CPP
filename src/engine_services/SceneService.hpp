@@ -30,7 +30,7 @@ public:
 };
 
 // The scene service classes, in the order game holds them.
-inline constexpr const char* kSceneServiceClasses[] = {"Workspace", "Lighting", "Storage", "Scripts", "Gui", "ServerStorage"};
+inline constexpr const char* kSceneServiceClasses[] = {"Workspace", "Lighting", "Storage", "ServerStorage", "Scripts", "Gui"};
 
 // Instances here render in the game. Anything may go in it.
 // CurrentCamera is the Camera the studio's scene view last used: set when you

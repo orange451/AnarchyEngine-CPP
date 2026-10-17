@@ -38,8 +38,8 @@ TEST_CASE("GS1 the placement rules, by class name", "[GS1]") {
 
     // The service table, in the order game and Assets hold them.
     REQUIRE(std::size(engine_core::kServices) == 13);
-    REQUIRE(std::string(engine_core::kServices[4].class_name) == "Gui");
-    REQUIRE(std::string(engine_core::kServices[5].class_name) == "ServerStorage");
+    REQUIRE(std::string(engine_core::kServices[5].class_name) == "Gui");
+    REQUIRE(std::string(engine_core::kServices[3].class_name) == "ServerStorage");
     REQUIRE(std::string(engine_core::kServices[6].class_name) == "Assets");
     REQUIRE(engine_core::kServices[6].parent_class == nullptr);
     REQUIRE(std::string(engine_core::kServices[7].class_name) == "Materials");
@@ -117,7 +117,7 @@ std::vector<std::string> child_classes(const DataModel& game, InstanceId parent)
 TEST_CASE("GS2 a new Game holds Assets and its five categories, hidden from the explorer", "[GS2]") {
     Game game;
     REQUIRE(child_classes(game, 0) ==
-            std::vector<std::string>{"Workspace", "Lighting", "Storage", "Scripts", "Gui", "ServerStorage", "Assets", "Core", "Connections"});
+            std::vector<std::string>{"Workspace", "Lighting", "Storage", "ServerStorage", "Scripts", "Gui", "Assets", "Core", "Connections"});
     const InstanceId assets = game.service("Assets");
     REQUIRE(assets != 0);
     REQUIRE(game.parent(assets) == 0);
@@ -713,7 +713,7 @@ TEST_CASE("GS13 a place saved before Assets loads with the whole tree made", "[G
     engine_core::Project project = engine_core::Project::load(dir.path);
     DataModel& game = project.datamodel();
     REQUIRE(child_classes(game, 0) ==
-            std::vector<std::string>{"Workspace", "Lighting", "Storage", "Scripts", "Gui", "ServerStorage", "Assets", "Core", "Connections"});
+            std::vector<std::string>{"Workspace", "Lighting", "Storage", "ServerStorage", "Scripts", "Gui", "Assets", "Core", "Connections"});
     REQUIRE(child_classes(game, game.service("Assets")).size() == 6);
     // A load that filled in what the files lacked opens clean; the next save still writes them.
     REQUIRE_FALSE(project.unsaved());

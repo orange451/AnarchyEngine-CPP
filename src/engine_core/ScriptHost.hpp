@@ -18,6 +18,9 @@ public:
     // Runs at the end of set_parent.
     virtual void on_moved(InstanceId id) = 0;
     virtual void on_script_enabled(Script& script, bool enabled) = 0;
+    // The script's RunContext changed. It stops if it no longer runs here, starts if it
+    // now does, and otherwise keeps running: a change that leaves it running here is not a restart.
+    virtual void on_script_context_changed(Script& script) = 0;
     virtual void on_script_destroyed(Script& script) = 0;
     // `child` is now under `parent` with this name, by a reparent or a rename.
     // Runs inside set_parent and set_name. WaitForChild wakes on it.

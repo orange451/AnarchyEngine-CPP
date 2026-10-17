@@ -209,6 +209,7 @@ public:
 
     void on_moved(InstanceId id) override;
     void on_script_enabled(Script& script, bool enabled) override;
+    void on_script_context_changed(Script& script) override;
     void on_script_destroyed(Script& script) override;
     void on_child_named(InstanceId parent, InstanceId child, const std::string& name) override;
 

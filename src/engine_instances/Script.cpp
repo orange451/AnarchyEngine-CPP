@@ -71,7 +71,7 @@ std::optional<std::string> Script::set_run_context(int value) {
     run_context_ = next;
     note_property_change("RunContext", run_context_slot(previous), run_context_slot(next));
     if (ScriptHost* host = script_host()) {
-        host->on_script_enabled(*this, enabled_);
+        host->on_script_context_changed(*this);
     }
     return std::nullopt;
 }

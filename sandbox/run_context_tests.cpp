@@ -192,3 +192,53 @@ TEST_CASE("SC16 changing RunContext during play starts or stops the script at on
     REQUIRE(rig.runtime.global_number("ticks", ticks));
     REQUIRE(ticks == stopped_at);   // its Heartbeat connection died with it
 }
+
+namespace {
+
+const char* kCountingSource =
+    "_G.starts = (_G.starts or 0) + 1\n"
+    "_G.ticks = _G.ticks or 0\n"
+    "game:GetService('RunService').Heartbeat:Connect(function() _G.ticks = _G.ticks + 1 end)";
+
+double number(ScriptRig& rig, const char* name) {
+    double value = -1;
+    REQUIRE(rig.runtime.global_number(name, value));
+    return value;
+}
+
+}  // namespace
+
+TEST_CASE("SC16b Standalone: changing RunContext during play never restarts the script", "[server-client][run-context]") {
+    ScriptRig rig;
+    engine_core::Script& script = add_script(rig.game, "Counter", kCountingSource);
+    rig.game.start_simulation();
+    rig.frames(2);
+    REQUIRE(number(rig, "starts") == 1);
+    for (const RunContext next : {RunContext::Client, RunContext::Any, RunContext::Server}) {
+        const double before = number(rig, "ticks");
+        REQUIRE_FALSE(script.set_run_context(static_cast<int>(next)));
+        rig.frames(2);
+        REQUIRE(number(rig, "starts") == 1);
+        REQUIRE(number(rig, "ticks") > before);
+    }
+}
+
+TEST_CASE("SC16c Server: RunContext changes that keep the script running here do not restart it", "[server-client][run-context]") {
+    ScriptRig rig;
+    rig.game.set_world_role(engine_core::WorldRole::Server);
+    engine_core::Script& script = add_script(rig.game, "Counter", kCountingSource);
+    rig.game.start_simulation();
+    rig.frames(2);
+    REQUIRE(number(rig, "starts") == 1);
+    REQUIRE_FALSE(script.set_run_context(static_cast<int>(RunContext::Any)));
+    rig.frames(2);
+    REQUIRE(number(rig, "starts") == 1);
+    REQUIRE_FALSE(script.set_run_context(static_cast<int>(RunContext::Client)));
+    const double stopped_at = number(rig, "ticks");
+    rig.frames(3);
+    REQUIRE(number(rig, "ticks") == stopped_at);
+    REQUIRE_FALSE(script.set_run_context(static_cast<int>(RunContext::Server)));
+    rig.frames(3);
+    REQUIRE(number(rig, "starts") == 2);
+    REQUIRE(number(rig, "ticks") > stopped_at);
+}

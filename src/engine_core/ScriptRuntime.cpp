@@ -455,6 +455,23 @@ void ScriptRuntime::on_script_enabled(Script& script, bool enabled) {
     }
 }
 
+// A RunContext change starts or stops a script only when where it runs changes.
+// One that runs here before and after keeps its state.
+void ScriptRuntime::on_script_context_changed(Script& script) {
+    if (game_ != nullptr && (game_->core_holds(script.id()) || core_scripts_.count(script.id()) != 0)) {
+        note_core(script.id());
+        return;
+    }
+    if (game_ == nullptr || !game_->simulation_running() || play_.closing) {
+        return;
+    }
+    if (!runs_here(script)) {
+        kill_script(script.id());
+    } else if (started_.count(script.id()) == 0 && script.enabled()) {
+        enqueue_start(script);
+    }
+}
+
 void ScriptRuntime::on_script_destroyed(Script& script) {
     core_scripts_.erase(script.id());
     if (!play_.closing) {

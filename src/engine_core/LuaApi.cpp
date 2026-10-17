@@ -1026,7 +1026,7 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
     add("DataModel", "IsA", "True when this instance's class is className or a subclass of it.", "boolean", false,
         {P("className", "string")});
     add("Game", "GetService",
-        "The service with this name: Workspace, Lighting, Storage, Scripts, RunService, Selection, or "
+        "The service with this name: Workspace, Lighting, Storage, Scripts, Gui, ServerStorage, RunService, Selection, or "
         "UserInputService.",
         "Instance", false,
         {P("className", "string")});
@@ -1034,6 +1034,12 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
     add("LuaSource", "Source", "The Luau source this instance holds.", "string", false, {});
     add("Script", "Source", "The Luau source this script runs.", "string", false, {});
     add("Script", "Enabled", "When false, the script does not run.", "boolean", false, {});
+    add("Script", "RunContext",
+        "Where the script runs in a networked game: Server, Client, or Any. In single-player every script runs.",
+        "RunContext", false, {});
+    add("Connection", "Id", "The connection's UUID, chosen by the server. Read-only.", "string", false, {});
+    add("Connections", "LocalConnection",
+        "This client's own Connection. Nil on a server and in single-player.", "Connection", false, {});
     add("ModuleScript", "Source", "The Luau source require runs.", "string", false, {});
 
     add("GameObject", "Transform", "Where this object is and how it is turned.", "Matrix4", false, {});

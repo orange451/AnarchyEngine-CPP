@@ -133,7 +133,7 @@ DataModel& existing_service(DataModel& world) {
     return *service;
 }
 
-static_assert(std::size(kServices) == 12, "one registry entry per service");
+static_assert(std::size(kServices) == 13, "one registry entry per service");
 
 std::vector<ClassEntry>& class_registry() {
     static std::vector<ClassEntry> entries = [] {
@@ -150,6 +150,7 @@ std::vector<ClassEntry>& class_registry() {
         out.push_back({kServices[9].class_name, existing_service<9>});
         out.push_back({kServices[10].class_name, existing_service<10>});
         out.push_back({kServices[11].class_name, existing_service<11>});
+        out.push_back({kServices[12].class_name, existing_service<12>});
         out.push_back({"DataModel", [](DataModel& world) -> DataModel& { return world.create(); }});
         out.push_back({"GameObject", [](DataModel& world) -> DataModel& { return world.create_game_object(); }});
         out.push_back({"Camera", [](DataModel& world) -> DataModel& { return world.create<Camera>(); }});

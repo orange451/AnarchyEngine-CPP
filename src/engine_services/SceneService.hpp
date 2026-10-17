@@ -30,7 +30,7 @@ public:
 };
 
 // The scene service classes, in the order game holds them.
-inline constexpr const char* kSceneServiceClasses[] = {"Workspace", "Lighting", "Storage", "Scripts", "Gui"};
+inline constexpr const char* kSceneServiceClasses[] = {"Workspace", "Lighting", "Storage", "Scripts", "Gui", "ServerStorage"};
 
 // Instances here render in the game. Anything may go in it.
 // CurrentCamera is the Camera the studio's scene view last used: set when you
@@ -105,6 +105,15 @@ public:
 // Script in it runs, as in Workspace.
 // Its class, and its name in scripts, is Gui (game.Gui).
 class GuiService : public SceneService {
+public:
+    using SceneService::SceneService;
+    const char* class_name() const override;
+};
+
+// What never leaves the server: a networked game's secret logic, tools, and
+// data. Nothing in it replicates to clients and no script in it runs. In
+// single-player it is a place to keep things, like Storage.
+class ServerStorage : public SceneService {
 public:
     using SceneService::SceneService;
     const char* class_name() const override;

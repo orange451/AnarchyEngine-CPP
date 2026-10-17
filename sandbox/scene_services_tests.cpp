@@ -166,28 +166,28 @@ TEST_CASE("SS5 Lighting's properties save, undo, and come back at Stop", "[SS5]"
     SimRole role;
     Game game;
     engine_core::Lighting& lighting = lighting_of(game);
-    REQUIRE(lighting.brightness() == engine_core::Lighting::kDefaultBrightness);
+    REQUIRE(lighting.saturation() == engine_core::Lighting::kDefaultSaturation);
 
     // A default place saves nothing.
     engine_core::PropertyBag saved;
     lighting.save_properties(saved);
     REQUIRE(saved.empty());
 
-    begin_step(game, "Set Brightness");
-    REQUIRE_FALSE(lighting.set_brightness(3.5));
+    begin_step(game, "Set Saturation");
+    REQUIRE_FALSE(lighting.set_saturation(3.5));
     end_step(game);
-    REQUIRE(lighting.brightness() == 3.5);
-    REQUIRE(game.history().can_undo().second == "Set Brightness");
+    REQUIRE(lighting.saturation() == 3.5);
+    REQUIRE(game.history().can_undo().second == "Set Saturation");
     game.history().undo();
-    REQUIRE(lighting.brightness() == engine_core::Lighting::kDefaultBrightness);
+    REQUIRE(lighting.saturation() == engine_core::Lighting::kDefaultSaturation);
     game.history().redo();
-    REQUIRE(lighting.brightness() == 3.5);
+    REQUIRE(lighting.saturation() == 3.5);
 
     // Numbers do not go below 0.
     REQUIRE_FALSE(lighting.set_exposure(-5.0));
     REQUIRE(lighting.exposure() == 0.0);
-    REQUIRE(*lighting.set_brightness(std::nan("")) == "Brightness must be a finite number");
-    REQUIRE(lighting.brightness() == 3.5);
+    REQUIRE(*lighting.set_saturation(std::nan("")) == "Saturation must be a finite number");
+    REQUIRE(lighting.saturation() == 3.5);
 
     engine_core::ColorRgb red;
     red.g = 0.f;
@@ -205,18 +205,18 @@ TEST_CASE("SS5 Lighting's properties save, undo, and come back at Stop", "[SS5]"
         REQUIRE(loaded.load_property(member.first, member.second, error));
         REQUIRE(error.empty());
     }
-    REQUIRE(loaded.brightness() == 3.5);
+    REQUIRE(loaded.saturation() == 3.5);
     REQUIRE(loaded.exposure() == 0.0);
     REQUIRE(engine_core::same_color(loaded.ambient(), red));
     std::string error;
-    REQUIRE(loaded.load_property("Brightness", engine_core::JsonValue::string("bright"), error));
-    REQUIRE(error == "Brightness must be a number");
+    REQUIRE(loaded.load_property("Saturation", engine_core::JsonValue::string("bright"), error));
+    REQUIRE(error == "Saturation must be a number");
 
     // Play changes are dropped at Stop, as any other instance's are.
     game.start_simulation();
-    REQUIRE_FALSE(lighting.set_brightness(9.0));
+    REQUIRE_FALSE(lighting.set_saturation(9.0));
     game.stop_simulation();
-    REQUIRE(lighting.brightness() == 3.5);
+    REQUIRE(lighting.saturation() == 3.5);
 }
 
 TEST_CASE("SS6 scripts see the scene services and cannot move them", "[SS6]") {
@@ -253,8 +253,8 @@ TEST_CASE("SS6 scripts see the scene services and cannot move them", "[SS6]") {
         folder.Parent = workspace
         _G.in_workspace = folder.Parent == workspace
 
-        game.Lighting.Brightness = 4
-        _G.lighting = game.Lighting.Brightness == 4
+        game.Lighting.Saturation = 4
+        _G.lighting = game.Lighting.Saturation == 4
         _G.no_nan = refuses(function() game.Lighting.Exposure = 0 / 0 end, "Exposure must be a finite number")
     )");
     rig.game.start_simulation();
@@ -270,8 +270,8 @@ TEST_CASE("SS6 scripts see the scene services and cannot move them", "[SS6]") {
 TEST_CASE("SS9 a path through game or workspace reads the live value", "[SS9]") {
     ScriptRig rig;
     add_script(rig.game, rig.game.scene_service("Scripts"), "Paths", R"(
-        game.Lighting.Brightness = 3
-        _G.game_path = game.Lighting.Brightness == 3
+        game.Lighting.Saturation = 3
+        _G.game_path = game.Lighting.Saturation == 3
         local folder = Instance.new("Folder", workspace)
         folder.Name = "Box"
         _G.found = workspace.Box ~= nil
@@ -500,17 +500,17 @@ TEST_CASE("SS12 a loaded place keeps its Lighting, and a new place resets it", "
     TempDir dir;
     {
         engine_core::Project project = engine_core::Project::create(dir.path);
-        lighting_of(static_cast<Game&>(project.datamodel())).set_brightness(5.0);
+        lighting_of(static_cast<Game&>(project.datamodel())).set_saturation(5.0);
         project.save();
     }
     Game game;
     engine_core::Project loaded = engine_core::Project::load(dir.path, game);
     const InstanceId lighting = game.scene_service("Lighting");
-    REQUIRE(lighting_of(game).brightness() == 5.0);
+    REQUIRE(lighting_of(game).saturation() == 5.0);
     engine_core::Project::reset_place(game);
     // The same service, back at its defaults.
     REQUIRE(game.scene_service("Lighting") == lighting);
-    REQUIRE(lighting_of(game).brightness() == engine_core::Lighting::kDefaultBrightness);
+    REQUIRE(lighting_of(game).saturation() == engine_core::Lighting::kDefaultSaturation);
     REQUIRE(game.get_children(0).size() == 7);
 }
 
@@ -522,9 +522,9 @@ TEST_CASE("SS13 registry properties fire Changed by name and default to a new in
         local seen = {}
         game.Lighting.Changed:Connect(function(property)
             table.insert(seen, property)
-            _G.names = table.concat(seen, ",") == "Brightness,Ambient"
+            _G.names = table.concat(seen, ",") == "Saturation,Ambient"
         end)
-        game.Lighting.Brightness = 3
+        game.Lighting.Saturation = 3
         game.Lighting.Ambient = Color3.new(1, 0, 0)
     )");
     rig.game.start_simulation();

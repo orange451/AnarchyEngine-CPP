@@ -19,6 +19,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -52,6 +53,7 @@ struct PrefabEditorHost;
 struct TerrainEditorHost;
 struct CollisionGroupsHost;
 class IdeSearch;
+class QuickOpen;
 class IdeConflicts;
 class IdeProblems;
 struct ProblemCounts;
@@ -141,6 +143,10 @@ public:
     // saved also moves what its scratch folder holds into the project's
     // resources/. False, after an alert saying why, when it cannot.
     bool save_project_to(const std::filesystem::path& root);
+    // Ends the save running in the background, waiting for it, and shows what
+    // came of it. Whatever saves, reads the disk, or swaps the project calls
+    // this first; a test calls it after Save to see the save's result.
+    void wait_for_save();
     // True when a save would write something, or an editor holds text its
     // script's Source does not have yet.
     bool has_unsaved_changes();
@@ -210,11 +216,13 @@ public:
     // toast. False when files holds none of them.
     bool import_instance_files(const std::vector<std::string>& files);
     // Shows the plugins' toolbars on the Plugins tab when they changed.
-    void refresh_plugin_ribbon();
+    // Each reads the place, waiting at most wait for the engine to let go of
+    // it; false when it did not, and so did nothing.
+    bool refresh_plugin_ribbon(std::chrono::milliseconds wait);
     // Makes, titles, opens, closes, and drops the plugins' dock widget pages to
     // match their DockWidgets, once a frame. A page the user closes clears its
     // widget's Enabled.
-    void sync_plugin_widgets();
+    bool sync_plugin_widgets(std::chrono::milliseconds wait);
     // Closes the tab showing page. False when none does.
     bool close_page(IdePane* page);
     // The dock a plugin page opens in for side: the one sitting there in the main
@@ -319,6 +327,19 @@ private:
     // conflicts to write over; any other still asks. A failed save skips then.
     bool save_open_project(std::function<void()> then = {},
                            const std::vector<engine_core::SaveConflict>* overwrite = nullptr);
+    // Save with the project open and no test running: a worker walks the disk
+    // and writes the files while the studio goes on. The place is held only to
+    // load what changed on disk and to take what the save writes. Save pressed
+    // again while it runs saves once more after it.
+    void save_in_background();
+    struct BackgroundSave;
+    // waiting: called by wait_for_save, so a queued save runs here, not in the background.
+    void finish_background_save(bool waiting);
+    // Says what the save wrote.
+    void show_saved();
+    // Shows what a disk check found: the files it loaded, the rows it skipped,
+    // why it could not read the disk, and the rows still open.
+    void show_scan(const engine_core::DiskScan& scan, const std::string& problem);
     // Lists the files a save found changed on disk. Overwrite saves over those
     // and runs then; Cancel writes nothing.
     // Where a save gate's rows came from, which sets what it offers.
@@ -417,6 +438,10 @@ private:
     // replace hidden. A selection on one line in the focused
     // editor becomes the find text.
     void open_search(bool replace, jadefx::Scene* scene);
+    // Edit > Quick Open (Ctrl+Shift+T) lists every instance by name. Choosing a
+    // script or prefab opens its editor; anything else is selected.
+    void open_quick_open(jadefx::Scene* scene);
+    void quick_open_chosen(std::uint32_t id);
     // Adds the one-of-a-kind windows, New Scene View, and New Terminal to the Window menu.
     void fill_window_menu(jadefx::Menu& menu);
     struct WindowEntry;
@@ -622,6 +647,7 @@ private:
     // built them. Null until first made. Kept while the tab is closed, so
     // reopening Search keeps the search.
     std::shared_ptr<IdeSearch> search_;
+    std::unique_ptr<QuickOpen> quick_open_;
     std::shared_ptr<IdeConflicts> conflicts_pane_;
     // The rows the last check left open.
     std::vector<engine_core::SaveConflict> conflicts_;
@@ -648,7 +674,13 @@ private:
     layout_detail::StatusChip* save_chip_ = nullptr;
     jadefx::Label* save_state_text_ = nullptr;
     std::shared_ptr<jadefx::Tooltip> save_tip_;
-    int shown_unsaved_ = -1;
+    // What the save chip shows: 0 saved, 1 unsaved, 2 saving.
+    int shown_save_state_ = -1;
+    // The save running in the background, and its worker.
+    std::shared_ptr<BackgroundSave> background_;
+    std::thread save_thread_;
+    // Save was pressed while the save in the background ran.
+    bool save_again_ = false;
     // Its right end: the caret, the frame time, the zoom, and the AI client.
     layout_detail::StatusChip* cursor_chip_ = nullptr;
     jadefx::Label* cursor_text_ = nullptr;
@@ -738,6 +770,8 @@ private:
     // What the last poll listed, and the scene time the next one waits for.
     std::vector<PluginStamp> plugin_stamps_;
     double plugin_poll_at_ = 0;
+    // A plugin ribbon and widget sync is waiting for the next frame's start.
+    bool plugin_sync_posted_ = false;
     // The ribbon, and the PluginUi revision its Plugins tab last showed.
     PluginRibbon* plugin_ribbon_ = nullptr;
     // The JadeFX menu bar, and what macOS's native bar moves or replaces.

@@ -8,6 +8,7 @@
 #include "GridBands.hpp"
 #include "BonePalette.hpp"
 #include "BoneTexture.hpp"
+#include "CardField.hpp"
 #include "InstanceBuffer.hpp"
 #include "ParticleRenderer.hpp"
 #include "Matrix4.hpp"
@@ -18,6 +19,7 @@
 #include "Visibility.hpp"
 #include "types.hpp"
 
+#include <chrono>
 #include <cstdint>
 #include <limits>
 #include <initializer_list>
@@ -223,6 +225,9 @@ struct LightDraw {
 // opposite state.light.toward, with kSkyShadowDistance.
 LightDraw SkyLightDraw(const SkyState& state, bool shadows);
 
+// A GL fence (gl.hpp's RtGLsync).
+struct RtGLsyncObject;
+
 // What the last draw did with its meshes.
 struct RenderStats {
     // MeshDraws given.
@@ -235,6 +240,10 @@ struct RenderStats {
     int runs = 0;
     // GpuMesh::draw_instanced calls in every pass, shadows included.
     int instancedCalls = 0;
+    // Instance bytes the geometry pass sent the GPU.
+    long long uploadBytes = 0;
+    // Cards the card field holds (CardField): drawn, but neither culled nor batched.
+    int cards = 0;
 };
 
 // The Skybox, as the renderer reads it. Each image is a GL texture as
@@ -648,6 +657,8 @@ private:
         int occlusionIntensity = -1;
         // geometry.vert's billboards (MeshDraw::billboard).
         int billboard = -1;
+        int cardBand = -1;
+        int probeTexel = -1;
         // DynamicSky (procedural_sky.glsl).
         int face = -1;
         int sunDirection = -1;
@@ -776,6 +787,9 @@ private:
     CameraView cameraView(const float* projection) const;
     // Fills drawItems_ from meshes and finds what the camera sees into visibility_.
     void findVisible(const MeshDraw* meshes, int count, const CameraView& camera);
+    // When findVisible last moved the LOD fades on.
+    std::chrono::steady_clock::time_point fadeClock_;
+    bool fadeClockStarted_ = false;
     // Draws this frame's due shadow maps, before the G-buffer, and fills shadowLookups_.
     bool shadowPass(const MeshDraw* meshes, int count, const CameraView& camera);
     // Points program at lookup's map, and every shadow sampler at a texture of its kind.
@@ -804,6 +818,7 @@ private:
     // only the DynamicSky goes undrawn.
     Program dynamicSky_;
     Program dynamicSkyCube_;
+    Program depthProbe_;
     bool dynamicSkyBuilt_ = false;
     // What the lighting cube was last drawn from, and when.
     SkyLightingKey skyLightingMade_;
@@ -989,13 +1004,30 @@ private:
 
     void readProbe(int paneX, int paneY, int paneWidth, int paneHeight, double sceneWidth, double sceneHeight,
                    const int viewport[4]);
+    // The depth under the cursor into probeTarget_, right after the geometry
+    // pass, for readProbe to read back. Sets probeCopied_.
+    void copyProbe(int paneX, int paneY, int paneWidth, int paneHeight, double sceneWidth, double sceneHeight,
+                   const int viewport[4]);
+    // The G-buffer texel under the cursor, or false off the pane.
+    bool probeTexel(int paneX, int paneY, int paneWidth, int paneHeight, double sceneWidth, double sceneHeight,
+                    const int viewport[4], int& px, int& py) const;
+    unsigned probeTarget_ = 0;
+    unsigned probeFbo_ = 0;
+    bool probeCopied_ = false;
+    // The float target would not attach: no probe from then on.
+    bool probeRefused_ = false;
+    // The depth before this draw cleared it, kept while a read is on its way.
+    std::optional<float> probeLast_;
     SceneDepth sceneDepth_;
     double probeX_ = -1;
     double probeY_ = -1;
     std::optional<float> probedDepth_;
-    // Two one-float buffers in turn: one is read back while the other fills.
-    unsigned probeBuffers_[2] = {0, 0};
-    bool probeFilled_[2] = {false, false};
+    // One-float buffers in turn, each with a fence: a read is taken back only
+    // once the GPU has done it, so the probe never makes the CPU wait for the GPU.
+    static constexpr int kProbeBuffers = 3;
+    unsigned probeBuffers_[kProbeBuffers] = {0, 0, 0};
+    RtGLsyncObject* probeFences_[kProbeBuffers] = {nullptr, nullptr, nullptr};
+    bool probeFilled_[kProbeBuffers] = {false, false, false};
     int probeNext_ = 0;
 
     bool ready_ = false;
@@ -1018,6 +1050,8 @@ private:
     std::vector<ViewLight> viewLights_;
     DrawBatches batches_;
     InstanceBuffer instances_;
+    // The opaque billboard cards, kept on the GPU between paints.
+    CardField cards_;
     ParticleRenderer particles_;
     std::vector<ParticleBatch> particleBatches_;
     // The frame's skinning matrices, packed in findVisible, and their texture.

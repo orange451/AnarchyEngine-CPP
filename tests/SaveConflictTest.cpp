@@ -86,9 +86,11 @@ int RunSaveConflictTests(ide::IdeLayout& layout, jadefx::Scene& scene) {
         WriteBytes(root / file, bytes);
         return bytes;
     };
-    auto press = [&scene](int key) {
+    // Save runs in the background; the test waits for what came of it.
+    auto press = [&scene, &layout](int key) {
         scene.noteKey(key, true, false, jadefx::Key::ModControl);
         scene.noteKey(key, false, false, 0);
+        layout.wait_for_save();
     };
     auto button = [&scene](const char* id) { return dynamic_cast<jadefx::Button*>(scene.getElementById(id)); };
     auto click = [&button](const char* id) {

@@ -23,6 +23,8 @@
 #include "TaskScheduler.hpp"
 
 #include "support.hpp"
+
+#include "Project.hpp"
 #include "ide/PluginLoader.hpp"
 
 #include <catch2/catch_test_macros.hpp>
@@ -45,6 +47,8 @@ namespace {
 struct InstallContractHandler {
     InstallContractHandler() {
         engine_core::set_contract_handler([](const char* message) { throw engine_core::ContractViolation(message); });
+        // Every disk check that reads only the changed files is checked against a whole read.
+        engine_core::Project::set_compare_check(true);
     }
 };
 

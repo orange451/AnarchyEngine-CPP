@@ -16,14 +16,16 @@ struct InstanceData {
     // The inverse transpose of model's 3 by 3, column-major, or zeros when it
     // has no inverse: slots 11 to 13.
     float normal[9];
-    // The GameObject's Color made linear, as surface.glsl's toLinear: slot 14.
+    // The GameObject's Color made linear, as surface.glsl's toLinear, then its
+    // LOD fade (VisibilityResult::fades): slot 14.
     float tint[3];
+    float fade = 1.f;
     // The first texel of its skinning matrices in the bone texture, or -1 for
     // an unskinned instance: slot 15. A float, which holds every texel index
     // the texture can have exactly.
     float boneBase;
 };
-static_assert(sizeof(InstanceData) == 116, "vertex slots 7 to 15 read 116 bytes per instance");
+static_assert(sizeof(InstanceData) == 120, "vertex slots 7 to 15 read 120 bytes per instance");
 
 // Instances first to first + count, all drawn with MeshDraw draw's mesh and Material.
 struct DrawRun {

@@ -119,6 +119,9 @@ FindChord find_chord(const jadefx::KeyEvent& event) {
     if (event.key == jadefx::Key::H && event.shift && !event.alt) {
         return FindChord::ReplaceInScripts;
     }
+    if (event.key == jadefx::Key::T && event.shift && !event.alt) {
+        return FindChord::QuickOpen;
+    }
     if (event.key == jadefx::Key::F && !event.shift) {
 #if defined(__APPLE__)
         return event.alt ? FindChord::Replace : FindChord::Find;

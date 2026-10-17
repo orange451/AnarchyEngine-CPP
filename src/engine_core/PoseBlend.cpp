@@ -36,6 +36,34 @@ void PoseBlend::record(InstanceId id, Kind kind, const Matrix4& before, const Ma
     entries_.push_back(Entry{id, kind, before, after});
 }
 
+void PoseBlend::follow(InstanceId id, Kind kind, const Matrix4& before, const Matrix4& after) {
+    const std::uint32_t slot = id_slot(id);
+    // Its entry, from this capture or an older one: no capture runs while
+    // nothing simulates, and one entry per id must still stand.
+    std::size_t at = entries_.size();
+    if (slot < slot_entry_.size() && slot_entry_[slot] < entries_.size() && entries_[slot_entry_[slot]].id == id) {
+        at = slot_entry_[slot];
+    }
+    if (same_matrix4(before, after)) {
+        if (at < entries_.size()) {
+            entries_[at] = entries_.back();
+            entries_.pop_back();
+            if (at < entries_.size()) {
+                slot_entry_[id_slot(entries_[at].id)] = static_cast<std::uint32_t>(at);
+            }
+        }
+        return;
+    }
+    if (at < entries_.size()) {
+        entries_[at] = Entry{id, kind, before, after};
+        return;
+    }
+    const bool capturing = capturing_;
+    capturing_ = true;
+    record(id, kind, before, after);
+    capturing_ = capturing;
+}
+
 void PoseBlend::clear() {
     entries_.clear();
     swaps_.clear();

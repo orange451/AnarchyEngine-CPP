@@ -79,7 +79,7 @@ struct SearchToggles {
 // The find shortcuts, as in VS Code. Cmd on macOS and Ctrl elsewhere: F finds in
 // the script, and Shift+F in every script. Replace is Cmd+Alt+F on macOS and
 // Ctrl+H elsewhere, and in every script Shift+H.
-enum class FindChord { None, Find, Replace, FindInScripts, ReplaceInScripts };
+enum class FindChord { None, Find, Replace, FindInScripts, ReplaceInScripts, QuickOpen };
 FindChord find_chord(const jadefx::KeyEvent& event);
 
 // The CSS the find bar and the Search pane share. Each sets it on itself.

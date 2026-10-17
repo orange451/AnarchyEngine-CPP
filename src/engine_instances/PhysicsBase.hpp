@@ -80,9 +80,9 @@ public:
     double linear_damping() const { return linear_damping_; }
 
     // The GameObject the body moves, or 0: its parent, when that is a
-    // GameObject; a Brush moves none. To move any other, a constraint joins
-    // them (a WeldConstraint). The parent link is never saved, so a body moved
-    // out from under it stops moving it.
+    // GameObject. A PhysicsObject may name another (its GameObject field); a
+    // Brush moves none. The parent link is never saved, so a body moved out
+    // from under it stops moving it.
     virtual InstanceId driven_game_object() const;
 
     // SimulationThread. Each returns why it refused the value, changing nothing.

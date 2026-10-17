@@ -59,7 +59,7 @@ struct Bytecode {
 
 // Compiled with optimization level 1 and line information for error messages.
 inline Bytecode compile_luau(std::string_view source) {
-    // Luau resolves a global path such as game.Lighting.Brightness once, when
+    // Luau resolves a global path such as game.Lighting.Exposure once, when
     // the chunk loads, and keeps that value. The tree and its properties
     // change, so paths through these globals are read each time.
     static const char* const kMutableGlobals[] = {"game", "workspace", "script", nullptr};

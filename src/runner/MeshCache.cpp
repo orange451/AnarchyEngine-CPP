@@ -9,13 +9,6 @@
 
 namespace runner {
 
-namespace {
-
-// How often a file already seen is looked at again.
-constexpr std::chrono::seconds kRecheck{1};
-
-}  // namespace
-
 MeshCache::MeshCache(Report report) : report_(std::move(report)) {}
 
 MeshCache::~MeshCache() {
@@ -204,9 +197,7 @@ const anarchy::amesh::GpuMesh* MeshCache::get(const std::string& path) {
         return nullptr;
     }
     Entry& entry = entries_[path];
-    const auto now = std::chrono::steady_clock::now();
-    if (!entry.tried || now - entry.checked >= kRecheck) {
-        entry.checked = now;
+    if (!entry.tried || FileWatch::take(entry.watched)) {
         load(path, entry);
         // Mesh.Loaded: shown, or its file is missing or will not read.
         engine_core::set_asset_loaded(engine_core::AssetKind::Mesh, root_, path, entry.mesh.valid());
@@ -219,6 +210,9 @@ void MeshCache::load(const std::string& path, Entry& entry) {
     const std::filesystem::path file = root_ / std::filesystem::u8path(path);
     std::error_code error;
     const std::filesystem::file_time_type stamp = std::filesystem::last_write_time(file, error);
+    if (!entry.watched) {
+        entry.watched = FileWatch::watch(file, !error, stamp);
+    }
     if (error) {
         const bool was_there = !entry.tried || entry.mesh.valid() || entry.stamp != std::filesystem::file_time_type{};
         entry.tried = true;

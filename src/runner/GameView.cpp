@@ -421,17 +421,23 @@ void GameView::collectMeshes() {
     // Each Prefab Model its own slot, from 1, so every GameObject drawing it
     // shares one instanced call. Numbered again each frame, as the list is made again.
     std::uint32_t nextSlot = 1;
-    for (std::size_t index = 0; index < snapshot.prefabs.size(); ++index) {
-        std::vector<MeshDraw>& loaded = prefabMeshes_[index];
-        loaded.clear();
-        LoadPrefabDraws(snapshot.prefabs[index], meshes_, textures_, nextSlot, loaded);
+    {
+        PROFILE_SCOPE("Prefab draws", profiler::Group::Render);
+        for (std::size_t index = 0; index < snapshot.prefabs.size(); ++index) {
+            std::vector<MeshDraw>& loaded = prefabMeshes_[index];
+            loaded.clear();
+            LoadPrefabDraws(snapshot.prefabs[index], meshes_, textures_, nextSlot, loaded);
+        }
     }
     // Uploads for sessions no Mesh draws now, as after a Stop. None this frame uses.
     meshes_.sweepSessions();
     lightDraws_.clear();
     // Only the snapshot's Prefabs: prefabMeshes_ may be longer from an earlier frame.
     prefabMeshes_.resize(snapshot.prefabs.size());
-    rowDraws_.update(snapshot.instances, prefabMeshes_, meshDraws_, lightDraws_, rowDrawsWritten_);
+    {
+        PROFILE_SCOPE("Row draws", profiler::Group::Render);
+        rowDraws_.update(snapshot.instances, prefabMeshes_, meshDraws_, lightDraws_, rowDrawsWritten_);
+    }
     // The rows' draws are the renderer's too: it works out again only what it keeps of the ones written.
     renderer_.noteDrawChanges(meshDraws_.size(), rowDrawsWritten_);
     // Each Terrain's LOD nodes chosen for this camera and pane (spec decision 2:
@@ -454,7 +460,10 @@ void GameView::collectMeshes() {
     terrainCamera.pane_height = static_cast<int>(std::lround(getHeight() * pixelsPerPoint));
     const double terrainNow =
         std::chrono::duration<double>(std::chrono::steady_clock::now() - terrainClockStart_).count();
-    AppendTerrainDraws(snapshot.terrains, terrainCamera, terrainNow, terrainFades_, meshes_, renderer_, meshDraws_);
+    {
+        PROFILE_SCOPE("Terrain draws", profiler::Group::Render);
+        AppendTerrainDraws(snapshot.terrains, terrainCamera, terrainNow, terrainFades_, meshes_, renderer_, meshDraws_);
+    }
     // Brushes: baked cells and single Brushes, one draw per Material.
     AppendBrushDraws(snapshot.brushes, meshes_, textures_, meshDraws_);
     meshes_.sweepBrushes();
@@ -1058,8 +1067,10 @@ void GameView::renderContent(jadefx::UiRenderer& renderer, float opacity) {
             if (now - statsPrinted_ >= std::chrono::seconds(1)) {
                 statsPrinted_ = now;
                 const RenderStats& stats = renderer_.stats();
-                std::fprintf(stderr, "render stats: %d draws, %d visible, %d culled, %d runs, %d instanced calls\n",
-                             stats.draws, stats.visible, stats.culled, stats.runs, stats.instancedCalls);
+                std::fprintf(stderr,
+                             "render stats: %d draws, %d visible, %d culled, %d runs, %d instanced calls, %lld upload bytes, %d cards\n",
+                             stats.draws, stats.visible, stats.culled, stats.runs, stats.instancedCalls,
+                             stats.uploadBytes, stats.cards);
             }
         }
         guiLayer_->setSceneDepth(renderer_.sceneDepth());
@@ -1149,6 +1160,9 @@ void GameView::sceneChanged(jadefx::Scene* previous) {
     }
     viewports_->release();
     renderer_.shutdown();
+    if (profilerOverlay_ != nullptr) {
+        profilerOverlay_->releaseGraphics();
+    }
     meshes_.clear();
     textures_.clear();
     graphicsAttempted_ = false;

@@ -42,6 +42,11 @@ public:
     // Nothing unless capturing. An instance written twice keeps its first
     // before and its last after.
     void record(InstanceId id, Kind kind, const Matrix4& before, const Matrix4& after);
+    // Captured or not: id moved from before to after across the last substep,
+    // as the view's Camera a PostSimulation script places on a body. It is
+    // drawn through that substep with the bodies, so the two stay together.
+    // before == after forgets id's entry, so a still Camera is drawn as it is.
+    void follow(InstanceId id, Kind kind, const Matrix4& before, const Matrix4& after);
     // Forgets every entry: play starting or stopping.
     void clear();
     const std::vector<Entry>& entries() const { return entries_; }

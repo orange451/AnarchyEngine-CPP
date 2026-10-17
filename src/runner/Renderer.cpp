@@ -15,6 +15,7 @@
 #include "amesh.hpp"
 #include "gl.hpp"
 
+#include <chrono>
 #include <algorithm>
 #include <atomic>
 #include <cmath>
@@ -320,6 +321,8 @@ bool Renderer::buildProgram(Program& program, const char* name, const char* vert
     program.occlusionIntensity = at("uOcclusionIntensity");
     program.face = at("uFace");
     program.billboard = at("uBillboard");
+    program.cardBand = at("uCardBand");
+    program.probeTexel = at("uProbeTexel");
     program.sunDirection = at("uSunDirection");
     program.moonDirection = at("uMoonDirection");
     program.starFrame = at("uStarFrame");
@@ -443,6 +446,7 @@ bool Renderer::initialize() {
         buildProgram(gridBands_, "Grid bands", "pipeline/grid_band.vert", "pipeline/grid.frag", {}) &&
         buildProgram(outline_, "Outline", "pipeline/outline.vert", "pipeline/outline.frag", {}) &&
         buildProgram(handle_, "Handle", "pipeline/handle.vert", "pipeline/handle.frag", {}) &&
+        buildProgram(depthProbe_, "Depth probe", "pipeline/fullscreen.vert", "pipeline/depth_probe.frag", {}) &&
         environment_.initialize() && shadows_.initialize() && particles_.create();
     if (!built) {
         shutdown();
@@ -1155,6 +1159,7 @@ bool Renderer::draw(double x, double y, double width, double height, double scen
     drawsNoted_ = false;
     // Nothing to hide behind, and no depth under the probe, until this draw leaves some.
     sceneDepth_ = SceneDepth{};
+    probeLast_ = probedDepth_;
     probedDepth_.reset();
     stats_ = RenderStats{};
     if (!ready_ || width <= 0.0 || height <= 0.0 || sceneWidth <= 0.0 || sceneHeight <= 0.0) {
@@ -1190,7 +1195,10 @@ bool Renderer::draw(double x, double y, double width, double height, double scen
     // Open before the state is saved, so every texture the draw deletes,
     // its targets on a resize or its shadow maps, is known to restore.
     DeletedTextures deleted;
-    const SavedState saved;
+    const SavedState saved = [] {
+        PROFILE_SCOPE("Save GL state", profiler::Group::Render);
+        return SavedState();
+    }();
     PixelRect clip = pane;
     if (saved.scissor == GL_TRUE) {
         const PixelRect outer{saved.scissorBox[0], saved.scissorBox[1], saved.scissorBox[2], saved.scissorBox[3]};
@@ -1318,18 +1326,21 @@ bool Renderer::draw(double x, double y, double width, double height, double scen
         skyReady_ = false;
         skyVisible_ = false;
         bool cubesReady = true;
-        if (hasSky && dynamicSkyDrawn()) {
-            skyReady_ = updateDynamicSkyLighting();
-            // Drawn straight from the shader every frame it is due, whether
-            // or not its lighting cube (skyReady_) is ready yet.
-            skyVisible_ = true;
-            prepareSky();
-        } else if (hasSky) {
-            const SceneSky& sky = lighting_.sky;
-            cubesReady = environment_.update(sky.image, sky.imageRevision, emptyVao_);
-            skyReady_ = cubesReady;
-            skyVisible_ = skyReady_;
-            prepareSky();
+        {
+            PROFILE_SCOPE("Sky prepare", profiler::Group::Render);
+            if (hasSky && dynamicSkyDrawn()) {
+                skyReady_ = updateDynamicSkyLighting();
+                // Drawn straight from the shader every frame it is due, whether
+                // or not its lighting cube (skyReady_) is ready yet.
+                skyVisible_ = true;
+                prepareSky();
+            } else if (hasSky) {
+                const SceneSky& sky = lighting_.sky;
+                cubesReady = environment_.update(sky.image, sky.imageRevision, emptyVao_);
+                skyReady_ = cubesReady;
+                skyVisible_ = skyReady_;
+                prepareSky();
+            }
         }
         glEnable(RT_GL_TEXTURE_CUBE_MAP_SEAMLESS);
 
@@ -1339,6 +1350,9 @@ bool Renderer::draw(double x, double y, double width, double height, double scen
         findVisible(meshes, meshCount, camera);
         drawn = cubesReady && shadowPass(meshes, meshCount, camera) &&
                 geometryPass(meshes, projection);
+        if (drawn) {
+            copyProbe(pane.x, pane.y, pane.width, pane.height, sceneWidth, sceneHeight, viewport);
+        }
         // Occlusion never fails the frame: without it, surfaces are lit as if open.
         if (drawn) {
             occlusionPass(projection, inverseProjection.m);
@@ -1404,6 +1418,7 @@ bool Renderer::draw(double x, double y, double width, double height, double scen
         drawn = onPane;
         if (drawn) {
             sceneDepth_ = SceneDepth{depthTexture_, pane.x, pane.y, pane.width, pane.height};
+            PROFILE_SCOPE("Read probe", profiler::Group::Render);
             readProbe(pane.x, pane.y, pane.width, pane.height, sceneWidth, sceneHeight, viewport);
         }
     }
@@ -1421,47 +1436,128 @@ bool Renderer::draw(double x, double y, double width, double height, double scen
         handlePass(projection);
     }
 
-    saved.restore(viewport, deleted);
-    gpu_.frame();
+    {
+        PROFILE_SCOPE("Restore GL state", profiler::Group::Render);
+        saved.restore(viewport, deleted);
+    }
+    {
+        PROFILE_SCOPE("GPU timer read", profiler::Group::Render);
+        gpu_.frame();
+    }
     return drawn;
+}
+
+bool Renderer::probeTexel(int paneX, int paneY, int paneWidth, int paneHeight, double sceneWidth,
+                          double sceneHeight, const int viewport[4], int& px, int& py) const {
+    if (!(probeX_ >= 0.0 && probeY_ >= 0.0)) {
+        return false;
+    }
+    const double scaleX = static_cast<double>(viewport[2]) / sceneWidth;
+    const double scaleY = static_cast<double>(viewport[3]) / sceneHeight;
+    px = viewport[0] + static_cast<int>(std::floor(probeX_ * scaleX)) - paneX;
+    py = viewport[1] + viewport[3] - 1 - static_cast<int>(std::floor(probeY_ * scaleY)) - paneY;
+    return px >= 0 && py >= 0 && px < paneWidth && py < paneHeight;
+}
+
+void Renderer::copyProbe(int paneX, int paneY, int paneWidth, int paneHeight, double sceneWidth,
+                         double sceneHeight, const int viewport[4]) {
+    probeCopied_ = false;
+    int px = 0;
+    int py = 0;
+    if (probeRefused_ ||
+        !probeTexel(paneX, paneY, paneWidth, paneHeight, sceneWidth, sceneHeight, viewport, px, py)) {
+        return;
+    }
+    if (probeFbo_ == 0) {
+        probeTarget_ = MakeTarget(RT_GL_R32F, RT_GL_RED, GL_FLOAT, 1, 1);
+        glGenFramebuffers(1, &probeFbo_);
+        glBindFramebuffer(RT_GL_FRAMEBUFFER, probeFbo_);
+        if (!Attach({probeTarget_}, 0)) {
+            glBindFramebuffer(RT_GL_FRAMEBUFFER, gbufferFbo_);
+            glDeleteFramebuffers(1, &probeFbo_);
+            probeFbo_ = 0;
+            DeleteTexture(probeTarget_);
+            probeRefused_ = true;
+            return;
+        }
+    }
+    // One texel of the finished depth into the float target, with nothing
+    // but the target and the viewport changed for the passes after.
+    glBindFramebuffer(RT_GL_FRAMEBUFFER, probeFbo_);
+    glViewport(0, 0, 1, 1);
+    glUseProgram(depthProbe_.id);
+    glUniform2f(depthProbe_.probeTexel, static_cast<float>(px), static_cast<float>(py));
+    BindTexture(kUnitDepth, depthTexture_);
+    glBindVertexArray(emptyVao_);
+    glDrawArrays(GL_TRIANGLES, 0, 3);
+    glBindFramebuffer(RT_GL_FRAMEBUFFER, gbufferFbo_);
+    glViewport(0, 0, targetWidth_, targetHeight_);
+    probeCopied_ = true;
 }
 
 void Renderer::readProbe(int paneX, int paneY, int paneWidth, int paneHeight, double sceneWidth,
                          double sceneHeight, const int viewport[4]) {
     if (probeBuffers_[0] == 0) {
-        glGenBuffers(2, probeBuffers_);
+        glGenBuffers(kProbeBuffers, probeBuffers_);
         for (unsigned buffer : probeBuffers_) {
             glBindBuffer(RT_GL_PIXEL_PACK_BUFFER, buffer);
             glBufferData(RT_GL_PIXEL_PACK_BUFFER, sizeof(float), nullptr, RT_GL_STREAM_READ);
         }
         glBindBuffer(RT_GL_PIXEL_PACK_BUFFER, 0);
     }
-    // Last draw's read, which the GPU has long finished.
-    const int previous = 1 - probeNext_;
-    probedDepth_.reset();
-    if (probeFilled_[previous]) {
-        glBindBuffer(RT_GL_PIXEL_PACK_BUFFER, probeBuffers_[previous]);
+    // Earlier draws' reads the GPU has done, oldest first so the newest wins.
+    // Mapping one it has not done would stall this thread until the GPU
+    // finished that whole frame, so those wait for a later draw.
+    bool pending = false;
+    bool took = false;
+    for (int age = kProbeBuffers; age >= 1; --age) {
+        const int slot = (probeNext_ + kProbeBuffers - age) % kProbeBuffers;
+        if (!probeFilled_[slot]) {
+            continue;
+        }
+        PROFILE_SCOPE("Probe take", profiler::Group::Render);
+        const GLenum state = glClientWaitSync(probeFences_[slot], 0, 0);
+        if (state != RT_GL_ALREADY_SIGNALED && state != RT_GL_CONDITION_SATISFIED) {
+            pending = true;
+            continue;
+        }
+        glBindBuffer(RT_GL_PIXEL_PACK_BUFFER, probeBuffers_[slot]);
         if (const void* mapped = glMapBufferRange(RT_GL_PIXEL_PACK_BUFFER, 0, sizeof(float), RT_GL_MAP_READ_BIT)) {
             probedDepth_ = *static_cast<const float*>(mapped);
+            took = true;
             glUnmapBuffer(RT_GL_PIXEL_PACK_BUFFER);
         }
-        probeFilled_[previous] = false;
+        glDeleteSync(probeFences_[slot]);
+        probeFences_[slot] = nullptr;
+        probeFilled_[slot] = false;
     }
-    probeFilled_[probeNext_] = false;
-    if (probeX_ >= 0.0 && probeY_ >= 0.0) {
-        const double scaleX = static_cast<double>(viewport[2]) / sceneWidth;
-        const double scaleY = static_cast<double>(viewport[3]) / sceneHeight;
-        const int px = viewport[0] + static_cast<int>(std::floor(probeX_ * scaleX)) - paneX;
-        const int py = viewport[1] + viewport[3] - 1 - static_cast<int>(std::floor(probeY_ * scaleY)) - paneY;
-        if (px >= 0 && py >= 0 && px < paneWidth && py < paneHeight) {
-            glBindFramebuffer(RT_GL_READ_FRAMEBUFFER, gbufferFbo_);
-            glBindBuffer(RT_GL_PIXEL_PACK_BUFFER, probeBuffers_[probeNext_]);
-            glReadPixels(px, py, 1, 1, RT_GL_DEPTH_COMPONENT, GL_FLOAT, nullptr);
-            probeFilled_[probeNext_] = true;
-        }
+    (void)paneX;
+    (void)paneY;
+    (void)paneWidth;
+    (void)paneHeight;
+    (void)sceneWidth;
+    (void)sceneHeight;
+    (void)viewport;
+    const bool inPane = probeCopied_;
+    probeCopied_ = false;
+    // Its buffer is free unless a read three draws old is still on its way.
+    if (inPane && !probeFilled_[probeNext_]) {
+        PROFILE_SCOPE("Probe read", profiler::Group::Render);
+        glBindFramebuffer(RT_GL_READ_FRAMEBUFFER, probeFbo_);
+        glBindBuffer(RT_GL_PIXEL_PACK_BUFFER, probeBuffers_[probeNext_]);
+        glReadPixels(0, 0, 1, 1, RT_GL_RED, GL_FLOAT, nullptr);
+        probeFences_[probeNext_] = glFenceSync(RT_GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+        probeFilled_[probeNext_] = true;
+    }
+    // Off the pane, with nothing left on its way, there is no depth under the
+    // cursor; while a read is still on its way, the last one stands.
+    if (!inPane && !pending) {
+        probedDepth_.reset();
+    } else if (!took && pending) {
+        probedDepth_ = probeLast_;
     }
     glBindBuffer(RT_GL_PIXEL_PACK_BUFFER, 0);
-    probeNext_ = previous;
+    probeNext_ = (probeNext_ + 1) % kProbeBuffers;
 }
 
 bool Renderer::paneHasDepth(int framebuffer) {
@@ -2093,6 +2189,8 @@ void Renderer::findVisible(const MeshDraw* meshes, int count, const CameraView& 
             }
             NormalizeRanges(changedDraws_);
         }
+        cards_.update(meshes, static_cast<int>(total), all, changedDraws_);
+        stats_.cards = cards_.cards();
         itemsMeshes_ = meshes;
         drawsChained_ = true;
         notedStable_ = static_cast<std::size_t>(-1);
@@ -2113,9 +2211,14 @@ void Renderer::findVisible(const MeshDraw* meshes, int count, const CameraView& 
                 item.lodNear = draw.lodNear;
                 item.lodFar = draw.lodFar;
                 item.billboard = draw.billboard;
+                item.castsShadow = draw.castsShadow;
                 // As the passes have always skipped: no mesh, not uploaded, or wholly see-through.
                 item.drawable = draw.mesh != nullptr && draw.mesh->valid() &&
                                 (draw.terrainLook != 0 || !(draw.transparency >= 1.f));
+                // A card the card field draws: no culling, batching, or casting here.
+                if (item.drawable && CardField::Holds(draw)) {
+                    item.drawable = false;
+                }
                 if (item.drawable) {
                     item.boundsMin = draw.mesh->bounds_min();
                     item.boundsMax = draw.mesh->bounds_max();
@@ -2181,7 +2284,14 @@ void Renderer::findVisible(const MeshDraw* meshes, int count, const CameraView& 
         // Spheres only for the changed draws; the cull reads every draw's.
         // A draw that names its LOD (Brush Materials) keeps it: each item's goes to its VisibleDraw.
         UpdateDrawBounds(drawItems_.data(), count, all, changedDraws_, visibility_);
+        // LOD fades go by the clock, so a slow frame fades as far as a fast one would have.
+        const auto now = std::chrono::steady_clock::now();
+        const float seconds = fadeClockStarted_ ? std::chrono::duration<float>(now - fadeClock_).count() : 0.f;
+        fadeClock_ = now;
+        fadeClockStarted_ = true;
+        visibility_.fadeStep = std::clamp(seconds / kLodFadeSeconds, 0.f, 1.f);
         CullDraws(count, camera, culling_, visibility_);
+        cards_.fade(camera.world.m + 12, visibility_.fadeStep);
         stats_.draws = count;
         stats_.visible = static_cast<int>(visibility_.opaque.size() + visibility_.transparent.size());
         stats_.culled = visibility_.culled;
@@ -2198,7 +2308,8 @@ bool Renderer::shadowPass(const MeshDraw* meshes, int count, const CameraView& c
         return true;
     }
     // What is outside its LOD band casts nothing, as it is not drawn.
-    shadows_.setHidden(visibility_.outOfBand.empty() ? nullptr : visibility_.outOfBand.data());
+    shadows_.setHidden(visibility_.outOfBand.empty() ? nullptr : visibility_.outOfBand.data(),
+                       visibility_.outOfBandRevision, &visibility_.casters);
     if (!shadows_.draw(shadowRequests_, meshes, count, visibility_.spheres.data(), camera, shadowSettings_)) {
         return false;
     }
@@ -2248,8 +2359,14 @@ bool Renderer::geometryPass(const MeshDraw* meshes, const float* projection) {
     // encodes it. Only on here, so no other pass's writes are converted.
     glEnable(RT_GL_FRAMEBUFFER_SRGB);
 
-    // Every instance of the frame, opaque and see-through, in one upload.
-    instances_.upload(batches_.instances.data(), static_cast<int>(batches_.instances.size()));
+    // The cards whose slots changed, then every other instance of the
+    // frame, opaque and see-through, in one upload.
+    cards_.upload();
+    {
+        PROFILE_SCOPE("Instance upload", profiler::Group::Render);
+        instances_.upload(batches_.instances.data(), static_cast<int>(batches_.instances.size()));
+        stats_.uploadBytes = static_cast<long long>(batches_.instances.size() * sizeof(InstanceData));
+    }
 
     // BuildBatches puts every terrain chunk or LOD node after the other
     // opaque runs, so the runs split cleanly into a mesh phase and a terrain
@@ -2360,6 +2477,37 @@ bool Renderer::geometryPass(const MeshDraw* meshes, const float* projection) {
             ++stats_.runs;
             ++stats_.instancedCalls;
         }
+    }
+    // The card field, after the terrain so hills hide far cards before they
+    // shade: each slot's cards in one call from their own buffer. The vertex
+    // shader drops the ones outside the slot's band.
+    if (ok && cards_.cards() > 0) {
+        RENDER_PASS("Cards");
+        glUseProgram(geometry_.id);
+        glUniformMatrix4fv(geometry_.view, 1, GL_FALSE, view_.m);
+        glUniformMatrix4fv(geometry_.projection, 1, GL_FALSE, projection);
+        glCullFace(RT_GL_BACK);
+        bool asked = false;
+        for (const CardField::Slot& slot : cards_.slots()) {
+            if (slot.rows.empty()) {
+                continue;
+            }
+            // Every card of a slot shares its template's quad and Material.
+            const MeshDraw& draw = meshes[slot.draws.front()];
+            bindMaterial(geometry_, draw);
+            glUniform2f(geometry_.cardBand, slot.nearSquared, slot.farSquared);
+            draw.mesh->bind();
+            slot.buffer.attach(0);
+            if (!asked && !CanDraw(geometry_.id)) {
+                ok = false;
+                break;
+            }
+            asked = true;
+            draw.mesh->draw_instanced(draw.lod, static_cast<int>(slot.rows.size()));
+            ++stats_.runs;
+            ++stats_.instancedCalls;
+        }
+        glUniform2f(geometry_.cardBand, 0.f, 0.f);
     }
     glDisable(RT_GL_FRAMEBUFFER_SRGB);
     glDisable(RT_GL_CULL_FACE);
@@ -3001,7 +3149,7 @@ void Renderer::shutdown() {
     ready_ = false;
     for (Program* program :
          {&geometry_, &terrain_, &forward_, &ibl_, &light_, &sun_, &merge_, &tonemap_, &bloomDown_, &bloomUp_, &fxaa_, &ssrScene_, &ssrBlur_, &ssr_, &gtao_, &aoBlur_, &sky_, &grid_,
-          &gridBands_, &outline_, &handle_, &dynamicSky_, &dynamicSkyCube_}) {
+          &gridBands_, &outline_, &handle_, &dynamicSky_, &dynamicSkyCube_, &depthProbe_}) {
         if (program->id != 0) {
             glDeleteProgram(program->id);
         }
@@ -3010,6 +3158,7 @@ void Renderer::shutdown() {
     environment_.shutdown();
     shadows_.shutdown();
     instances_.destroy();
+    cards_.destroy();
     boneTexture_.destroy();
     skyReady_ = false;
     skyVisible_ = false;
@@ -3043,13 +3192,26 @@ void Renderer::shutdown() {
     }
     sphereIndexCount_ = 0;
     if (probeBuffers_[0] != 0) {
-        glDeleteBuffers(2, probeBuffers_);
+        glDeleteBuffers(kProbeBuffers, probeBuffers_);
     }
-    probeBuffers_[0] = 0;
-    probeBuffers_[1] = 0;
-    probeFilled_[0] = false;
-    probeFilled_[1] = false;
+    for (int slot = 0; slot < kProbeBuffers; ++slot) {
+        if (probeFences_[slot] != nullptr) {
+            glDeleteSync(probeFences_[slot]);
+        }
+        probeFences_[slot] = nullptr;
+        probeBuffers_[slot] = 0;
+        probeFilled_[slot] = false;
+    }
+    probeNext_ = 0;
+    if (probeFbo_ != 0) {
+        glDeleteFramebuffers(1, &probeFbo_);
+        probeFbo_ = 0;
+    }
+    DeleteTexture(probeTarget_);
+    probeCopied_ = false;
+    probeRefused_ = false;
     probedDepth_.reset();
+    probeLast_.reset();
     sceneDepth_ = SceneDepth{};
     // The current set first: unparking writes over its names.
     destroyTargets();

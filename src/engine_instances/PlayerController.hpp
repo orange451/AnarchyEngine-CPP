@@ -16,7 +16,8 @@ namespace engine_core {
 //
 // Transform's position is the feet: the ground point under the cylinder's
 // middle. Any Transform written keeps only its position and its turn about Y.
-// It moves the GameObject it is under, if any.
+// It moves the GameObject it is under, if any: unlike a PhysicsObject, it has
+// no GameObject field.
 // The Scale of the GameObject it moves does not size it.
 //
 // Friction    number   8, not below 0. Per second, only while OnGround: the

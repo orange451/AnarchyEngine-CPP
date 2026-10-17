@@ -250,3 +250,22 @@ TEST_CASE("PB12 a window write built from the blended read keeps the body's true
     INFO("moved " << heartbeat[1] - heartbeat[0]);
     REQUIRE(std::fabs((heartbeat[1] - heartbeat[0]) - 0.25f) < 1e-3f);
 }
+
+TEST_CASE("PB13 a followed Camera keeps one entry, outside a capture too, and a still one none", "[pose_blend]") {
+    PoseBlend blend;
+    blend.begin_capture();
+    blend.record(3, PoseBlend::Kind::Body, at(0, 0, 0), at(1, 0, 0));
+    blend.end_capture();
+    // A script in PostSimulation moved the Camera with the body.
+    blend.follow(9, PoseBlend::Kind::Spatial, at(0, 2, 5), at(1, 2, 5));
+    REQUIRE(blend.entries().size() == 2);
+    // A frame with no capture: the Camera moved again; still one entry for it.
+    blend.follow(9, PoseBlend::Kind::Spatial, at(1, 2, 5), at(2, 2, 5));
+    REQUIRE(blend.entries().size() == 2);
+    REQUIRE(near(blend.entries()[1].before, at(1, 2, 5)));
+    REQUIRE(near(blend.entries()[1].after, at(2, 2, 5)));
+    // Still across the substep: drawn as it is, so its entry goes.
+    blend.follow(9, PoseBlend::Kind::Spatial, at(2, 2, 5), at(2, 2, 5));
+    REQUIRE(blend.entries().size() == 1);
+    REQUIRE(blend.entries()[0].id == 3);
+}

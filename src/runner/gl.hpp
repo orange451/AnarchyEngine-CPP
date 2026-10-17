@@ -21,6 +21,8 @@ using GLchar = char;
 using GLsizeiptr = std::ptrdiff_t;
 using GLint64 = long long;
 using GLuint64 = unsigned long long;
+// A fence (GL 3.2 core): signalled once the GPU has done everything before it.
+using RtGLsync = struct RtGLsyncObject*;
 
 // A platform OpenGL header may already have defined these as macros.
 #ifdef GL_FALSE
@@ -159,6 +161,9 @@ constexpr GLenum RT_GL_READ_FRAMEBUFFER = 0x8CA8;
 constexpr GLenum RT_GL_PIXEL_PACK_BUFFER = 0x88EB;
 constexpr GLenum RT_GL_STREAM_READ = 0x88E1;
 constexpr GLbitfield RT_GL_MAP_READ_BIT = 0x0001;
+constexpr GLenum RT_GL_SYNC_GPU_COMMANDS_COMPLETE = 0x9117;
+constexpr GLenum RT_GL_ALREADY_SIGNALED = 0x911A;
+constexpr GLenum RT_GL_CONDITION_SATISFIED = 0x911C;
 constexpr GLenum GL_TIMESTAMP = 0x8E28;
 constexpr GLenum GL_QUERY_RESULT = 0x8866;
 constexpr GLenum GL_QUERY_RESULT_AVAILABLE = 0x8867;
@@ -213,6 +218,7 @@ constexpr GLenum RT_GL_COLOR_ATTACHMENT0 = 0x8CE0;
 constexpr GLenum RT_GL_DEPTH_ATTACHMENT = 0x8D00;
 constexpr GLenum RT_GL_RGBA16F = 0x881A;
 constexpr GLenum RT_GL_R8 = 0x8229;
+constexpr GLenum RT_GL_R32F = 0x822E;
 constexpr GLenum RT_GL_RG = 0x8227;
 constexpr GLenum RT_GL_RG16 = 0x822C;
 constexpr GLenum RT_GL_SRGB8_ALPHA8 = 0x8C43;
@@ -309,6 +315,7 @@ extern void (*rt_glGenBuffers)(GLsizei n, GLuint* buffers);
 extern void (*rt_glDeleteBuffers)(GLsizei n, const GLuint* buffers);
 extern void (*rt_glBindBuffer)(GLenum target, GLuint buffer);
 extern void (*rt_glBufferData)(GLenum target, GLsizeiptr size, const void* data, GLenum usage);
+extern void (*rt_glBufferSubData)(GLenum target, GLsizeiptr offset, GLsizeiptr size, const void* data);
 extern void (*rt_glEnableVertexAttribArray)(GLuint index);
 extern void (*rt_glVertexAttribPointer)(GLuint index, GLint size, GLenum type, GLboolean normalized, GLsizei stride, const void* pointer);
 extern void (*rt_glDrawArrays)(GLenum mode, GLint first, GLsizei count);
@@ -331,6 +338,9 @@ extern void (*rt_glUniformMatrix4fv)(GLint location, GLsizei count, GLboolean tr
 extern void (*rt_glUniformMatrix3fv)(GLint location, GLsizei count, GLboolean transpose, const GLfloat* value);
 extern void (*rt_glReadPixels)(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type, void* pixels);
 extern void* (*rt_glMapBufferRange)(GLenum target, GLsizeiptr offset, GLsizeiptr length, GLbitfield access);
+extern RtGLsync (*rt_glFenceSync)(GLenum condition, GLbitfield flags);
+extern GLenum (*rt_glClientWaitSync)(RtGLsync sync, GLbitfield flags, GLuint64 timeout);
+extern void (*rt_glDeleteSync)(RtGLsync sync);
 extern GLboolean (*rt_glUnmapBuffer)(GLenum target);
 extern void (*rt_glGenTextures)(GLsizei n, GLuint* textures);
 extern void (*rt_glDeleteTextures)(GLsizei n, const GLuint* textures);
@@ -452,6 +462,7 @@ bool LoadGl(GlGetProcAddress get_proc);
 #define glDeleteBuffers ::runner::rt_glDeleteBuffers
 #define glBindBuffer ::runner::rt_glBindBuffer
 #define glBufferData ::runner::rt_glBufferData
+#define glBufferSubData ::runner::rt_glBufferSubData
 #define glEnableVertexAttribArray ::runner::rt_glEnableVertexAttribArray
 #define glVertexAttribPointer ::runner::rt_glVertexAttribPointer
 #define glDrawArrays ::runner::rt_glDrawArrays
@@ -472,6 +483,9 @@ bool LoadGl(GlGetProcAddress get_proc);
 #define glUniformMatrix3fv ::runner::rt_glUniformMatrix3fv
 #define glReadPixels ::runner::rt_glReadPixels
 #define glMapBufferRange ::runner::rt_glMapBufferRange
+#define glFenceSync ::runner::rt_glFenceSync
+#define glClientWaitSync ::runner::rt_glClientWaitSync
+#define glDeleteSync ::runner::rt_glDeleteSync
 #define glUnmapBuffer ::runner::rt_glUnmapBuffer
 #define glGenTextures ::runner::rt_glGenTextures
 #define glDeleteTextures ::runner::rt_glDeleteTextures

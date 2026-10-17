@@ -34,8 +34,17 @@ void InstanceBuffer::attach(int first) const {
     for (unsigned column = 0; column < 3; ++column) {
         slot(anarchy::amesh::kAttribInstanceNormal + column, 3, offsetof(InstanceData, normal) + column * 12);
     }
-    slot(anarchy::amesh::kAttribInstanceTint, 3, offsetof(InstanceData, tint));
+    slot(anarchy::amesh::kAttribInstanceTint, 4, offsetof(InstanceData, tint));
     slot(anarchy::amesh::kAttribInstanceBoneBase, 1, offsetof(InstanceData, boneBase));
+}
+
+void InstanceBuffer::patch(int row, const InstanceData& data) {
+    if (buffer_ == 0 || row < 0) {
+        return;
+    }
+    glBindBuffer(GL_ARRAY_BUFFER, buffer_);
+    glBufferSubData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(sizeof(InstanceData) * static_cast<std::size_t>(row)),
+                    static_cast<GLsizeiptr>(sizeof(InstanceData)), &data);
 }
 
 void InstanceBuffer::destroy() {

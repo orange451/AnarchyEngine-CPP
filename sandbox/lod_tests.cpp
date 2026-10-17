@@ -258,6 +258,31 @@ std::vector<int> Seen(const runner::VisibilityResult& out) {
 
 }  // namespace
 
+TEST_CASE("LOD5 crossing a band's end fades the two draws over time, one the other's complement", "[lod]") {
+    constexpr float kForever = std::numeric_limits<float>::infinity();
+    const engine_core::Matrix4 origin = engine_core::matrix4_translation(0.f, 0.f, 0.f);
+    const runner::DrawItem items[2] = {Banded(origin, 0.f, 50.f), Banded(origin, 50.f, kForever)};
+    runner::VisibilityResult out;
+    out.fadeStep = 0.25f;
+    // The first cull settles at once.
+    runner::FindVisible(items, 2, LookFrom({0.f, 0.f, 49.f}, {0.f, 0.f, 0.f}), true, out);
+    REQUIRE(Seen(out) == std::vector<int>{0});
+    REQUIRE(out.fades == std::vector<float>{1.f, 0.f});
+    // Past 50 both draw, the near one fading out as the far one fades in.
+    const runner::CameraView past = LookFrom({0.f, 0.f, 51.f}, {0.f, 0.f, 0.f});
+    runner::FindVisible(items, 2, past, true, out);
+    REQUIRE(Seen(out) == std::vector<int>{0, 1});
+    REQUIRE(Near(out.fades[0], -0.75f));
+    REQUIRE(Near(out.fades[1], 0.25f));
+    REQUIRE(out.outOfBand == std::vector<std::uint8_t>{0, 0});
+    for (int frame = 0; frame < 3; ++frame) {
+        runner::FindVisible(items, 2, past, true, out);
+    }
+    REQUIRE(Seen(out) == std::vector<int>{1});
+    REQUIRE(out.fades[1] == 1.f);
+    REQUIRE(out.outOfBand == std::vector<std::uint8_t>{1, 0});
+}
+
 TEST_CASE("LOD5 a banded draw is seen and casts only while the camera is in its band", "[lod]") {
     constexpr float kForever = std::numeric_limits<float>::infinity();
     const engine_core::Matrix4 origin = engine_core::matrix4_translation(0.f, 0.f, 0.f);

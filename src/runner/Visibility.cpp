@@ -1,5 +1,7 @@
 #include "Visibility.hpp"
 
+#include <atomic>
+
 #include "ParallelBlocks.hpp"
 
 #include <algorithm>
@@ -60,7 +62,8 @@ void BoundItem(const DrawItem& item, Sphere& sphere, std::uint16_t& traits, Visi
     const bool banded = item.lodNear > 0.f || item.lodFar < std::numeric_limits<float>::infinity();
     traits = static_cast<std::uint16_t>(kTraitDrawable | (item.shadowOnly ? kTraitShadowOnly : 0) |
                                         (item.transparency > 0.f ? kTraitTransparent : 0) |
-                                        (banded ? kTraitBanded : 0) | (item.lod << 8));
+                                        (banded ? kTraitBanded : 0) | (item.castsShadow ? kTraitCasts : 0) |
+                                        (item.lod << 8));
     if (banded) {
         const float* origin = item.model->m + 12;
         band.x = origin[0];
@@ -104,8 +107,15 @@ void CullDraws(int count, const CameraView& camera, bool cull, VisibilityResult&
     const auto total = static_cast<std::size_t>(std::max(count, 0));
     out.opaque.clear();
     out.transparent.clear();
+    out.casters.clear();
     out.culled = 0;
-    out.outOfBand.resize(total);
+    if (out.outOfBand.size() != total) {
+        out.outOfBand.resize(total);
+        ++out.outOfBandRevision;
+    }
+    out.fades.resize(total, std::numeric_limits<float>::quiet_NaN());
+    const float step = out.fadeStep;
+    std::atomic<bool> flipped{false};
     const float* eye = camera.world.m + 12;
     const Frustum frustum = MakeFrustum(camera.viewProjection);
     const float halfFov = camera.fovYDegrees * 0.5f * 0.01745329252f;
@@ -120,24 +130,38 @@ void CullDraws(int count, const CameraView& camera, bool cull, VisibilityResult&
         VisibilityResult::Block* mine = alone ? nullptr : &out.blocks[block];
         std::vector<VisibleDraw>& opaque = alone ? out.opaque : mine->opaque;
         std::vector<VisibleDraw>& transparent = alone ? out.transparent : mine->transparent;
+        std::vector<int>& casters = alone ? out.casters : mine->casters;
         opaque.clear();
         transparent.clear();
+        casters.clear();
         int culled = 0;
         for (std::size_t index = begin; index < end; ++index) {
             const std::uint16_t traits = out.traits[index];
-            // Outside its band, whether or not culling is on: neither seen nor casting.
+            // Faded out of its band, whether or not culling is on: neither seen nor casting.
             std::uint8_t& outside = out.outOfBand[index];
-            outside = 0;
+            std::uint8_t now = 0;
+            float& fade = out.fades[index];
             if ((traits & kTraitBanded) != 0) {
                 const VisibilityResult::Band& band = out.bands[index];
                 const float dx = band.x - eye[0];
                 const float dy = band.y - eye[1];
                 const float dz = band.z - eye[2];
                 const float squared = dx * dx + dy * dy + dz * dz;
-                if (squared < band.nearSquared || !(squared < band.farSquared)) {
-                    outside = 1;
-                    continue;
-                }
+                fade = StepLodFade(fade, !(squared < band.nearSquared) && squared < band.farSquared, step);
+                now = fade == 0.f ? 1 : 0;
+            } else {
+                fade = kLodShown;
+            }
+            if (now != outside) {
+                outside = now;
+                flipped.store(true, std::memory_order_relaxed);
+            }
+            if (now != 0) {
+                continue;
+            }
+            // In view or not: a caster outside the view can shade what is in it.
+            if ((traits & (kTraitDrawable | kTraitCasts)) == (kTraitDrawable | kTraitCasts)) {
+                casters.push_back(static_cast<int>(index));
             }
             if ((traits & kTraitDrawable) == 0 || (traits & kTraitShadowOnly) != 0) {
                 continue;
@@ -159,12 +183,16 @@ void CullDraws(int count, const CameraView& camera, bool cull, VisibilityResult&
             mine->culled = culled;
         }
     });
+    if (flipped.load(std::memory_order_relaxed)) {
+        ++out.outOfBandRevision;
+    }
     if (alone) {
         return;
     }
     for (const VisibilityResult::Block& block : out.blocks) {
         out.opaque.insert(out.opaque.end(), block.opaque.begin(), block.opaque.end());
         out.transparent.insert(out.transparent.end(), block.transparent.begin(), block.transparent.end());
+        out.casters.insert(out.casters.end(), block.casters.begin(), block.casters.end());
         out.culled += block.culled;
     }
 }

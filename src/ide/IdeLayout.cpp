@@ -1,5 +1,6 @@
 #include "IdeLayout.hpp"
 #include "PluginWidgetPane.hpp"
+#include "QuickOpen.hpp"
 
 #include "IdeTerrainEditor.hpp"
 #include "runner/ProfilerOverlay.hpp"
@@ -126,6 +127,8 @@ IdeLayout::IdeLayout(double windowWidth, double windowHeight, const std::filesys
         ->setOnAction([this](jadefx::ActionEvent&) { open_search(false, scene_); });
     AddItem(*edit, "Replace in Scripts", nullptr, jadefx::Key::H, jadefx::Key::ModControl | jadefx::Key::ModShift)
         ->setOnAction([this](jadefx::ActionEvent&) { open_search(true, scene_); });
+    AddItem(*edit, "Quick Open", nullptr, jadefx::Key::T, jadefx::Key::ModControl | jadefx::Key::ModShift)
+        ->setOnAction([this](jadefx::ActionEvent&) { open_quick_open(scene_); });
 
     // The profiler keeps its tab and split here, and saves through a dialog.
     {
@@ -578,21 +581,22 @@ void GrowToFit(const jadefx::Node* area, jadefx::Scene* scene, const std::functi
 }
 }  // namespace
 
-void IdeLayout::refresh_plugin_ribbon() {
+bool IdeLayout::refresh_plugin_ribbon(std::chrono::milliseconds wait) {
     if (plugin_ribbon_ == nullptr) {
-        return;
+        return true;
     }
     engine_core::Engine& engine = runner_.simulation();
     // The simulation may be inside a step. Skip this frame rather than wait.
-    engine_core::DataModelLock lock(engine.datamodel(), engine_core::DataModelLock::Read, std::chrono::milliseconds(1));
+    engine_core::DataModelLock lock(engine.datamodel(), engine_core::DataModelLock::Read, wait);
     if (!lock.owns()) {
-        return;
+        return false;
     }
     const engine_core::PluginUi& ui = engine.scripts().plugin_ui();
     if (ui.revision() != plugin_ui_revision_) {
         plugin_ui_revision_ = ui.revision();
         plugin_ribbon_->setToolbars(ui.toolbars());
     }
+    return true;
 }
 
 void IdeLayout::flushFrame() {
@@ -611,7 +615,8 @@ void IdeLayout::flushFrame() {
         }
     }
     was_focused_ = focused;
-    if (check_pending_ && !in_test() && !editing_field()) {
+    // A save in the background checks the disk itself; one due waits for it.
+    if (check_pending_ && !in_test() && !editing_field() && !save_thread_.joinable()) {
         check_disk();
     }
     // The place and size to keep while maximized: the last ones it had when it was not.
@@ -632,32 +637,67 @@ void IdeLayout::flushFrame() {
             saved_splits_.clear();
         }
     }
-    poll_plugins(false);
-    refresh_plugin_ribbon();
-    sync_plugin_widgets();
+    {
+        PROFILE_SCOPE("Tail plugins", profiler::Group::Engine);
+        poll_plugins(false);
+        // Now if the place is free. The Scene View has just woken the engine,
+        // though, whose step holds the place for a millisecond or two, so
+        // rather than wait that out here every frame, a busy place is read at
+        // the start of the next frame, when the step is long done.
+        const bool ribbon = refresh_plugin_ribbon(std::chrono::milliseconds(0));
+        const bool widgets = sync_plugin_widgets(std::chrono::milliseconds(0));
+        if ((!ribbon || !widgets) && !plugin_sync_posted_) {
+            plugin_sync_posted_ = true;
+            jadefx::runLater([this, alive = std::weak_ptr<int>(alive_), ribbon, widgets] {
+                if (alive.expired()) {
+                    return;
+                }
+                plugin_sync_posted_ = false;
+                PROFILE_SCOPE("Plugin sync", profiler::Group::Engine);
+                if (!ribbon) {
+                    refresh_plugin_ribbon(std::chrono::milliseconds(1));
+                }
+                if (!widgets) {
+                    sync_plugin_widgets(std::chrono::milliseconds(1));
+                }
+            });
+        }
+    }
     // A pane is laid out only when something in it changed, and a script's
     // writes to its GUI change nothing there until it reads them, so each
     // open plugin page reads them once a frame.
-    for (const auto& [name, widget] : plugin_widgets_) {
-        if (widget.pane && dockContaining(widget.pane.get()) != nullptr) {
-            widget.pane->sync();
+    {
+        PROFILE_SCOPE("Tail plugin pages", profiler::Group::Engine);
+        for (const auto& [name, widget] : plugin_widgets_) {
+            if (widget.pane && dockContaining(widget.pane.get()) != nullptr) {
+                widget.pane->sync();
+            }
         }
     }
-    refresh_modified();
+    {
+        PROFILE_SCOPE("Tail modified", profiler::Group::Engine);
+        refresh_modified();
+    }
     // A tab that is not showing, or a closed page kept for reopening, is not
     // laid out, so Problems would stop counting. Its tick keeps the list and
     // the title current and leaves the rows until it shows again. It does
     // nothing a layout this frame already did.
-    if (problems_window_ != nullptr && problems_window_->pane) {
-        if (auto* problems = dynamic_cast<IdeProblems*>(problems_window_->pane.get())) {
-            problems->tick(scene_ != nullptr ? scene_->timeSeconds() : 0);
-            show_problem_count(problems->list().total);
+    {
+        PROFILE_SCOPE("Tail problems", profiler::Group::Engine);
+        if (problems_window_ != nullptr && problems_window_->pane) {
+            if (auto* problems = dynamic_cast<IdeProblems*>(problems_window_->pane.get())) {
+                problems->tick(scene_ != nullptr ? scene_->timeSeconds() : 0);
+                show_problem_count(problems->list().total);
+            }
         }
     }
-    show_cursor_position();
-    show_frame_time();
-    show_zoom();
-    show_ai_client();
+    {
+        PROFILE_SCOPE("Tail status bar", profiler::Group::Engine);
+        show_cursor_position();
+        show_frame_time();
+        show_zoom();
+        show_ai_client();
+    }
     const std::vector<std::shared_ptr<IdeDock>> pending = std::move(pendingEmpty_);
     pendingEmpty_.clear();
     for (const std::shared_ptr<IdeDock>& dock : pending) {
@@ -706,6 +746,10 @@ void IdeLayout::flushFrame() {
 }
 
 IdeLayout::~IdeLayout() {
+    // A save still writing finishes; what came of it is not shown.
+    if (save_thread_.joinable()) {
+        save_thread_.join();
+    }
     // The native menus' items would outlive the actions they run.
     RemoveNativeMenuBar();
     // Before anything its tools reach is torn down.
@@ -888,6 +932,9 @@ void IdeLayout::routeSearch(jadefx::KeyEvent& event, jadefx::Scene& scene) {
     if (chord == FindChord::FindInScripts || chord == FindChord::ReplaceInScripts) {
         event.consume();
         open_search(chord == FindChord::ReplaceInScripts, &scene);
+    } else if (chord == FindChord::QuickOpen) {
+        event.consume();
+        open_quick_open(&scene);
     }
 }
 
@@ -1027,6 +1074,7 @@ void IdeLayout::show_grid() {
 }
 
 void IdeLayout::start_test() {
+    wait_for_save();
     engine_core::Engine& engine = runner_.simulation();
     // A sound auditioned in Properties is not heard over the game.
     properties_->stop_sound();

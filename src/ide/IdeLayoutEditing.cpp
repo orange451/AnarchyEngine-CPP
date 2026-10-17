@@ -6,11 +6,13 @@
 #include "IdeCssEditor.hpp"
 #include "IdeCollisionGroups.hpp"
 #include "IdeTerrainEditor.hpp"
+#include "QuickOpen.hpp"
 
 #include "Assemblies.hpp"
 #include "FileBytes.hpp"
 #include "Folder.hpp"
 #include "InstanceFile.hpp"
+#include "GameService.hpp"
 #include "Gui.hpp"
 #include "Terrain.hpp"
 
@@ -1130,6 +1132,81 @@ void IdeLayout::save_as_plugin(std::uint32_t folder) {
     alerts_.push_back(alert);
     if (scene_ != nullptr) {
         alert->show(*scene_);
+    }
+}
+
+void IdeLayout::open_quick_open(jadefx::Scene* scene) {
+    if (scene == nullptr) {
+        return;
+    }
+    engine_core::DataModel& game = runner_.simulation().datamodel();
+    std::vector<QuickOpenEntry> entries;
+    {
+        engine_core::DataModelLock lock(game, engine_core::DataModelLock::Read, kActionWait);
+        if (!lock.owns()) {
+            show_toast(busy_message("Quick Open"));
+            return;
+        }
+        // Parents before children, so each child's path is its parent's plus its name.
+        struct Pending {
+            engine_core::InstanceId id;
+            std::string path;
+        };
+        std::vector<Pending> stack;
+        for (engine_core::InstanceId child : game.get_children(game.id())) {
+            stack.push_back({child, {}});
+        }
+        std::reverse(stack.begin(), stack.end());
+        while (!stack.empty()) {
+            Pending next = std::move(stack.back());
+            stack.pop_back();
+            const engine_core::DataModel* object = game.instance(next.id);
+            // What the explorers leave out, such as the studio's own plugins in Core, is
+            // left out here too. Assets are kept: the Assets pane shows them.
+            if (object == nullptr ||
+                (object->hidden_in_explorer() && dynamic_cast<const engine_core::GameService*>(object) == nullptr)) {
+                continue;
+            }
+            QuickOpenEntry entry;
+            entry.id = next.id;
+            entry.name = game.name(next.id);
+            entry.class_name = object->class_name();
+            entry.path = next.path;
+            const std::string below = next.path.empty() ? entry.name : next.path + "." + entry.name;
+            std::vector<engine_core::InstanceId> children = game.get_children(next.id);
+            for (auto it = children.rbegin(); it != children.rend(); ++it) {
+                stack.push_back({*it, below});
+            }
+            entries.push_back(std::move(entry));
+        }
+    }
+    if (!quick_open_) {
+        quick_open_ = std::make_unique<QuickOpen>();
+        quick_open_->setOnChoose([this](std::uint32_t id) { quick_open_chosen(id); });
+    }
+    quick_open_->show(*scene, std::move(entries));
+}
+
+void IdeLayout::quick_open_chosen(std::uint32_t id) {
+    engine_core::DataModel& game = runner_.simulation().datamodel();
+    bool opens = false;
+    {
+        engine_core::DataModelLock lock(game, engine_core::DataModelLock::Read, kActionWait);
+        if (!lock.owns()) {
+            show_toast(busy_message("Quick Open"));
+            return;
+        }
+        const engine_core::DataModel* object = game.instance(id);
+        if (object == nullptr) {
+            return;
+        }
+        opens = dynamic_cast<const engine_core::Prefab*>(object) != nullptr ||
+                dynamic_cast<const engine_core::LuaSource*>(object) != nullptr;
+    }
+    if (opens) {
+        edit(id);
+    } else {
+        game.selection().set({id});
     }
 }
 

@@ -57,6 +57,8 @@ set(STUDIO_CORE_SOURCES
     src/runner/Visibility.cpp
     src/runner/TerrainSelection.cpp
     src/runner/DrawBatches.cpp
+    src/runner/CardField.cpp
+    src/runner/FileWatch.cpp
     src/runner/ParallelBlocks.cpp
     src/runner/BonePalette.cpp
     src/runner/GamePack.cpp
@@ -141,6 +143,7 @@ set(STUDIO_SOURCES
     src/ide/AssetPicker.cpp
     src/ide/IdeScriptEditor.cpp
     src/ide/IdeSearch.cpp
+    src/ide/QuickOpen.cpp
     src/ide/IdeProblems.cpp
     src/ide/FindBar.cpp
     src/ide/IdeTheme.cpp

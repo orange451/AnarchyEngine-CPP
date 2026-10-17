@@ -144,7 +144,8 @@ TEST_CASE("P5 a GameObject seeds the body and follows it, keeping its scale", "[
     Matrix4 scaled = at(3.f, 10.f, 0.f);
     scaled.m[0] = scaled.m[5] = scaled.m[10] = 2.f;
     part.set_transform(scaled);
-    PhysicsObject& body = rig.body(engine_core::matrix4_identity(), Vec3{1.f, 1.f, 1.f}, false, part.id());
+    PhysicsObject& body = rig.body(engine_core::matrix4_identity(), Vec3{1.f, 1.f, 1.f}, false);
+    REQUIRE_FALSE(body.set_game_object(instance_slot(part.id())));
     rig.play();
     rig.steps(1);
     REQUIRE(near(x_of(body.transform()), 3.f, 1e-4f));
@@ -159,8 +160,10 @@ TEST_CASE("P6 the first PhysicsObject in tree order drives a shared GameObject",
     PhysicsRig rig;
     GameObject& part = create_part(rig.game);
     part.set_transform(at(0.f, 20.f, 0.f));
-    PhysicsObject& first = rig.body(engine_core::matrix4_identity(), Vec3{1.f, 1.f, 1.f}, false, part.id());
-    PhysicsObject& second = rig.body(engine_core::matrix4_identity(), Vec3{1.f, 1.f, 1.f}, false, part.id());
+    PhysicsObject& first = rig.body(engine_core::matrix4_identity(), Vec3{1.f, 1.f, 1.f}, false);
+    PhysicsObject& second = rig.body(engine_core::matrix4_identity(), Vec3{1.f, 1.f, 1.f}, false);
+    REQUIRE_FALSE(first.set_game_object(instance_slot(part.id())));
+    REQUIRE_FALSE(second.set_game_object(instance_slot(part.id())));
     rig.play();
     rig.steps(5);
     REQUIRE(rig.physics.has_body(first.id()));
@@ -179,7 +182,8 @@ TEST_CASE("P7 writing a Transform during play teleports the body", "[physics]") 
     PhysicsRig rig;
     GameObject& part = create_part(rig.game);
     part.set_transform(at(0.f, 20.f, 0.f));
-    PhysicsObject& body = rig.body(engine_core::matrix4_identity(), Vec3{1.f, 1.f, 1.f}, false, part.id());
+    PhysicsObject& body = rig.body(engine_core::matrix4_identity(), Vec3{1.f, 1.f, 1.f}, false);
+    REQUIRE_FALSE(body.set_game_object(instance_slot(part.id())));
     rig.play();
     rig.steps(10);
 
@@ -211,7 +215,8 @@ TEST_CASE("P9 Stop puts back what was authored, and the next Test simulates agai
     rig.floor();
     GameObject& part = create_part(rig.game);
     part.set_transform(at(0.f, 8.f, 0.f));
-    PhysicsObject& body = rig.body(engine_core::matrix4_identity(), Vec3{1.f, 1.f, 1.f}, false, part.id());
+    PhysicsObject& body = rig.body(engine_core::matrix4_identity(), Vec3{1.f, 1.f, 1.f}, false);
+    REQUIRE_FALSE(body.set_game_object(instance_slot(part.id())));
     rig.play();
     rig.seconds(1.0);
     REQUIRE(y_of(part.transform()) < 8.f);
@@ -311,6 +316,8 @@ TEST_CASE("P15 a PhysicsObject under a GameObject moves it until it is moved els
     rig.seconds(0.5);
     REQUIRE(y_of(part.transform()) < 20.f);
     REQUIRE(near(y_of(part.transform()), y_of(body.transform()), 1e-5f));
+    // The link is the parent, never written to the GameObject property.
+    REQUIRE(body.game_object().kind == engine_core::LuaSlot::Kind::Nil);
 
     rig.game.set_parent(body.id(), workspace_of(rig.game));
     rig.steps(1);
@@ -320,6 +327,17 @@ TEST_CASE("P15 a PhysicsObject under a GameObject moves it until it is moved els
     rig.seconds(0.5);
     REQUIRE(y_of(part.transform()) == left);
     REQUIRE(y_of(body.transform()) < left);
+
+    // An explicit link wins over the parent.
+    GameObject& other = create_part(rig.game);
+    other.set_transform(at(10.f, 30.f, 0.f));
+    rig.game.set_parent(body.id(), part.id());
+    REQUIRE_FALSE(body.set_game_object(instance_slot(other.id())));
+    rig.steps(1);
+    REQUIRE(body.driven_game_object() == other.id());
+    rig.seconds(0.25);
+    REQUIRE(y_of(other.transform()) < 30.f);
+    REQUIRE(y_of(part.transform()) == left);
 }
 
 TEST_CASE("P16 an anchored Custom collides as its whole mesh, and still falls when unanchored", "[physics]") {
@@ -426,7 +444,7 @@ TEST_CASE("P14 scripts set Shape by item, name, or value, and nothing else", "[p
     add_script(rig.game, "Shapes", R"(
         local body = Instance.new("PhysicsObject", workspace)
         _G.default = body.Shape == Enum.PhysicsShape.Box and body.Mass == 50 and body.Anchored == false
-            and body.Size == Vector3.new(1, 1, 1) and body.Mesh == nil
+            and body.Size == Vector3.new(1, 1, 1) and body.GameObject == nil and body.Mesh == nil
         body.Shape = Enum.PhysicsShape.Sphere
         _G.item = body.Shape == Enum.PhysicsShape.Sphere
         body.Shape = "Capsule"
@@ -440,9 +458,10 @@ TEST_CASE("P14 scripts set Shape by item, name, or value, and nothing else", "[p
         _G.whole_only = not pcall(function() body.Shape = 1.9 end)
             and not pcall(function() body.Shape = 0 / 0 end)
             and body.Shape == Enum.PhysicsShape.Hull
-        -- What it moves is its parent GameObject: it names none.
-        _G.ref = not pcall(function() return body.GameObject end)
-            and not pcall(function() body.GameObject = Instance.new("GameObject", workspace) end)
+        local part = Instance.new("GameObject", workspace)
+        body.GameObject = part
+        _G.ref = body.GameObject == part
+            and not pcall(function() body.GameObject = Instance.new("Folder") end)
         body.Mass = 0
         _G.mass = body.Mass == 0.001
     )");
@@ -851,7 +870,7 @@ TEST_CASE("P23 PhysicsObject is a PhysicsBase, which is never made itself", "[ph
         REQUIRE(engine_core::lua_class_find("PhysicsBase", shared) != nullptr);
     }
     for (const char* own :
-         {"AngularVelocity", "AngularDamping", "Friction", "Bounciness", "Shape", "Size", "Mesh"}) {
+         {"AngularVelocity", "AngularDamping", "Friction", "Bounciness", "Shape", "Size", "Mesh", "GameObject"}) {
         INFO(own);
         REQUIRE(engine_core::lua_class_find("PhysicsBase", own) == nullptr);
         REQUIRE(engine_core::lua_class_find("PhysicsObject", own) != nullptr);
@@ -864,11 +883,10 @@ TEST_CASE("P23 PhysicsObject is a PhysicsBase, which is never made itself", "[ph
     engine_core::PropertyBag defaults;
     body.default_properties(defaults);
     for (const char* name : {"Transform", "Velocity", "AngularVelocity", "Anchored", "Mass", "Friction", "Bounciness",
-                             "LinearDamping", "AngularDamping", "Shape", "Size", "Mesh"}) {
+                             "LinearDamping", "AngularDamping", "Shape", "Size", "Mesh", "GameObject"}) {
         INFO(name);
         REQUIRE(engine_core::bag_find(defaults, name) != nullptr);
     }
-    REQUIRE(engine_core::bag_find(defaults, "GameObject") == nullptr);
 }
 
 namespace {
@@ -1116,7 +1134,8 @@ TEST_CASE("P35 stopped, a body's Transform follows the GameObject it moves", "[p
     Matrix4 scaled = at(3.f, 10.f, 0.f);
     scaled.m[0] = scaled.m[5] = scaled.m[10] = 2.f;
     part.set_transform(scaled);
-    PhysicsObject& body = rig.body(engine_core::matrix4_identity(), Vec3{1.f, 1.f, 1.f}, false, part.id());
+    PhysicsObject& body = rig.body(engine_core::matrix4_identity(), Vec3{1.f, 1.f, 1.f}, false);
+    REQUIRE_FALSE(body.set_game_object(instance_slot(part.id())));
     PhysicsObject& loose = rig.body(at(0.f, 2.f, 0.f), Vec3{1.f, 1.f, 1.f}, false);
 
     rig.sync_steps(1);

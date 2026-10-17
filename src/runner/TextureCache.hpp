@@ -1,5 +1,7 @@
 #pragma once
 
+#include "FileWatch.hpp"
+
 #include "texture/TextureBake.hpp"
 
 #include <chrono>
@@ -116,7 +118,8 @@ private:
         // The file's time when it was last read; unset before the first try.
         std::filesystem::file_time_type stamp{};
         bool tried = false;
-        std::chrono::steady_clock::time_point checked{};
+        // Up once the file changes (FileWatch), which a draw then checks.
+        FileWatch::Flag watched;
         std::uint64_t revision = 0;
     };
 
@@ -129,7 +132,8 @@ private:
         bool alwaysLoaded = false;
         std::filesystem::file_time_type stamp{};
         bool tried = false;
-        std::chrono::steady_clock::time_point checked{};
+        // Up once the file changes (FileWatch), which a draw then checks.
+        FileWatch::Flag watched;
         std::string key;
         bool failed = false;
         unsigned texture = 0;
@@ -157,6 +161,8 @@ private:
     std::filesystem::path root_;
     // get's textures, by path, usage, and flip.
     std::unordered_map<std::string, Streamed> streamed_;
+    // get's lookup key, built in place.
+    std::string key_;
     std::shared_ptr<Loads> loads_;
     // 1 by 1 mid grey, what a Color texture draws while it loads; made on first need.
     unsigned grey_ = 0;

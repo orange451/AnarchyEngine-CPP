@@ -208,11 +208,12 @@ TEST_CASE("B8 a second frame replaces the first", "[batches]") {
     REQUIRE(out.opaqueRuns == 0);
 }
 
-TEST_CASE("B9 InstanceData is 116 bytes, in slot order", "[batches]") {
-    REQUIRE(sizeof(InstanceData) == 116);
+TEST_CASE("B9 InstanceData is 120 bytes, in slot order", "[batches]") {
+    REQUIRE(sizeof(InstanceData) == 120);
+    REQUIRE(offsetof(InstanceData, fade) == 112);
     REQUIRE(offsetof(InstanceData, normal) == 64);
     REQUIRE(offsetof(InstanceData, tint) == 100);
-    REQUIRE(offsetof(InstanceData, boneBase) == 112);
+    REQUIRE(offsetof(InstanceData, boneBase) == 116);
 }
 
 TEST_CASE("B10 terrain chunks draw alone, after every other opaque run", "[batches]") {
@@ -280,7 +281,7 @@ TEST_CASE("B12 a tint at the sRGB knee decodes linearly, not by a power", "[batc
 
 #include "runner/BonePalette.hpp"
 
-static_assert(sizeof(InstanceData) == 116, "slot 15 adds the bone base");
+static_assert(sizeof(InstanceData) == 120, "slot 14 adds the fade, slot 15 the bone base");
 
 TEST_CASE("BonePalette packs each pose once, three texels a bone", "[bones]") {
     BonePalette palette;

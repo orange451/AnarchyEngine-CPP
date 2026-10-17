@@ -31,6 +31,7 @@ void (*rt_glGenBuffers)(GLsizei, GLuint*) = nullptr;
 void (*rt_glDeleteBuffers)(GLsizei, const GLuint*) = nullptr;
 void (*rt_glBindBuffer)(GLenum, GLuint) = nullptr;
 void (*rt_glBufferData)(GLenum, GLsizeiptr, const void*, GLenum) = nullptr;
+void (*rt_glBufferSubData)(GLenum, GLsizeiptr, GLsizeiptr, const void*) = nullptr;
 void (*rt_glEnableVertexAttribArray)(GLuint) = nullptr;
 void (*rt_glVertexAttribPointer)(GLuint, GLint, GLenum, GLboolean, GLsizei, const void*) = nullptr;
 void (*rt_glDrawArrays)(GLenum, GLint, GLsizei) = nullptr;
@@ -52,6 +53,9 @@ void (*rt_glUniformMatrix4fv)(GLint, GLsizei, GLboolean, const GLfloat*) = nullp
 void (*rt_glUniformMatrix3fv)(GLint, GLsizei, GLboolean, const GLfloat*) = nullptr;
 void (*rt_glReadPixels)(GLint, GLint, GLsizei, GLsizei, GLenum, GLenum, void*) = nullptr;
 void* (*rt_glMapBufferRange)(GLenum, GLsizeiptr, GLsizeiptr, GLbitfield) = nullptr;
+RtGLsync (*rt_glFenceSync)(GLenum, GLbitfield) = nullptr;
+GLenum (*rt_glClientWaitSync)(RtGLsync, GLbitfield, GLuint64) = nullptr;
+void (*rt_glDeleteSync)(RtGLsync) = nullptr;
 GLboolean (*rt_glUnmapBuffer)(GLenum) = nullptr;
 void (*rt_glGenTextures)(GLsizei, GLuint*) = nullptr;
 void (*rt_glDeleteTextures)(GLsizei, const GLuint*) = nullptr;
@@ -181,6 +185,7 @@ bool LoadGl(GlGetProcAddress get_proc) {
     LOAD(DeleteBuffers);
     LOAD(BindBuffer);
     LOAD(BufferData);
+    LOAD(BufferSubData);
     LOAD(EnableVertexAttribArray);
     LOAD(VertexAttribPointer);
     LOAD(DrawArrays);
@@ -202,6 +207,9 @@ bool LoadGl(GlGetProcAddress get_proc) {
     LOAD(UniformMatrix3fv);
     LOAD(ReadPixels);
     LOAD(MapBufferRange);
+    LOAD(FenceSync);
+    LOAD(ClientWaitSync);
+    LOAD(DeleteSync);
     LOAD(UnmapBuffer);
     LOAD(GenTextures);
     LOAD(DeleteTextures);

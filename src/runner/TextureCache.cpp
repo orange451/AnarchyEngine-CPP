@@ -26,8 +26,6 @@ namespace runner {
 
 namespace {
 
-// How often a file already seen is looked at again.
-constexpr std::chrono::seconds kRecheck{1};
 // Larger files are refused before they are read.
 constexpr std::uintmax_t kMaxFileSize = 256u * 1024u * 1024u;
 
@@ -394,9 +392,7 @@ void TextureCache::clear() {
 TextureCache::Entry& TextureCache::find(std::unordered_map<std::string, Entry>& entries, const std::string& path,
                                         bool linear, bool flipY) {
     Entry& entry = entries[path];
-    const auto now = std::chrono::steady_clock::now();
-    if (!entry.tried || now - entry.checked >= kRecheck) {
-        entry.checked = now;
+    if (!entry.tried || FileWatch::take(entry.watched)) {
         load(path, entry, linear, flipY);
     }
     return entry;
@@ -406,17 +402,19 @@ unsigned TextureCache::get(const std::string& path, texture::Usage usage, bool f
     if (root_.empty() || path.empty()) {
         return 0;
     }
-    const std::string name = path + '|' + std::to_string(int(usage)) + (flipY ? "|1" : "|0");
-    Streamed& streamed = streamed_[name];
+    // The key built in a buffer kept between calls, so a lookup allocates nothing.
+    key_.assign(path);
+    key_ += '|';
+    key_ += std::to_string(int(usage));
+    key_ += flipY ? "|1" : "|0";
+    Streamed& streamed = streamed_[key_];
     if (streamed.path.empty()) {
         streamed.path = path;
         streamed.usage = usage;
         streamed.flipY = flipY;
     }
     streamed.alwaysLoaded = alwaysLoaded;
-    const auto now = std::chrono::steady_clock::now();
-    if (!streamed.tried || now - streamed.checked >= kRecheck) {
-        streamed.checked = now;
+    if (!streamed.tried || FileWatch::take(streamed.watched)) {
         check(streamed);
     }
     if (streamed.visible) return streamed.texture;
@@ -443,6 +441,9 @@ void TextureCache::check(Streamed& streamed) {
     const std::filesystem::path file = root_ / std::filesystem::u8path(streamed.path);
     std::error_code error;
     const std::filesystem::file_time_type stamp = std::filesystem::last_write_time(file, error);
+    if (!streamed.watched) {
+        streamed.watched = FileWatch::watch(file, !error, stamp);
+    }
     if (error) {
         const bool was_there = !streamed.tried || streamed.texture != 0 || streamed.old != 0 ||
                                streamed.stamp != std::filesystem::file_time_type{};
@@ -635,6 +636,9 @@ void TextureCache::load(const std::string& path, Entry& entry, bool linear, bool
     const std::filesystem::path file = root_ / std::filesystem::u8path(path);
     std::error_code error;
     const std::filesystem::file_time_type stamp = std::filesystem::last_write_time(file, error);
+    if (!entry.watched) {
+        entry.watched = FileWatch::watch(file, !error, stamp);
+    }
     if (error) {
         const bool was_there = !entry.tried || entry.texture != 0 || entry.stamp != std::filesystem::file_time_type{};
         entry.tried = true;

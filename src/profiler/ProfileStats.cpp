@@ -67,6 +67,7 @@ std::vector<ScopeStat> compute_stats(const History& history, std::size_t selecte
         stat.max_ms = static_cast<double>(acc.max_ns) / 1e6;
         stat.avg_ms = static_cast<double>(acc.total_ns) / 1e6 / count;
         stat.calls_per_frame = static_cast<double>(acc.calls) / count;
+        stat.per_call_ms = acc.calls > 0 ? static_cast<double>(acc.total_ns) / 1e6 / static_cast<double>(acc.calls) : 0.0;
         stat.share = avg_frame_ms > 0 ? stat.avg_ms / avg_frame_ms : 0.0;
     }
     return out;

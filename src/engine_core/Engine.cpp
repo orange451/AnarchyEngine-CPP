@@ -7,6 +7,7 @@
 #include "DataModelLock.hpp"
 #include "MeshEditors.hpp"
 #include "PoseBlend.hpp"
+#include "SceneService.hpp"
 #include "ScriptAnalysis.hpp"
 #include "ScriptRuntime.hpp"
 
@@ -512,8 +513,17 @@ void Engine::run_step(double wall) {
             PROFILE_SCOPE("Substep", profiler::Group::Physics);
             // The last substep's motion is what the window draws through.
             const bool last = accumulator_ - physics_dt_ < physics_dt_ || substeps + 1 == kMaxSubsteps;
+            // The view's Camera across that substep: one a script moves with a
+            // body is drawn through it as the body is, not a part-step ahead.
+            InstanceId camera = 0;
+            Matrix4 cameraBefore;
             if (last) {
                 game_.pose_blend().arm();
+                const auto* workspace = dynamic_cast<const Workspace*>(game_.instance(game_.scene_service("Workspace")));
+                camera = workspace != nullptr ? workspace->current_camera() : 0;
+                if (camera != 0 && !game_.spatial_transform(camera, cameraBefore)) {
+                    camera = 0;
+                }
             }
             scheduler_.run_phase(Phase::PreSimulation, physics_dt_);
             game_.events().drain();
@@ -526,6 +536,9 @@ void Engine::run_step(double wall) {
             game_.pose_blend().disarm();
             scheduler_.run_phase(Phase::PostSimulation, physics_dt_);
             game_.events().drain();
+            if (Matrix4 cameraAfter; camera != 0 && game_.spatial_transform(camera, cameraAfter)) {
+                game_.pose_blend().follow(camera, PoseBlend::Kind::Spatial, cameraBefore, cameraAfter);
+            }
             accumulator_ -= physics_dt_;
             ++substeps;
         }

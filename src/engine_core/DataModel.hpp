@@ -386,6 +386,13 @@ public:
     // instances created during play are never included. Unparented instances
     // are not in the tree. want(id) false leaves properties and source empty.
     std::vector<AuthoredNode> authored_tree(const std::function<bool(InstanceId)>& want) const;
+    // Edit mode, one instance at a time, as authored_tree has them: every
+    // instance a save holds, root (0) first and parents before children...
+    void authored_ids(std::vector<InstanceId>& out) const;
+    // ...id's children a save holds, in their order...
+    void authored_children(InstanceId id, std::vector<InstanceId>& out) const;
+    // ...and id as a node with its properties and source, its children left empty.
+    AuthoredNode authored_node(InstanceId id) const;
     // While a place is captured, the bytes id wrote at its capture: what Stop
     // will restore. Null when id was not captured. id need not be live now.
     const std::vector<std::byte>* captured_place_bytes(InstanceId id) const;
@@ -394,6 +401,9 @@ public:
     // edits that came after the last capture.
     AuthoredDirty authored_dirty() const;
     void clear_authored_dirty();
+    // Every instance counts as changed, as after a restore: a save that took
+    // the changes and could not write them gives them back this way.
+    void mark_all_authored_dirty();
     void mark_authored_dirty(InstanceId id);
     // Bumps on every authored mark and on Stop. Never resets. Safe to read from
     // any thread, so a UI can notice a change without taking the lock.

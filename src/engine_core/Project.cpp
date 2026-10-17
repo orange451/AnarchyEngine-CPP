@@ -1794,9 +1794,18 @@ void Project::read_into_game(const fs::path& root, bool replace) {
     }
     // Reads alone, on every core: the world is built, and nothing else runs on it.
     std::vector<JsonValue> live_docs(plan.size());
+    // An instance that changed itself as it loaded, as a Terrain whose voxel
+    // file is damaged takes a file of its own, differs from its file: that is
+    // the studio's change, which the next save writes.
+    std::vector<char> changed_itself(plan.size(), 0);
     parallel_for(plan.size(), [&](std::size_t index) {
         if (!plan[index].made) {
-            guarded([&] { live_docs[index] = written_doc(*game_, ids[index], plan[index].doc); });
+            guarded([&] {
+                live_docs[index] = written_doc(*game_, ids[index], plan[index].doc);
+                if (scratch != nullptr) {
+                    changed_itself[index] = !(disk_docs[index] == live_docs[index]);
+                }
+            });
         }
     });
     if (failed) {
@@ -1804,6 +1813,9 @@ void Project::read_into_game(const fs::path& root, bool replace) {
     }
     const std::vector<std::size_t> parents = parents_of(plan);
     bool made = false;
+    id_guid_.reserve(id_guid_.size() + plan.size());
+    guid_id_.reserve(guid_id_.size() + plan.size());
+    files_.reserve(files_.size() + plan.size());
     for (std::size_t index = 0; index < plan.size(); ++index) {
         const PlanNode& node = plan[index];
         id_guid_[ids[index]] = node.guid;
@@ -1815,10 +1827,7 @@ void Project::read_into_game(const fs::path& root, bool replace) {
         }
         JsonValue live = std::move(live_docs[index]);
         if (scratch != nullptr) {
-            // An instance that changed itself as it loaded, as a Terrain whose
-            // voxel file is damaged takes a file of its own, differs from its
-            // file: that is the studio's change, which the next save writes.
-            if (!(disk_docs[index] == live)) {
+            if (changed_itself[index] != 0) {
                 game_->mark_authored_dirty(ids[index]);
             }
             live = std::move(disk_docs[index]);

@@ -1090,7 +1090,7 @@ void TestToolSpecs() {
         if (Member(tool, "name").as_string() == "create_instance") {
             const std::string parent =
                 Member(Member(Member(Member(tool, "inputSchema"), "properties"), "parent"), "description").as_string();
-            Expect(parent.find("Workspace, Lighting, Storage, Scripts, and Gui") != std::string::npos,
+            Expect(parent.find("Workspace, Lighting, Storage, Scripts, Gui, and ServerStorage") != std::string::npos,
                    "create_instance names every scene service as a parent: " + parent);
         }
     }

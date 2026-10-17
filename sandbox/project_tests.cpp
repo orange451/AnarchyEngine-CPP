@@ -824,6 +824,27 @@ TEST_CASE("folders: first child, folder rename, script with children, undo of a 
     REQUIRE(again.name(again.get_children(script).at(0)) == "Handle");
 }
 
+TEST_CASE("a hand-made folder with no children saves as a leaf, without its old folder", "[project]") {
+    SimRole role;
+    TempDir dir;
+    write_bare_project(dir.path);
+    const fs::path folder = dir.path / "src" / kWorkspace / "Pieces.5193a97324899f3d";
+    write_file(folder / "init.json", meta("Folder", "5193a97324899f3d", "Pieces", ",\n  \"children\": []"));
+    Project project = Project::load(dir.path);
+    DataModel& game = project.datamodel();
+
+    SECTION("saved as it is") {}
+    SECTION("saved after an edit elsewhere") { add_part(game, workspace_of(game), "Nudge"); }
+    SECTION("saved after an edit to it") { game.set_name(by_guid(game, "5193a97324899f3d"), "Pieces2"); }
+    SECTION("saved after a child came and went") {
+        const InstanceId child = add_part(game, by_guid(game, "5193a97324899f3d"), "I").id();
+        game.set_parent(child, workspace_of(game));
+    }
+    project.save();
+    CHECK_FALSE(fs::exists(folder));
+    Project::load(dir.path);
+}
+
 TEST_CASE("save_as writes the whole tree under a new root", "[project]") {
     SimRole role;
     TempDir dir;

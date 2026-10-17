@@ -3742,10 +3742,22 @@ bool Project::plan_changed(const AuthoredDirty& dirty, PendingSave& save) const 
             changed.insert(id);
         }
     }
+    std::vector<InstanceId> kids;
     for (InstanceId id : held) {
         const auto known = id_guid_.find(id);
-        if (known == id_guid_.end() || known->second != world.guid(id) || files_.count(known->second) == 0) {
+        const auto base =
+            known == id_guid_.end() || known->second != world.guid(id) ? files_.end() : files_.find(known->second);
+        if (base == files_.end()) {
             changed.insert(id);
+            continue;
+        }
+        // A folder with no children, as a hand-made project can load, saves as a
+        // leaf. Left unchanged, a save would keep the folder beside the leaf.
+        if (id != 0 && !own_folder(base->second.props_path).empty()) {
+            world.authored_children(id, kids);
+            if (kids.empty()) {
+                changed.insert(id);
+            }
         }
     }
     // Where each instance's files go, as plan_files names them.

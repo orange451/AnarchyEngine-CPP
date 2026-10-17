@@ -113,6 +113,7 @@ TEST_CASE("SC4 a quiet simulated transform write reports nothing; a script trans
     // Physics' quiet path (DataModel::write_simulated_transform).
     game.write_simulated_transform(object.id(), moved);
     REQUIRE(recorder.changes.empty());
+    REQUIRE(object.transform().m[12] == 5.0f);   // the write took effect, so the silence is real
     moved.m[12] = 6.0f;
     object.set_transform(moved);   // the checked setter scripts reach
     REQUIRE(recorder.changes.size() == 1);
@@ -131,4 +132,39 @@ TEST_CASE("SC5 with no sink set nothing is reported and clearing it stops report
     engine_core::Folder& folder = game.create<engine_core::Folder>();
     game.set_parent(folder.id(), game.scene_service("Workspace"));
     REQUIRE(recorder.changes.empty());
+}
+
+TEST_CASE("SC6 destroy reports the orphaned children; destroy_tree reports only Destroyed", "[server-client][tree-change]") {
+    SimRole role;
+    engine_core::Game game;
+    engine_core::Folder& folder = game.create<engine_core::Folder>();
+    game.set_parent(folder.id(), game.scene_service("Workspace"));
+    engine_core::Folder& a = game.create<engine_core::Folder>();
+    engine_core::Folder& b = game.create<engine_core::Folder>();
+    game.set_parent(a.id(), folder.id());
+    game.set_parent(b.id(), folder.id());
+    const InstanceId folder_id = folder.id(), a_id = a.id(), b_id = b.id();
+    Recorder recorder;
+    recorder.attach(game);
+    game.destroy(folder_id);
+    REQUIRE(recorder.count(TreeChange::Kind::Destroyed, folder_id) == 1);
+    for (const InstanceId child : {a_id, b_id}) {
+        REQUIRE(recorder.count(TreeChange::Kind::Parented, child) == 1);
+        REQUIRE(game.parent(child) == DataModel::kNoParent);
+        for (const TreeChange& c : recorder.changes) {
+            if (c.kind == TreeChange::Kind::Parented && c.id == child) REQUIRE(c.previous_parent == folder_id);
+        }
+    }
+
+    engine_core::Folder& root = game.create<engine_core::Folder>();
+    game.set_parent(root.id(), game.scene_service("Workspace"));
+    engine_core::Folder& mid = game.create<engine_core::Folder>();
+    engine_core::Folder& leaf = game.create<engine_core::Folder>();
+    game.set_parent(mid.id(), root.id());
+    game.set_parent(leaf.id(), mid.id());
+    const InstanceId ids[3] = {root.id(), mid.id(), leaf.id()};
+    recorder.changes.clear();
+    game.destroy_tree(ids[0]);
+    for (const InstanceId id : ids) REQUIRE(recorder.count(TreeChange::Kind::Destroyed, id) == 1);
+    for (const TreeChange& c : recorder.changes) REQUIRE(c.kind == TreeChange::Kind::Destroyed);
 }

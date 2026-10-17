@@ -312,8 +312,13 @@ public:
     // sets it; null without one.
     void set_physics(PhysicsWorld* physics);
     PhysicsWorld* physics() const;
-    // Every parent, destroy, rename, and checked property write calls it,
-    // on the gameplay thread, after the change. Empty to stop.
+    // Every parent, destroy, rename, and checked property write calls it, on
+    // the gameplay thread, in the middle of the funnel. Destroyed runs before
+    // the instance is released (it is alive and readable); the others run
+    // after the stored value changed. A plain destroy also reports each
+    // orphaned child as Parented to nowhere. The sink may only record and read:
+    // it must not create, destroy, or set anything on the DataModel, and must
+    // not throw. Empty to stop.
     void set_change_sink(TreeChangeSink sink);
     bool has_change_sink() const;
     std::uint32_t world_generation() const;

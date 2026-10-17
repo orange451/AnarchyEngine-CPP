@@ -793,7 +793,19 @@ void DataModel::destroy(InstanceId id) {
     }
     // Its children leave the tree without set_parent, so scripts under them stop here.
     const std::vector<InstanceId> orphans = state_->script_host != nullptr ? get_children(id) : std::vector<InstanceId>{};
+    // Orphaned children are reparented to nowhere without set_parent, so replication hears of them here.
+    std::vector<InstanceId> reparented;
+    if (state_->change_sink) {
+        reparented = get_children(id);
+    }
     detach_links(id, *part);
+    for (const InstanceId child : reparented) {
+        TreeChange change;
+        change.kind = TreeChange::Kind::Parented;
+        change.id = child;
+        change.previous_parent = id;
+        state_->change_sink(change);
+    }
     release_signals(id);
     release_to_pool(index, *part);
     if (part->generation != kMaxGeneration) {

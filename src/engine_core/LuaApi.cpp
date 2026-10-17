@@ -1036,10 +1036,10 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
     add("Script", "Enabled", "When false, the script does not run.", "boolean", false, {});
     add("Script", "RunContext",
         "Where the script runs in a networked game: Server, Client, or Any. In single-player every script runs.",
-        "RunContext", false, {});
+        "Enum.RunContext", false, {});
     add("Connection", "Id", "The connection's UUID, chosen by the server. Read-only.", "string", false, {});
     add("Connections", "LocalConnection",
-        "This client's own Connection. Nil on a server and in single-player.", "Connection", false, {});
+        "This client's own Connection. Nil on a server and in single-player.", "Connection?", false, {});
     add("ModuleScript", "Source", "The Luau source require runs.", "string", false, {});
 
     add("GameObject", "Transform", "Where this object is and how it is turned.", "Matrix4", false, {});

@@ -6,6 +6,7 @@
 #include "ConnectionInstance.hpp"
 #include "Connections.hpp"
 #include "Containment.hpp"
+#include "Folder.hpp"
 #include "Project.hpp"
 
 #include <catch2/catch_test_macros.hpp>
@@ -83,10 +84,16 @@ TEST_CASE("SC30 scripts read Id and LocalConnection but cannot set them or make 
                "_G.no_set_id = not pcall(function() c.LocalConnection.Id = 'x' end)\n"
                "_G.no_set_local = not pcall(function() c.LocalConnection = nil end)\n"
                "_G.no_new = not pcall(function() Instance.new('Connection') end)\n"
-               "_G.no_destroy = not pcall(function() c:Destroy() end)");
+               "_G.no_destroy = not pcall(function() c:Destroy() end)\n"
+               "local mine = c.LocalConnection\n"
+               "_G.no_conn_destroy = not pcall(function() mine:Destroy() end)\n"
+               "_G.no_conn_nil = not pcall(function() mine.Parent = nil end)\n"
+               "_G.no_conn_move = not pcall(function() mine.Parent = workspace end)\n"
+               "_G.no_conn_clone = not pcall(function() return mine:Clone() end)\n"
+               "_G.still_there = mine.Parent == c");
     rig.game.start_simulation();
     rig.frames(1);
-    require_globals(rig, {"same_service", "local_ok", "no_set_id", "no_set_local", "no_new", "no_destroy"});
+    require_globals(rig, {"same_service", "local_ok", "no_set_id", "no_set_local", "no_new", "no_destroy", "no_conn_destroy", "no_conn_nil", "no_conn_move", "no_conn_clone", "still_there"});
 }
 
 TEST_CASE("SC31 Connections and its Connections never save", "[server-client][connections][project]") {
@@ -124,6 +131,7 @@ TEST_CASE("SC33 LocalConnection reads nil when its Connection is destroyed", "[s
     auto* service = static_cast<Connections*>(game.instance(game.connections()));
     service->set_local_connection(mine.id());
     game.destroy(mine.id());
+    REQUIRE(service->local_connection() == 0);
     REQUIRE(game.instance(service->local_connection()) == nullptr);
 }
 
@@ -143,4 +151,59 @@ TEST_CASE("SC34 Play and Stop leave Connections as they are", "[server-client][c
     REQUIRE(rig.game.parent(id) == rig.game.connections());
     REQUIRE(rig.game.instance(joined_id) != nullptr);
     REQUIRE(rig.game.parent(joined_id) == rig.game.connections());
+}
+
+namespace {
+
+// Every live instance has one parent and appears once among that parent's children.
+void require_consistent_tree(engine_core::DataModel& game) {
+    std::vector<engine_core::InstanceId> roots = game.get_children(0);
+    std::set<engine_core::InstanceId> seen;
+    for (std::size_t at = 0; at < roots.size(); ++at) {
+        REQUIRE(seen.insert(roots[at]).second);
+        REQUIRE(game.parent(roots[at]) == (at < game.get_children(0).size() ? 0 : game.parent(roots[at])));
+        for (engine_core::InstanceId child : game.get_children(roots[at])) {
+            REQUIRE(game.parent(child) == roots[at]);
+            roots.push_back(child);
+        }
+    }
+}
+
+}  // namespace
+
+TEST_CASE("SC35 what sits under a Connection survives Play and Stop, twice", "[server-client][connections]") {
+    ScriptRig rig;
+    ConnectionInstance& mine = add_connection(rig.game);
+    for (int round = 0; round < 2; ++round) {
+        rig.game.start_simulation();
+        auto& folder = rig.game.create<engine_core::Folder>();
+        rig.game.set_parent(folder.id(), mine.id());
+        auto& leaf = rig.game.create<engine_core::Folder>();
+        rig.game.set_parent(leaf.id(), folder.id());
+        rig.game.stop_simulation();
+        REQUIRE(rig.game.parent(folder.id()) == mine.id());
+        REQUIRE(rig.game.parent(leaf.id()) == folder.id());
+        require_consistent_tree(rig.game);
+    }
+    REQUIRE(rig.game.get_children(mine.id()).size() == 2);
+}
+
+TEST_CASE("SC35b a place instance moved under a Connection returns to the place at Stop", "[server-client][connections]") {
+    ScriptRig rig;
+    ConnectionInstance& mine = add_connection(rig.game);
+    auto& folder = rig.game.create<engine_core::Folder>();
+    const engine_core::InstanceId workspace = rig.game.scene_service("Workspace");
+    rig.game.set_parent(folder.id(), workspace);
+    auto& child = rig.game.create<engine_core::Folder>();
+    rig.game.set_parent(child.id(), folder.id());
+    rig.game.start_simulation();
+    rig.game.set_parent(folder.id(), mine.id());
+    auto& made = rig.game.create<engine_core::Folder>();
+    rig.game.set_parent(made.id(), folder.id());
+    rig.game.stop_simulation();
+    REQUIRE(rig.game.parent(folder.id()) == workspace);
+    REQUIRE(rig.game.parent(child.id()) == folder.id());
+    REQUIRE(rig.game.get_children(mine.id()).empty());
+    REQUIRE_FALSE(rig.game.alive(made.id()));
+    require_consistent_tree(rig.game);
 }

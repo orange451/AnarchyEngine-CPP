@@ -346,10 +346,16 @@ void DataModel::restore_place_unlocked() {
         }
     }
     std::vector<std::pair<InstanceId, std::vector<InstanceId>>> core_links;
+    std::unordered_set<InstanceId> kept;
     for (InstanceId root : outside_roots) {
         std::vector<InstanceId> walk{root};
         for (std::size_t at = 0; at < walk.size(); ++at) {
+            kept.insert(walk[at]);
             std::vector<InstanceId> children = child_ids(walk[at]);
+            // A place instance that play moved in goes back where the snapshot had it, with its own children.
+            children.erase(std::remove_if(children.begin(), children.end(),
+                                          [&](InstanceId child) { return ids.count(child) != 0; }),
+                           children.end());
             walk.insert(walk.end(), children.begin(), children.end());
             core_links.emplace_back(walk[at], std::move(children));
         }
@@ -361,7 +367,7 @@ void DataModel::restore_place_unlocked() {
             continue;
         }
         const InstanceId id = make_instance_id(part.generation, index);
-        if (ids.count(id) == 0 && !outside_place(id)) {
+        if (ids.count(id) == 0 && kept.count(id) == 0 && !core_holds(id)) {
             retire_slot(index, true);
         }
     }

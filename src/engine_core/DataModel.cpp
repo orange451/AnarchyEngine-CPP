@@ -2019,8 +2019,9 @@ bool DataModel::outside_place(InstanceId id) const {
     if (id == 0 || !alive(id)) {
         return false;
     }
+    // Connections and everything under it, at any depth: a Connection may hold what a game keeps per client.
     const InstanceId holder = connections();
-    return holder != 0 && (id == holder || parent(id) == holder);
+    return holder != 0 && is_under(holder, id);
 }
 
 std::string DataModel::rule_class(InstanceId parent, InstanceId moved, InstanceId moved_to) const {
@@ -2715,6 +2716,11 @@ bool read_lua_parent(DataModel& world, DataModel& object, LuaSlot& out) {
 }
 
 bool write_lua_parent(DataModel& world, DataModel& object, LuaSlot& in) {
+    // The engine places a Connection under Connections once; a script cannot move it.
+    if (std::string_view(object.class_name()) == "Connection") {
+        in.error = "A Connection cannot be moved";
+        return false;
+    }
     const InstanceId parent = in.kind == LuaSlot::Kind::Nil ? DataModel::kNoParent : in.id;
     if (std::optional<std::string> error = world.parent_error(object.id(), parent)) {
         in.error = std::move(*error);

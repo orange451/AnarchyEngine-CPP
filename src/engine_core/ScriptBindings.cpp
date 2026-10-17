@@ -655,6 +655,10 @@ int ScriptBindings::instance_destroy(lua_State* state) {
         if (runtime == nullptr || runtime->resolve_id(ud->id, ud->world) == nullptr) {
             luaL_error(state, "instance is gone");
         }
+        // The engine makes and destroys Connections; scripts read them.
+        if (std::string_view(runtime->resolve_id(ud->id, ud->world)->class_name()) == "Connection") {
+            luaL_error(state, "A Connection cannot be destroyed by a script");
+        }
         if (const std::optional<std::string> error = runtime->game_->destroy_error(ud->id)) {
             luaL_error(state, "%s", error->c_str());
         }
@@ -670,6 +674,9 @@ int ScriptBindings::instance_clone(lua_State* state) {
         ScriptRuntime* runtime = runtime_from(state);
         if (runtime == nullptr || runtime->resolve_id(ud->id, ud->world) == nullptr) {
             luaL_error(state, "instance is gone");
+        }
+        if (std::string_view(runtime->resolve_id(ud->id, ud->world)->class_name()) == "Connection") {
+            luaL_error(state, "A Connection cannot be cloned");
         }
         std::string refused;
         const InstanceId copy = clone_tree(*runtime->game_, ud->id, &refused);

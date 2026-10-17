@@ -196,6 +196,14 @@ const EnumEntry kTransformSpaces[] = {
     {"Local", 1},
 };
 
+// Where a Script runs: on the server, on each client, or on both. In
+// single-player every script runs, whatever it says.
+const EnumEntry kRunContexts[] = {
+    {"Server", 0},
+    {"Client", 1},
+    {"Any", 2},
+};
+
 // Whether a ray sees only what RaycastParams lists (Include) or all but it.
 const EnumEntry kRaycastFilterTypes[] = {
     {"Exclude", 0},
@@ -299,6 +307,7 @@ const EnumEntry kParticleBlendModes[] = {{"Normal", 0}, {"Additive", 1}, {"Multi
 const EnumType kParticleBlendModeType{"ParticleBlendMode", kParticleBlendModes, count_of(kParticleBlendModes)};
 const EnumEntry kLodKinds[] = {{"Model", 0}, {"Billboard", 1}, {"None", 2}};
 const EnumType kLodKindType{"LodKind", kLodKinds, count_of(kLodKinds)};
+const EnumType kRunContextType{"RunContext", kRunContexts, count_of(kRunContexts)};
 
 const EnumType* const kTypes[] = {&kNormalIdType,       &kAxisType,          &kRotationOrderType,
                                   &kKeyCodeType,        &kUserInputTypeType, &kUserInputStateType,
@@ -311,7 +320,7 @@ const EnumType* const kTypes[] = {&kNormalIdType,       &kAxisType,          &kR
                                   &kCollisionFilterTypeType,
                                   &kParticleShapeType, &kParticleEmitFromType, &kParticleCollisionType,
                                   &kParticleCollisionResponseType, &kParticleTextureModeType, &kParticleFacingType,
-                                  &kParticleBlendModeType, &kLodKindType};
+                                  &kParticleBlendModeType, &kLodKindType, &kRunContextType};
 
 int enum_item_index(lua_State* state) {
     auto* item = static_cast<EnumItemUd*>(luaL_checkudata(state, 1, kEnumItemMeta));
@@ -406,6 +415,7 @@ const EnumType& easing_direction_enum() { return kEasingDirectionType; }
 const EnumType& antialiasing_mode_enum() { return kAntialiasingModeType; }
 const EnumType& effect_quality_enum() { return kEffectQualityType; }
 const EnumType& lod_kind_enum() { return kLodKindType; }
+const EnumType& run_context_enum() { return kRunContextType; }
 const EnumType& texture_size_enum() { return kTextureSizeType; }
 const EnumType& texture_streaming_enum() { return kTextureStreamingType; }
 const EnumType& tone_mapping_mode_enum() { return kToneMappingModeType; }

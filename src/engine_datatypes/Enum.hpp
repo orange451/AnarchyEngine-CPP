@@ -44,6 +44,11 @@ const EnumType& transform_space_enum();
 // transform_space_enum's items, by value.
 enum class TransformSpace { World = 0, Local = 1 };
 
+// Server 0, Client 1, Any 2. Script.RunContext: where a script runs.
+const EnumType& run_context_enum();
+// run_context_enum's items, by value.
+enum class RunContext { Server = 0, Client = 1, Any = 2 };
+
 // ParticleEmitter.Shape: where particles are born.
 const EnumType& particle_shape_enum();
 enum class ParticleShape { Point = 0, Box = 1, Sphere = 2, Hemisphere = 3, Cylinder = 4, Cone = 5, Disc = 6 };

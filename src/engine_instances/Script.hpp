@@ -1,9 +1,11 @@
 #pragma once
 
+#include "Enum.hpp"
 #include "LuaSource.hpp"
 #include "ScriptHost.hpp"
 
 #include <cstdint>
+#include <optional>
 #include <string>
 
 namespace engine_core {
@@ -23,6 +25,12 @@ public:
     void set_enabled(bool enabled);
     bool enabled() const { return enabled_; }
 
+    // Where the script runs once worlds have roles: Server, Client, or Any.
+    // Standalone runs every script. A change during play starts or stops it
+    // as toggling Enabled does.
+    RunContext run_context() const { return run_context_; }
+    std::optional<std::string> set_run_context(int value);
+
     std::uint32_t start_generation() const { return start_generation_; }
     // Bumps the generation connections must match. Returns the new value.
     std::uint32_t bump_start_generation();
@@ -35,12 +43,13 @@ public:
 protected:
     void on_release() override;
     void on_reuse() override;
-    // Enabled as one byte, then the source.
+    // The base's registry bytes, length-prefixed; Enabled as one byte; then the source.
     void write_place(std::vector<std::byte>& out) const override;
     void read_place(const std::byte* data, std::size_t size) override;
 
 private:
     bool enabled_ = true;
+    RunContext run_context_ = RunContext::Server;
     std::uint32_t start_generation_ = 0;
 };
 

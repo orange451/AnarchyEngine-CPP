@@ -1146,6 +1146,7 @@ add_executable(sandbox
     sandbox/player_controller_tests.cpp
     sandbox/audio_tests.cpp
     sandbox/attachment_tests.cpp
+    sandbox/run_context_tests.cpp
     sandbox/scene_camera_tests.cpp
     sandbox/gui_tests.cpp
     sandbox/viewport_pane_tests.cpp

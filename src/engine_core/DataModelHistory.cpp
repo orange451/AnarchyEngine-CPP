@@ -277,10 +277,11 @@ AuthoredRecord DataModel::capture_record(InstanceId id, bool subtree) const {
     if (const Script* script = dynamic_cast<const Script*>(object)) {
         record.enabled = script->enabled();
     }
-    if (record.spatial) {
-        // A SpatialObject's saved registry properties, such as a Prefab: the base class's bytes.
+    if (record.spatial || record.has_source) {
+        // The base class's saved registry properties: a SpatialObject's Prefab,
+        // a Script's RunContext.
         object->DataModel::write_place(record.extra);
-    } else if (!record.has_source) {
+    } else {
         object->write_place(record.extra);
     }
     if (subtree) {
@@ -316,6 +317,10 @@ void DataModel::apply_record_fields(const AuthoredRecord& record) {
         }
         if (auto* script = dynamic_cast<Script*>(instance(record.id))) {
             script->set_enabled(record.enabled);
+        }
+        if (DataModel* object = instance(record.id)) {
+            const std::byte* bytes = record.extra.empty() ? nullptr : record.extra.data();
+            object->DataModel::read_place(bytes, record.extra.size());
         }
     } else if (!record.spatial) {
         if (DataModel* object = instance(record.id)) {

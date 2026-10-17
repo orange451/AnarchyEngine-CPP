@@ -8,6 +8,7 @@
 #include "Containment.hpp"
 #include "Folder.hpp"
 #include "Project.hpp"
+#include "ScriptAnalysis.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -16,6 +17,8 @@
 #include <fstream>
 #include <iterator>
 #include <set>
+#include <chrono>
+#include <thread>
 
 namespace fs = std::filesystem;
 using engine_core::ConnectionInstance;
@@ -206,4 +209,41 @@ TEST_CASE("SC35b a place instance moved under a Connection returns to the place 
     REQUIRE(rig.game.get_children(mine.id()).empty());
     REQUIRE_FALSE(rig.game.alive(made.id()));
     require_consistent_tree(rig.game);
+}
+
+TEST_CASE("SC36 a signal's SignalConnection and a Connection instance are distinct classes", "[server-client][connections]") {
+    ScriptRig rig;
+    ConnectionInstance& mine = add_connection(rig.game);
+    static_cast<Connections*>(rig.game.instance(rig.game.connections()))->set_local_connection(mine.id());
+    add_script(rig.game, rig.game.scene_service("Scripts"), "Probe",
+               "local c = game:GetService(\"RunService\").Heartbeat:Connect(function() end)\n"
+               "_G.signal_live = c.Connected == true\n"
+               "c:Disconnect()\n"
+               "_G.signal_dead = c.Connected == false\n"
+               "local mine = game.Connections.LocalConnection\n"
+               "_G.instance_ok = mine:IsA('Instance') and mine:IsA('Connection') and #mine.Id == 36\n"
+               "_G.instance_not_signal = not pcall(function() return mine.Connected end) and not pcall(function() mine:Disconnect() end)\n");
+    rig.game.start_simulation();
+    rig.frames(1);
+    require_globals(rig, {"signal_live", "signal_dead", "instance_ok", "instance_not_signal"});
+}
+
+TEST_CASE("SC37 the checker knows SignalConnection as what Connect returns", "[server-client][connections]") {
+    ScriptRig rig;
+    engine_core::ScriptAnalysis analysis(rig.game);
+    engine_core::Script& script = add_script(rig.game, "Typed",
+                                             "--!strict\n"
+                                             "local c: SignalConnection = game:GetService(\"RunService\").Heartbeat:Connect(function() end)\n"
+                                             "c:Disconnect()\n"
+                                             "return c.Connected\n");
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(20);
+    while (!analysis.idle() && std::chrono::steady_clock::now() < deadline) {
+        analysis.pump();
+        std::this_thread::yield();
+    }
+    const auto diagnostics = analysis.diagnostics(script.id());
+    std::string text;
+    for (const auto& diagnostic : diagnostics) text += diagnostic.message + "\n";
+    INFO(text);
+    REQUIRE(diagnostics.empty());
 }

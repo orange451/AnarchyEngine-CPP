@@ -1676,7 +1676,7 @@ void testCompletionDocs() {
 
     const ide::CompletionList beat = at_end("game:GetService(\"RunService\").Heartbeat:");
     expect_info(beat, "Wait", "number", "function Signal:Wait(): number", "signal", "Heartbeat:Wait");
-    expect_info(beat, "Connect", "Connection", nullptr, "callback", "Heartbeat:Connect");
+    expect_info(beat, "Connect", "SignalConnection", nullptr, "callback", "Heartbeat:Connect");
 
     const char* added = "local function add(x: number, y: number)\n    return x + y\nend\nad";
     const ide::CompletionList add = at_end(added);

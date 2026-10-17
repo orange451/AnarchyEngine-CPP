@@ -399,6 +399,10 @@ struct SearchRig {
                 continue;
             }
             for (engine_core::InstanceId child : game.get_children(service)) {
+                // Storage's own services, ServerStorage and ClientStorage, stay.
+                if (const engine_core::DataModel* held = game.instance(child); held != nullptr && held->is_service()) {
+                    continue;
+                }
                 game.destroy_tree(child);
             }
         }

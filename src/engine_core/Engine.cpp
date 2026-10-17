@@ -54,7 +54,9 @@ void WaitForSlot(std::chrono::steady_clock::time_point& next, std::chrono::stead
 
 }  // namespace
 
-Engine::Engine() {
+Engine::Engine() : Engine(EngineOptions{}) {}
+
+Engine::Engine(const EngineOptions& options) : audio_device_(options.audio_device), audio_(options.audio_device) {
     pump_.reserve(DataModel::kMaxInstances);
     scheduler_.reserve(64);
     game_.attach_scheduler(&scheduler_);

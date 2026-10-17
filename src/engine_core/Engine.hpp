@@ -35,10 +35,20 @@ namespace engine_core {
 class ScriptAnalysis;
 class ScriptRuntime;
 
+// How an Engine is built. A headless server turns the audio device off.
+struct EngineOptions {
+    // False: SoundEmitters still step and mix offline, but no device opens and
+    // nothing is heard.
+    bool audio_device = true;
+};
+
 class Engine {
 public:
     Engine();
+    // An Engine built to the options, such as a headless server with no audio device.
+    explicit Engine(const EngineOptions& options);
     ~Engine();
+    bool has_audio_device() const { return audio_device_; }
 
     Engine(const Engine&) = delete;
     Engine& operator=(const Engine&) = delete;
@@ -142,6 +152,8 @@ private:
     // seen already has its layer index by the time rebuild_look runs.
     TerrainTextures textures_;
     std::uint64_t terrain_failures_seen_ = 0;   // report_terrain_failures' high-water mark
+    // Whether audio_ may open an output device; declared first so audio_ is built after it.
+    bool audio_device_ = true;
     // SoundEmitter voices, stepped after the scripts each frame while the place plays.
     AudioWorld audio_;
     // Every ParticleEmitter in Workspace, stepped once a frame in run_frame,

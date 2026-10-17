@@ -1134,6 +1134,7 @@ add_executable(sandbox
     sandbox/bloom_tests.cpp
     sandbox/value_tests.cpp
     sandbox/curve_tests.cpp
+    sandbox/engine_options_tests.cpp
     sandbox/particle_emitter_tests.cpp
     sandbox/particle_shape_tests.cpp
     sandbox/particle_sim_tests.cpp

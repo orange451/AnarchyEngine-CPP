@@ -5,6 +5,7 @@
 #include "Game.hpp"
 #include "GameObject.hpp"
 #include "Project.hpp"
+#include "ProjectPack.hpp"
 #include "PropertyBag.hpp"
 #include "ModuleScript.hpp"
 #include "Script.hpp"
@@ -17,6 +18,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
@@ -31,6 +33,7 @@
 #include <set>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace fs = std::filesystem;
@@ -3402,4 +3405,128 @@ TEST_CASE("P10 an outside edit while the save writes stops it, and the next save
     REQUIRE(read_file(file) == outside);
     REQUIRE(rig.project.unsaved());
     REQUIRE_FALSE(rig.project.apply_disk().conflicts.empty());
+}
+
+namespace {
+
+// A saved project of n parts, every file dated an hour ago: not racy, so a
+// load may take them from the load pack.
+void write_parts_project(const fs::path& root, int n) {
+    {
+        Project project = Project::create(root);
+        DataModel& game = project.datamodel();
+        const InstanceId workspace = game.service("Workspace");
+        for (int i = 0; i < n; ++i) {
+            char name[16];
+            std::snprintf(name, sizeof(name), "P%05d", i);
+            add_part(game, workspace, name);
+        }
+        project.save();
+    }
+    const auto old = fs::file_time_type::clock::now() - std::chrono::hours(1);
+    for (const fs::directory_entry& entry : fs::recursive_directory_iterator(root / "src")) {
+        if (entry.is_regular_file()) {
+            fs::last_write_time(entry.path(), old);
+        }
+    }
+}
+
+// The load pack a load writes on a thread of its own, once it is there.
+std::unique_ptr<engine_core::project_pack::Pack> wait_for_pack(const fs::path& root) {
+    const fs::path file = engine_core::project_pack::path_for(root);
+    for (int tries = 0; tries < 200; ++tries) {
+        if (auto pack = engine_core::project_pack::read(file)) {
+            return pack;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+    return nullptr;
+}
+
+std::vector<std::string> part_names(const DataModel& game) {
+    std::vector<std::string> names;
+    for (InstanceId child : game.get_children(game.service("Workspace"))) {
+        names.push_back(game.name(child));
+    }
+    std::sort(names.begin(), names.end());
+    return names;
+}
+
+}  // namespace
+
+TEST_CASE("a large tree's load writes a load pack that the next load reads", "[project][pack]") {
+    namespace pack = engine_core::project_pack;
+    SimRole role;
+    TempDir dir;
+    write_parts_project(dir.path, 1100);
+    std::vector<std::string> names;
+    {
+        Project project = Project::load(dir.path);
+        names = part_names(project.datamodel());
+    }
+    REQUIRE(std::count_if(names.begin(), names.end(), [](const std::string& n) { return n.rfind("P0", 0) == 0; }) == 1100);
+    std::unique_ptr<pack::Pack> written = wait_for_pack(dir.path);
+    REQUIRE(written != nullptr);
+    CHECK(written->files.size() >= 1100);
+
+    // One entry's bytes changed, its stamp kept: a load that reads it from
+    // the pack gets the changed Name.
+    std::string target;
+    std::vector<pack::Source> sources;
+    for (const auto& [path, entry] : written->files) {
+        std::string bytes(entry.bytes);
+        if (target.empty() && bytes.find("\"P00007\"") != std::string::npos) {
+            target = std::string(path);
+            bytes.replace(bytes.find("\"P00007\""), 8, "\"Q00007\"");
+        }
+        sources.push_back(pack::Source{std::string(path), entry.size, entry.written,
+                                       std::make_shared<const std::string>(std::move(bytes))});
+    }
+    REQUIRE_FALSE(target.empty());
+    REQUIRE(pack::write(pack::path_for(dir.path), sources));
+
+    SECTION("a file whose stamp matches comes from the pack") {
+        Project project = Project::load(dir.path);
+        const std::vector<std::string> now = part_names(project.datamodel());
+        CHECK(std::count(now.begin(), now.end(), "Q00007") == 1);
+        CHECK(std::count(now.begin(), now.end(), "P00007") == 0);
+    }
+    SECTION("a file written since comes from disk") {
+        const fs::path file = dir.path / fs::u8path(target);
+        fs::last_write_time(file, fs::last_write_time(file) + std::chrono::seconds(5));
+        Project project = Project::load(dir.path);
+        CHECK(part_names(project.datamodel()) == names);
+    }
+    SECTION("a file of another size comes from disk") {
+        const fs::path file = dir.path / fs::u8path(target);
+        const auto when = fs::last_write_time(file);
+        std::string bytes = read_file(file);
+        bytes.replace(bytes.find("\"P00007\""), 8, "\"P00007b\"");
+        write_file(file, bytes);
+        fs::last_write_time(file, when);
+        Project project = Project::load(dir.path);
+        const std::vector<std::string> now = part_names(project.datamodel());
+        CHECK(std::count(now.begin(), now.end(), "P00007b") == 1);
+    }
+    SECTION("a damaged pack is not read") {
+        const fs::path file = pack::path_for(dir.path);
+        std::string bytes = read_file(file);
+        bytes[bytes.size() / 2] = static_cast<char>(bytes[bytes.size() / 2] ^ 0x5a);
+        write_file(file, bytes);
+        Project project = Project::load(dir.path);
+        CHECK(part_names(project.datamodel()) == names);
+    }
+    // A load from the pack keeps the disk check's stamp: nothing reads as changed.
+    SECTION("a load from the pack finds the disk unchanged") {
+        REQUIRE(pack::write(pack::path_for(dir.path), [&] {
+            std::vector<pack::Source> real;
+            for (const auto& [path, entry] : written->files) {
+                real.push_back(pack::Source{std::string(path), entry.size, entry.written,
+                                            std::make_shared<const std::string>(entry.bytes)});
+            }
+            return real;
+        }()));
+        Project project = Project::load(dir.path);
+        CHECK_FALSE(project.scan_disk().has_disk_changes);
+    }
 }

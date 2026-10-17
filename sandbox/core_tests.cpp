@@ -500,3 +500,30 @@ TEST_CASE("PR2 a change in Core leaves the place's authored revision alone", "[P
     game.destroy(more);
     REQUIRE(game.authored_revision() == before);
 }
+
+TEST_CASE("CO2c Stop keeps a subtree play built in Core, retires nothing there, and a place Folder cannot be moved into Core in play",
+          "[CO2c]") {
+    SimRole role;
+    engine_core::Game game;
+    const InstanceId core = game.core();
+    const InstanceId workspace = game.scene_service("Workspace");
+    const InstanceId tools = add_folder(game, "Tools", core);
+    const InstanceId place = add_folder(game, "Place", workspace);
+    const InstanceId inner = add_folder(game, "Inner", place);
+    game.start_simulation();
+    // A place instance cannot go into Core in play, so Stop never meets one there.
+    game.set_parent(place, engine_core::DataModel::kNoParent);
+    REQUIRE(game.parent_error(place, core).has_value());
+    REQUIRE_THROWS_AS(game.set_parent(place, core), ContractViolation);
+    game.set_parent(place, workspace);
+    const InstanceId made = add_folder(game, "Made", core);
+    const InstanceId made_child = add_folder(game, "MadeChild", made);
+    game.stop_simulation();
+    REQUIRE(game.parent(place) == workspace);
+    REQUIRE(game.parent(inner) == place);
+    REQUIRE(game.get_children(place) == std::vector<InstanceId>{inner});
+    REQUIRE(game.get_children(core) == std::vector<InstanceId>{tools, made});
+    REQUIRE(game.parent(made_child) == made);
+    REQUIRE(game.in_core(made_child));
+    REQUIRE(game.next_sibling(core) == game.connections());
+}

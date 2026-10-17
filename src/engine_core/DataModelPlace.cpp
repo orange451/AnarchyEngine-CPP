@@ -367,7 +367,7 @@ void DataModel::restore_place_unlocked() {
             continue;
         }
         const InstanceId id = make_instance_id(part.generation, index);
-        if (ids.count(id) == 0 && kept.count(id) == 0 && !core_holds(id)) {
+        if (ids.count(id) == 0 && kept.count(id) == 0) {
             retire_slot(index, true);
         }
     }

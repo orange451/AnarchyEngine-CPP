@@ -10,12 +10,15 @@ Every object in the world is an instance. It has a name, a parent, and children,
 
 Everything in the tree is a `DataModel`: it has `Name`, `Parent`, `FindFirstChild`, and the rest. What `Instance.new` makes is an `Instance`. `game` is a `Game`, a `DataModel` that is not an `Instance`, since a script cannot make one; `GetService` is on `game` alone. A `Parent` is any `DataModel`.
 
-`game` holds six scene services and nothing else, in this order:
+`game` holds five scene services and nothing else, in this order:
 
 - `Workspace` is what the place shows. Anything may go in it; what can render, renders.
 - `Lighting` is how the scene is lit, through its properties: `Ambient`, `Brightness`, `Exposure`, `Saturation`, `Gamma`, and `Antialiasing`. `Antialiasing`, an `Enum.AntialiasingMode`, smooths the 3D scene's edges with `FXAA` (the default), or leaves them hard with `None`. The Scene View reads `Ambient`, `Exposure`, `Saturation`, and `Gamma`; `Brightness` is not drawn yet. Lights in it shine as they do in `Workspace`, and a `Skybox` or `DynamicSky` in it is the sky, and a `BloomEffect` its bloom.
-- `Storage` keeps assets a place uses at runtime. Nothing in it renders or runs.
-- `ServerStorage` keeps what a networked game's server never sends to players: secret logic, tools, and data. Nothing in it replicates or runs. In single-player it is a place to keep things, like `Storage`.
+- `Storage` keeps assets a place uses at runtime. Nothing in it renders or runs. It always holds two services:
+  - `ServerStorage` keeps what a networked game's server never sends to players: secret logic, tools, and data. Nothing in it replicates.
+  - `ClientStorage` keeps what a networked game sends its players to use: GUIs to clone, effects, and client modules. It replicates like the rest of the place.
+
+  In single-player both are places to keep things, like `Storage`. Scripts reach them as `game.Storage.ServerStorage` or `game:GetService("ServerStorage")`.
 - `Scripts` holds scripts that run at runtime.
 - `Gui` holds the screen GUIs: every `ScreenGui` in it is drawn over the Scene View, in edit mode and in play. Scripts in it run, as they do in `Workspace`.
 

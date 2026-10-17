@@ -136,7 +136,7 @@ DataModel& existing_service(DataModel& world) {
     return *service;
 }
 
-static_assert(std::size(kServices) == 13, "one registry entry per service");
+static_assert(std::size(kServices) == 14, "one registry entry per service");
 
 std::vector<ClassEntry>& class_registry() {
     static std::vector<ClassEntry> entries = [] {
@@ -154,6 +154,7 @@ std::vector<ClassEntry>& class_registry() {
         out.push_back({kServices[10].class_name, existing_service<10>});
         out.push_back({kServices[11].class_name, existing_service<11>});
         out.push_back({kServices[12].class_name, existing_service<12>});
+        out.push_back({kServices[13].class_name, existing_service<13>});
         out.push_back({"DataModel", [](DataModel& world) -> DataModel& { return world.create(); }});
         out.push_back({"GameObject", [](DataModel& world) -> DataModel& { return world.create_game_object(); }});
         out.push_back({"Camera", [](DataModel& world) -> DataModel& { return world.create<Camera>(); }});
@@ -897,7 +898,10 @@ private:
                 const bool home = spec->parent_class == nullptr
                                       ? parent[index] == 0
                                       : parent[index] != 0 && nodes_[parent[index]].class_name == spec->parent_class;
-                if (!home || node.guid != guid) {
+                // ServerStorage was a child of game before it went inside
+                // Storage: a nested service a file left under game is moved home.
+                const bool moved_home = spec->parent_class != nullptr && parent[index] == 0;
+                if ((!home && !moved_home) || node.guid != guid) {
                     fail(node.props_path + ": " + node.class_name + " must be a child of " +
                          (spec->parent_class != nullptr ? spec->parent_class : "game") + " with GUID " + guid);
                 }
@@ -924,6 +928,15 @@ private:
             for (std::size_t child : nodes_[holder].children) {
                 if (nodes_[child].class_name == spec.class_name) {
                     found = child;
+                }
+            }
+            if (found == 0 && holder != 0) {
+                // Left under game by an older file (see above): game's list
+                // drops it below, as it keeps only game's own services.
+                for (std::size_t child : nodes_[0].children) {
+                    if (nodes_[child].class_name == spec.class_name) {
+                        found = child;
+                    }
                 }
             }
             if (found == 0) {

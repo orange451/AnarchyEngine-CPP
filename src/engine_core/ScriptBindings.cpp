@@ -799,12 +799,15 @@ int ScriptBindings::instance_service(lua_State* state) {
         if (runtime == nullptr || ud->id != 0 || runtime->resolve_id(0, ud->world) == nullptr) {
             luaL_error(state, "GetService is on game");
         }
-        // A service directly under game is in the tree: GetService gives the instance itself.
+        // A service directly under game is in the tree: GetService gives the
+        // instance itself. So is a registered one nested in another, as
+        // ServerStorage and ClientStorage are in Storage; the asset categories
+        // are not registered, so game:GetService("Textures") stays an error.
         const InstanceId found = name != nullptr ? runtime->game_->service(name) : 0;
         if (found != 0 && hidden_from_play(state, *runtime, found)) {
             luaL_error(state, "%s is not available to game scripts", name);
         }
-        if (found != 0 && runtime->game_->parent(found) == 0) {
+        if (found != 0 && (runtime->game_->parent(found) == 0 || lua_service_known(name))) {
             runtime->push_instance(state, found);
             return 1;
         }

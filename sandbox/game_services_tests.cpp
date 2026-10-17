@@ -37,13 +37,16 @@ TEST_CASE("GS1 the placement rules, by class name", "[GS1]") {
     using engine_core::placement_error;
 
     // The service table, in the order game and Assets hold them.
-    REQUIRE(std::size(engine_core::kServices) == 13);
-    REQUIRE(std::string(engine_core::kServices[5].class_name) == "Gui");
+    REQUIRE(std::size(engine_core::kServices) == 14);
+    REQUIRE(std::string(engine_core::kServices[6].class_name) == "Gui");
     REQUIRE(std::string(engine_core::kServices[3].class_name) == "ServerStorage");
-    REQUIRE(std::string(engine_core::kServices[6].class_name) == "Assets");
-    REQUIRE(engine_core::kServices[6].parent_class == nullptr);
-    REQUIRE(std::string(engine_core::kServices[7].class_name) == "Materials");
-    REQUIRE(std::string(engine_core::kServices[7].parent_class) == "Assets");
+    REQUIRE(std::string(engine_core::kServices[3].parent_class) == "Storage");
+    REQUIRE(std::string(engine_core::kServices[4].class_name) == "ClientStorage");
+    REQUIRE(std::string(engine_core::kServices[4].parent_class) == "Storage");
+    REQUIRE(std::string(engine_core::kServices[7].class_name) == "Assets");
+    REQUIRE(engine_core::kServices[7].parent_class == nullptr);
+    REQUIRE(std::string(engine_core::kServices[8].class_name) == "Materials");
+    REQUIRE(std::string(engine_core::kServices[8].parent_class) == "Assets");
     REQUIRE(engine_core::find_service("Textures") != nullptr);
     REQUIRE(engine_core::find_service("Texture") == nullptr);
     REQUIRE(engine_core::service_guid("Textures") == "textures");
@@ -117,7 +120,7 @@ std::vector<std::string> child_classes(const DataModel& game, InstanceId parent)
 TEST_CASE("GS2 a new Game holds Assets and its five categories, hidden from the explorer", "[GS2]") {
     Game game;
     REQUIRE(child_classes(game, 0) ==
-            std::vector<std::string>{"Workspace", "Lighting", "Storage", "ServerStorage", "Scripts", "Gui", "Assets", "Core", "Connections"});
+            std::vector<std::string>{"Workspace", "Lighting", "Storage", "Scripts", "Gui", "Assets", "Core", "Connections"});
     const InstanceId assets = game.service("Assets");
     REQUIRE(assets != 0);
     REQUIRE(game.parent(assets) == 0);
@@ -131,9 +134,12 @@ TEST_CASE("GS2 a new Game holds Assets and its five categories, hidden from the 
         REQUIRE(service->is_service());
         REQUIRE(game.name(id) == spec.class_name);
         REQUIRE(game.guid(id) == engine_core::service_guid(spec.class_name));
-        const bool game_service = std::string(spec.class_name) == "Assets" || spec.parent_class != nullptr;
+        // Assets and its categories are hidden game services; ServerStorage and
+        // ClientStorage are shown, nested in Storage, and are not scene services.
+        const bool in_storage = spec.parent_class != nullptr && std::string(spec.parent_class) == "Storage";
+        const bool game_service = !in_storage && (std::string(spec.class_name) == "Assets" || spec.parent_class != nullptr);
         REQUIRE(service->hidden_in_explorer() == game_service);
-        REQUIRE(service->is_scene_service() == !game_service);
+        REQUIRE(service->is_scene_service() == (!game_service && !in_storage));
     }
     // scene_service still finds only the scene services.
     REQUIRE(game.scene_service("Workspace") == game.service("Workspace"));
@@ -258,7 +264,7 @@ TEST_CASE("GS6 scripts see game services and meet the same rules", "[GS6]") {
         _G.path = game.Assets.Textures.ClassName == "Textures" and game:GetService("Assets") == game.Assets
         _G.isa = game.Assets:IsA("GameService") and game.Assets:IsA("Service") and not game.Assets:IsA("Instance")
             and workspace:IsA("Service")
-        _G.listed = #game:GetChildren() == 8
+        _G.listed = #game:GetChildren() == 7
         _G.no_move = refuses(function() game.Assets.Textures.Parent = workspace end, "Textures cannot be moved")
         _G.no_rename = refuses(function() game.Assets.Name = "Stuff" end, "Assets cannot be renamed")
         _G.no_destroy = refuses(function() game.Assets.Audio:Destroy() end, "Audio cannot be destroyed")
@@ -713,7 +719,7 @@ TEST_CASE("GS13 a place saved before Assets loads with the whole tree made", "[G
     engine_core::Project project = engine_core::Project::load(dir.path);
     DataModel& game = project.datamodel();
     REQUIRE(child_classes(game, 0) ==
-            std::vector<std::string>{"Workspace", "Lighting", "Storage", "ServerStorage", "Scripts", "Gui", "Assets", "Core", "Connections"});
+            std::vector<std::string>{"Workspace", "Lighting", "Storage", "Scripts", "Gui", "Assets", "Core", "Connections"});
     REQUIRE(child_classes(game, game.service("Assets")).size() == 6);
     // A load that filled in what the files lacked opens clean; the next save still writes them.
     REQUIRE_FALSE(project.unsaved());

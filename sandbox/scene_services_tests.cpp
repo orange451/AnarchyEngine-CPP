@@ -35,13 +35,13 @@ std::string reason(const std::optional<std::string>& error) { return error.value
 
 }  // namespace
 
-TEST_CASE("SS1 a new Game holds the six scene services, in order", "[SS1]") {
+TEST_CASE("SS1 a new Game holds the five scene services, in order, and Storage holds ServerStorage and ClientStorage", "[SS1]") {
     Game game;
     const std::vector<InstanceId> children = game.get_children(0);
-    REQUIRE(children.size() == 9);
-    const char* const classes[] = {"Workspace", "Lighting", "Storage", "ServerStorage", "Scripts", "Gui"};
-    const char* const guids[] = {"workspace", "lighting", "storage", "serverstorage", "scripts", "gui"};
-    for (std::size_t index = 0; index < 6; ++index) {
+    REQUIRE(children.size() == 8);
+    const char* const classes[] = {"Workspace", "Lighting", "Storage", "Scripts", "Gui"};
+    const char* const guids[] = {"workspace", "lighting", "storage", "scripts", "gui"};
+    for (std::size_t index = 0; index < 5; ++index) {
         INFO(classes[index]);
         const DataModel* service = game.instance(children[index]);
         REQUIRE(service != nullptr);
@@ -51,9 +51,16 @@ TEST_CASE("SS1 a new Game holds the six scene services, in order", "[SS1]") {
         REQUIRE(game.guid(children[index]) == guids[index]);
         REQUIRE(game.scene_service(classes[index]) == children[index]);
     }
-    REQUIRE(std::string(game.instance(children[6])->class_name()) == "Assets");
+    // Storage holds ServerStorage, then ClientStorage, before anything else.
+    const std::vector<InstanceId> stored = game.get_children(game.scene_service("Storage"));
+    REQUIRE(stored.size() == 2);
+    REQUIRE(std::string(game.instance(stored[0])->class_name()) == "ServerStorage");
+    REQUIRE(std::string(game.instance(stored[1])->class_name()) == "ClientStorage");
+    REQUIRE(game.service("ServerStorage") == stored[0]);
+    REQUIRE(game.service("ClientStorage") == stored[1]);
+    REQUIRE(std::string(game.instance(children[5])->class_name()) == "Assets");
     // Then Core, last.
-    REQUIRE(std::string(game.instance(children[7])->class_name()) == "Core");
+    REQUIRE(std::string(game.instance(children[6])->class_name()) == "Core");
     REQUIRE(game.scene_service("Folder") == 0);
     REQUIRE_FALSE(game.is_scene_service());
     // Nothing to undo: a new place starts with them.
@@ -88,7 +95,7 @@ TEST_CASE("SS2 a scene service cannot be moved, renamed, or destroyed", "[SS2]")
     REQUIRE(game.alive(workspace));
     REQUIRE(game.parent(workspace) == 0);
     REQUIRE(game.name(workspace) == "Workspace");
-    REQUIRE(game.get_children(0).size() == 9);
+    REQUIRE(game.get_children(0).size() == 8);
 }
 
 TEST_CASE("SS3 only scene services are children of game", "[SS3]") {
@@ -262,7 +269,7 @@ TEST_CASE("SS6 scripts see the scene services and cannot move them", "[SS6]") {
     require_globals(rig, {"workspace", "classes", "isa", "run_service", "locked", "no_move", "no_move_in", "no_rename",
                           "same_name", "no_destroy", "no_game_destroy", "no_game_move", "no_new", "no_setmetatable",
                           "no_root", "no_root_new", "no_cycle", "in_workspace", "lighting", "no_nan"});
-    REQUIRE(rig.game.get_children(0).size() == 9);
+    REQUIRE(rig.game.get_children(0).size() == 8);
 }
 
 // Luau would otherwise read a path of up to three names from a global once,
@@ -407,7 +414,7 @@ TEST_CASE("SS10 a place missing scene services loads with them made", "[SS10][pr
         engine_core::Project project = engine_core::Project::load(dir.path);
         DataModel& game = project.datamodel();
         REQUIRE(child_names(game, 0) ==
-                std::vector<std::string>{"Workspace", "Lighting", "Storage", "ServerStorage", "Scripts", "Gui", "Assets", "Core", "Connections"});
+                std::vector<std::string>{"Workspace", "Lighting", "Storage", "Scripts", "Gui", "Assets", "Core", "Connections"});
         const InstanceId workspace = game.scene_service("Workspace");
         REQUIRE(child_names(game, workspace) == std::vector<std::string>{"Part", "Main", "Box"});
         REQUIRE(child_names(game, *game.find_guid("cccc")) == std::vector<std::string>{"Inner"});
@@ -422,7 +429,8 @@ TEST_CASE("SS10 a place missing scene services loads with them made", "[SS10][pr
 
         project.save();
         REQUIRE(fs::exists(dir.path / "src" / "Lighting.lighting.json"));
-        REQUIRE(fs::exists(dir.path / "src" / "Storage.storage.json"));
+        // Storage holds ServerStorage and ClientStorage, so it is a folder.
+        REQUIRE(fs::exists(dir.path / "src" / "Storage.storage" / "init.json"));
         REQUIRE(fs::exists(dir.path / "src" / "Scripts.scripts.json"));
         REQUIRE(fs::exists(dir.path / "src" / "Assets.assets" / "init.json"));
         REQUIRE(fs::exists(dir.path / "src" / "Workspace.workspace" / "Box.cccc" / "Inner.dddd.json"));
@@ -511,7 +519,7 @@ TEST_CASE("SS12 a loaded place keeps its Lighting, and a new place resets it", "
     // The same service, back at its defaults.
     REQUIRE(game.scene_service("Lighting") == lighting);
     REQUIRE(lighting_of(game).saturation() == engine_core::Lighting::kDefaultSaturation);
-    REQUIRE(game.get_children(0).size() == 9);
+    REQUIRE(game.get_children(0).size() == 8);
 }
 
 // A saved registry property gets Changed with its own name, and its registered

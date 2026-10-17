@@ -1026,7 +1026,7 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
     add("DataModel", "IsA", "True when this instance's class is className or a subclass of it.", "boolean", false,
         {P("className", "string")});
     add("Game", "GetService",
-        "The service with this name: Workspace, Lighting, Storage, Scripts, Gui, ServerStorage, RunService, Selection, or "
+        "The service with this name: Workspace, Lighting, Storage, ServerStorage, ClientStorage, Scripts, Gui, RunService, Selection, or "
         "UserInputService.",
         "Instance", false,
         {P("className", "string")});

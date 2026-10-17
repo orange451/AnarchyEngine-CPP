@@ -30,7 +30,7 @@ public:
 };
 
 // The scene service classes, in the order game holds them.
-inline constexpr const char* kSceneServiceClasses[] = {"Workspace", "Lighting", "Storage", "ServerStorage", "Scripts", "Gui"};
+inline constexpr const char* kSceneServiceClasses[] = {"Workspace", "Lighting", "Storage", "Scripts", "Gui"};
 
 // Instances here render in the game. Anything may go in it.
 // CurrentCamera is the Camera the studio's scene view last used: set when you
@@ -110,12 +110,21 @@ public:
     const char* class_name() const override;
 };
 
-// What never leaves the server: a networked game's secret logic, tools, and
-// data. Nothing in it replicates to clients and no script in it runs. In
-// single-player it is a place to keep things, like Storage.
-class ServerStorage : public SceneService {
+// Inside Storage: what never leaves the server, such as a networked game's
+// secret logic, tools, and data. Nothing in it replicates to clients and no
+// script in it runs. In single-player it is a place to keep things.
+class ServerStorage : public Service {
 public:
-    using SceneService::SceneService;
+    using Service::Service;
+    const char* class_name() const override;
+};
+
+// Inside Storage: what a networked game keeps for its clients, such as GUIs to
+// clone, effects, and client modules. It replicates like the rest of the
+// place; no script in it runs. In single-player it is a place to keep things.
+class ClientStorage : public Service {
+public:
+    using Service::Service;
     const char* class_name() const override;
 };
 

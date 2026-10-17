@@ -62,7 +62,7 @@ TEST_CASE("GUI1 game has a Gui service, after Scripts", "[gui]") {
     REQUIRE(game.guid(gui) == "gui");
     REQUIRE(game.name(gui) == "Gui");
     REQUIRE(game.instance(gui)->is_scene_service());
-    REQUIRE(game.get_children(0)[5] == gui);
+    REQUIRE(game.get_children(0)[4] == gui);
     REQUIRE(engine_core::lua_service_known("Gui"));
 }
 

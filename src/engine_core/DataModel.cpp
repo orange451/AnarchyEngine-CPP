@@ -1957,23 +1957,20 @@ InstanceId DataModel::scene_service(std::string_view class_name) const {
 }
 
 InstanceId DataModel::service(std::string_view class_name) const {
-    // kServices nests one level: a service's parent is game or a child of game.
-    for (InstanceId child = first_child(0); child != 0; child = next_sibling(child)) {
+    // kServices nests one level: a nested service is looked for only in the
+    // parent the table names, so a lookup never scans Workspace or Storage's
+    // other contents. Core and Connections are not in the table: children of game.
+    InstanceId holder = 0;
+    if (const ServiceSpec* spec = find_service(class_name); spec != nullptr && spec->parent_class != nullptr) {
+        holder = service(spec->parent_class);
+        if (holder == 0) {
+            return 0;
+        }
+    }
+    for (InstanceId child = first_child(holder); child != 0; child = next_sibling(child)) {
         const DataModel* object = instance(child);
-        if (object == nullptr || !object->is_service()) {
-            continue;
-        }
-        if (class_name == object->class_name()) {
+        if (object != nullptr && object->is_service() && class_name == object->class_name()) {
             return child;
-        }
-        if (object->is_scene_service()) {
-            continue;
-        }
-        for (InstanceId inner = first_child(child); inner != 0; inner = next_sibling(inner)) {
-            const DataModel* nested = instance(inner);
-            if (nested != nullptr && nested->is_service() && class_name == nested->class_name()) {
-                return inner;
-            }
         }
     }
     return 0;

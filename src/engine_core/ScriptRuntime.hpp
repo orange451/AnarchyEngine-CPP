@@ -409,8 +409,9 @@ private:
     template <typename Match>
     void close_recordings(Vm& vm, Match&& match, bool cancel, const char* when);
     void kill_script(InstanceId id);
-    // Whether a script at id is under Workspace, Scripts, or Gui, where scripts run.
-    bool runs_here(InstanceId id) const;
+    // Whether a script is under Workspace, Scripts, or Gui, where scripts run, and its
+    // RunContext runs in this world's role.
+    bool runs_here(const Script& script) const;
     void enqueue_start(Script& script);
     void launch_starts();
     void launch_one(const Start& start);

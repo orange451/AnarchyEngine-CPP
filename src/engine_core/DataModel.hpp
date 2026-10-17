@@ -323,6 +323,9 @@ public:
     bool has_change_sink() const;
     std::uint32_t world_generation() const;
     bool simulation_running() const;
+    // Standalone until a server or client says otherwise, before Play starts.
+    WorldRole world_role() const;
+    void set_world_role(WorldRole role);
     // Whether the physics world has stepped since play started. Until it has,
     // a driven body's GameObject decides where the body is (PhysicsWorld);
     // after, the body does, and a Transform written to it moves its GameObject

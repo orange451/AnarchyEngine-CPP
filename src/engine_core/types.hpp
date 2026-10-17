@@ -101,4 +101,9 @@ enum class ThreadRole {
 void set_thread_role(ThreadRole role);
 ThreadRole thread_role();
 
+// What a world is in a networked game. Standalone is single-player, Studio's
+// Play included: every script runs. A Server runs Server and Any scripts; a
+// Client runs Client and Any scripts.
+enum class WorldRole : std::uint8_t { Standalone, Server, Client };
+
 }  // namespace engine_core

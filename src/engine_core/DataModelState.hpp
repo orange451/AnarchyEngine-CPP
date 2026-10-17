@@ -237,6 +237,8 @@ struct DataModel::State {
     DataModel* root = nullptr;
     std::uint32_t world_generation = 0;
     bool simulation_running = false;
+    // Which scripts this world runs (see WorldRole). Set before start_simulation.
+    WorldRole world_role = WorldRole::Standalone;
     // The physics world has stepped since play started (DataModel::physics_stepped).
     bool physics_stepped = false;
     bool place_captured = false;

@@ -1872,6 +1872,8 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
         "Signal", false, {});
     add("RunService", "IsRunning", "True while a play session is open, paused or not. False in edit mode.", "boolean",
         false, {});
+    add("RunService", "IsServer", "True on a server and in single-player.", "boolean", false, {});
+    add("RunService", "IsClient", "True on a connected player and in single-player.", "boolean", false, {});
 
     add("Workspace", "CurrentCamera",
         "The Camera the studio's scene view last used, set when you click in a view or pick its camera. Nil when that "

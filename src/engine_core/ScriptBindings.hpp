@@ -444,6 +444,8 @@ struct ScriptBindings {
     static int input_get_mouse_location(lua_State* state);
     static int input_get_mouse_delta(lua_State* state);
     static int run_is_running(lua_State* state);
+    static int run_is_server(lua_State* state);
+    static int run_is_client(lua_State* state);
     static int input_object_index(lua_State* state);
     static int input_object_tostring(lua_State* state);
     // TouchObject: read-only; Instance reads nil once the other is gone.

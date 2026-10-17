@@ -47,6 +47,15 @@ LuaSlot run_context_slot(RunContext context) {
 
 }  // namespace
 
+bool context_runs(RunContext context, WorldRole role) {
+    switch (role) {
+        case WorldRole::Standalone: return true;
+        case WorldRole::Server: return context != RunContext::Client;
+        case WorldRole::Client: return context != RunContext::Server;
+    }
+    return true;
+}
+
 std::optional<std::string> Script::set_run_context(int value) {
     if (!on_gameplay_thread()) {
         contract_fail("set_run_context runs on SimulationThread");

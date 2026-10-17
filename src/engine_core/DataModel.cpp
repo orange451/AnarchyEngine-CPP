@@ -2278,6 +2278,15 @@ std::uint32_t DataModel::world_generation() const { return state_->world_generat
 
 bool DataModel::simulation_running() const { return state_->simulation_running; }
 
+WorldRole DataModel::world_role() const { return state_->world_role; }
+
+void DataModel::set_world_role(WorldRole role) {
+    if (!mutation_thread()) {
+        contract_fail("set_world_role runs on SimulationThread");
+    }
+    state_->world_role = role;
+}
+
 bool DataModel::physics_stepped() const { return state_->physics_stepped; }
 
 void DataModel::set_physics_stepped(bool stepped) { state_->physics_stepped = stepped; }

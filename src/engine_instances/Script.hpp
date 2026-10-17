@@ -10,6 +10,9 @@
 
 namespace engine_core {
 
+// Whether a script with this RunContext runs in a world with this role.
+bool context_runs(RunContext context, WorldRole role);
+
 // A LuaSource that runs on its own, while it is under Workspace, Scripts, or
 // Gui. It may live anywhere in the tree; elsewhere it does not run. The Luau
 // global `script` is the userdata for this instance. It does not run inside

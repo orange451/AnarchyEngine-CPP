@@ -1495,6 +1495,28 @@ int ScriptBindings::run_is_running(lua_State* state) {
     });
 }
 
+int ScriptBindings::run_is_server(lua_State* state) {
+    return lua_guard(state, [&] {
+        luaL_checkudata(state, 1, kServiceMeta);
+        ScriptRuntime* runtime = runtime_from(state);
+        const bool server = runtime == nullptr || runtime->game_ == nullptr ||
+                            runtime->game_->world_role() != WorldRole::Client;
+        lua_pushboolean(state, server ? 1 : 0);
+        return 1;
+    });
+}
+
+int ScriptBindings::run_is_client(lua_State* state) {
+    return lua_guard(state, [&] {
+        luaL_checkudata(state, 1, kServiceMeta);
+        ScriptRuntime* runtime = runtime_from(state);
+        const bool client = runtime == nullptr || runtime->game_ == nullptr ||
+                            runtime->game_->world_role() != WorldRole::Server;
+        lua_pushboolean(state, client ? 1 : 0);
+        return 1;
+    });
+}
+
 int ScriptBindings::input_object_index(lua_State* state) {
     const auto* record = static_cast<const InputRecord*>(luaL_checkudata(state, 1, kInputObjectMeta));
     const char* key = luaL_checkstring(state, 2);
@@ -1719,8 +1741,10 @@ ANARCHY_LUA_REGISTER(register_script_methods) {
     // RunService.cpp declares the class, its signals, and the service.
     const LuaField run[] = {
         lua_method("IsRunning", "boolean", reinterpret_cast<void*>(&ScriptBindings::run_is_running)),
+        lua_method("IsServer", "boolean", reinterpret_cast<void*>(&ScriptBindings::run_is_server)),
+        lua_method("IsClient", "boolean", reinterpret_cast<void*>(&ScriptBindings::run_is_client)),
     };
-    register_lua_class("RunService", nullptr, run, 1);
+    register_lua_class("RunService", nullptr, run, 3);
 }
 
 }  // namespace engine_core

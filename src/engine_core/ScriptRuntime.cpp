@@ -413,7 +413,7 @@ void ScriptRuntime::on_moved(InstanceId id) {
         }
     }
     for (Script* script : scripts) {
-        if (!runs_here(script->id())) {
+        if (!runs_here(*script)) {
             kill_script(script->id());
         } else if (started_.count(script->id()) == 0) {
             enqueue_start(*script);
@@ -421,9 +421,9 @@ void ScriptRuntime::on_moved(InstanceId id) {
     }
 }
 
-bool ScriptRuntime::runs_here(InstanceId id) const {
+bool ScriptRuntime::runs_here(const Script& script) const {
     // The ancestor just under game decides.
-    InstanceId top = id;
+    InstanceId top = script.id();
     for (InstanceId up = game_->parent(top); up != 0; up = game_->parent(top)) {
         if (up == DataModel::kNoParent) {
             return false;
@@ -435,7 +435,10 @@ bool ScriptRuntime::runs_here(InstanceId id) const {
         return false;
     }
     const std::string_view name = service->class_name();
-    return name == "Workspace" || name == "Scripts" || name == "Gui";
+    if (name != "Workspace" && name != "Scripts" && name != "Gui") {
+        return false;
+    }
+    return context_runs(script.run_context(), game_->world_role());
 }
 
 void ScriptRuntime::on_script_enabled(Script& script, bool enabled) {
@@ -1086,7 +1089,7 @@ void ScriptRuntime::enqueue_start(Script& script) {
     if (game_ == nullptr || !open_ || play_.closing || play_.halted || !game_->simulation_running()) {
         return;
     }
-    if (!script.enabled() || !runs_here(script.id())) {
+    if (!script.enabled() || !runs_here(script)) {
         return;
     }
     const std::uint32_t generation = script.bump_start_generation();
@@ -1113,7 +1116,7 @@ void ScriptRuntime::launch_one(const Start& start) {
     if (script == nullptr || script->start_generation() != start.generation || !script->enabled()) {
         return;
     }
-    if (!runs_here(script->id()) || !game_->simulation_running()) {
+    if (!runs_here(*script) || !game_->simulation_running()) {
         return;
     }
     const Bytecode bytecode = compile_luau(script->source());

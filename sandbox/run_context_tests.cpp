@@ -96,3 +96,99 @@ TEST_CASE("SC11 undoing a script's delete keeps its RunContext", "[server-client
     REQUIRE(back != nullptr);
     REQUIRE(back->run_context() == RunContext::Any);
 }
+
+namespace {
+
+void add_three(engine_core::DataModel& game) {
+    engine_core::Script& server = add_script(game, "Server", "_G.server_ran = true");
+    engine_core::Script& client = add_script(game, "Client", "_G.client_ran = true");
+    engine_core::Script& any = add_script(game, "Any", "_G.any_ran = true");
+    REQUIRE_FALSE(server.set_run_context(static_cast<int>(RunContext::Server)));
+    REQUIRE_FALSE(client.set_run_context(static_cast<int>(RunContext::Client)));
+    REQUIRE_FALSE(any.set_run_context(static_cast<int>(RunContext::Any)));
+}
+
+bool ran(ScriptRig& rig, const char* name) {
+    bool value = false;
+    return rig.runtime.global_boolean(name, value) && value;
+}
+
+}  // namespace
+
+TEST_CASE("SC12 Standalone runs every script whatever its RunContext", "[server-client][run-context]") {
+    ScriptRig rig;
+    REQUIRE(rig.game.world_role() == engine_core::WorldRole::Standalone);
+    add_three(rig.game);
+    rig.game.start_simulation();
+    rig.frames(1);
+    REQUIRE(ran(rig, "server_ran"));
+    REQUIRE(ran(rig, "client_ran"));
+    REQUIRE(ran(rig, "any_ran"));
+}
+
+TEST_CASE("SC13 a Server world runs Server and Any scripts only", "[server-client][run-context]") {
+    ScriptRig rig;
+    rig.game.set_world_role(engine_core::WorldRole::Server);
+    add_three(rig.game);
+    rig.game.start_simulation();
+    rig.frames(1);
+    REQUIRE(ran(rig, "server_ran"));
+    REQUIRE_FALSE(ran(rig, "client_ran"));
+    REQUIRE(ran(rig, "any_ran"));
+}
+
+TEST_CASE("SC14 a Client world runs Client and Any scripts only", "[server-client][run-context]") {
+    ScriptRig rig;
+    rig.game.set_world_role(engine_core::WorldRole::Client);
+    add_three(rig.game);
+    rig.game.start_simulation();
+    rig.frames(1);
+    REQUIRE_FALSE(ran(rig, "server_ran"));
+    REQUIRE(ran(rig, "client_ran"));
+    REQUIRE(ran(rig, "any_ran"));
+}
+
+TEST_CASE("SC15 RunService.IsServer and IsClient follow the role; both are true in Standalone", "[server-client][run-context]") {
+    const char* source =
+        "local run = game:GetService('RunService')\n"
+        "_G.is_server = run:IsServer()\n"
+        "_G.is_client = run:IsClient()";
+    struct Case { engine_core::WorldRole role; bool server; bool client; };
+    for (const Case c : {Case{engine_core::WorldRole::Standalone, true, true},
+                         Case{engine_core::WorldRole::Server, true, false},
+                         Case{engine_core::WorldRole::Client, false, true}}) {
+        ScriptRig rig;
+        rig.game.set_world_role(c.role);
+        engine_core::Script& script = add_script(rig.game, "Probe", source);
+        REQUIRE_FALSE(script.set_run_context(static_cast<int>(RunContext::Any)));
+        rig.game.start_simulation();
+        rig.frames(1);
+        bool value = false;
+        REQUIRE(rig.runtime.global_boolean("is_server", value));
+        REQUIRE(value == c.server);
+        REQUIRE(rig.runtime.global_boolean("is_client", value));
+        REQUIRE(value == c.client);
+    }
+}
+
+TEST_CASE("SC16 changing RunContext during play starts or stops the script at once", "[server-client][run-context]") {
+    ScriptRig rig;
+    rig.game.set_world_role(engine_core::WorldRole::Server);
+    engine_core::Script& script = add_script(rig.game, "Ticker",
+        "_G.ticks = 0\n"
+        "game:GetService('RunService').Heartbeat:Connect(function() _G.ticks = _G.ticks + 1 end)");
+    REQUIRE_FALSE(script.set_run_context(static_cast<int>(RunContext::Client)));
+    rig.game.start_simulation();
+    rig.frames(2);
+    double ticks = -1;
+    REQUIRE_FALSE(rig.runtime.global_number("ticks", ticks));   // never started on a server
+    REQUIRE_FALSE(script.set_run_context(static_cast<int>(RunContext::Server)));
+    rig.frames(3);
+    REQUIRE(rig.runtime.global_number("ticks", ticks));
+    REQUIRE(ticks >= 1);
+    REQUIRE_FALSE(script.set_run_context(static_cast<int>(RunContext::Client)));
+    const double stopped_at = ticks;
+    rig.frames(3);
+    REQUIRE(rig.runtime.global_number("ticks", ticks));
+    REQUIRE(ticks == stopped_at);   // its Heartbeat connection died with it
+}

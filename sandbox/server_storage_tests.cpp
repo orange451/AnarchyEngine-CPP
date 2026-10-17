@@ -27,7 +27,7 @@ void require_globals(ScriptRig& rig, std::initializer_list<const char*> names) {
 
 }  // namespace
 
-TEST_CASE("SC20 Storage holds ServerStorage then ClientStorage, and GetService finds both", "[server-client][server-storage]") {
+TEST_CASE("SC20 Storage holds ClientStorage then ServerStorage, and GetService finds both", "[server-client][server-storage]") {
     ScriptRig rig;
     const engine_core::InstanceId storage = rig.game.scene_service("Storage");
     const engine_core::InstanceId server = rig.game.service("ServerStorage");
@@ -38,8 +38,8 @@ TEST_CASE("SC20 Storage holds ServerStorage then ClientStorage, and GetService f
     REQUIRE(rig.game.guid(client) == "clientstorage");
     REQUIRE(rig.game.parent(server) == storage);
     REQUIRE(rig.game.parent(client) == storage);
-    REQUIRE(rig.game.first_child(storage) == server);
-    REQUIRE(rig.game.next_sibling(server) == client);
+    REQUIRE(rig.game.first_child(storage) == client);
+    REQUIRE(rig.game.next_sibling(client) == server);
     REQUIRE_FALSE(rig.game.instance(server)->is_scene_service());
     add_script(rig.game, rig.game.scene_service("Scripts"), "Probe",
                "_G.same = game:GetService('ServerStorage') == game.Storage.ServerStorage\n"

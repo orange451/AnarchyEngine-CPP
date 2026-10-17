@@ -35,7 +35,7 @@ std::string reason(const std::optional<std::string>& error) { return error.value
 
 }  // namespace
 
-TEST_CASE("SS1 a new Game holds the five scene services, in order, and Storage holds ServerStorage and ClientStorage", "[SS1]") {
+TEST_CASE("SS1 a new Game holds the five scene services, in order, and Storage holds ClientStorage and ServerStorage", "[SS1]") {
     Game game;
     const std::vector<InstanceId> children = game.get_children(0);
     REQUIRE(children.size() == 8);
@@ -51,13 +51,13 @@ TEST_CASE("SS1 a new Game holds the five scene services, in order, and Storage h
         REQUIRE(game.guid(children[index]) == guids[index]);
         REQUIRE(game.scene_service(classes[index]) == children[index]);
     }
-    // Storage holds ServerStorage, then ClientStorage, before anything else.
+    // Storage holds ClientStorage, then ServerStorage, before anything else.
     const std::vector<InstanceId> stored = game.get_children(game.scene_service("Storage"));
     REQUIRE(stored.size() == 2);
-    REQUIRE(std::string(game.instance(stored[0])->class_name()) == "ServerStorage");
-    REQUIRE(std::string(game.instance(stored[1])->class_name()) == "ClientStorage");
-    REQUIRE(game.service("ServerStorage") == stored[0]);
-    REQUIRE(game.service("ClientStorage") == stored[1]);
+    REQUIRE(std::string(game.instance(stored[0])->class_name()) == "ClientStorage");
+    REQUIRE(std::string(game.instance(stored[1])->class_name()) == "ServerStorage");
+    REQUIRE(game.service("ClientStorage") == stored[0]);
+    REQUIRE(game.service("ServerStorage") == stored[1]);
     REQUIRE(std::string(game.instance(children[5])->class_name()) == "Assets");
     // Then Core, last.
     REQUIRE(std::string(game.instance(children[6])->class_name()) == "Core");

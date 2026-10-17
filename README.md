@@ -15,8 +15,8 @@ Everything in the tree is a `DataModel`: it has `Name`, `Parent`, `FindFirstChil
 - `Workspace` is what the place shows. Anything may go in it; what can render, renders.
 - `Lighting` is how the scene is lit, through its properties: `Ambient`, `Brightness`, `Exposure`, `Saturation`, `Gamma`, and `Antialiasing`. `Antialiasing`, an `Enum.AntialiasingMode`, smooths the 3D scene's edges with `FXAA` (the default), or leaves them hard with `None`. The Scene View reads `Ambient`, `Exposure`, `Saturation`, and `Gamma`; `Brightness` is not drawn yet. Lights in it shine as they do in `Workspace`, and a `Skybox` or `DynamicSky` in it is the sky, and a `BloomEffect` its bloom.
 - `Storage` keeps assets a place uses at runtime. Nothing in it renders or runs. It always holds two services:
-  - `ServerStorage` keeps what a networked game's server never sends to players: secret logic, tools, and data. Nothing in it replicates.
   - `ClientStorage` keeps what a networked game sends its players to use: GUIs to clone, effects, and client modules. It replicates like the rest of the place.
+  - `ServerStorage` keeps what a networked game's server never sends to players: secret logic, tools, and data. Nothing in it replicates.
 
   In single-player both are places to keep things, like `Storage`. Scripts reach them as `game.Storage.ServerStorage` or `game:GetService("ServerStorage")`.
 - `Scripts` holds scripts that run at runtime.

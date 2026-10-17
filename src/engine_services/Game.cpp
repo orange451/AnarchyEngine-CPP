@@ -36,8 +36,8 @@ Game::Game() : DataModel(kClassName) {
     add_service<Workspace>(*this);
     add_service<Lighting>(*this);
     add_service<Storage>(*this);
-    add_service<ServerStorage>(*this);
     add_service<ClientStorage>(*this);
+    add_service<ServerStorage>(*this);
     add_service<Scripts>(*this);
     add_service<GuiService>(*this);
     add_service<Assets>(*this);

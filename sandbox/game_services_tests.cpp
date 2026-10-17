@@ -39,9 +39,9 @@ TEST_CASE("GS1 the placement rules, by class name", "[GS1]") {
     // The service table, in the order game and Assets hold them.
     REQUIRE(std::size(engine_core::kServices) == 14);
     REQUIRE(std::string(engine_core::kServices[6].class_name) == "Gui");
-    REQUIRE(std::string(engine_core::kServices[3].class_name) == "ServerStorage");
+    REQUIRE(std::string(engine_core::kServices[3].class_name) == "ClientStorage");
     REQUIRE(std::string(engine_core::kServices[3].parent_class) == "Storage");
-    REQUIRE(std::string(engine_core::kServices[4].class_name) == "ClientStorage");
+    REQUIRE(std::string(engine_core::kServices[4].class_name) == "ServerStorage");
     REQUIRE(std::string(engine_core::kServices[4].parent_class) == "Storage");
     REQUIRE(std::string(engine_core::kServices[7].class_name) == "Assets");
     REQUIRE(engine_core::kServices[7].parent_class == nullptr);

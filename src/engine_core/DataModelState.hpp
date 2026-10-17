@@ -252,6 +252,8 @@ struct DataModel::State {
     std::vector<std::uint32_t> history_held;
     // Core's id once found. Core cannot move or be destroyed, so it holds.
     InstanceId core_id = 0;
+    // The Connections service's id once found. Like Core it is outside the place.
+    InstanceId connections_id = 0;
     // Edit-mode authored changes a project save has not written yet.
     std::unordered_set<InstanceId> dirty;
     bool dirty_all = false;

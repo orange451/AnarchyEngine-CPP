@@ -30,6 +30,9 @@ inline constexpr ServiceSpec kServices[] = {
 // as it is by New, Open, Play, and Stop. Not in kServices, which is the place's
 // services, the ones a project reads and writes. Game makes it last.
 inline constexpr const char* kCoreClass = "Core";
+// Who is connected: a child of game outside the place, like Core, so never in
+// kServices, never saved, and left as it is by Play and Stop.
+inline constexpr const char* kConnectionsClass = "Connections";
 
 // Null for a class that is not a service.
 const ServiceSpec* find_service(std::string_view class_name);

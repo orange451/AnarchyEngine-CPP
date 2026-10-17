@@ -175,6 +175,12 @@ public:
     InstanceId service(std::string_view class_name) const;
     // The Core service, or 0 in a DataModel that is not a Game.
     InstanceId core() const;
+    // The Connections service, or 0 in a DataModel that is not a Game.
+    InstanceId connections() const;
+    // Core or Connections, or anything under either: what a save, undo, New,
+    // Open, Play, and Stop all leave alone. core_holds is only Core's, which
+    // Play scripts cannot see; Connections they can.
+    bool outside_place(InstanceId id) const;
 
     // Why set_parent, set_name, or destroy would refuse, worded for the user,
     // or empty when it would go ahead. Setting the value an instance already

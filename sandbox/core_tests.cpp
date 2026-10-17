@@ -43,14 +43,14 @@ bool has_line(const engine_core::ScriptRuntime::OutputBatch& batch, const std::s
 
 }  // namespace
 
-TEST_CASE("CO9 a Game holds Core last, hidden from the explorer, and it cannot be moved, renamed, or destroyed",
+TEST_CASE("CO9 a Game holds Core after the place's services, hidden from the explorer, and it cannot be moved, renamed, or destroyed",
           "[CO9]") {
     SimRole role;
     engine_core::Game game;
     const InstanceId core = game.core();
     REQUIRE(core != 0);
     REQUIRE(game.parent(core) == 0);
-    REQUIRE(game.get_children(0).back() == core);
+    REQUIRE(game.next_sibling(core) == game.connections());
     REQUIRE(std::string(game.instance(core)->class_name()) == "Core");
     REQUIRE(game.name(core) == "Core");
     REQUIRE(game.guid(core) == "core");
@@ -127,7 +127,7 @@ TEST_CASE("CO1 New and Open leave Core's instances with their ids, names, and ch
     REQUIRE(game.core() == core);
     REQUIRE(game.alive(inner));
     REQUIRE(game.parent(tools) == core);
-    REQUIRE(game.get_children(0).back() == core);
+    REQUIRE(game.next_sibling(core) == game.connections());
 }
 
 TEST_CASE("CO2 what changes in Core during play is still there after Stop", "[CO2]") {
@@ -149,7 +149,7 @@ TEST_CASE("CO2 what changes in Core during play is still there after Stop", "[CO
     // The place outside Core is restored as before.
     REQUIRE(game.name(place) == "Place");
     REQUIRE_FALSE(game.alive(play_only));
-    REQUIRE(game.get_children(0).back() == core);
+    REQUIRE(game.next_sibling(core) == game.connections());
 }
 
 TEST_CASE("CO2b a Core instance made after a captured one is destroyed in play survives Stop", "[CO2b]") {

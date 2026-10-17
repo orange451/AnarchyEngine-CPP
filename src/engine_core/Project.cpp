@@ -1091,7 +1091,7 @@ void clear_extras(DataModel& world, InstanceId id) {
 void clear_world(DataModel& world) {
     std::vector<InstanceId> ids;
     world.for_each_instance([&world, &ids](DataModel& object) {
-        if (!object.is_service() && !world.core_holds(object.id())) {
+        if (!object.is_service() && !world.outside_place(object.id())) {
             ids.push_back(object.id());
         }
     });

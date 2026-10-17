@@ -782,7 +782,7 @@ void DataModel::destroy(InstanceId id) {
     }
     std::optional<AuthoredRecord> captured;
     // Noted after the instance is gone, when Core no longer holds it, so the check is here.
-    if (state_->history && state_->history->wants_mutation() && !core_holds(id)) {
+    if (state_->history && state_->history->wants_mutation() && !outside_place(id)) {
         captured = capture_record(id, true);
     }
     // The parent's folder may become a leaf and its child order changes.
@@ -2004,6 +2004,25 @@ InstanceId DataModel::core() const {
     return state_->core_id;
 }
 
+InstanceId DataModel::connections() const {
+    // Game makes Connections once; until then, and in a DataModel that is not a Game, there is none.
+    if (state_->connections_id == 0 || !alive(state_->connections_id)) {
+        state_->connections_id = service(kConnectionsClass);
+    }
+    return state_->connections_id;
+}
+
+bool DataModel::outside_place(InstanceId id) const {
+    if (core_holds(id)) {
+        return true;
+    }
+    if (id == 0 || !alive(id)) {
+        return false;
+    }
+    const InstanceId holder = connections();
+    return holder != 0 && (id == holder || parent(id) == holder);
+}
+
 std::string DataModel::rule_class(InstanceId parent, InstanceId moved, InstanceId moved_to) const {
     InstanceId at = parent;
     for (std::size_t guard = 0; guard <= kMaxInstances + 1; ++guard) {
@@ -2076,7 +2095,8 @@ std::optional<std::string> DataModel::parent_error(InstanceId id, InstanceId new
             if (spec->parent_class != nullptr && home == 0) {
                 home = kNoParent;
             }
-        } else if (std::string_view(object->class_name()) == kCoreClass) {
+        } else if (std::string_view(object->class_name()) == kCoreClass ||
+                   std::string_view(object->class_name()) == kConnectionsClass) {
             home = 0;
         }
         const bool placing = current == kNoParent && home != kNoParent && new_parent == home &&
@@ -2636,7 +2656,7 @@ void DataModel::mark_authored_dirty(InstanceId id) {
         return;
     }
     // Core is not the place: what changes there is never saved.
-    if (core_holds(id)) {
+    if (outside_place(id)) {
         return;
     }
     state_->dirty.insert(id);
@@ -2646,7 +2666,7 @@ void DataModel::mark_authored_dirty(InstanceId id) {
 void DataModel::note_unrecorded_edit(InstanceId id) {
     mark_authored_dirty(id);
     // History is off while a place is built, as Game's services are given their GUIDs.
-    if (id == kNoParent || state_->simulation_running || core_holds(id) || !state_->history ||
+    if (id == kNoParent || state_->simulation_running || outside_place(id) || !state_->history ||
         !state_->history->enabled()) {
         return;
     }

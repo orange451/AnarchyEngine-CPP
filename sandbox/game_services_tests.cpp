@@ -117,7 +117,7 @@ std::vector<std::string> child_classes(const DataModel& game, InstanceId parent)
 TEST_CASE("GS2 a new Game holds Assets and its five categories, hidden from the explorer", "[GS2]") {
     Game game;
     REQUIRE(child_classes(game, 0) ==
-            std::vector<std::string>{"Workspace", "Lighting", "Storage", "Scripts", "Gui", "ServerStorage", "Assets", "Core"});
+            std::vector<std::string>{"Workspace", "Lighting", "Storage", "Scripts", "Gui", "ServerStorage", "Assets", "Core", "Connections"});
     const InstanceId assets = game.service("Assets");
     REQUIRE(assets != 0);
     REQUIRE(game.parent(assets) == 0);
@@ -258,7 +258,7 @@ TEST_CASE("GS6 scripts see game services and meet the same rules", "[GS6]") {
         _G.path = game.Assets.Textures.ClassName == "Textures" and game:GetService("Assets") == game.Assets
         _G.isa = game.Assets:IsA("GameService") and game.Assets:IsA("Service") and not game.Assets:IsA("Instance")
             and workspace:IsA("Service")
-        _G.listed = #game:GetChildren() == 7
+        _G.listed = #game:GetChildren() == 8
         _G.no_move = refuses(function() game.Assets.Textures.Parent = workspace end, "Textures cannot be moved")
         _G.no_rename = refuses(function() game.Assets.Name = "Stuff" end, "Assets cannot be renamed")
         _G.no_destroy = refuses(function() game.Assets.Audio:Destroy() end, "Audio cannot be destroyed")
@@ -713,7 +713,7 @@ TEST_CASE("GS13 a place saved before Assets loads with the whole tree made", "[G
     engine_core::Project project = engine_core::Project::load(dir.path);
     DataModel& game = project.datamodel();
     REQUIRE(child_classes(game, 0) ==
-            std::vector<std::string>{"Workspace", "Lighting", "Storage", "Scripts", "Gui", "ServerStorage", "Assets", "Core"});
+            std::vector<std::string>{"Workspace", "Lighting", "Storage", "Scripts", "Gui", "ServerStorage", "Assets", "Core", "Connections"});
     REQUIRE(child_classes(game, game.service("Assets")).size() == 6);
     // A load that filled in what the files lacked opens clean; the next save still writes them.
     REQUIRE_FALSE(project.unsaved());

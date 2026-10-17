@@ -113,7 +113,9 @@ void DataModel::capture_place_unlocked() {
     }
     shot.root_children = child_ids(0);
     const InstanceId core_id = core();
-    shot.root_children.erase(std::remove(shot.root_children.begin(), shot.root_children.end(), core_id),
+    const InstanceId connections_id = connections();
+    shot.root_children.erase(std::remove_if(shot.root_children.begin(), shot.root_children.end(),
+                                            [&](InstanceId child) { return child == core_id || child == connections_id; }),
                              shot.root_children.end());
     const std::uint32_t count = slot_count();
     shot.instances.reserve(count);
@@ -124,7 +126,7 @@ void DataModel::capture_place_unlocked() {
             continue;
         }
         // Core is outside the place: Stop leaves it as play left it.
-        if (core_holds(make_instance_id(part.generation, index))) {
+        if (outside_place(make_instance_id(part.generation, index))) {
             continue;
         }
         state_->place_slots[index] = true;
@@ -336,11 +338,16 @@ void DataModel::restore_place_unlocked() {
         }
     }
 
-    // Core and what it holds stay as they are, links included.
-    const InstanceId core_id = core();
+    // Core, Connections, and what they hold stay as they are, links included.
+    std::vector<InstanceId> outside_roots;
+    for (InstanceId root : {core(), connections()}) {
+        if (root != 0) {
+            outside_roots.push_back(root);
+        }
+    }
     std::vector<std::pair<InstanceId, std::vector<InstanceId>>> core_links;
-    if (core_id != 0) {
-        std::vector<InstanceId> walk{core_id};
+    for (InstanceId root : outside_roots) {
+        std::vector<InstanceId> walk{root};
         for (std::size_t at = 0; at < walk.size(); ++at) {
             std::vector<InstanceId> children = child_ids(walk[at]);
             walk.insert(walk.end(), children.begin(), children.end());
@@ -354,7 +361,7 @@ void DataModel::restore_place_unlocked() {
             continue;
         }
         const InstanceId id = make_instance_id(part.generation, index);
-        if (ids.count(id) == 0 && !core_holds(id)) {
+        if (ids.count(id) == 0 && !outside_place(id)) {
             retire_slot(index, true);
         }
     }
@@ -366,8 +373,8 @@ void DataModel::restore_place_unlocked() {
     for (const PlaceRecord& record : place.instances) {
         link_children(record.id, record.children);
     }
-    if (core_id != 0) {
-        link_children(0, {core_id});
+    if (!outside_roots.empty()) {
+        link_children(0, outside_roots);
         for (const auto& [parent, children] : core_links) {
             link_children(parent, children);
         }
@@ -415,7 +422,7 @@ void DataModel::authored_children(InstanceId id, std::vector<InstanceId>& out) c
     for (InstanceId child = first_child(id); child != 0; child = next_sibling(child)) {
         const DataModel* object = instance(child);
         // As authored_tree: Core and what is not archivable are not saved.
-        if (object == nullptr || child == core() || !object->archivable_) {
+        if (object == nullptr || child == core() || child == connections() || !object->archivable_) {
             continue;
         }
         out.push_back(child);
@@ -482,7 +489,7 @@ std::vector<AuthoredNode> DataModel::authored_tree(const std::function<bool(Inst
                 const DataModel* object = instance(child);
                 // Core is the studio's, not the place's, and a non-archivable instance
                 // asks not to be saved: neither is written, with all it holds.
-                if (object == nullptr || child == core() || !object->archivable_) {
+                if (object == nullptr || child == core() || child == connections() || !object->archivable_) {
                     continue;
                 }
                 AuthoredNode node;

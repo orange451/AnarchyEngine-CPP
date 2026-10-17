@@ -178,7 +178,7 @@ void ChangeHistoryService::forget_core() {
     named_slots_stale_ = true;
     std::vector<Mutation>& list = recording_->mutations;
     list.erase(std::remove_if(list.begin(), list.end(),
-                              [this](const Mutation& mutation) { return game_->core_holds(mutation.id); }),
+                              [this](const Mutation& mutation) { return game_->outside_place(mutation.id); }),
                list.end());
 }
 
@@ -188,7 +188,7 @@ void ChangeHistoryService::note(Mutation mutation) {
     }
     // Core is the studio's, not the place's: what happens there is never an
     // undo step, and what entered it leaves the open recording.
-    if (game_->core_holds(mutation.id)) {
+    if (game_->outside_place(mutation.id)) {
         forget_core();
         return;
     }
@@ -249,13 +249,13 @@ void ChangeHistoryService::apply_waypoint(Waypoint& waypoint, bool inverse) {
         for (std::size_t index = waypoint.mutations.size(); index > 0; --index) {
             const Mutation& mutation = waypoint.mutations[index - 1];
             // A step recorded before its instance went into Core no longer reaches it.
-            if (!game_->core_holds(mutation.id)) {
+            if (!game_->outside_place(mutation.id)) {
                 game_->apply_history(mutation, true);
             }
         }
     } else {
         for (const Mutation& mutation : waypoint.mutations) {
-            if (!game_->core_holds(mutation.id)) {
+            if (!game_->outside_place(mutation.id)) {
                 game_->apply_history(mutation, false);
             }
         }

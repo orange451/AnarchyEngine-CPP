@@ -628,6 +628,7 @@ add_library(engine_instances STATIC
     src/engine_instances/Camera.cpp
     src/engine_instances/MeshShapes.cpp
     src/engine_instances/MeshEditor.cpp
+    src/engine_instances/ConnectionInstance.cpp
     src/engine_instances/Folder.cpp
     src/engine_instances/GameObject.cpp
     src/engine_instances/SpatialObject.cpp
@@ -663,6 +664,7 @@ add_library(engine_services STATIC
     src/engine_services/Game.cpp
     src/engine_services/GameService.cpp
     src/engine_services/Lighting.cpp
+    src/engine_services/Connections.cpp
     src/engine_services/SceneService.cpp
     src/engine_services/UserInputService.cpp
     src/engine_services/RunService.cpp
@@ -1148,6 +1150,7 @@ add_executable(sandbox
     sandbox/attachment_tests.cpp
     sandbox/run_context_tests.cpp
     sandbox/server_storage_tests.cpp
+    sandbox/connections_tests.cpp
     sandbox/scene_camera_tests.cpp
     sandbox/gui_tests.cpp
     sandbox/viewport_pane_tests.cpp

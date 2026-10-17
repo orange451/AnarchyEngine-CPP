@@ -1,6 +1,7 @@
 #include "Game.hpp"
 
 #include "ChangeHistoryService.hpp"
+#include "Connections.hpp"
 #include "Containment.hpp"
 #include "GameService.hpp"
 #include "Lighting.hpp"
@@ -49,6 +50,10 @@ Game::Game() : DataModel(kClassName) {
     Core& core = create<Core>();
     set_guid(core.id(), service_guid(kCoreClass));
     set_parent(core.id(), 0);
+    // Who is connected: outside the place, like Core.
+    Connections& connections = create<Connections>();
+    set_guid(connections.id(), service_guid(kConnectionsClass));
+    set_parent(connections.id(), 0);
     changes.set_enabled(enabled);
 }
 

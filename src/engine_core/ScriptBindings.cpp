@@ -1016,7 +1016,7 @@ int ScriptBindings::connection_disconnect(lua_State* state) {
 
 int ScriptBindings::connection_index(lua_State* state) {
     const char* key = luaL_checkstring(state, 2);
-    const LuaField* field = lua_class_find("SignalConnection", key != nullptr ? key : "");
+    const LuaField* field = lua_class_find("ScriptConnection", key != nullptr ? key : "");
     if (field == nullptr) {
         lua_pushnil(state);
         return 1;
@@ -1658,7 +1658,7 @@ ANARCHY_LUA_REGISTER(register_script_methods) {
     register_lua_class("Game", nullptr, &get_service, 1);
 
     LuaField connect =
-        lua_method("Connect", "SignalConnection", reinterpret_cast<void*>(&ScriptBindings::signal_connect));
+        lua_method("Connect", "ScriptConnection", reinterpret_cast<void*>(&ScriptBindings::signal_connect));
     connect.callback_arg = true;
     const LuaField signal[] = {
         connect,
@@ -1672,7 +1672,7 @@ ANARCHY_LUA_REGISTER(register_script_methods) {
         lua_method("Disconnect", "nil", reinterpret_cast<void*>(&ScriptBindings::connection_disconnect)),
         connected,
     };
-    register_lua_class("SignalConnection", nullptr, connection, 2);
+    register_lua_class("ScriptConnection", nullptr, connection, 2);
 
     // SelectionService.cpp declares the class and the service.
     const LuaField selection[] = {

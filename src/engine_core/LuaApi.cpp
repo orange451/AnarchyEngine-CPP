@@ -1779,11 +1779,11 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
     add("Slider", "Step", "When above 0, Value stays on Min plus a whole number of Steps.", "number", false, {});
     add("CSS", "Source", "The stylesheet for its parent GuiBase and everything inside it.", "string", false, {});
 
-    add("Signal", "Connect", "Calls callback when the signal fires and returns the connection.", "SignalConnection", false,
+    add("Signal", "Connect", "Calls callback when the signal fires and returns the connection.", "ScriptConnection", false,
         {P("callback", "function")});
     add("Signal", "Wait", "Yields until the signal fires, then returns the signal's arguments.", "", false, {});
-    add("SignalConnection", "Disconnect", "Stops this connection from firing.", nullptr, false, {});
-    add("SignalConnection", "Connected", "True until Disconnect runs.", "boolean", false, {});
+    add("ScriptConnection", "Disconnect", "Stops this connection from firing.", nullptr, false, {});
+    add("ScriptConnection", "Connected", "True until Disconnect runs.", "boolean", false, {});
 
     add("Selection", "Get", "The selected instances, in the order they were selected.", "{Instance}", false, {});
     add("Selection", "Set", "Selects these instances and nothing else. The explorer shows the same selection.", nullptr,

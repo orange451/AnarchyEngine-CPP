@@ -211,7 +211,7 @@ TEST_CASE("SC35b a place instance moved under a Connection returns to the place 
     require_consistent_tree(rig.game);
 }
 
-TEST_CASE("SC36 a signal's SignalConnection and a Connection instance are distinct classes", "[server-client][connections]") {
+TEST_CASE("SC36 a signal's ScriptConnection and a Connection instance are distinct classes", "[server-client][connections]") {
     ScriptRig rig;
     ConnectionInstance& mine = add_connection(rig.game);
     static_cast<Connections*>(rig.game.instance(rig.game.connections()))->set_local_connection(mine.id());
@@ -228,12 +228,12 @@ TEST_CASE("SC36 a signal's SignalConnection and a Connection instance are distin
     require_globals(rig, {"signal_live", "signal_dead", "instance_ok", "instance_not_signal"});
 }
 
-TEST_CASE("SC37 the checker knows SignalConnection as what Connect returns", "[server-client][connections]") {
+TEST_CASE("SC37 the checker knows ScriptConnection as what Connect returns", "[server-client][connections]") {
     ScriptRig rig;
     engine_core::ScriptAnalysis analysis(rig.game);
     engine_core::Script& script = add_script(rig.game, "Typed",
                                              "--!strict\n"
-                                             "local c: SignalConnection = game:GetService(\"RunService\").Heartbeat:Connect(function() end)\n"
+                                             "local c: ScriptConnection = game:GetService(\"RunService\").Heartbeat:Connect(function() end)\n"
                                              "c:Disconnect()\n"
                                              "return c.Connected\n");
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(20);

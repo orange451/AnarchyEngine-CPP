@@ -70,7 +70,7 @@ inline constexpr const char* kInstanceMeta = "AE.Instance";
 // Registry table: instance id -> its one userdata in this state, weak values.
 inline constexpr const char* kInstanceCache = "AE.InstanceCache";
 inline constexpr const char* kSignalMeta = "AE.Signal";
-inline constexpr const char* kConnectionMeta = "AE.SignalConnection";
+inline constexpr const char* kConnectionMeta = "AE.ScriptConnection";
 inline constexpr const char* kThreadMeta = "AE.Thread";
 inline constexpr const char* kServiceMeta = "AE.Service";
 inline constexpr const char* kInputObjectMeta = "AE.InputObject";

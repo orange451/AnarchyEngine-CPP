@@ -208,12 +208,12 @@ std::string signal_type(const std::string& owner, const LuaField& field, std::ve
 }
 
 void emit_signal_types(std::ostringstream& out, const std::vector<SignalType>& signals) {
-    if (!lua_class_known("Signal") || !lua_class_known("SignalConnection")) {
+    if (!lua_class_known("Signal") || !lua_class_known("ScriptConnection")) {
         return;
     }
     for (const SignalType& type : signals) {
         out << "declare extern type " << type.name << " extends Signal with\n";
-        out << "    function Connect(self, callback: (" << type.params << ") -> ()): SignalConnection\n";
+        out << "    function Connect(self, callback: (" << type.params << ") -> ()): ScriptConnection\n";
         out << "    function Wait(self): (" << type.values << ")\n";
         out << "end\n\n";
     }
@@ -224,12 +224,12 @@ void emit_signal_types(std::ostringstream& out, const std::vector<SignalType>& s
 // but the checker cannot tell a plugin's Script from another, so it is declared
 // for every script, as Roblox's is.
 void emit_plugin(std::ostringstream& out) {
-    if (!lua_class_known("Signal") || !lua_class_known("SignalConnection") || !lua_class_known("DockWidget") ||
+    if (!lua_class_known("Signal") || !lua_class_known("ScriptConnection") || !lua_class_known("DockWidget") ||
         !lua_class_known("Matrix4") || !lua_class_known("Instance")) {
         return;
     }
     out << "declare extern type Signal_Plugin with\n"
-           "    function Connect(self, callback: () -> ()): SignalConnection\n"
+           "    function Connect(self, callback: () -> ()): ScriptConnection\n"
            "    function Wait(self): ()\n"
            "end\n\n"
            "declare extern type PluginToolbarButton with\n"

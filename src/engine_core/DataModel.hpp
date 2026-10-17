@@ -5,6 +5,7 @@
 #include "InstanceRef.hpp"
 #include "InvalidationQueue.hpp"
 #include "PropertyBag.hpp"
+#include "TreeChange.hpp"
 #include "types.hpp"
 
 #include <chrono>
@@ -311,6 +312,10 @@ public:
     // sets it; null without one.
     void set_physics(PhysicsWorld* physics);
     PhysicsWorld* physics() const;
+    // Every parent, destroy, rename, and checked property write calls it,
+    // on the gameplay thread, after the change. Empty to stop.
+    void set_change_sink(TreeChangeSink sink);
+    bool has_change_sink() const;
     std::uint32_t world_generation() const;
     bool simulation_running() const;
     // Whether the physics world has stepped since play started. Until it has,

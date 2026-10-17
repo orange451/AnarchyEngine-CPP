@@ -16,6 +16,7 @@
 #include "LuaApi.hpp"
 #include "Ring.hpp"
 #include "Script.hpp"
+#include "TreeChange.hpp"
 #include "StableArray.hpp"
 #include "ScriptAnalysis.hpp"
 #include "SelectionService.hpp"
@@ -279,6 +280,9 @@ struct DataModel::State {
     ScriptAnalysis* script_analysis = nullptr;
     // The Engine's physics world, for scripts' queries. Null without an Engine.
     PhysicsWorld* physics = nullptr;
+    // Replication's reader of the tree's changes. Empty in Standalone, so the
+    // funnels pay one check.
+    TreeChangeSink change_sink;
 };
 
 }  // namespace engine_core

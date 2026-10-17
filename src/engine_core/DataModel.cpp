@@ -749,6 +749,10 @@ GameObject& DataModel::create_game_object() {
     return object;
 }
 
+void DataModel::set_change_sink(TreeChangeSink sink) { state_->change_sink = std::move(sink); }
+
+bool DataModel::has_change_sink() const { return static_cast<bool>(state_->change_sink); }
+
 void DataModel::destroy(InstanceId id) {
     // A paused edit owns the world like SimulationThread does, so it destroys now.
     if (!mutation_thread()) {
@@ -768,6 +772,13 @@ void DataModel::destroy(InstanceId id) {
     }
     if (part->instance != nullptr && part->instance->is_service()) {
         contract_fail(destroy_error(id)->c_str());
+    }
+    // Before anything is released, so the id still names a live instance.
+    if (state_->change_sink) {
+        TreeChange change;
+        change.kind = TreeChange::Kind::Destroyed;
+        change.id = id;
+        state_->change_sink(change);
     }
     std::optional<AuthoredRecord> captured;
     // Noted after the instance is gone, when Core no longer holds it, so the check is here.
@@ -1604,6 +1615,15 @@ void DataModel::notify_all_watchers() {
 }
 
 void DataModel::emit_change(InstanceId id, Field field, WriteOrigin origin, std::uint64_t payload) {
+    // set_parent and set_name report their own kinds.
+    if (state_->change_sink && field != Field::Parent && field != Field::Name) {
+        TreeChange change;
+        change.kind = TreeChange::Kind::Property;
+        change.id = id;
+        change.field = field;
+        change.payload = payload;
+        state_->change_sink(change);
+    }
     if (field == Field::Source) {
         state_->source_revision.fetch_add(1, std::memory_order_relaxed);
     }
@@ -1806,6 +1826,13 @@ void DataModel::set_parent(InstanceId id, InstanceId new_parent) {
     note_tree_changed();
     const WriteOrigin origin = current_origin();
     emit_change(id, Field::Parent, origin);
+    if (state_->change_sink) {
+        TreeChange change;
+        change.kind = TreeChange::Kind::Parented;
+        change.id = id;
+        change.previous_parent = old;
+        state_->change_sink(change);
+    }
     if (old != kNoParent) {
         emit_child(old, SignalKind::ChildRemoved, id, origin);
     }
@@ -2148,6 +2175,12 @@ void DataModel::set_name(InstanceId id, std::string name) {
     record_string(id, Field::Name, previous, object->name_);
     note_tree_changed();
     emit_change(id, Field::Name, current_origin());
+    if (state_->change_sink) {
+        TreeChange change;
+        change.kind = TreeChange::Kind::Renamed;
+        change.id = id;
+        state_->change_sink(change);
+    }
     if (state_->script_host != nullptr && id != 0) {
         const InstanceId under = parent(id);
         if (under != kNoParent) {

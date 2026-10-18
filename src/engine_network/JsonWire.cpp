@@ -1,0 +1,93 @@
+#include "JsonWire.hpp"
+
+namespace engine_network {
+
+namespace {
+
+enum Tag : std::uint8_t { Null = 0, False = 1, True = 2, Number = 3, String = 4, Array = 5, Object = 6 };
+constexpr int kMaxDepth = 32;
+
+bool read_value(ByteReader& in, engine_core::JsonValue& out, int depth) {
+    using engine_core::JsonValue;
+    if (depth > kMaxDepth) {
+        return false;
+    }
+    switch (in.u8()) {
+        case Null: out = JsonValue(); break;
+        case False: out = JsonValue::boolean(false); break;
+        case True: out = JsonValue::boolean(true); break;
+        case Number: out = JsonValue::number(in.f64()); break;
+        case String: out = JsonValue::string(in.string()); break;
+        case Array: {
+            const std::uint64_t count = in.varuint();
+            // Each item takes at least one byte, so a count beyond what is left is a lie.
+            if (in.failed() || count > in.left()) {
+                return false;
+            }
+            std::vector<JsonValue> items(static_cast<std::size_t>(count));
+            for (JsonValue& item : items) {
+                if (!read_value(in, item, depth + 1)) {
+                    return false;
+                }
+            }
+            out = JsonValue::array(std::move(items));
+            break;
+        }
+        case Object: {
+            const std::uint64_t count = in.varuint();
+            if (in.failed() || count > in.left()) {
+                return false;
+            }
+            out = JsonValue::object();
+            for (std::uint64_t i = 0; i < count; ++i) {
+                std::string key = in.string();
+                JsonValue value;
+                if (in.failed() || !read_value(in, value, depth + 1)) {
+                    return false;
+                }
+                out.set(std::move(key), std::move(value));
+            }
+            break;
+        }
+        default:
+            return false;
+    }
+    return !in.failed();
+}
+
+}  // namespace
+
+void write_json(ByteWriter& out, const engine_core::JsonValue& value) {
+    using Kind = engine_core::JsonValue::Kind;
+    switch (value.kind()) {
+        case Kind::Null: out.u8(Null); break;
+        case Kind::Bool: out.u8(value.as_bool() ? True : False); break;
+        case Kind::Number:
+            out.u8(Number);
+            out.f64(value.as_number());
+            break;
+        case Kind::String:
+            out.u8(String);
+            out.string(value.as_string());
+            break;
+        case Kind::Array:
+            out.u8(Array);
+            out.varuint(value.items().size());
+            for (const engine_core::JsonValue& item : value.items()) {
+                write_json(out, item);
+            }
+            break;
+        case Kind::Object:
+            out.u8(Object);
+            out.varuint(value.members().size());
+            for (const auto& [key, member] : value.members()) {
+                out.string(key);
+                write_json(out, member);
+            }
+            break;
+    }
+}
+
+bool read_json(ByteReader& in, engine_core::JsonValue& out) { return read_value(in, out, 0); }
+
+}  // namespace engine_network

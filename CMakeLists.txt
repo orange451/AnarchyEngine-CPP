@@ -781,6 +781,20 @@ target_link_libraries(engine_instances PRIVATE flecs)
 target_link_libraries(engine_core PRIVATE box3d)
 # zstd too: only AvoxFile.cpp includes it.
 target_link_libraries(engine_core PRIVATE zstd)
+
+# engine_network replicates a server's instance tree to its clients over
+# anarchy_network (docs/superpowers/specs/2026-10-13-server-client-design.md).
+# Nothing in the engine packages includes it: Engine reaches a session only
+# through engine_core::INetworkPump.
+add_library(engine_network STATIC
+    src/engine_network/ByteBuffer.cpp
+    src/engine_network/JsonWire.cpp
+    src/engine_network/TreeCodec.cpp
+)
+target_include_directories(engine_network PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src/engine_network")
+target_compile_features(engine_network PUBLIC cxx_std_17)
+target_link_libraries(engine_network PUBLIC engine_core anarchy_network)
+target_link_libraries(engine_network PRIVATE zstd)
 # meshoptimizer too: only LodBuilder.cpp includes it.
 target_link_libraries(engine_core PRIVATE meshoptimizer)
 # V-HACD too: only ConvexDecomposition.cpp includes it. SYSTEM, so -Wextra does not report on it.
@@ -1219,8 +1233,9 @@ add_executable(sandbox
     sandbox/tree_change_tests.cpp
     sandbox/replication_engine_tests.cpp
     sandbox/replication_property_tests.cpp
+    sandbox/replication_codec_tests.cpp
 )
-target_link_libraries(sandbox PRIVATE studio_core anarchy_network Catch2::Catch2WithMain)
+target_link_libraries(sandbox PRIVATE studio_core anarchy_network engine_network Catch2::Catch2WithMain)
 # The dense views tests check flecs state the engine keeps private.
 target_link_libraries(sandbox PRIVATE flecs)
 # The cylinder tests call Box3D directly (src/cylinder.c in the Box3D fork).
@@ -1241,7 +1256,7 @@ function(anarchy_warnings target)
 endfunction()
 foreach(target IN ITEMS studio_core studio AnarchyStudio AnarchyPlayer engine-tests shell-tests properties-tests console-tests
                         studio-tests mcp-tests explorer-tests assets-tests prefab-editor-tests terrain-editor-tests assets-demo billboard-demo viewport-demo prefab-demo terminal-tests terminal-probe anarchy-mcp
-                        sandbox amesh aanim amesh-tests amesh-gl-check scene-render-check gpu-timer-check grid-check profiler-demo profiler profiler-tests ${ENGINE_PACKAGES})
+                        engine_network sandbox amesh aanim amesh-tests amesh-gl-check scene-render-check gpu-timer-check grid-check profiler-demo profiler profiler-tests ${ENGINE_PACKAGES})
     anarchy_warnings(${target})
 endforeach()
 
@@ -1337,7 +1352,7 @@ endforeach()
 # is on; Ninja runs files in parallel already. The engine's own libraries share
 # a precompiled set of standard headers, which nearly every source includes.
 set(ANARCHY_OWN_LIBRARIES
-    profiler engine_datatypes engine_instances engine_services engine_core
+    profiler engine_datatypes engine_instances engine_services engine_core engine_network
     studio_core studio amesh amesh_gl)
 set(ANARCHY_PCH_HEADERS
     <algorithm> <atomic> <chrono> <cmath> <cstdint> <cstring> <filesystem> <functional>

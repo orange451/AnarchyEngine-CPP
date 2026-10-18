@@ -3921,7 +3921,7 @@ int main(int argc, char** argv) {
                 const auto skyAt = [&](double hours, double latitude, int quality) {
                     runner::SceneLighting out;
                     out.ambient[0] = out.ambient[1] = out.ambient[2] = 0.f;
-                    const runner::SkyState state = runner::ComputeSky(hours, latitude, 3.0, 0.0, 0.0);
+                    const runner::SkyState state = runner::ComputeSky(hours, latitude, runner::kSkyReferenceBrightness, 0.0, 0.0);
                     runner::SceneDynamicSky& sky = out.dynamicSky;
                     sky.enabled = true;
                     runner::SetSkyState(sky, state);

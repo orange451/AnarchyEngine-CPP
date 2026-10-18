@@ -80,6 +80,7 @@ SkyState ComputeSky(double timeOfDay, double latitudeDegrees, double brightness,
     state.starVisibility = StarVisibility(sunUp);
     const float dimming = CloudDimming(static_cast<float>(cloudCover), static_cast<float>(cloudDensity));
     const float strength = static_cast<float>(std::max(brightness, 0.0));
+    state.brightness = strength / kSkyReferenceBrightness;
 
     float sunAir[3];
     float moonAir[3];
@@ -96,14 +97,16 @@ SkyState ComputeSky(double timeOfDay, double latitudeDegrees, double brightness,
         light.fromSun = true;
         light.toward = state.sun;
         std::copy(sunAir, sunAir + 3, light.color);
-        light.intensity = strength * BodyFade(sunUp) * dimming;
+        light.referenceIntensity = kSkyReferenceBrightness * BodyFade(sunUp) * dimming;
+        light.intensity = light.referenceIntensity * state.brightness;
     } else {
         light.fromSun = false;
         light.toward = state.moon;
         for (int channel = 0; channel < 3; ++channel) {
             light.color[channel] = moonAir[channel] * kMoonTint[channel];
         }
-        light.intensity = strength * kMoonBrightnessScale * BodyFade(moonUp) * dimming;
+        light.referenceIntensity = kSkyReferenceBrightness * kMoonBrightnessScale * BodyFade(moonUp) * dimming;
+        light.intensity = light.referenceIntensity * state.brightness;
     }
     return state;
 }

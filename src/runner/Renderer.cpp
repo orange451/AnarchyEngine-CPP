@@ -242,9 +242,10 @@ void SetSkyState(SceneDynamicSky& out, const SkyState& state) {
     copy(state.moon, out.moonDirection);
     std::copy(state.starFrame, state.starFrame + 9, out.starFrame);
     out.starVisibility = state.starVisibility;
+    out.brightness = state.brightness;
     copy(state.light.toward, out.lightDirection);
     for (int channel = 0; channel < 3; ++channel) {
-        out.lightColor[channel] = state.light.color[channel] * state.light.intensity;
+        out.lightColor[channel] = state.light.color[channel] * state.light.referenceIntensity;
         out.sunColor[channel] = state.sunColor[channel];
         out.moonColor[channel] = state.moonColor[channel];
     }
@@ -2095,7 +2096,8 @@ void Renderer::prepareSky() {
     // Tint is a color as picked, sRGB, made linear as surface.glsl makes a Material's.
     const float exposure = std::max(lighting_.sky.exposure, 0.f);
     for (int channel = 0; channel < 3; ++channel) {
-        skyColor_[channel] = dynamic ? 1.f : exposure * engine_core::srgb_to_linear(lighting_.sky.tint[channel]);
+        skyColor_[channel] = dynamic ? std::max(lighting_.dynamicSky.brightness, 0.f)
+                                     : exposure * engine_core::srgb_to_linear(lighting_.sky.tint[channel]);
     }
     skyLightScale_ = dynamic ? 1.f : std::max(lighting_.sky.lightScale, 0.f);
     skyImage_ = dynamic ? whiteTexture_ : lighting_.sky.image;
@@ -2761,6 +2763,7 @@ bool Renderer::skyPass(const float* inverseProjection) {
         // since the DynamicSky draws even when skyReady_ (its lighting
         // cube) is not.
         glUniformMatrix3fv(program.viewToSky, 1, GL_FALSE, viewToSky_);
+        glUniform3f(program.skyColor, skyColor_[0], skyColor_[1], skyColor_[2]);
         bindDynamicSky(program, lighting_.dynamicSky);
     } else {
         bindSky(program);

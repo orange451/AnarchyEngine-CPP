@@ -20,8 +20,15 @@ namespace engine_core {
 // TimeOfDay          number              hours, wrapped into 0 up to 24. 14.
 // Latitude           number              degrees, -90 to 90: how high the sun
 //                                        climbs (90 - |Latitude| at noon). 35.
-// Brightness         number              the sun light's intensity; the moon's
-//                                        is a tenth of it. 2, 0 to kMaxBrightness.
+// Brightness         number              how bright the whole sky is: the sun
+//                                        light's intensity (the moon's is a
+//                                        tenth of it), and the sky as seen and
+//                                        its light and reflections on surfaces,
+//                                        in proportion (Brightness / 2). With
+//                                        Lighting's Exposure set inversely, the
+//                                        outdoors looks the same while other
+//                                        lights look dimmer or brighter beside
+//                                        it. 2, 0 to kMaxBrightness.
 // Shadows            boolean             whether the sun or moon light casts shadows. True.
 // CloudCover         number              how much of the sky has cloud, 0 to 1. 0.3.
 // CloudDensity       number              how thick the clouds are, 0 to 1. 0.

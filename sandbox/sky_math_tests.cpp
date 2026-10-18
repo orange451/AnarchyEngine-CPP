@@ -145,6 +145,20 @@ TEST_CASE("SM7 the light reddens at a low sun, and the discs hide below the hori
     REQUIRE(high.moonColor[2] == 0.f);
 }
 
+TEST_CASE("SM7b Brightness scales the whole sky against its picture, by day and by night", "[sky_math]") {
+    for (const double hours : {12.0, 0.0}) {
+        const SkyState reference = ComputeSky(hours, 35.0, kSkyReferenceBrightness, 0.3, 0.4);
+        const SkyState doubled = ComputeSky(hours, 35.0, kSkyReferenceBrightness * 2.0, 0.3, 0.4);
+        REQUIRE(reference.brightness == Approx(1.f));
+        REQUIRE(doubled.brightness == Approx(2.f));
+        // The light on the scene follows Brightness; the picture's own light on its clouds does not.
+        REQUIRE(doubled.light.intensity == Approx(reference.light.intensity * 2.f));
+        REQUIRE(doubled.light.referenceIntensity == Approx(reference.light.referenceIntensity));
+        REQUIRE(reference.light.intensity == Approx(reference.light.referenceIntensity));
+    }
+    REQUIRE(ComputeSky(12.0, 35.0, 0.0, 0.0, 0.0).brightness == 0.f);
+}
+
 TEST_CASE("SM8 the lighting cube's sizes and when it is drawn again", "[sky_math]") {
     REQUIRE(EnvironmentSizesFor(0).environment == 128);
     REQUIRE(EnvironmentSizesFor(0).prefiltered == 128);

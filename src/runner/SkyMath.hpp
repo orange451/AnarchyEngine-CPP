@@ -6,6 +6,11 @@
 // direction points toward the body.
 namespace runner {
 
+// The Brightness the sky's own picture is drawn at: at Brightness b the sky
+// as seen, its light and reflections on the scene, and the sun's light are all
+// b / this as bright, so Brightness against Exposure keeps the outdoors' look
+// while lights of fixed strength change beside it.
+constexpr float kSkyReferenceBrightness = 2.f;
 // The moon's light is the sun's Brightness times this.
 constexpr float kMoonBrightnessScale = 0.1f;
 // Full, dense cloud takes this much of the light away.
@@ -59,6 +64,8 @@ struct SkyLight {
     // Linear, at most 1 per channel.
     float color[3] = {1.f, 1.f, 1.f};
     float intensity = 0.f;
+    // The intensity at kSkyReferenceBrightness, as the sky's picture lights its clouds.
+    float referenceIntensity = 0.f;
     bool fromSun = true;
 };
 
@@ -73,6 +80,9 @@ struct SkyState {
     // the horizon, by which point a 2-degree disc has sunk behind the ground.
     float sunColor[3] = {0.f, 0.f, 0.f};
     float moonColor[3] = {0.f, 0.f, 0.f};
+    // Brightness / kSkyReferenceBrightness: the sky's picture is drawn at 1
+    // and scaled by this where it is seen and where it lights the scene.
+    float brightness = 1.f;
 };
 
 SkyState ComputeSky(double timeOfDay, double latitudeDegrees, double brightness, double cloudCover,

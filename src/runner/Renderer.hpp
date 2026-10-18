@@ -306,13 +306,16 @@ struct SceneDynamicSky {
     // Column-major, world into the stars' frame.
     float starFrame[9] = {1.f, 0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 1.f};
     float starVisibility = 0.f;
-    // The sky's light, toward it, and its color times its intensity, linear;
-    // the clouds are lit by it.
+    // The sky's light, toward it, and its color times its intensity at
+    // kSkyReferenceBrightness, linear; the clouds are lit by it.
     float lightDirection[3] = {0.f, 1.f, 0.f};
     float lightColor[3] = {0.f, 0.f, 0.f};
     // Each disc's linear radiance.
     float sunColor[3] = {0.f, 0.f, 0.f};
     float moonColor[3] = {0.f, 0.f, 0.f};
+    // SkyState::brightness: the sky as seen, and its light and reflections
+    // on the scene, are this times the picture its shaders draw.
+    float brightness = 1.f;
     float cloudCover = 0.5f;
     float cloudDensity = 0.5f;
     // Units drifted across X and Z.

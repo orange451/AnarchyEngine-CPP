@@ -9,11 +9,13 @@ out vec4 outColor;
 uniform sampler2D uDepth;
 // From view space to the world's: a DynamicSky does not turn.
 uniform mat3 uViewToSky;
+// The DynamicSky's brightness against the picture proceduralSky draws, the same each channel.
+uniform vec3 uSkyColor;
 
 void main() {
     if (texture(uDepth, vUv).r < 1.0) {
         discard;
     }
     vec3 direction = normalize(uViewToSky * viewPositionAt(vUv, 1.0));
-    outColor = vec4(proceduralSky(direction, true), 1.0);
+    outColor = vec4(min(proceduralSky(direction, true) * uSkyColor, vec3(kMaxHalf)), 1.0);
 }

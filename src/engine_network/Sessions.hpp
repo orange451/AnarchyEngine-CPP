@@ -4,8 +4,15 @@
 // The engine pumps one through engine_core::INetworkPump, receive at the start
 // of a step and send at its end
 // (docs/superpowers/specs/2026-10-13-server-client-design.md, section 2).
-// A session does not know the Engine pumping it: whoever called
-// Engine::set_network with it calls set_network(nullptr) before destroying it.
+//
+// Three rules for whoever owns a session:
+// - It does not know the Engine pumping it: whoever called Engine::set_network
+//   with it calls Engine::set_network(nullptr) before destroying it.
+// - It holds its DataModel (the Game) by reference, and its destructor still
+//   writes to it (Connections destroyed, play stopped), so the Game outlives it.
+// - connect, disconnect, close and the destructors change the world, so they run
+//   on the simulation thread under the write lock, as receive and send do when
+//   the engine pumps them.
 
 #include "DataModel.hpp"
 #include "Endpoint.hpp"
@@ -91,7 +98,8 @@ enum class ClientState { Idle, Connecting, Joining, Joined, Disconnected };
 
 // The client's side: it connects, starts play while its world is still empty,
 // builds the world from the server's snapshot, then applies each tick's
-// changes. When the connection ends, play it started stops and reason() says why.
+// changes. When the connection ends, play it started stops, the world role it
+// set goes back, and reason() says why.
 class ClientSession : public engine_core::INetworkPump {
 public:
     ClientSession(engine_core::DataModel& game, std::unique_ptr<network::ISocket> socket, SessionConfig config);
@@ -126,6 +134,8 @@ private:
     std::string reason_;
     double now_ = 0.0;
     bool started_play_ = false;   // this connection started play, so its end stops it
+    bool set_role_ = false;       // this connection made the world a Client, so its end puts previous_role_ back
+    engine_core::WorldRole previous_role_ = engine_core::WorldRole::Standalone;
     std::unique_ptr<network::Endpoint> endpoint_;
 };
 

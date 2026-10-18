@@ -472,3 +472,31 @@ TEST_CASE("RP45b destroying a session ends its connections", "[replication][sess
     REQUIRE(a.session->reason() == "The server closed the connection");
     REQUIRE_FALSE(a.rig.game.simulation_running());
 }
+
+TEST_CASE("RP45c a connection's end puts back the world role it set, and leaves one it found alone", "[replication][session]") {
+    Net net;
+    Client& client = net.add_client();
+    REQUIRE(client.rig.game.world_role() == engine_core::WorldRole::Standalone);
+    net.run(0.5);
+    REQUIRE(client.session->state() == engine_network::ClientState::Joined);
+    REQUIRE(client.rig.game.world_role() == engine_core::WorldRole::Client);
+    client.session->disconnect(net.now);
+    net.run(0.2);
+    REQUIRE(client.session->state() == engine_network::ClientState::Disconnected);
+    REQUIRE_FALSE(client.rig.game.simulation_running());
+    REQUIRE(client.rig.game.world_role() == engine_core::WorldRole::Standalone);
+    // A world that was a Client already stays one.
+    Client& already = net.add_client();
+    already.session.reset();
+    already.rig.game.set_world_role(engine_core::WorldRole::Client);
+    engine_network::SessionConfig config;
+    config.endpoint.identity = identity();
+    already.session = std::make_unique<engine_network::ClientSession>(already.rig.game, net.hub.open(client_address(5)), config);
+    REQUIRE(already.session->connect(kServer, net.now));
+    net.run(0.5);
+    REQUIRE(already.session->state() == engine_network::ClientState::Joined);
+    net.session->close(net.now);
+    net.run(0.5);
+    REQUIRE(already.session->state() == engine_network::ClientState::Disconnected);
+    REQUIRE(already.rig.game.world_role() == engine_core::WorldRole::Client);
+}

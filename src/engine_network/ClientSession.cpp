@@ -22,7 +22,11 @@ void ClientSession::on_connected() {
     state_ = ClientState::Joining;
     // A client plays the server's world: it starts while still empty, and the
     // snapshot builds the place during play.
-    game_.set_world_role(engine_core::WorldRole::Client);
+    if (game_.world_role() != engine_core::WorldRole::Client) {
+        previous_role_ = game_.world_role();
+        set_role_ = true;
+        game_.set_world_role(engine_core::WorldRole::Client);
+    }
     if (!game_.simulation_running()) {
         game_.capture_place();
         game_.start_simulation();
@@ -64,6 +68,11 @@ void ClientSession::on_disconnected(network::DisconnectReason why, network::Deny
         game_.stop_simulation();
     }
     started_play_ = false;
+    // A role this connection set goes back to what it was, after play has stopped in it.
+    if (set_role_) {
+        game_.set_world_role(previous_role_);
+    }
+    set_role_ = false;
 }
 
 std::string ClientSession::describe(network::DisconnectReason why, network::DenyReason deny) const {

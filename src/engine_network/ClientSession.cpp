@@ -16,7 +16,7 @@ ClientSession::ClientSession(engine_core::DataModel& game, std::unique_ptr<netwo
     endpoint_ = std::make_unique<network::Endpoint>(std::move(socket), config_.endpoint, std::move(callbacks));
 }
 
-ClientSession::~ClientSession() = default;
+ClientSession::~ClientSession() { disconnect(now_); }
 
 void ClientSession::on_connected() {
     state_ = ClientState::Joining;
@@ -26,6 +26,7 @@ void ClientSession::on_connected() {
     if (!game_.simulation_running()) {
         game_.capture_place();
         game_.start_simulation();
+        started_play_ = true;
     }
 }
 
@@ -57,10 +58,12 @@ void ClientSession::on_disconnected(network::DisconnectReason why, network::Deny
         reason_ = describe(why, deny);
     }
     state_ = ClientState::Disconnected;
-    // Stopping puts back the empty place the client started play with.
-    if (game_.simulation_running()) {
+    // Stopping puts back the empty place the client started play with; play
+    // this connection did not start, as after a refused connect, is left alone.
+    if (started_play_ && game_.simulation_running()) {
         game_.stop_simulation();
     }
+    started_play_ = false;
 }
 
 std::string ClientSession::describe(network::DisconnectReason why, network::DenyReason deny) const {

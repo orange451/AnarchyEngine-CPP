@@ -12,6 +12,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <cstdint>
 #include <deque>
 #include <memory>
@@ -64,11 +65,11 @@ struct Net {
     void tick() {
         now += 1.0 / 60.0;
         session->receive(now);
-        for (auto& c : clients) c->session->receive(now);
+        for (auto& c : clients) if (c->session) c->session->receive(now);
         server.frames(1);
         for (auto& c : clients) c->rig.frames(1);
         session->send(now);
-        for (auto& c : clients) c->session->send(now);
+        for (auto& c : clients) if (c->session) c->session->send(now);
     }
     void run(double seconds) {
         for (int i = 0; i < static_cast<int>(seconds * 60.0); ++i) tick();
@@ -83,6 +84,31 @@ engine_core::Folder& add_folder(engine_core::DataModel& game, InstanceId parent,
     game.set_name(folder.id(), name);
     game.set_parent(folder.id(), parent);
     return folder;
+}
+
+// The one peer in after that is not in before.
+network::PeerId only_new_peer(const std::vector<network::PeerId>& before, const std::vector<network::PeerId>& after) {
+    std::vector<network::PeerId> fresh;
+    for (const network::PeerId peer : after) {
+        if (std::find(before.begin(), before.end(), peer) == before.end()) fresh.push_back(peer);
+    }
+    REQUIRE(fresh.size() == 1);
+    return fresh[0];
+}
+
+// The Connection Id a client holds as its LocalConnection; empty when it has none.
+std::string local_connection_id(Client& client) {
+    engine_core::DataModel& game = client.rig.game;
+    const auto* connections = static_cast<engine_core::Connections*>(game.instance(game.connections()));
+    const InstanceId local = connections->local_connection();
+    if (local == 0 || !game.alive(local)) return std::string();
+    return static_cast<engine_core::ConnectionInstance*>(game.instance(local))->connection_id();
+}
+
+std::string server_connection_id(Net& net, network::PeerId peer) {
+    const InstanceId id = net.session->connection_of(peer);
+    REQUIRE(id != 0);
+    return static_cast<engine_core::ConnectionInstance*>(net.server.game.instance(id))->connection_id();
 }
 
 // A raw server endpoint sends messages to a ClientSession once it connects,
@@ -232,18 +258,27 @@ TEST_CASE("RP45 the server closing tells clients so; a client that stops hearing
 
 TEST_CASE("RP46 a client too far behind is dropped", "[replication][session]") {
     engine_network::SessionConfig config;
-    config.max_queued_messages = 4;
+    SECTION("its queue stalls") {
+        config.max_stall_seconds = 1.0;
+    }
+    SECTION("its queue grows too big") {
+        config.max_queued_bytes = 256;
+    }
     Net net(config);
     Client& client = net.add_client();
     net.run(0.5);
+    const network::PeerId peer = only_new_peer({}, net.session->endpoint().peers());
+    REQUIRE(net.session->connection_of(peer) != 0);
     net.session->endpoint().conditioner().loss = 1.0f;   // the client never acks
     engine_core::Folder& churn = add_folder(net.server.game, net.server.game.scene_service("Workspace"), "Churn");
-    for (int i = 0; i < 60 * 5 && net.session->fell_behind() == 0; ++i) {
+    // The window fills in about four seconds; the client gives up on a silent server at five.
+    for (int i = 0; i < 60 * 9 && net.session->fell_behind() == 0; ++i) {
         net.server.game.set_name(churn.id(), "Churn" + std::to_string(i));
         net.tick();
     }
     REQUIRE(net.session->fell_behind() == 1);
-    REQUIRE(net.session->connection_of(0) == 0);
+    REQUIRE(net.session->connection_of(peer) == 0);
+    REQUIRE(net.session->queued_bytes(peer) == 0);
     REQUIRE(net.server.game.get_children(net.server.game.connections()).empty());
     (void)client;
 }
@@ -284,4 +319,152 @@ TEST_CASE("RP47 bad data from the server ends the connection with a reason", "[r
     REQUIRE(client.state() == engine_network::ClientState::Disconnected);
     REQUIRE(client.reason() == "Bad data from the server");
     REQUIRE_FALSE(rig.game.simulation_running());
+}
+
+TEST_CASE("RP41b a big snapshot into a world that changes every tick still joins", "[replication][session]") {
+    engine_network::SessionConfig config;
+    config.replicator.snapshot_part_bytes = 8192;
+    // Each part takes longer than this to cross the thin link below, so only its acks show progress.
+    config.max_stall_seconds = 3.0;
+    Net net(config);
+    const InstanceId workspace = net.server.game.scene_service("Workspace");
+    for (int i = 0; i < 4000; ++i) {
+        add_folder(net.server.game, workspace, ("Folder" + std::to_string(i * 7919)).c_str());
+    }
+    engine_core::Folder& busy = add_folder(net.server.game, workspace, "Busy");
+    Client& client = net.add_client();
+    // A thin link: the snapshot takes over a minute, so far more than 3600
+    // changes queue behind it, and its acks are the only progress for long stretches.
+    net.session->endpoint().conditioner().bandwidth_bytes_per_second = 1500.0;
+    int joining_ticks = 0;
+    for (int i = 0; i < 60 * 300 && client.session->state() != engine_network::ClientState::Joined; ++i) {
+        net.server.game.set_name(busy.id(), "Busy" + std::to_string(i));
+        if (i % 600 == 0) add_folder(net.server.game, busy.id(), ("Kid" + std::to_string(i)).c_str());
+        net.tick();
+        if (client.session->state() == engine_network::ClientState::Joining) ++joining_ticks;
+    }
+    INFO("joining ticks " << joining_ticks);
+    REQUIRE(client.session->state() == engine_network::ClientState::Joined);
+    REQUIRE(joining_ticks > 3600 + 256);
+    REQUIRE(net.session->fell_behind() == 0);
+    // The link opens up; the backlog drains and the client catches up.
+    net.session->endpoint().conditioner().bandwidth_bytes_per_second = 0.0;
+    const network::PeerId peer = only_new_peer({}, net.session->endpoint().peers());
+    for (int i = 0; i < 60 * 120 && net.session->queued_bytes(peer) != 0; ++i) net.tick();
+    net.run(1.0);
+    REQUIRE(net.session->queued_bytes(peer) == 0);
+    net.same(client);
+    REQUIRE(client.session->applier().skipped() == 0);
+}
+
+TEST_CASE("RP42b two clients joining in the same tick each get their own Connection", "[replication][session]") {
+    Net net;
+    add_folder(net.server.game, net.server.game.scene_service("Workspace"), "Level");
+    Client& a = net.add_client();
+    Client& b = net.add_client();
+    for (int i = 0; i < 60 && net.session->endpoint().peers().empty(); ++i) net.tick();
+    const std::vector<network::PeerId> peers = net.session->endpoint().peers();
+    REQUIRE(peers.size() == 2);   // both connected in the same tick, so both snapshots went in it
+    net.run(0.5);
+    REQUIRE(a.session->state() == engine_network::ClientState::Joined);
+    REQUIRE(b.session->state() == engine_network::ClientState::Joined);
+    net.same(a);
+    net.same(b);
+    const std::string ids[2] = {server_connection_id(net, peers[0]), server_connection_id(net, peers[1])};
+    REQUIRE(ids[0] != ids[1]);
+    REQUIRE(local_connection_id(a) != local_connection_id(b));
+    for (Client* client : {&a, &b}) {
+        const std::string mine = local_connection_id(*client);
+        REQUIRE((mine == ids[0] || mine == ids[1]));
+        REQUIRE(client->session->applier().skipped() == 0);
+    }
+}
+
+TEST_CASE("RP42c a client leaving mid-snapshot leaves nothing behind", "[replication][session]") {
+    engine_network::SessionConfig config;
+    config.replicator.snapshot_part_bytes = 2048;
+    Net net(config);
+    const InstanceId workspace = net.server.game.scene_service("Workspace");
+    for (int i = 0; i < 2000; ++i) {
+        add_folder(net.server.game, workspace, ("F" + std::to_string(i * 7919)).c_str());
+    }
+    Client& stays = net.add_client();
+    net.run(3.0);
+    REQUIRE(stays.session->state() == engine_network::ClientState::Joined);
+    const std::vector<network::PeerId> before = net.session->endpoint().peers();
+    Client& leaves = net.add_client();
+    for (int i = 0; i < 60 && net.session->endpoint().peers().size() < 2; ++i) net.tick();
+    const network::PeerId peer = only_new_peer(before, net.session->endpoint().peers());
+    net.tick();
+    REQUIRE(leaves.session->state() == engine_network::ClientState::Joining);
+    leaves.session->disconnect(net.now);
+    engine_core::Folder& later = add_folder(net.server.game, workspace, "Later");
+    net.run(0.5);
+    REQUIRE(net.session->connection_of(peer) == 0);
+    REQUIRE(net.session->queued_bytes(peer) == 0);
+    REQUIRE(net.server.game.get_children(net.server.game.connections()).size() == 1);
+    net.server.game.set_name(later.id(), "Later2");
+    net.run(0.2);
+    net.same(stays);
+    REQUIRE(stays.session->applier().skipped() == 0);
+    // A new client, likely in the same slot, starts from a clean queue.
+    Client& next = net.add_client();
+    net.run(3.0);
+    REQUIRE(next.session->state() == engine_network::ClientState::Joined);
+    net.same(next);
+    REQUIRE(next.session->applier().skipped() == 0);
+}
+
+TEST_CASE("RP42d a script destroying a client's Connection on the server", "[replication][session]") {
+    Net net;
+    Client& client = net.add_client();
+    net.run(0.5);
+    const network::PeerId peer = only_new_peer({}, net.session->endpoint().peers());
+    REQUIRE(!local_connection_id(client).empty());
+    net.server.game.destroy_tree(net.session->connection_of(peer));   // as Destroy from a script would
+    net.run(0.3);
+    REQUIRE(client.session->state() == engine_network::ClientState::Joined);
+    REQUIRE(client.rig.game.get_children(client.rig.game.connections()).empty());
+    REQUIRE(local_connection_id(client).empty());
+    net.same(client);
+    client.session->disconnect(net.now);
+    net.run(0.5);
+    REQUIRE(net.session->connection_of(peer) == 0);
+    REQUIRE(net.server.game.get_children(net.server.game.connections()).empty());
+}
+
+TEST_CASE("RP44b a refused connect leaves play it did not start alone", "[replication][session]") {
+    Net net;
+    network::GameIdentity other = identity();
+    other.game_id[0] ^= 0xFF;
+    net.clients.push_back(std::make_unique<Client>());
+    Client& client = *net.clients.back();
+    client.rig.game.start_simulation();   // already playing, standalone
+    engine_network::SessionConfig config;
+    config.endpoint.identity = other;
+    client.session = std::make_unique<engine_network::ClientSession>(client.rig.game, net.hub.open(client_address(0)), config);
+    REQUIRE(client.session->connect(kServer, net.now));
+    net.run(0.5);
+    REQUIRE(client.session->reason() == "This server runs a different game");
+    REQUIRE(client.rig.game.simulation_running());
+}
+
+TEST_CASE("RP45b destroying a session ends its connections", "[replication][session]") {
+    Net net;
+    Client& a = net.add_client();
+    Client& b = net.add_client();
+    net.run(0.5);
+    REQUIRE(net.server.game.get_children(net.server.game.connections()).size() == 2);
+    b.session.reset();   // the client goes away: it leaves (its world stays, as a rig must until the test ends)
+    net.run(0.5);
+    REQUIRE(net.server.game.get_children(net.server.game.connections()).size() == 1);
+    net.session.reset();   // the server goes away: it closes
+    REQUIRE(net.server.game.get_children(net.server.game.connections()).empty());
+    for (int i = 0; i < 30; ++i) {
+        net.now += 1.0 / 60.0;
+        a.session->receive(net.now);
+        a.session->send(net.now);
+    }
+    REQUIRE(a.session->reason() == "The server closed the connection");
+    REQUIRE_FALSE(a.rig.game.simulation_running());
 }

@@ -50,6 +50,8 @@ public:
         }
     }
     void acked(const MessageRef& ref);
+    // Messages and fragments acked so far, each counted once.
+    std::uint64_t acked_pieces() const { return acked_pieces_; }
     std::size_t unacked() const { return static_cast<std::size_t>(sequence_diff(next_send_id_, oldest_unacked_)); }
 
 private:
@@ -93,6 +95,7 @@ private:
     std::vector<Incoming> in_ = std::vector<Incoming>(kWindowSize);
     std::uint16_t next_deliver_ = 0;
     std::size_t reassembly_bytes_ = 0;
+    std::uint64_t acked_pieces_ = 0;
 };
 
 }  // namespace network

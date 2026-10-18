@@ -200,6 +200,7 @@ void ReliableChannel::acked(const MessageRef& ref) {
         out.fragment_acked[ref.fragment] = 1;
         if (++out.fragments_acked == out.fragment_count) out.acked = true;
     }
+    ++acked_pieces_;
     // The window slides past every acked message at its front.
     while (sequence_diff(next_send_id_, oldest_unacked_) > 0) {
         Outgoing& front = out_[oldest_unacked_ % kWindowSize];

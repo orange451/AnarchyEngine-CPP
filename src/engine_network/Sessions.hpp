@@ -4,6 +4,8 @@
 // The engine pumps one through engine_core::INetworkPump, receive at the start
 // of a step and send at its end
 // (docs/superpowers/specs/2026-10-13-server-client-design.md, section 2).
+// A session does not know the Engine pumping it: whoever called
+// Engine::set_network with it calls set_network(nullptr) before destroying it.
 
 #include "DataModel.hpp"
 #include "Endpoint.hpp"
@@ -24,8 +26,11 @@ namespace engine_network {
 struct SessionConfig {
     network::EndpointConfig endpoint;            // role is set by the session
     ReplicatorOptions replicator;
-    std::size_t max_queued_messages = 3600;      // about a minute of ticks waiting on one client
-    std::size_t max_queued_bytes = 64u << 20;
+    // A client is dropped when its queue makes no progress this long: nothing
+    // handed to the channel and nothing acked. A big snapshot draining slowly
+    // into a busy world is progress, however long it takes.
+    double max_stall_seconds = 30.0;
+    std::size_t max_queued_bytes = 256u << 20;   // or when its queue holds more than this
 };
 
 // The server's side: each client that connects gets a Connection under
@@ -34,6 +39,7 @@ struct SessionConfig {
 class ServerSession : public engine_core::INetworkPump {
 public:
     ServerSession(engine_core::DataModel& game, std::unique_ptr<network::ISocket> socket, SessionConfig config);
+    // Closes: every client is told and its Connection destroyed.
     ~ServerSession() override;
     ServerSession(const ServerSession&) = delete;
     ServerSession& operator=(const ServerSession&) = delete;
@@ -48,19 +54,25 @@ public:
     engine_core::InstanceId connection_of(network::PeerId peer) const;
     // Messages clients sent: nothing a client says has meaning yet, so each is counted and dropped.
     std::size_t dropped_messages() const;
-    // Clients dropped because their queue passed max_queued_messages or max_queued_bytes.
+    // Clients dropped because their queue stalled past max_stall_seconds or grew past max_queued_bytes.
     std::size_t fell_behind() const;
+    // Bytes waiting for room in the peer's reliable window; 0 for a peer it does not have.
+    std::size_t queued_bytes(network::PeerId peer) const;
 
 private:
+    // One tick's changes go to every joined peer; they share the bytes.
+    using Message = std::shared_ptr<const std::vector<std::uint8_t>>;
     struct Peer {
         engine_core::InstanceId connection = 0;
         bool joined = false;   // its snapshot is queued; it gets every tick's changes after it
-        std::deque<std::vector<std::uint8_t>> queue;   // messages the reliable window had no room for yet
+        std::deque<Message> queue;   // messages the reliable window had no room for yet
         std::size_t queued_bytes = 0;
+        double last_progress = 0.0;       // when the queue was last empty, handed a message, or saw an ack
+        std::uint64_t acked = 0;          // the channel's acked count then
     };
     void on_connected(network::PeerId peer);
     void on_disconnected(network::PeerId peer);
-    void push(Peer& entry, const std::vector<std::uint8_t>& message);
+    void push(Peer& entry, Message message);
     void flush(network::PeerId peer, double now);
 
     engine_core::DataModel& game_;
@@ -69,6 +81,7 @@ private:
     std::unordered_map<network::PeerId, Peer> peers_;
     std::size_t dropped_messages_ = 0;
     std::size_t fell_behind_ = 0;
+    double now_ = 0.0;   // the last time the engine gave
     // Last, so it goes first: its callbacks reach everything above.
     std::unique_ptr<network::Endpoint> endpoint_;
 };
@@ -77,10 +90,11 @@ enum class ClientState { Idle, Connecting, Joining, Joined, Disconnected };
 
 // The client's side: it connects, starts play while its world is still empty,
 // builds the world from the server's snapshot, then applies each tick's
-// changes. When the connection ends, play stops and reason() says why.
+// changes. When the connection ends, play it started stops and reason() says why.
 class ClientSession : public engine_core::INetworkPump {
 public:
     ClientSession(engine_core::DataModel& game, std::unique_ptr<network::ISocket> socket, SessionConfig config);
+    // Leaves, as disconnect does, when still connecting or connected.
     ~ClientSession() override;
     ClientSession(const ClientSession&) = delete;
     ClientSession& operator=(const ClientSession&) = delete;
@@ -110,6 +124,7 @@ private:
     ClientState state_ = ClientState::Idle;
     std::string reason_;
     double now_ = 0.0;
+    bool started_play_ = false;   // this connection started play, so its end stops it
     std::unique_ptr<network::Endpoint> endpoint_;
 };
 

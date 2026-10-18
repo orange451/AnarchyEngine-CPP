@@ -119,6 +119,7 @@ ConnectionStats Connection::stats(double now) const {
     stats.bytes_in_per_second = in_rate_;
     stats.bytes_out_per_second = out_rate_;
     stats.budget_bytes_per_second = flow_.bytes_per_second();
+    stats.reliable_acked = reliable_.acked_pieces();
     return stats;
 }
 

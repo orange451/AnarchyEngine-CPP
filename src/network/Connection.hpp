@@ -23,6 +23,8 @@ struct ConnectionStats {
     std::uint64_t packets_received = 0;
     std::uint64_t dropped_replay = 0;
     std::uint64_t dropped_malformed = 0;
+    // Reliable messages and fragments the peer has acked so far: it goes up while a backlog drains.
+    std::uint64_t reliable_acked = 0;
 };
 
 // Set once at connect; none is called from inside another.

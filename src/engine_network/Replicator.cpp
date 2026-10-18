@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <set>
 #include <stdexcept>
+#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 
@@ -195,7 +196,7 @@ void Replicator::write_subtree(OpWriter& writer, InstanceId id, std::unordered_s
     }
 }
 
-void Replicator::forget_subtree(InstanceId id) {
+void Replicator::forget_subtree(InstanceId id, const std::unordered_set<InstanceId>& moved) {
     std::vector<InstanceId> pending{id};
     while (!pending.empty()) {
         const InstanceId next = pending.back();
@@ -205,7 +206,10 @@ void Replicator::forget_subtree(InstanceId id) {
             continue;
         }
         for (InstanceId child = game_.first_child(next); child != 0; child = game_.next_sibling(child)) {
-            pending.push_back(child);
+            // One that moved here this tick is somewhere else on the client, and has its own entry.
+            if (moved.count(child) == 0) {
+                pending.push_back(child);
+            }
         }
     }
 }
@@ -221,8 +225,9 @@ bool Replicator::end_tick(std::vector<std::uint8_t>& message) {
     std::unordered_set<InstanceId> destroyed_set;
     std::vector<InstanceId> moved;
     std::unordered_set<InstanceId> moved_set;
-    // Left nowhere by its parent's destroy this tick and not moved since: the
-    // client's destroy_tree of that parent takes it, so it needs no op of its own.
+    // Where each moved instance was when the tick began: where clients hold it, if they know it.
+    std::unordered_map<InstanceId, InstanceId> start_parent;
+    // Left nowhere by a parent's destroy this tick and not moved since.
     std::unordered_set<InstanceId> orphaned;
     std::vector<InstanceId> renamed;
     std::unordered_set<InstanceId> renamed_set;
@@ -244,6 +249,7 @@ bool Replicator::end_tick(std::vector<std::uint8_t>& message) {
             case engine_core::TreeChange::Kind::Parented:
                 if (moved_set.insert(change.id).second) {
                     moved.push_back(change.id);
+                    start_parent.emplace(change.id, change.previous_parent);
                 }
                 if (destroyed_set.count(change.previous_parent) != 0) {
                     orphaned.insert(change.id);
@@ -271,6 +277,16 @@ bool Replicator::end_tick(std::vector<std::uint8_t>& message) {
             }
         }
     }
+    // An orphan whose parent at the tick's start was destroyed is still under that
+    // parent on the client, so the client's destroy_tree of it takes this one: no op.
+    // Any other orphan the client knows leaves through a Destroy of its own.
+    const auto taken_with_parent = [&](InstanceId id) {
+        if (orphaned.count(id) == 0) {
+            return false;
+        }
+        const auto at = start_parent.find(id);
+        return at != start_parent.end() && destroyed_set.count(at->second) != 0;
+    };
 
     ByteWriter out;
     out.u8(static_cast<std::uint8_t>(MessageType::Changes));
@@ -293,8 +309,8 @@ bool Replicator::end_tick(std::vector<std::uint8_t>& message) {
     std::vector<InstanceId> left_filter;
     for (const auto& entry : by_depth) {
         const InstanceId id = entry.second;
-        if (orphaned.count(id) != 0) {
-            forget_subtree(id);
+        if (taken_with_parent(id)) {
+            forget_subtree(id, moved_set);
             continue;
         }
         if (replicated(id)) {
@@ -315,11 +331,11 @@ bool Replicator::end_tick(std::vector<std::uint8_t>& message) {
     for (const InstanceId id : left_filter) {
         if (known_.count(id) != 0) {
             writer.destroy(id);
-            forget_subtree(id);
+            forget_subtree(id, moved_set);
         }
     }
     for (const InstanceId id : destroyed) {
-        if (known_.erase(id) != 0 && orphaned.count(id) == 0) {
+        if (known_.erase(id) != 0 && !taken_with_parent(id)) {
             writer.destroy(id);
         }
     }

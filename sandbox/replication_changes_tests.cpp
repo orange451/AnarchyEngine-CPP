@@ -161,6 +161,13 @@ TEST_CASE("RP33 an instance moved into ServerStorage disappears; moved back, it 
     REQUIRE(pair.tick());
     pair.same();
     require_no_orphans(pair.client.game);
+    // The same netids name it again on the client.
+    const InstanceId client_box = pair.client_id(box.id());
+    REQUIRE(client_box != engine_core::DataModel::kNoParent);
+    REQUIRE(pair.client.game.alive(client_box));
+    REQUIRE(pair.client.game.parent(client_box) == pair.client.game.scene_service("Workspace"));
+    REQUIRE(pair.client.game.parent(pair.client_id(lamp.id())) == client_box);
+    REQUIRE(pair.applier->skipped() == 0);
 }
 
 TEST_CASE("RP34 reparents work, under something new this tick, and when two swap places", "[replication][changes]") {
@@ -199,7 +206,7 @@ TEST_CASE("RP35 RunContext decides what source a client holds; a Server script's
     pair.same();   // and it is emptied again
 }
 
-TEST_CASE("RP36 quiet physics writes and view-local properties send nothing", "[replication][changes]") {
+TEST_CASE("RP36 quiet physics writes and velocity writes send nothing", "[replication][changes]") {
     Pair pair;
     engine_core::DataModel& game = pair.server.game;
     engine_core::GameObject& object = game.create<engine_core::GameObject>();
@@ -208,6 +215,9 @@ TEST_CASE("RP36 quiet physics writes and view-local properties send nothing", "[
     engine_core::Matrix4 moved = engine_core::matrix4_identity();
     moved.m[12] = 2.0f;
     game.write_simulated_transform(object.id(), moved);
+    REQUIRE_FALSE(pair.tick());
+    // A checked velocity write is reported, but LinearVelocity is never sent.
+    object.set_linear_velocity(1.0f, 2.0f, 3.0f);
     REQUIRE_FALSE(pair.tick());
 }
 
@@ -264,4 +274,118 @@ TEST_CASE("RP39 a string only a later client's snapshot named reaches the first 
     REQUIRE(second_applier.receive_message(message.data(), message.size()) == engine_network::ApplyResult::Ok);
     pair.same();
     require_same_world(*pair.replicator, game, second.game);
+}
+
+TEST_CASE("RP40 an instance moved into something destroyed in the same tick leaves the client too", "[replication][changes]") {
+    Pair pair;
+    engine_core::DataModel& game = pair.server.game;
+    const InstanceId workspace = game.scene_service("Workspace");
+    engine_core::Folder& holder = add_folder(game, workspace, "Holder");
+    engine_core::Folder& d = add_folder(game, holder.id(), "D");
+    add_folder(game, d.id(), "Inside");
+    engine_core::Folder& known = add_folder(game, workspace, "Known");
+    REQUIRE(pair.tick());
+
+    SECTION("into something new this tick") {
+        engine_core::Folder& tmp = add_folder(game, workspace, "Tmp");
+        game.set_parent(d.id(), tmp.id());
+        game.destroy(tmp.id());
+    }
+    SECTION("into something clients already hold") {
+        game.set_parent(d.id(), known.id());
+        game.destroy(known.id());
+    }
+    SECTION("into something clients already hold, then destroyed itself") {
+        game.set_parent(d.id(), known.id());
+        game.destroy(known.id());
+        game.destroy(d.id());
+    }
+    REQUIRE(pair.tick());
+    pair.same();
+    REQUIRE(pair.applier->skipped() == 0);
+    require_no_orphans(pair.client.game);
+    if (game.alive(d.id())) {
+        game.set_parent(d.id(), workspace);
+        REQUIRE(pair.tick());
+        pair.same();
+        REQUIRE(pair.applier->skipped() == 0);
+    }
+}
+
+TEST_CASE("RP41 an instance moved into ServerStorage and back in one tick sends one Parent op", "[replication][changes]") {
+    Pair pair;
+    engine_core::DataModel& game = pair.server.game;
+    const InstanceId workspace = game.scene_service("Workspace");
+    engine_core::Folder& box = add_folder(game, workspace, "Box");
+    add_folder(game, box.id(), "Inside");
+    REQUIRE(pair.tick());
+    const InstanceId before = pair.client_id(box.id());
+    game.set_parent(box.id(), game.service("ServerStorage"));
+    game.set_parent(box.id(), workspace);
+    std::vector<std::uint8_t> message;
+    REQUIRE(pair.replicator->end_tick(message));
+    engine_network::StringTable strings;
+    engine_network::ByteReader in(message.data() + 1, message.size() - 1);   // past the message type
+    in.u8();
+    in.varuint();
+    std::vector<engine_network::Op> ops;
+    REQUIRE(engine_network::read_ops(in, strings, ops));
+    REQUIRE(ops.size() == 1);
+    REQUIRE(ops[0].kind == engine_network::Op::Kind::Parent);
+    REQUIRE(pair.applier->receive_message(message.data(), message.size()) == engine_network::ApplyResult::Ok);
+    REQUIRE(pair.client_id(box.id()) == before);
+    pair.same();
+}
+
+TEST_CASE("RP42 a child moved out of something going into ServerStorage in the same tick survives", "[replication][changes]") {
+    Pair pair;
+    engine_core::DataModel& game = pair.server.game;
+    const InstanceId workspace = game.scene_service("Workspace");
+    engine_core::Folder& box = add_folder(game, workspace, "Box");
+    engine_core::Folder& kid = add_folder(game, box.id(), "Kid");
+    add_folder(game, kid.id(), "Grandkid");
+    REQUIRE(pair.tick());
+    const InstanceId before = pair.client_id(kid.id());
+    SECTION("moved out first") {
+        game.set_parent(kid.id(), workspace);
+        game.set_parent(box.id(), game.service("ServerStorage"));
+    }
+    SECTION("moved out after") {
+        game.set_parent(box.id(), game.service("ServerStorage"));
+        game.set_parent(kid.id(), workspace);
+    }
+    REQUIRE(pair.tick());
+    pair.same();
+    REQUIRE(pair.client_id(kid.id()) == before);
+    REQUIRE(pair.client.game.alive(before));
+    REQUIRE(pair.applier->skipped() == 0);
+}
+
+TEST_CASE("RP43 an instance moved into something leaving the client in the same tick leaves too", "[replication][changes]") {
+    Pair pair;
+    engine_core::DataModel& game = pair.server.game;
+    const InstanceId workspace = game.scene_service("Workspace");
+    engine_core::Folder& box = add_folder(game, workspace, "Box");
+    engine_core::Folder& holder = add_folder(game, workspace, "Holder");
+    engine_core::Folder& x = add_folder(game, workspace, "X");
+    REQUIRE(pair.tick());
+    SECTION("into something going into ServerStorage") {
+        game.set_parent(x.id(), box.id());
+        game.set_parent(box.id(), game.service("ServerStorage"));
+    }
+    SECTION("into something left nowhere by a destroy") {
+        game.set_parent(box.id(), holder.id());
+        REQUIRE(pair.tick());
+        game.set_parent(x.id(), box.id());
+        game.destroy(holder.id());
+    }
+    REQUIRE(pair.tick());
+    pair.same();
+    REQUIRE(pair.applier->skipped() == 0);
+    require_no_orphans(pair.client.game);
+    // Back where clients see it, it is created again without trouble.
+    game.set_parent(box.id(), workspace);
+    REQUIRE(pair.tick());
+    pair.same();
+    REQUIRE(pair.applier->skipped() == 0);
 }

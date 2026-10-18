@@ -53,8 +53,9 @@ private:
     // hold (they moved here this tick and get their own Parent op).
     void write_subtree(OpWriter& writer, engine_core::InstanceId id,
                        std::unordered_set<engine_core::InstanceId>& created);
-    // Clients no longer hold id or anything under it.
-    void forget_subtree(engine_core::InstanceId id);
+    // Clients no longer hold id or what they hold under it; a child in moved
+    // came here this tick, is elsewhere on the client, and is left to its own entry.
+    void forget_subtree(engine_core::InstanceId id, const std::unordered_set<engine_core::InstanceId>& moved);
 
     engine_core::DataModel& game_;
     ReplicatorOptions options_;

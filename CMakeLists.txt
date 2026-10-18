@@ -1218,6 +1218,7 @@ add_executable(sandbox
     sandbox/network_soak_tests.cpp
     sandbox/tree_change_tests.cpp
     sandbox/replication_engine_tests.cpp
+    sandbox/replication_property_tests.cpp
 )
 target_link_libraries(sandbox PRIVATE studio_core anarchy_network Catch2::Catch2WithMain)
 # The dense views tests check flecs state the engine keeps private.

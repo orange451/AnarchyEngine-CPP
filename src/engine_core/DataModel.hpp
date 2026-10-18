@@ -392,6 +392,11 @@ public:
     // The value save_properties leaves out, for every key this class owns: what
     // a key missing from its file means. The root owns none.
     virtual void default_properties(PropertyBag& out) const;
+    // The current value of one property as a project save writes it, whether or
+    // not it is at its default: a saved registry property, Simulated, or
+    // VisualOnly; a subclass adds what its save_properties adds (a
+    // SpatialObject's Transform, a Script's Enabled). False for any other name.
+    virtual bool read_property_json(std::string_view name, JsonValue& out) const;
     // True when this class owns key. The value was applied, or error is set.
     // Runs on a live instance during project load.
     virtual bool load_property(const std::string& key, const JsonValue& value, std::string& error);

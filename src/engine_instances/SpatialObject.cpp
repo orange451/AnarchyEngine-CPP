@@ -73,6 +73,19 @@ void SpatialObject::default_properties(PropertyBag& out) const {
     bag_set(out, "Transform", json_floats(identity.m, 16));
 }
 
+// The base answers first, so a class with its own saved Transform row answers from that row.
+bool SpatialObject::read_property_json(std::string_view name, JsonValue& out) const {
+    if (DataModel::read_property_json(name, out)) {
+        return true;
+    }
+    if (name == "Transform") {
+        const Matrix4 value = transform();
+        out = json_floats(value.m, 16);
+        return true;
+    }
+    return false;
+}
+
 bool SpatialObject::load_property(const std::string& key, const JsonValue& value, std::string& error) {
     if (key == "Transform") {
         std::vector<float> floats;

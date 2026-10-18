@@ -2582,6 +2582,28 @@ void DataModel::default_properties(PropertyBag& out) const {
     bag_set(out, "VisualOnly", JsonValue::boolean(false));
 }
 
+bool DataModel::read_property_json(std::string_view name, JsonValue& out) const {
+    const std::shared_ptr<const std::vector<LuaField>> fields = lua_saved_field_list(class_name());
+    for (const LuaField& field : *fields) {
+        if (name == field.name) {
+            return saved_value(*state_->root, *this, field, out);
+        }
+    }
+    // The root has no entity to tag, as in load_property.
+    if (slot(id_) == nullptr) {
+        return false;
+    }
+    if (name == "Simulated") {
+        out = JsonValue::boolean(simulated(id_));
+        return true;
+    }
+    if (name == "VisualOnly") {
+        out = JsonValue::boolean(visual_only(id_));
+        return true;
+    }
+    return false;
+}
+
 bool DataModel::load_property(const std::string& key, const JsonValue& value, std::string& error) {
     const std::shared_ptr<const std::vector<LuaField>> fields = lua_saved_field_list(class_name());
     for (const LuaField& field : *fields) {

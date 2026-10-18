@@ -35,6 +35,7 @@ public:
     // Transform when it differs from a new object's.
     void save_properties(PropertyBag& out) const override;
     void default_properties(PropertyBag& out) const override;
+    bool read_property_json(std::string_view name, JsonValue& out) const override;
     bool load_property(const std::string& key, const JsonValue& value, std::string& error) override;
 
 protected:

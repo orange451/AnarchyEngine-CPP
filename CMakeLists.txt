@@ -788,9 +788,11 @@ target_link_libraries(engine_core PRIVATE zstd)
 # through engine_core::INetworkPump.
 add_library(engine_network STATIC
     src/engine_network/ByteBuffer.cpp
+    src/engine_network/ClientSession.cpp
     src/engine_network/JsonWire.cpp
     src/engine_network/ReplicaApplier.cpp
     src/engine_network/Replicator.cpp
+    src/engine_network/ServerSession.cpp
     src/engine_network/TreeCodec.cpp
 )
 target_include_directories(engine_network PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src/engine_network")
@@ -1238,6 +1240,7 @@ add_executable(sandbox
     sandbox/replication_codec_tests.cpp
     sandbox/replication_snapshot_tests.cpp
     sandbox/replication_changes_tests.cpp
+    sandbox/replication_session_tests.cpp
 )
 target_link_libraries(sandbox PRIVATE studio_core anarchy_network engine_network Catch2::Catch2WithMain)
 # The dense views tests check flecs state the engine keeps private.

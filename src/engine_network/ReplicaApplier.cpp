@@ -146,12 +146,18 @@ bool ReplicaApplier::apply(const Op& op) {
         case Op::Kind::Create:
             return apply_create(op);
         case Op::Kind::Destroy: {
+            // A refused destroy keeps its mapping; one already gone, or done here, frees the netid.
             const InstanceId id = alive_local(op.netid);
-            local_.erase(op.netid);
-            if (id == DataModel::kNoParent || id == 0 || game_.destroy_error(id)) {
+            if (id == DataModel::kNoParent) {
+                local_.erase(op.netid);
                 ++skipped_;
                 return true;
             }
+            if (id == 0 || game_.destroy_error(id)) {
+                ++skipped_;
+                return true;
+            }
+            local_.erase(op.netid);
             game_.destroy_tree(id);
             return true;
         }

@@ -276,7 +276,7 @@ TEST_CASE("RP39 a string only a later client's snapshot named reaches the first 
     require_same_world(*pair.replicator, game, second.game);
 }
 
-TEST_CASE("RP40 an instance moved into something destroyed in the same tick leaves the client too", "[replication][changes]") {
+TEST_CASE("RP33b an instance moved into something destroyed in the same tick leaves the client too", "[replication][changes]") {
     Pair pair;
     engine_core::DataModel& game = pair.server.game;
     const InstanceId workspace = game.scene_service("Workspace");
@@ -312,7 +312,7 @@ TEST_CASE("RP40 an instance moved into something destroyed in the same tick leav
     }
 }
 
-TEST_CASE("RP41 an instance moved into ServerStorage and back in one tick sends one Parent op", "[replication][changes]") {
+TEST_CASE("RP33c an instance moved into ServerStorage and back in one tick sends one Parent op", "[replication][changes]") {
     Pair pair;
     engine_core::DataModel& game = pair.server.game;
     const InstanceId workspace = game.scene_service("Workspace");
@@ -337,7 +337,7 @@ TEST_CASE("RP41 an instance moved into ServerStorage and back in one tick sends 
     pair.same();
 }
 
-TEST_CASE("RP42 a child moved out of something going into ServerStorage in the same tick survives", "[replication][changes]") {
+TEST_CASE("RP33d a child moved out of something going into ServerStorage in the same tick survives", "[replication][changes]") {
     Pair pair;
     engine_core::DataModel& game = pair.server.game;
     const InstanceId workspace = game.scene_service("Workspace");
@@ -361,7 +361,7 @@ TEST_CASE("RP42 a child moved out of something going into ServerStorage in the s
     REQUIRE(pair.applier->skipped() == 0);
 }
 
-TEST_CASE("RP43 an instance moved into something leaving the client in the same tick leaves too", "[replication][changes]") {
+TEST_CASE("RP33e an instance moved into something leaving the client in the same tick leaves too", "[replication][changes]") {
     Pair pair;
     engine_core::DataModel& game = pair.server.game;
     const InstanceId workspace = game.scene_service("Workspace");

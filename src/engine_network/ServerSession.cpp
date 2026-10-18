@@ -23,7 +23,7 @@ ServerSession::ServerSession(engine_core::DataModel& game, std::unique_ptr<netwo
 ServerSession::~ServerSession() { close(now_); }
 
 network::Endpoint& ServerSession::endpoint() { return *endpoint_; }
-Replicator& ServerSession::replicator() { return replicator_; }
+const Replicator& ServerSession::replicator() const { return replicator_; }
 std::size_t ServerSession::dropped_messages() const { return dropped_messages_; }
 std::size_t ServerSession::fell_behind() const { return fell_behind_; }
 

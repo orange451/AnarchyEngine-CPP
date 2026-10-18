@@ -13,6 +13,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -41,11 +42,22 @@ void fill(engine_core::DataModel& game, int count, std::vector<InstanceId>& ligh
     }
 }
 
-// Moves every light: one Transform change each.
-void move_lights(engine_core::DataModel& game, const std::vector<InstanceId>& lights, float offset) {
+// Moves every light: one Transform change each. Each pose is what a moving body
+// has, a turn about Y and a fractional position, so no value is a round number.
+void move_lights(engine_core::DataModel& game, const std::vector<InstanceId>& lights, float t) {
     for (std::size_t i = 0; i < lights.size(); ++i) {
+        const float k = static_cast<float>(i);
+        const float angle = t * 0.7f + k * 0.0131f;
+        const float c = std::cos(angle);
+        const float s = std::sin(angle);
         engine_core::Matrix4 moved = engine_core::matrix4_identity();
-        moved.m[12] = offset + static_cast<float>(i);
+        moved.m[0] = c;
+        moved.m[2] = -s;
+        moved.m[8] = s;
+        moved.m[10] = c;
+        moved.m[12] = k * 1.37f + std::sin(t) * 3.1f;
+        moved.m[13] = 2.25f + 0.5f * std::sin(t + k);
+        moved.m[14] = -k * 0.731f + t * 0.4f;
         static_cast<engine_core::PointLight*>(game.instance(lights[i]))->set_transform(moved);
     }
 }
@@ -97,7 +109,7 @@ TEST_CASE("RP61 1,000 changes a tick, sent to 50 clients, cost the server under 
     // Raw clients ack one packet a tick, so queues grow while this runs; none may be dropped.
     config.max_stall_seconds = 1.0e9;
     config.max_queued_bytes = std::size_t{1} << 31;
-    engine_network::ServerSession session(server.game, hub.open(network::Address::loopback(1)), config);
+    auto session = std::make_unique<engine_network::ServerSession>(server.game, hub.open(network::Address::loopback(1)), config);
     // Fifty raw client endpoints: they connect and receive, which is all the server sees of a client.
     std::vector<std::unique_ptr<network::Endpoint>> clients;
     for (int i = 0; i < 50; ++i) {
@@ -112,34 +124,38 @@ TEST_CASE("RP61 1,000 changes a tick, sent to 50 clients, cost the server under 
     double now = 0.0;
     auto tick = [&](bool busy) {
         now += 1.0 / 60.0;
-        session.receive(now);
+        session->receive(now);
         for (auto& c : clients) c->receive(now);
         if (busy) {
             move_lights(server.game, lights, static_cast<float>(now));
         }
         const auto start = std::chrono::steady_clock::now();
-        session.send(now);
+        session->send(now);
         const double ms = milliseconds_since(start);
         for (auto& c : clients) c->send(now);
         return ms;
     };
     for (int i = 0; i < 120; ++i) tick(false);   // everyone joined and their snapshots drained
-    REQUIRE(session.endpoint().peers().size() == 50);
+    REQUIRE(session->endpoint().peers().size() == 50);
     for (int i = 0; i < 30; ++i) tick(true);     // warm up
     double total = 0.0;
     for (int i = 0; i < 60; ++i) total += tick(true);
     const double server_ms = total / 60.0;
     WARN("server send with 1,000 changes to 50 clients: " << server_ms << " ms a tick");
-    REQUIRE(session.fell_behind() == 0);
-    REQUIRE(session.endpoint().peers().size() == 50);
+    REQUIRE(session->fell_behind() == 0);
+    REQUIRE(session->endpoint().peers().size() == 50);
+
+    // A session alone ends its ticks, so the parts below time a Replicator of their own on the same world.
+    session.reset();
+    engine_network::Replicator replicator(server.game);
 
     // end_tick alone, the part every client count shares: coalesce and encode 1,000 changes.
     std::vector<std::uint8_t> message;
     double end_tick_total = 0.0;
     for (int i = 0; i < 60; ++i) {
-        move_lights(server.game, lights, 1000.0f + static_cast<float>(i));
+        move_lights(server.game, lights, 1000.0f + static_cast<float>(i) * 0.37f);
         const auto start = std::chrono::steady_clock::now();
-        REQUIRE(session.replicator().end_tick(message));
+        REQUIRE(replicator.end_tick(message));
         end_tick_total += milliseconds_since(start);
     }
     WARN("end_tick of 1,000 changes: " << (end_tick_total / 60.0) << " ms, " << message.size() << " bytes");
@@ -149,16 +165,12 @@ TEST_CASE("RP61 1,000 changes a tick, sent to 50 clients, cost the server under 
     replication::start_client(client_rig);
     engine_network::ReplicaApplier applier(client_rig.game);
     std::vector<std::vector<std::uint8_t>> snapshot;
-    session.replicator().snapshot_messages(0, snapshot);
+    replicator.snapshot_messages(0, snapshot);
     REQUIRE(replication::deliver(applier, snapshot) == engine_network::ApplyResult::SnapshotApplied);
     double client_total = 0.0;
     for (int i = 0; i < 30; ++i) {
-        for (std::size_t l = 0; l < lights.size(); ++l) {
-            engine_core::Matrix4 moved = engine_core::matrix4_identity();
-            moved.m[13] = static_cast<float>(l) + static_cast<float>(i);
-            static_cast<engine_core::PointLight*>(server.game.instance(lights[l]))->set_transform(moved);
-        }
-        REQUIRE(session.replicator().end_tick(message));
+        move_lights(server.game, lights, 2000.0f + static_cast<float>(i) * 0.37f);
+        REQUIRE(replicator.end_tick(message));
         const auto start = std::chrono::steady_clock::now();
         REQUIRE(applier.receive_message(message.data(), message.size()) == engine_network::ApplyResult::Ok);
         if (i >= 10) client_total += milliseconds_since(start);   // the first ten warm up
@@ -166,18 +178,17 @@ TEST_CASE("RP61 1,000 changes a tick, sent to 50 clients, cost the server under 
     const double client_ms = client_total / 20.0;
     WARN("client apply of 1,000 changes: " << client_ms << " ms");
     REQUIRE(applier.skipped() == 0);
-    replication::require_same_world(session.replicator(), server.game, client_rig.game);
-    // The targets are 1 ms and 0.5 ms; measured on 2026-10-18 they are about
-    // 3.5 ms and 0.75 ms. Most of the server's time is the transport copying the
-    // 150 KB message into each of the fifty reliable channels (about 2 ms), then
-    // read_property_json (about 0.8 ms: a saved-field list lookup and scan per
-    // change, and a 16-element JSON array per Transform). Until those are fixed
-    // the limits here are ceilings that catch a regression, not the targets.
-    if (server_ms >= 1.0 || client_ms >= 0.5) {
-        WARN("over the targets of 1 ms (server) and 0.5 ms (client)");
+    replication::require_same_world(replicator, server.game, client_rig.game);
+    // The targets are 1 ms and 0.5 ms. Measured on 2026-10-18 with fractional
+    // poses: the server's send is about 0.7 ms, so its target is the assert. The
+    // client's apply is about 0.8 ms, most of it decoding each Set into a
+    // 16-element JsonValue array and an Op; its ceiling is the worst run (0.88 ms) x 1.5,
+    // which catches a regression until the client gets a compact Transform path.
+    if (client_ms >= 0.5) {
+        WARN("client apply over its target of 0.5 ms");
     }
 #ifdef NDEBUG
-    REQUIRE(server_ms < 10.0);
-    REQUIRE(client_ms < 2.0);
+    REQUIRE(server_ms < 1.0);
+    REQUIRE(client_ms < 1.3);
 #endif
 }

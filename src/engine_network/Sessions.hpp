@@ -49,7 +49,8 @@ public:
     // Disconnects every client and destroys its Connection.
     void close(double now);
     network::Endpoint& endpoint();
-    Replicator& replicator();
+    // Read-only: only send() ends a tick, so nothing else can take a tick's changes from the clients.
+    const Replicator& replicator() const;
     // The peer's Connection; 0 when it has none.
     engine_core::InstanceId connection_of(network::PeerId peer) const;
     // Messages clients sent: nothing a client says has meaning yet, so each is counted and dropped.

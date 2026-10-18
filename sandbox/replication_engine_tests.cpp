@@ -4,14 +4,22 @@
 
 #include "support.hpp"
 
+#include "Connections.hpp"
 #include "Engine.hpp"
+#include "GameIdentity.hpp"
 #include "GameObject.hpp"
 #include "INetworkPump.hpp"
 #include "PhysicsObject.hpp"
+#include "ScriptAnalysis.hpp"
+#include "ScriptRuntime.hpp"
+#include "Sessions.hpp"
+#include "Socket.hpp"
 #include "ValueBase.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <chrono>
+#include <string>
 #include <vector>
 
 using engine_core::InstanceId;
@@ -118,4 +126,73 @@ TEST_CASE("RP3 two worlds on one thread run their own scripts", "[replication][e
     REQUIRE(where == "server");
     REQUIRE(client.runtime.global_string("where", where));
     REQUIRE(where == "client");
+}
+
+TEST_CASE("RP48 a server engine and a client engine: the client sees the server's script move a part, and runs its own", "[replication][engine]") {
+    SimRole role;
+    network::LinkHub hub;
+    network::GameIdentity id;
+    network::parse_game_id("0123456789abcdef0123456789abcdef", id.game_id);
+    id.resources_hash = 7;
+
+    engine_core::Engine server;
+    server.analysis().set_enabled(false);
+    engine_core::DataModel& sg = server.datamodel();
+    sg.set_world_role(engine_core::WorldRole::Server);
+    engine_core::GameObject& part = sg.create<engine_core::GameObject>();
+    sg.set_name(part.id(), "Part");
+    sg.set_parent(part.id(), sg.scene_service("Workspace"));
+    engine_core::Script& mover = add_script(sg, "Mover",
+        "game:GetService('RunService').Heartbeat:Connect(function()\n"
+        "    workspace.Part.Transform = workspace.Part.Transform + Vector3.new(1, 0, 0)\n"
+        "end)");
+    REQUIRE_FALSE(mover.set_run_context(static_cast<int>(engine_core::RunContext::Server)));
+    engine_core::Script& reader = add_script(sg, "Reader",
+        "_G.my_id = game:GetService('Connections').LocalConnection.Id");
+    REQUIRE_FALSE(reader.set_run_context(static_cast<int>(engine_core::RunContext::Client)));
+    engine_network::SessionConfig server_config;
+    server_config.endpoint.identity = id;
+    engine_network::ServerSession server_session(sg, hub.open(network::Address::loopback(1)), server_config);
+    server.set_network(&server_session);
+    sg.start_simulation();
+    server.resume();
+
+    engine_core::Engine client;
+    client.analysis().set_enabled(false);
+    engine_core::DataModel& cg = client.datamodel();
+    engine_network::SessionConfig client_config;
+    client_config.endpoint.identity = id;
+    engine_network::ClientSession client_session(cg, hub.open(network::Address::loopback(2)), client_config);
+    client.set_network(&client_session);
+    client.resume();
+    // The engines give the network seconds on the steady clock; the connect starts on the same clock.
+    const double started = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+    REQUIRE(client_session.connect(network::Address::loopback(1), started));
+
+    // The engines read the steady clock, so the handshake takes real time: step
+    // until the client joins (5 seconds at most), then a second more of play.
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (client_session.state() != engine_network::ClientState::Joined &&
+           std::chrono::steady_clock::now() < deadline) {
+        server.run_frame(1.0 / 60.0);
+        client.run_frame(1.0 / 60.0);
+    }
+    for (int i = 0; i < 60; ++i) {
+        server.run_frame(1.0 / 60.0);
+        client.run_frame(1.0 / 60.0);
+    }
+    server.set_network(nullptr);
+    client.set_network(nullptr);
+    INFO(client_session.reason());
+    REQUIRE(client_session.state() == engine_network::ClientState::Joined);
+    const InstanceId seen = cg.find_first_child(cg.scene_service("Workspace"), "Part");
+    REQUIRE(seen != 0);
+    const float server_x = part.transform().m[12];
+    const float client_x = static_cast<engine_core::GameObject*>(cg.instance(seen))->transform().m[12];
+    REQUIRE(server_x > 30.0f);
+    REQUIRE(client_x > 20.0f);   // a few ticks behind the server, never ahead
+    REQUIRE(client_x <= server_x);
+    std::string my_id;
+    REQUIRE(client.scripts().global_string("my_id", my_id));
+    REQUIRE(my_id.size() == 36);
 }

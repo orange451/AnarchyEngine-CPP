@@ -40,10 +40,13 @@ ApplyResult ReplicaApplier::receive_message(const std::uint8_t* data, std::size_
 }
 
 ApplyResult ReplicaApplier::snapshot_part(ByteReader& in) {
+    // Every part names its codec version, so the first one is refused before anything is buffered.
+    const std::uint8_t version = in.u8();
     const std::uint32_t index = in.u32();
     const std::uint32_t count = in.u32();
     const std::uint64_t raw_size = in.varuint();
-    if (in.failed() || joined_ || count == 0 || index != parts_seen_ || raw_size > kMaxSnapshotBytes) {
+    if (in.failed() || version != kCodecVersion || joined_ || count == 0 || index != parts_seen_ ||
+        raw_size > kMaxSnapshotBytes) {
         return ApplyResult::Bad;
     }
     if (index == 0) {
@@ -76,10 +79,9 @@ ApplyResult ReplicaApplier::snapshot_part(ByteReader& in) {
         return ApplyResult::Bad;
     }
     ByteReader body(raw.data(), raw.size());
-    const std::uint8_t version = body.u8();
     server_tick_ = body.varuint();
     const std::uint32_t local_connection = body.u32();
-    if (body.failed() || version != kCodecVersion) {
+    if (body.failed()) {
         return ApplyResult::Bad;
     }
     std::vector<Op> ops;

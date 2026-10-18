@@ -301,7 +301,11 @@ TEST_CASE("RP47 bad data from the server ends the connection with a reason", "[r
         messages.push_back({2, 0x00});
     }
     SECTION("a snapshot part claiming a huge snapshot") {
-        messages.push_back({1, 0, 0, 0, 0, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x7F});
+        messages.push_back({1, engine_network::kCodecVersion, 0, 0, 0, 0, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x7F});
+    }
+    SECTION("a snapshot of another codec version") {
+        messages = snapshot;
+        messages[0][1] = engine_network::kCodecVersion + 1;
     }
     SECTION("an empty message") {
         messages.push_back({});

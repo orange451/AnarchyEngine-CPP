@@ -3,10 +3,11 @@
 // The server half of tree replication: it watches the server's world, decides
 // what clients may see, and builds the messages that carry it
 // (docs/superpowers/specs/2026-10-13-server-client-design.md, section 2).
-// A snapshot is one op stream: u8 kCodecVersion, varuint server tick, u32 the
-// joining client's Connection netid, then ops (define_all first). Its body is
-// zstd-compressed and cut into parts, each: u8 MessageType::SnapshotPart,
-// u32 index, u32 count, varuint raw body size, then that part's bytes.
+// A snapshot is one op stream: varuint server tick, u32 the joining client's
+// Connection netid, then ops (define_all first). Its body is zstd-compressed and
+// cut into parts, each: u8 MessageType::SnapshotPart, u8 kCodecVersion, u32 index,
+// u32 count, varuint raw body size, then that part's bytes. The version leads, so
+// a client refuses a snapshot it cannot read before buffering any of it.
 
 #include "DataModel.hpp"
 #include "TreeChange.hpp"

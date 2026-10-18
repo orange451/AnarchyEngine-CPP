@@ -14,7 +14,8 @@
 //   Rename   u32 netid, string name
 //   Set      u32 netid, varuint property, json value
 //   Source   u32 netid, string source
-// A property value is a JSON value as JsonWire writes it.
+// A property value is a JSON value as JsonWire writes it: a tag byte, then a
+// number as an f32 when a float holds it exactly, otherwise an f64.
 
 #include "ByteBuffer.hpp"
 
@@ -29,7 +30,9 @@
 
 namespace engine_network {
 
-constexpr std::uint8_t kCodecVersion = 1;
+// 2: a number a float holds exactly travels as a Float32 tag (JsonWire), and a
+// snapshot part names the version in its header.
+constexpr std::uint8_t kCodecVersion = 2;
 
 enum class MessageType : std::uint8_t { SnapshotPart = 1, Changes = 2 };
 

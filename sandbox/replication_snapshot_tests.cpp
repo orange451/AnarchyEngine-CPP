@@ -228,6 +228,16 @@ TEST_CASE("RP26 a large snapshot splits into parts; a missing or corrupt part is
         corrupt.back().back() ^= 0xFF;
         REQUIRE(replication::deliver(applier, corrupt) == engine_network::ApplyResult::Bad);
     }
+    {
+        // A first part of another codec version is refused before any of it is buffered.
+        ScriptRig other;
+        replication::start_client(other);
+        engine_network::ReplicaApplier applier(other.game);
+        std::vector<std::uint8_t> first = messages.front();
+        REQUIRE(first[1] == engine_network::kCodecVersion);
+        first[1] = 1;
+        REQUIRE(applier.receive_message(first.data(), first.size()) == engine_network::ApplyResult::Bad);
+    }
     engine_network::ReplicaApplier applier(client.game);
     REQUIRE(replication::deliver(applier, messages) == engine_network::ApplyResult::SnapshotApplied);
     require_same_world(replicator, server.game, client.game);

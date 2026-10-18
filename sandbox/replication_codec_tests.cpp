@@ -86,6 +86,49 @@ TEST_CASE("RP12 JSON values round-trip exactly", "[replication][codec]") {
     REQUIRE(static_cast<float>(round_trip(JsonValue::number_from_float(f)).as_number()) == f);
 }
 
+TEST_CASE("RP12b a number a float holds exactly travels in four bytes; every other keeps eight, exactly", "[replication][codec]") {
+    // The tag and payload size one number takes on the wire.
+    const auto wire_size = [](double d) {
+        ByteWriter out;
+        engine_network::write_json(out, JsonValue::number(d));
+        return out.data().size();
+    };
+    const auto bits = [](double d) {
+        std::uint64_t b = 0;
+        std::memcpy(&b, &d, sizeof(b));
+        return b;
+    };
+    const double inf = std::numeric_limits<double>::infinity();
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+    // Float-exact: the float's own value, zero, both infinities, the largest float, the least denormal.
+    for (const double d : {static_cast<double>(0.1f), 0.0, inf, -inf, 1.5, -1234.5,
+                           static_cast<double>(std::numeric_limits<float>::max()),
+                           static_cast<double>(std::numeric_limits<float>::denorm_min())}) {
+        INFO(d);
+        REQUIRE(wire_size(d) == 5);
+        REQUIRE(bits(round_trip(JsonValue::number(d)).as_number()) == bits(d));
+    }
+    // JsonValue keeps one zero, so -0 reaches the wire as 0; the four-byte form
+    // would keep its sign, as every float bit survives it.
+    REQUIRE(wire_size(-0.0) == 5);
+    ByteWriter negative_zero;
+    negative_zero.f32(-0.0f);
+    ByteReader nz(negative_zero.data().data(), negative_zero.data().size());
+    REQUIRE(std::signbit(nz.f32()));
+    // Not float-exact: 0.1 itself, a third, past a float's range, below its least denormal, NaN.
+    for (const double d : {0.1, 1.0 / 3.0, 1e300, -1e39, 1e-50, nan}) {
+        INFO(d);
+        REQUIRE(wire_size(d) == 9);
+        REQUIRE(bits(round_trip(JsonValue::number(d)).as_number()) == bits(d));
+    }
+    REQUIRE(std::isnan(round_trip(JsonValue::number(nan)).as_number()));
+    // A Float32 tag cut short fails.
+    const std::vector<std::uint8_t> short_float = {7, 0, 0, 0x80};
+    ByteReader in(short_float.data(), short_float.size());
+    JsonValue v;
+    REQUIRE_FALSE(engine_network::read_json(in, v));
+}
+
 TEST_CASE("RP13 operations round-trip and strings are defined once, before first use", "[replication][codec]") {
     engine_network::StringTable server_strings;
     ByteWriter out;

@@ -116,7 +116,6 @@ void Replicator::write_record(OpWriter& writer, InstanceId id) const {
 
 void Replicator::snapshot_messages(InstanceId local_connection, std::vector<std::vector<std::uint8_t>>& out) {
     ByteWriter body;
-    body.u8(kCodecVersion);
     body.varuint(tick_);
     body.u32(local_connection);
     OpWriter writer(body, strings_);
@@ -160,6 +159,7 @@ void Replicator::snapshot_messages(InstanceId local_connection, std::vector<std:
     for (std::uint32_t index = 0; index < count; ++index) {
         ByteWriter message;
         message.u8(static_cast<std::uint8_t>(MessageType::SnapshotPart));
+        message.u8(kCodecVersion);
         message.u32(index);
         message.u32(count);
         message.varuint(raw.size());

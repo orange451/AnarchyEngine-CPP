@@ -497,8 +497,12 @@ void GameView::collectMeshes() {
             std::chrono::duration<double>(std::chrono::steady_clock::now() - skyClockStart_).count();
         // In double, wrapped, so the shader's floats stay precise: the clouds jump once in many hours.
         constexpr double kCloudOffsetWrap = 100000.0;
-        out.cloudOffset[0] = static_cast<float>(std::fmod(static_cast<double>(dynamic.wind.x) * seconds, kCloudOffsetWrap));
-        out.cloudOffset[1] = static_cast<float>(std::fmod(static_cast<double>(dynamic.wind.z) * seconds, kCloudOffsetWrap));
+        const double elapsed = std::max(seconds - cloudDriftSeconds_, 0.0);
+        cloudDriftSeconds_ = seconds;
+        cloudDrift_[0] = std::fmod(cloudDrift_[0] + static_cast<double>(dynamic.wind.x) * elapsed, kCloudOffsetWrap);
+        cloudDrift_[1] = std::fmod(cloudDrift_[1] + static_cast<double>(dynamic.wind.z) * elapsed, kCloudOffsetWrap);
+        out.cloudOffset[0] = static_cast<float>(cloudDrift_[0]);
+        out.cloudOffset[1] = static_cast<float>(cloudDrift_[1]);
         out.windy = dynamic.wind.x != 0.f || dynamic.wind.z != 0.f;
         out.seconds = seconds;
         out.sunSizeDegrees = dynamic.sun_size;

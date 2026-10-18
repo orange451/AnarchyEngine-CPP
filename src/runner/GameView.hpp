@@ -336,6 +336,10 @@ private:
     // Paints in the current window. framesPerSecond and frameMilliseconds read the finished average.
     // The DynamicSky's clouds drift by this clock, from when the view was made.
     std::chrono::steady_clock::time_point skyClockStart_ = std::chrono::steady_clock::now();
+    // How far the clouds have drifted, added up each frame by the wind then, so a
+    // change of wind turns them from where they are; and that frame's clock.
+    double cloudDrift_[2] = {0.0, 0.0};
+    double cloudDriftSeconds_ = 0.0;
     std::chrono::steady_clock::time_point paintWindowStart_{};
     int paintWindowFrames_ = 0;
     bool paintWindowOpen_ = false;

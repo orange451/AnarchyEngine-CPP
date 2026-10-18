@@ -13,7 +13,7 @@ namespace runner {
 // diffuse light is read from, a prefiltered cube whose mips are its
 // reflection at each roughness, and the lookup table of how much a surface
 // reflects. A Skybox's cubes are made again only when an image changes, never
-// for Exposure, Rotation, or Tint, which the shaders apply as they read them.
+// for Brightness, Rotation, or Tint, which the shaders apply as they read them.
 //
 // A Skybox's image is a 2D RGBA16F texture, mipmapped, as TextureCache's
 // getEnvironment uploads it, and a revision that changes only when it does. A

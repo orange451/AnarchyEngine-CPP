@@ -9,7 +9,7 @@ uniform sampler2D uDepth;
 uniform sampler2D uSky;
 // From view space to the sky's, with the camera's turn and the Rotation.
 uniform mat3 uViewToSky;
-// Exposure times Tint, linear.
+// Brightness times Tint, linear.
 uniform vec3 uSkyColor;
 
 void main() {

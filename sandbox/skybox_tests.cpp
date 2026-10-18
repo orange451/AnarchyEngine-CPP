@@ -1,4 +1,4 @@
-// Skybox: the sky under Lighting, whose Image, Exposure, LightScale,
+// Skybox: the sky under Lighting, whose Image, Brightness, LightScale,
 // Rotation, and Tint the render snapshot carries for the Scene View.
 
 #include "support.hpp"
@@ -56,7 +56,7 @@ TEST_CASE("SKY1 a Skybox's properties are checked, undo, save, and come back at 
     REQUIRE(engine_core::project_class_known("Skybox"));
     Skybox& sky = add_skybox(game, game.scene_service("Lighting"));
     REQUIRE(sky.image().kind == engine_core::LuaSlot::Kind::Nil);
-    REQUIRE(sky.exposure() == 1.0);
+    REQUIRE(sky.brightness() == 1.0);
     REQUIRE(sky.light_scale() == 1.0);
     REQUIRE(sky.rotation() == 0.0);
     REQUIRE(sky.tint().r == 1.f);
@@ -66,20 +66,20 @@ TEST_CASE("SKY1 a Skybox's properties are checked, undo, save, and come back at 
     sky.save_properties(saved);
     REQUIRE(saved.empty());
 
-    begin_step(game, "Set Exposure");
-    REQUIRE_FALSE(sky.set_exposure(2.5));
+    begin_step(game, "Set Brightness");
+    REQUIRE_FALSE(sky.set_brightness(2.5));
     end_step(game);
-    REQUIRE(sky.exposure() == 2.5);
+    REQUIRE(sky.brightness() == 2.5);
     game.history().undo();
-    REQUIRE(sky.exposure() == 1.0);
+    REQUIRE(sky.brightness() == 1.0);
     game.history().redo();
-    REQUIRE(sky.exposure() == 2.5);
+    REQUIRE(sky.brightness() == 2.5);
 
-    // Exposure is clamped to 0..10; Rotation wraps into 0..360.
-    REQUIRE_FALSE(sky.set_exposure(50.0));
-    REQUIRE(sky.exposure() == Skybox::kMaxExposure);
-    REQUIRE_FALSE(sky.set_exposure(-1.0));
-    REQUIRE(sky.exposure() == 0.0);
+    // Brightness is clamped to 0..10; Rotation wraps into 0..360.
+    REQUIRE_FALSE(sky.set_brightness(50.0));
+    REQUIRE(sky.brightness() == Skybox::kMaxBrightness);
+    REQUIRE_FALSE(sky.set_brightness(-1.0));
+    REQUIRE(sky.brightness() == 0.0);
     REQUIRE_FALSE(sky.set_rotation(450.0));
     REQUIRE(sky.rotation() == 90.0);
     REQUIRE_FALSE(sky.set_rotation(-90.0));
@@ -100,7 +100,7 @@ TEST_CASE("SKY1 a Skybox's properties are checked, undo, save, and come back at 
     REQUIRE_FALSE(sky.set_light_scale(-1.0));
     REQUIRE(sky.light_scale() == 0.0);
     REQUIRE(*sky.set_light_scale(std::nan("")) == "LightScale must be a finite number");
-    REQUIRE(*sky.set_exposure(std::nan("")) == "Exposure must be a finite number");
+    REQUIRE(*sky.set_brightness(std::nan("")) == "Brightness must be a finite number");
     REQUIRE(*sky.set_rotation(INFINITY) == "Rotation must be a finite number");
     REQUIRE(*sky.set_tint(engine_core::ColorRgb{std::nanf(""), 0.f, 0.f, 1.f}) == "Tint must be finite");
 
@@ -116,10 +116,17 @@ TEST_CASE("SKY1 a Skybox's properties are checked, undo, save, and come back at 
     REQUIRE_FALSE(sky.set_tint(engine_core::ColorRgb{1.f, 0.5f, 0.25f, 1.f}));
     engine_core::PropertyBag changed;
     sky.save_properties(changed);
-    for (const char* name : {"Image", "Exposure", "LightScale", "Rotation", "Tint"}) {
+    for (const char* name : {"Image", "Brightness", "LightScale", "Rotation", "Tint"}) {
         INFO(name);
         REQUIRE(engine_core::bag_find(changed, name) != nullptr);
     }
+    REQUIRE(engine_core::bag_find(changed, "Exposure") == nullptr);
+
+    // A place saved while Brightness was named Exposure loads it as Brightness.
+    std::string loadError;
+    REQUIRE(sky.load_property("Exposure", engine_core::JsonValue::number(3.5), loadError));
+    REQUIRE(loadError.empty());
+    REQUIRE(sky.brightness() == 3.5);
 
     game.capture_place();
     game.start_simulation();
@@ -178,18 +185,18 @@ TEST_CASE("SKY3 the snapshot carries the first Skybox under Lighting", "[skybox]
     Skybox& first = add_skybox(game, folder.id());
     Skybox& second = add_skybox(game, lighting);
     REQUIRE_FALSE(first.set_image(instance_slot(day.id())));
-    REQUIRE_FALSE(first.set_exposure(2.0));
+    REQUIRE_FALSE(first.set_brightness(2.0));
     REQUIRE_FALSE(first.set_light_scale(0.5));
     REQUIRE_FALSE(first.set_rotation(90.0));
     REQUIRE_FALSE(first.set_tint(engine_core::ColorRgb{1.f, 0.f, 0.f, 1.f}));
-    REQUIRE_FALSE(second.set_exposure(5.0));
+    REQUIRE_FALSE(second.set_brightness(5.0));
     frame();
     // The Folder comes first in Lighting, so the Skybox inside it is the sky.
     {
         const engine_core::VisualSky& sky = pump.front().sky;
         REQUIRE(sky.present);
         REQUIRE(sky.image == "textures/day.hdr");
-        REQUIRE(sky.exposure == 2.f);
+        REQUIRE(sky.brightness == 2.f);
         REQUIRE(sky.light_scale == 0.5f);
         REQUIRE(sky.rotation == 90.f);
         REQUIRE(sky.tint.g == 0.f);
@@ -204,7 +211,7 @@ TEST_CASE("SKY3 the snapshot carries the first Skybox under Lighting", "[skybox]
     game.destroy(first.id());
     frame();
     REQUIRE(pump.front().sky.present);
-    REQUIRE(pump.front().sky.exposure == 5.f);
+    REQUIRE(pump.front().sky.brightness == 5.f);
     REQUIRE(pump.front().sky.image.empty());
     REQUIRE_FALSE(second.set_image(instance_slot(chrome.id())));
     frame();
@@ -216,7 +223,7 @@ TEST_CASE("SKY3 the snapshot carries the first Skybox under Lighting", "[skybox]
     game.destroy(second.id());
     frame();
     REQUIRE_FALSE(pump.front().sky.present);
-    REQUIRE(pump.front().sky.exposure == 1.f);
+    REQUIRE(pump.front().sky.brightness == 1.f);
     REQUIRE(pump.front().sky.light_scale == 1.f);
 }
 
@@ -227,18 +234,18 @@ TEST_CASE("SKY4 scripts make a Skybox and set it", "[skybox]") {
     rig.game.set_parent(day.id(), rig.game.service("Textures"));
     add_script(rig.game, "Sky", R"(
         local sky = Instance.new("Skybox", game.Lighting)
-        _G.defaults = sky.Exposure == 1 and sky.Rotation == 0 and sky.Tint == Color3.new(1, 1, 1)
+        _G.defaults = sky.Brightness == 1 and sky.Rotation == 0 and sky.Tint == Color3.new(1, 1, 1)
             and sky.Image == nil and sky.LightScale == 1
         sky.Image = game.Assets.Textures.Day
-        sky.Exposure = 20
+        sky.Brightness = 20
         sky.LightScale = 0.3
         sky.Rotation = -90
         sky.Tint = Color3.new(0.5, 0.5, 1)
-        _G.set = sky.Image == game.Assets.Textures.Day and sky.Exposure == 10
+        _G.set = sky.Image == game.Assets.Textures.Day and sky.Brightness == 10
             and math.abs(sky.LightScale - 0.3) < 1e-9 and sky.Rotation == 270
             and sky.Tint == Color3.new(0.5, 0.5, 1)
         _G.refused = not pcall(function() sky.Image = workspace end)
-            and not pcall(function() sky.Exposure = 0 / 0 end)
+            and not pcall(function() sky.Brightness = 0 / 0 end)
             and not pcall(function() Instance.new("Skybox", workspace) end)
             and not pcall(function() sky.Parent = workspace end)
     )");

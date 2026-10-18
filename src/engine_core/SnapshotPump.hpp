@@ -104,7 +104,7 @@ struct VisualSky {
     std::string image;
     // The Texture's FlipY.
     bool image_flip_y = false;
-    float exposure = 1.f;
+    float brightness = 1.f;
     // Multiplies the light the sky gives surfaces, not the sky as drawn.
     float light_scale = 1.f;
     // Degrees about the world's Y axis, 0 up to 360.

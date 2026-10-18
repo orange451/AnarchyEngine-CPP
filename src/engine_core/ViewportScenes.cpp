@@ -87,7 +87,7 @@ bool same_row(const VisualInstance& a, const VisualInstance& b) {
 
 bool same_sky(const VisualSky& a, const VisualSky& b) {
     return a.present == b.present && a.image == b.image && a.image_flip_y == b.image_flip_y &&
-           a.exposure == b.exposure && a.light_scale == b.light_scale && a.rotation == b.rotation &&
+           a.brightness == b.brightness && a.light_scale == b.light_scale && a.rotation == b.rotation &&
            same_color(a.tint, b.tint);
 }
 

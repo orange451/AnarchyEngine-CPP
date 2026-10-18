@@ -415,7 +415,7 @@ void SkyFor(const engine_core::VisualSky& sky, TextureCache& textures, SceneSky&
     const EnvironmentTexture image = textures.getEnvironment(sky.image, sky.image_flip_y);
     out.image = image.texture;
     out.imageRevision = image.revision;
-    out.exposure = sky.exposure;
+    out.brightness = sky.brightness;
     out.lightScale = sky.light_scale;
     out.rotationDegrees = sky.rotation;
     out.tint[0] = sky.tint.r;

@@ -605,7 +605,7 @@ void fill_visual_sky(const DataModel& game, const Skybox& skybox, VisualSky& out
         out.image.clear();
         out.image_flip_y = false;
     }
-    out.exposure = static_cast<float>(skybox.exposure());
+    out.brightness = static_cast<float>(skybox.brightness());
     out.light_scale = static_cast<float>(skybox.light_scale());
     out.rotation = static_cast<float>(skybox.rotation());
     out.tint = skybox.tint();
@@ -639,7 +639,7 @@ void SnapshotPump::resolve_lighting(DataModel& game) {
     } else {
         sky.image.clear();
         sky.image_flip_y = false;
-        sky.exposure = static_cast<float>(Skybox::kDefaultExposure);
+        sky.brightness = static_cast<float>(Skybox::kDefaultBrightness);
         sky.light_scale = static_cast<float>(Skybox::kDefaultLightScale);
         sky.rotation = static_cast<float>(Skybox::kDefaultRotation);
         sky.tint = Skybox::kDefaultTint;

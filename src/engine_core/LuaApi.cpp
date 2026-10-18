@@ -1276,7 +1276,7 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
         "The sky, an equirectangular image drawn behind everything and lighting every surface. An .hdr gives light "
         "brighter than white. Nil draws no sky.",
         "Texture?", false, {});
-    add("Skybox", "Exposure", "How bright the sky and its light are, from 0 to 10. 1 is the image as it is.", "number",
+    add("Skybox", "Brightness", "How bright the sky and its light are, from 0 to 10. 1 is the image as it is.", "number",
         false, {});
     add("Skybox", "LightScale",
         "Multiplies the light the sky gives surfaces, from 0 to 10, without changing how the sky looks behind them. "

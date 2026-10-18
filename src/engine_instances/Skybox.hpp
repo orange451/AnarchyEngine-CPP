@@ -17,7 +17,7 @@ namespace engine_core {
 //
 // Image        Texture?  the sky. Nil draws no sky, and the surfaces take
 //                        the flat stand-in light they had before.
-// Exposure     number    how bright the sky is, 1. From 0 to kMaxExposure.
+// Brightness     number    how bright the sky is, 1. From 0 to kMaxBrightness.
 // LightScale   number    multiplies the light the sky gives surfaces, 1,
 //                        without changing how the sky looks behind them.
 //                        From 0 to kMaxLightScale.
@@ -30,8 +30,8 @@ namespace engine_core {
 // every Prepare (VisualSky), as it reads Lighting's.
 class Skybox : public DataModel {
 public:
-    static constexpr double kDefaultExposure = 1.0;
-    static constexpr double kMaxExposure = 10.0;
+    static constexpr double kDefaultBrightness = 1.0;
+    static constexpr double kMaxBrightness = 10.0;
     static constexpr double kDefaultLightScale = 1.0;
     static constexpr double kMaxLightScale = 10.0;
     static constexpr double kDefaultRotation = 0.0;
@@ -39,18 +39,20 @@ public:
 
     Skybox(DataModel::ChildTag tag, DataModel::State& state, InstanceId id) : DataModel(tag, state, id) {}
     const char* class_name() const override { return "Skybox"; }
+    // Reads a place saved before Brightness was named so: its Exposure is the Brightness.
+    bool load_property(const std::string& key, const JsonValue& value, std::string& error) override;
 
     LuaSlot image() const;
-    double exposure() const { return exposure_; }
+    double brightness() const { return brightness_; }
     double light_scale() const { return light_scale_; }
     double rotation() const { return rotation_; }
     ColorRgb tint() const { return tint_; }
 
     // SimulationThread. Each returns why it refused the value, changing
-    // nothing. A number that is not finite is refused; Exposure and LightScale
+    // nothing. A number that is not finite is refused; Brightness and LightScale
     // are clamped to their ranges and Rotation wraps into its.
     std::optional<std::string> set_image(const LuaSlot& value);
-    std::optional<std::string> set_exposure(double value);
+    std::optional<std::string> set_brightness(double value);
     std::optional<std::string> set_light_scale(double value);
     std::optional<std::string> set_rotation(double degrees);
     std::optional<std::string> set_tint(ColorRgb color);
@@ -62,7 +64,7 @@ private:
     std::optional<std::string> set_number(const char* property, double& slot, double value);
 
     InstanceRef image_ref_;
-    double exposure_ = kDefaultExposure;
+    double brightness_ = kDefaultBrightness;
     double light_scale_ = kDefaultLightScale;
     double rotation_ = kDefaultRotation;
     ColorRgb tint_ = kDefaultTint;

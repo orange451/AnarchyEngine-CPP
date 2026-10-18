@@ -55,7 +55,7 @@ std::optional<std::string> Skybox::set_number(const char* property, double& slot
             value = 0.0;
         }
     } else {
-        value = std::clamp(value, 0.0, &slot == &light_scale_ ? kMaxLightScale : kMaxExposure);
+        value = std::clamp(value, 0.0, &slot == &light_scale_ ? kMaxLightScale : kMaxBrightness);
     }
     if (slot == value) {
         return std::nullopt;
@@ -66,7 +66,11 @@ std::optional<std::string> Skybox::set_number(const char* property, double& slot
     return std::nullopt;
 }
 
-std::optional<std::string> Skybox::set_exposure(double value) { return set_number("Exposure", exposure_, value); }
+std::optional<std::string> Skybox::set_brightness(double value) { return set_number("Brightness", brightness_, value); }
+
+bool Skybox::load_property(const std::string& key, const JsonValue& value, std::string& error) {
+    return DataModel::load_property(key == "Exposure" ? std::string("Brightness") : key, value, error);
+}
 
 std::optional<std::string> Skybox::set_light_scale(double value) {
     return set_number("LightScale", light_scale_, value);
@@ -94,7 +98,7 @@ std::optional<std::string> Skybox::set_tint(ColorRgb color) {
 
 void Skybox::on_reuse() {
     image_ref_.set_guid(std::string());
-    exposure_ = kDefaultExposure;
+    brightness_ = kDefaultBrightness;
     light_scale_ = kDefaultLightScale;
     rotation_ = kDefaultRotation;
     tint_ = kDefaultTint;
@@ -162,7 +166,7 @@ std::string number_json(double value) { return write_json(JsonValue::number(valu
 
 ANARCHY_LUA_REGISTER(register_skybox_lua) {
     // The defaults, as a file would hold them, from the class's own constants.
-    static const std::string exposure = number_json(Skybox::kDefaultExposure);
+    static const std::string brightness = number_json(Skybox::kDefaultBrightness);
     static const std::string light_scale = number_json(Skybox::kDefaultLightScale);
     static const std::string rotation = number_json(Skybox::kDefaultRotation);
     static const std::string tint = [] {
@@ -172,9 +176,9 @@ ANARCHY_LUA_REGISTER(register_skybox_lua) {
     const LuaField fields[] = {
         lua_saved_property("Image", "Texture?", read_texture<&Skybox::image>, write_texture<&Skybox::set_image>,
                            "null"),
-        lua_slider(lua_saved_property("Exposure", "number", read_number<&Skybox::exposure>,
-                                      write_number<&Skybox::set_exposure>, exposure.c_str()),
-                   0.0, Skybox::kMaxExposure),
+        lua_slider(lua_saved_property("Brightness", "number", read_number<&Skybox::brightness>,
+                                      write_number<&Skybox::set_brightness>, brightness.c_str()),
+                   0.0, Skybox::kMaxBrightness),
         lua_slider(lua_saved_property("LightScale", "number", read_number<&Skybox::light_scale>,
                                       write_number<&Skybox::set_light_scale>, light_scale.c_str()),
                    0.0, Skybox::kMaxLightScale),

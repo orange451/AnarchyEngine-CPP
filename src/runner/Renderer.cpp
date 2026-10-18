@@ -2094,10 +2094,10 @@ void Renderer::prepareSky() {
         }
     }
     // Tint is a color as picked, sRGB, made linear as surface.glsl makes a Material's.
-    const float exposure = std::max(lighting_.sky.exposure, 0.f);
+    const float brightness = std::max(lighting_.sky.brightness, 0.f);
     for (int channel = 0; channel < 3; ++channel) {
         skyColor_[channel] = dynamic ? std::max(lighting_.dynamicSky.brightness, 0.f)
-                                     : exposure * engine_core::srgb_to_linear(lighting_.sky.tint[channel]);
+                                     : brightness * engine_core::srgb_to_linear(lighting_.sky.tint[channel]);
     }
     skyLightScale_ = dynamic ? 1.f : std::max(lighting_.sky.lightScale, 0.f);
     skyImage_ = dynamic ? whiteTexture_ : lighting_.sky.image;

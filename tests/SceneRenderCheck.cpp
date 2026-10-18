@@ -3864,12 +3864,12 @@ int main(int argc, char** argv) {
             const Pixel turnedLeft = ReadPixel(fbWidth / 4, fbHeight * 3 / 4);
             Expect(turnedLeft.g > 150 && turnedLeft.r < 30, "Rotation 180 puts green on the left (" +
                                                                 Text(turnedLeft) + ")");
-            // Exposure 0 is black, not the pane's clear color; Tint multiplies.
+            // Brightness 0 is black, not the pane's clear color; Tint multiplies.
             runner::SceneLighting dark = lit;
-            dark.sky.exposure = 0.f;
+            dark.sky.brightness = 0.f;
             renderer.setLighting(dark);
             drawSky(nullptr, 0);
-            Expect(Sum(ReadPixel(fbWidth / 4, fbHeight * 3 / 4)) < 6, "Exposure 0 is a black sky");
+            Expect(Sum(ReadPixel(fbWidth / 4, fbHeight * 3 / 4)) < 6, "Brightness 0 is a black sky");
             runner::SceneLighting cyan = lit;
             cyan.sky.tint[0] = 0.f;
             renderer.setLighting(cyan);

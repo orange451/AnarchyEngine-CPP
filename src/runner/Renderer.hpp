@@ -252,7 +252,7 @@ struct SceneSky {
     // 0 draws no sky: surfaces take the legacy stand-in sky's light.
     unsigned image = 0;
     std::uint64_t imageRevision = 0;
-    float exposure = 1.f;
+    float brightness = 1.f;
     // Multiplies the light the sky gives surfaces (image-based lighting),
     // not the sky drawn behind them.
     float lightScale = 1.f;
@@ -840,7 +840,7 @@ private:
     // when skyReady_ is, and also for a DynamicSky whose lighting cube
     // (skyReady_) is not ready yet — the visible sky does not wait on it.
     bool skyVisible_ = false;
-    // From view space to the sky's, column-major, and Exposure times Tint, linear.
+    // From view space to the sky's, column-major, and Brightness times Tint, linear.
     float viewToSky_[9] = {1.f, 0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 1.f};
     float skyColor_[3] = {1.f, 1.f, 1.f};
     // The sky's LightScale and the 2D image bound for it: a DynamicSky's are 1 and white.

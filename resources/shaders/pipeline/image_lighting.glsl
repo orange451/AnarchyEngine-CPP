@@ -13,7 +13,7 @@ uniform samplerCube uPrefiltered;
 uniform sampler2D uBrdf;
 // From view space to the sky's, with the camera's turn and the Rotation.
 uniform mat3 uViewToSky;
-// Exposure times Tint, linear.
+// Brightness times Tint, linear.
 uniform vec3 uSkyColor;
 // The Skybox's LightScale: how much of the sky's light surfaces take. The sky
 // drawn behind them (sky.frag) does not read it.

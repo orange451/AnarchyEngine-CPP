@@ -60,10 +60,10 @@ Stop (`restore_place_unlocked`) and undo revival change the tree without these f
 
 **`TreeCodec`.** Encodes and decodes a byte stream (little-endian integers, LEB128 lengths):
 
-- **Values** are the JSON values a project save writes for the property (`save_properties` for a whole instance, `read_property_json` for one property), applied with `load_property`, carried in a compact binary JSON form: null, booleans, numbers as 64-bit doubles, strings, arrays, objects. This reuses the save/load path, which already round-trips every saved property, `Transform`, `Enabled`, `Simulated`, `VisualOnly`, enum names, and curves, at the stored precision. References travel as the target's GUID and resolve late through `InstanceRef`, as a project load's do, so a reference to an instance not yet created, or filtered, reads nil until it exists. `Source` travels in its own field and op.
+- **Values** are the JSON values a project save writes for the property (`save_properties` for a whole instance, `read_property_json` for one property), applied with `load_property`, carried in a compact binary JSON form: null, booleans, numbers, strings, arrays, objects. A number travels exactly: as a 4-byte float when a float holds it exactly (the infinities included, NaN never), otherwise as a 64-bit double. Replication reads `Transform` as each stored float's exact double, not the shortest decimal a save writes, so its sixteen numbers take the 4-byte form and a client casts each back to the same float. This reuses the save/load path, which already round-trips every saved property, `Transform`, `Enabled`, `Simulated`, `VisualOnly`, enum names, and curves, at the stored precision. References travel as the target's GUID and resolve late through `InstanceRef`, as a project load's do, so a reference to an instance not yet created, or filtered, reads nil until it exists. `Source` travels in its own field and op.
 - **Names** of classes and properties go through one server-wide string table: a message defines each string it is the first to use (`Define {index, text}`), later uses send the index. A Changes message is encoded once for every client, so it first defines whatever a join snapshot added since the last Changes message; a client can therefore be told a string twice, and a repeated `Define` with the same text is accepted.
 - **Operations**: `Bind {netid, guid}` (a service or Connections, which every `Game` has), `Create {netid, parent netid, class, guid, name, properties[], source?}`, `Destroy {netid}` (the client destroys the subtree), `Parent {netid, parent netid}`, `Rename {netid, name}`, `Set {netid, property, value}`, `Source {netid, source}`.
-- **Messages**: a join snapshot is one op stream (codec version, server tick, the joining client's Connection NetId, then ops), zstd-compressed and split into `SnapshotPart {index, count, raw size, bytes}` messages; a tick's changes are `Changes {codec version, server tick, ops}`.
+- **Messages**: a join snapshot is one op stream (server tick, the joining client's Connection NetId, then ops), zstd-compressed and split into `SnapshotPart {codec version, index, count, raw size, bytes}` messages; a tick's changes are `Changes {codec version, server tick, ops}`. The codec version is 2. It leads every snapshot part, so a client refuses a snapshot of another version on its first part, before buffering any of it.
 
 A NetId is the server's `InstanceId` raw value: unique while alive, generation-tagged, so a reused slot never reads as the instance that held it.
 
@@ -81,20 +81,21 @@ Filtering: `ServerStorage` and everything under it, `Core`, and the `Source` of 
 
 On join it encodes the filtered tree as `Create` operations in parent-before-child order, compresses with zstd, and splits it into `SnapshotPart` messages of at most 1 MB, each a reliable message. Changes from the following tick go to that client too and arrive after the last part, in order.
 
-**`ReplicaApplier` (client).** Buffers snapshot parts until the last, decompresses, and builds the place into its empty `DataModel` with the same privileged path it uses for changes. It keeps `NetId → InstanceId`. Each `Changes` message is applied at the start of the client's tick, before scripts. The privileged path may write any property (including ones read-only to scripts), fires the normal signals (`Changed`, property signals, `ChildAdded`, `ChildRemoved`, `Destroying`), and records no undo. An operation on an unknown NetId is skipped and counted; an instance reference to an unknown NetId reads nil and resolves when that instance is created.
+**`ReplicaApplier` (client).** Buffers snapshot parts until the last, decompresses, and builds the place into its empty `DataModel` with the same privileged path it uses for changes. It keeps `NetId → InstanceId` and the reverse, changed together; a `Destroy` frees the NetId of everything in the subtree it takes, since the server sends no `Destroy` for those. Each `Changes` message is applied at the start of the client's tick, before scripts. The privileged path may write any property (including ones read-only to scripts), fires the normal signals (`Changed`, property signals, `ChildAdded`, `ChildRemoved`, `Destroying`), and records no undo. An operation on an unknown NetId is skipped and counted. References are not NetIds: they travel as GUIDs and resolve late, so one to an instance not yet created, or filtered, reads nil and resolves when that instance is created.
 
-**`NetworkSession`.** Owns the `network::Endpoint` and, by role, the Replicator or the ReplicaApplier. `Engine` gains an optional `INetworkPump*`: `receive(now)` runs at the start of `run_step`, before PreAnimation; `send(now)` at its end, after audio. Both under the frame's write lock. On the server:
+**`ServerSession` and `ClientSession`.** Two classes, one per role: each owns a `network::Endpoint`, and the server's owns the Replicator, the client's a ReplicaApplier (a fresh one for each connect). `Engine` gains an optional `INetworkPump*`: `receive(now)` runs at the start of `run_step`, before PreAnimation; `send(now)` at its end, after audio. Both under the frame's write lock. On the server:
 
 - a peer connects: create a `Connection` with a fresh UUID under `Connections`; the snapshot goes out at the end of that tick;
 - a peer disconnects or times out: destroy its `Connection`;
 - a reliable message from a client: dropped and counted (sub-project 3 gives it meaning);
-- a client whose reliable send window is full (it has fallen about 4 s behind): disconnected.
+- a client whose queue makes no progress for 30 s (nothing handed to its reliable channel and nothing acked), or whose queue holds more than 256 MB: disconnected. A full send window alone is not a reason: a big snapshot draining slowly into a busy world is progress, however long it takes.
 
 On the client:
 
-- the snapshot completes: set the world role to Client, set `Connections.LocalConnection`, start play;
+- the connection is made: set the world role to Client and, unless play is already running, capture the empty place and start play, so the world is still empty when play starts;
+- the snapshot completes: build the world from it during play, and set `Connections.LocalConnection`;
 - a malformed message, a Create of one instance twice, a Bind of something that is not a service, or a codec-version mismatch: disconnect and report the reason;
-- the connection ends for any reason: stop play and report it.
+- the connection ends for any reason: stop play if this connection started it, put back the world role it replaced, and report the reason.
 
 ### 3. Executables
 
@@ -107,7 +108,7 @@ On the client:
 | Situation | Behavior |
 | --- | --- |
 | Snapshot bigger than one block | Split into ≤1 MB parts; the reliable channel's 8 MB reassembly budget and one-block-at-a-time rule are never approached |
-| Client falls behind | Disconnected when its reliable send window is full |
+| Client falls behind | Disconnected when its queue makes no progress for 30 s or holds more than 256 MB |
 | Malformed or mismatched data from the server | Client disconnects with "bad data from server" |
 | Data from a client | Dropped and counted |
 | Operation on an instance the client destroyed locally | Skipped and counted |

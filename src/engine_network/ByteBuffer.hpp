@@ -15,6 +15,7 @@ public:
     void u32(std::uint32_t value);
     // Seven bits a byte, low first, the high bit set on every byte but the last.
     void varuint(std::uint64_t value);
+    void f32(float value);
     void f64(double value);
     void string(std::string_view text);
     void bytes(const std::uint8_t* data, std::size_t count);
@@ -34,6 +35,7 @@ public:
     std::uint8_t u8();
     std::uint32_t u32();
     std::uint64_t varuint();
+    float f32();
     double f64();
     // Refuses a length longer than what is left, before allocating anything.
     std::string string();

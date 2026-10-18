@@ -9,8 +9,10 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <cmath>
 #include <cstring>
 #include <limits>
+#include <vector>
 
 using engine_core::JsonValue;
 using engine_network::ByteReader;
@@ -38,6 +40,7 @@ TEST_CASE("RP10 bytes, varints, doubles and strings round-trip", "[replication][
     for (const std::uint64_t v : {0ull, 1ull, 127ull, 128ull, 300ull, 0xFFFFFFFFull, ~0ull}) out.varuint(v);
     out.f64(0.1);
     out.f64(-std::numeric_limits<double>::infinity());
+    out.f32(0.1f);
     out.string("");
     out.string("Läuft ✓");
     ByteReader in(out.data().data(), out.data().size());
@@ -46,11 +49,18 @@ TEST_CASE("RP10 bytes, varints, doubles and strings round-trip", "[replication][
     for (const std::uint64_t v : {0ull, 1ull, 127ull, 128ull, 300ull, 0xFFFFFFFFull, ~0ull}) REQUIRE(in.varuint() == v);
     REQUIRE(in.f64() == 0.1);
     REQUIRE(in.f64() == -std::numeric_limits<double>::infinity());
+    REQUIRE(in.f32() == 0.1f);
     REQUIRE(in.string().empty());
     REQUIRE(in.string() == "Läuft ✓");
     REQUIRE(in.done());
     REQUIRE(in.u8() == 0);   // past the end
     REQUIRE(in.failed());
+    // The wire is little-endian: the format is the contract, whatever the host.
+    const std::vector<std::uint8_t> le{out.data().begin() + 1, out.data().begin() + 5};
+    REQUIRE(le == std::vector<std::uint8_t>{0xEF, 0xBE, 0xAD, 0xDE});
+    ByteWriter one;
+    one.f64(1.0);
+    REQUIRE(one.data() == std::vector<std::uint8_t>{0, 0, 0, 0, 0, 0, 0xF0, 0x3F});
 }
 
 TEST_CASE("RP11 a string longer than what is left fails without allocating it", "[replication][codec]") {

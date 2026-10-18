@@ -2,13 +2,26 @@
 
 #include <cstring>
 
+// Values are copied in the host's byte order, which must be the wire's.
+#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ != __ORDER_LITTLE_ENDIAN__
+#error "ByteBuffer copies values in host order, and the wire is little-endian"
+#endif
+
 namespace engine_network {
 
-void ByteWriter::u32(std::uint32_t value) {
-    for (int shift = 0; shift < 32; shift += 8) {
-        data_.push_back(static_cast<std::uint8_t>(value >> shift));
-    }
+namespace {
+
+// One value's bytes appended in a single step, not a push_back each.
+template <typename T>
+void append(std::vector<std::uint8_t>& data, T value) {
+    const std::size_t at = data.size();
+    data.resize(at + sizeof(T));
+    std::memcpy(data.data() + at, &value, sizeof(T));
 }
+
+}  // namespace
+
+void ByteWriter::u32(std::uint32_t value) { append(data_, value); }
 
 void ByteWriter::varuint(std::uint64_t value) {
     while (value >= 0x80) {
@@ -18,13 +31,9 @@ void ByteWriter::varuint(std::uint64_t value) {
     data_.push_back(static_cast<std::uint8_t>(value));
 }
 
-void ByteWriter::f64(double value) {
-    std::uint64_t bits = 0;
-    std::memcpy(&bits, &value, sizeof(bits));
-    for (int shift = 0; shift < 64; shift += 8) {
-        data_.push_back(static_cast<std::uint8_t>(bits >> shift));
-    }
-}
+void ByteWriter::f32(float value) { append(data_, value); }
+
+void ByteWriter::f64(double value) { append(data_, value); }
 
 void ByteWriter::string(std::string_view text) {
     varuint(text.size());
@@ -55,9 +64,8 @@ std::uint32_t ByteReader::u32() {
         return 0;
     }
     std::uint32_t value = 0;
-    for (int i = 0; i < 4; ++i) {
-        value |= static_cast<std::uint32_t>(data_[at_++]) << (8 * i);
-    }
+    std::memcpy(&value, data_ + at_, sizeof(value));
+    at_ += sizeof(value);
     return value;
 }
 
@@ -81,16 +89,23 @@ std::uint64_t ByteReader::varuint() {
     return 0;
 }
 
+float ByteReader::f32() {
+    if (!take(4)) {
+        return 0.0f;
+    }
+    float value = 0.0f;
+    std::memcpy(&value, data_ + at_, sizeof(value));
+    at_ += sizeof(value);
+    return value;
+}
+
 double ByteReader::f64() {
     if (!take(8)) {
         return 0.0;
     }
-    std::uint64_t bits = 0;
-    for (int i = 0; i < 8; ++i) {
-        bits |= static_cast<std::uint64_t>(data_[at_++]) << (8 * i);
-    }
     double value = 0.0;
-    std::memcpy(&value, &bits, sizeof(value));
+    std::memcpy(&value, data_ + at_, sizeof(value));
+    at_ += sizeof(value);
     return value;
 }
 

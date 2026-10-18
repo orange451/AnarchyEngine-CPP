@@ -58,12 +58,12 @@ Stop (`restore_place_unlocked`) and undo revival change the tree without these f
 
 ### 2. `engine_network`
 
-**`TreeCodec`.** Encodes and decodes, with `network::BitWriter`/`BitReader`:
+**`TreeCodec`.** Encodes and decodes a byte stream (little-endian integers, LEB128 lengths):
 
-- **Values**, one encoder per `LuaSlot` kind: Nil, Bool, Number (64-bit), String (length-prefixed UTF-8), Instance (NetId, 0 for nil), Vec3, Color, Matrix4, Enum, Vec2, NumberCurve, ColorCurve, at the engine's stored precision.
-- **Names** through a per-connection string table: the first use of a class or property name sends `Define {id, text}`, later uses send the id. Each side keeps the table for the life of the connection.
-- **Operations**: `Create {netid, class, parent netid, name, properties[]}`, `Destroy {netid}`, `Parent {netid, parent netid}`, `Rename {netid, name}`, `Set {netid, property, value}`.
-- **Messages**: `SnapshotPart {header on the first part, last flag, ops}` and `Changes {server tick, ops}`. The snapshot header carries the codec version, the server tick, and the joining client's Connection NetId.
+- **Values** are the JSON values a project save writes for the property (`save_properties` for a whole instance, `read_property_json` for one property), applied with `load_property`, carried in a compact binary JSON form: null, booleans, numbers as 64-bit doubles, strings, arrays, objects. This reuses the save/load path, which already round-trips every saved property, `Transform`, `Enabled`, `Simulated`, `VisualOnly`, enum names, and curves, at the stored precision. References travel as the target's GUID and resolve late through `InstanceRef`, as a project load's do, so a reference to an instance not yet created, or filtered, reads nil until it exists. `Source` travels in its own field and op.
+- **Names** of classes and properties go through one server-wide string table: a message defines each string it is the first to use (`Define {index, text}`), later uses send the index. A Changes message is encoded once for every client, so it first defines whatever a join snapshot added since the last Changes message; a client can therefore be told a string twice, and a repeated `Define` with the same text is accepted.
+- **Operations**: `Bind {netid, guid}` (a service or Connections, which every `Game` has), `Create {netid, parent netid, class, guid, name, properties[], source?}`, `Destroy {netid}` (the client destroys the subtree), `Parent {netid, parent netid}`, `Rename {netid, name}`, `Set {netid, property, value}`, `Source {netid, source}`.
+- **Messages**: a join snapshot is one op stream (codec version, server tick, the joining client's Connection NetId, then ops), zstd-compressed and split into `SnapshotPart {index, count, raw size, bytes}` messages; a tick's changes are `Changes {codec version, server tick, ops}`.
 
 A NetId is the server's `InstanceId` raw value: unique while alive, generation-tagged, so a reused slot never reads as the instance that held it.
 

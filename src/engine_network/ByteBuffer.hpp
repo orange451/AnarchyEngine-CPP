@@ -37,6 +37,8 @@ public:
     double f64();
     // Refuses a length longer than what is left, before allocating anything.
     std::string string();
+    // Takes everything left in one step: data points at it, the count is its size.
+    std::size_t take_rest(const std::uint8_t*& data);
     bool failed() const { return failed_; }
     std::size_t left() const { return failed_ ? 0 : size_ - at_; }
     // Nothing left and nothing failed.

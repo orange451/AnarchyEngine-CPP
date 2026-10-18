@@ -67,9 +67,9 @@ private:
 class OpWriter {
 public:
     OpWriter(ByteWriter& out, StringTable& strings);
-    // Every string in the table, in index order: a snapshot's start.
     // The strings at indices [from, to): what a message adds to a table clients already hold.
     void define_range(std::uint32_t from, std::uint32_t to);
+    // Every string in the table, in index order: a snapshot's start.
     void define_all();
     void bind(std::uint32_t netid, std::string_view guid);
     void create(std::uint32_t netid, std::uint32_t parent, std::string_view class_name, std::string_view guid,

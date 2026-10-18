@@ -94,6 +94,13 @@ double ByteReader::f64() {
     return value;
 }
 
+std::size_t ByteReader::take_rest(const std::uint8_t*& data) {
+    const std::size_t count = left();
+    data = data_ + (failed_ ? size_ : at_);
+    at_ += count;
+    return count;
+}
+
 std::string ByteReader::string() {
     const std::uint64_t length = varuint();
     if (failed_ || length > size_ - at_) {

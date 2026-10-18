@@ -67,7 +67,7 @@ Stop (`restore_place_unlocked`) and undo revival change the tree without these f
 
 A NetId is the server's `InstanceId` raw value: unique while alive, generation-tagged, so a reused slot never reads as the instance that held it.
 
-Decoding never trusts input: a truncated message, an unknown string id, an unknown class or property name, an out-of-range enum, or a value of the wrong kind for its property fails the whole message.
+Decoding never trusts input: a truncated message, malformed bytes, a string index never defined, a second Create of one instance, a GUID no server makes, or a Bind of something that is not a service fails the whole message. An unknown class, a property the client's build does not know, or a value the property refuses is skipped and counted, so a client from a slightly different engine build still joins.
 
 **`Replicator` (server).** Holds the journal for the current tick, appended by the change sink. At tick end it coalesces:
 
@@ -93,7 +93,7 @@ On join it encodes the filtered tree as `Create` operations in parent-before-chi
 On the client:
 
 - the snapshot completes: set the world role to Client, set `Connections.LocalConnection`, start play;
-- a malformed message, an unknown class or property, or a codec-version mismatch: disconnect and report the reason;
+- a malformed message, a Create of one instance twice, a Bind of something that is not a service, or a codec-version mismatch: disconnect and report the reason;
 - the connection ends for any reason: stop play and report it.
 
 ### 3. Executables

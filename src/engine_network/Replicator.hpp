@@ -38,6 +38,8 @@ public:
     // A join snapshot for the client whose Connection is local_connection, as messages ready to send in order.
     void snapshot_messages(engine_core::InstanceId local_connection, std::vector<std::vector<std::uint8_t>>& out);
     std::uint64_t tick() const;
+    // The strings every client is told; tests build messages against it.
+    const StringTable& strings() const { return strings_; }
 
 private:
     void on_change(const engine_core::TreeChange& change);

@@ -52,14 +52,21 @@ ApplyResult ReplicaApplier::snapshot_part(ByteReader& in) {
     } else if (count != parts_count_ || raw_size != raw_size_) {
         return ApplyResult::Bad;
     }
-    // The rest of the message is this part's compressed bytes.
-    const std::size_t left = in.left();
-    std::vector<std::uint8_t> bytes(left);
-    for (std::size_t i = 0; i < left; ++i) bytes[i] = in.u8();
-    parts_.insert(parts_.end(), bytes.begin(), bytes.end());
+    // The rest of the message is this part's compressed bytes; never more than a frame of this size could be.
+    const std::uint8_t* rest = nullptr;
+    const std::size_t left = in.take_rest(rest);
+    if (parts_.size() + left > ZSTD_compressBound(static_cast<std::size_t>(raw_size_))) {
+        return ApplyResult::Bad;
+    }
+    parts_.insert(parts_.end(), rest, rest + left);
     ++parts_seen_;
     if (parts_seen_ < parts_count_) {
         return ApplyResult::Ok;
+    }
+    // The frame says how big it unpacks; believe it only when it agrees with the header, before allocating.
+    const unsigned long long framed = ZSTD_getFrameContentSize(parts_.data(), parts_.size());
+    if (framed != raw_size_) {
+        return ApplyResult::Bad;
     }
     std::vector<std::uint8_t> raw(static_cast<std::size_t>(raw_size_));
     const std::size_t written = ZSTD_decompress(raw.data(), raw.size(), parts_.data(), parts_.size());
@@ -88,7 +95,10 @@ ApplyResult ReplicaApplier::snapshot_part(ByteReader& in) {
     if (local_connection != 0) {
         const InstanceId mine = local(local_connection);
         auto* connections = dynamic_cast<engine_core::Connections*>(game_.instance(game_.connections()));
-        if (connections != nullptr && mine != DataModel::kNoParent && game_.alive(mine)) {
+        const bool real = mine != DataModel::kNoParent && game_.alive(mine) &&
+                          dynamic_cast<engine_core::ConnectionInstance*>(game_.instance(mine)) != nullptr &&
+                          game_.parent(mine) == game_.connections();
+        if (connections != nullptr && real) {
             connections->set_local_connection(mine);
         }
     }
@@ -124,7 +134,10 @@ bool ReplicaApplier::apply(const Op& op) {
             // Only a service, or Connections, is bound: never something a client could make.
             const std::optional<InstanceId> found = engine_core::valid_guid(op.text) ? game_.find_guid(op.text) : std::nullopt;
             const DataModel* object = found ? game_.instance(*found) : nullptr;
-            if (object == nullptr || !object->is_service()) {
+            const auto bound = local_.find(op.netid);
+            const bool taken = bound != local_.end() && (bound->second == 0 || game_.alive(bound->second));
+            if (object == nullptr || !object->is_service() || op.netid == 0 || taken || *found == game_.core() ||
+                *found == game_.service("ServerStorage")) {
                 return false;
             }
             local_[op.netid] = *found;
@@ -187,6 +200,11 @@ bool ReplicaApplier::apply(const Op& op) {
 }
 
 bool ReplicaApplier::apply_create(const Op& op) {
+    // A netid whose instance died with an ancestor is free again; a live one is a second create.
+    const auto old = local_.find(op.netid);
+    if (old != local_.end() && old->second != 0 && !game_.alive(old->second)) {
+        local_.erase(old);
+    }
     if (local_.count(op.netid) != 0 || op.netid == 0 || !engine_core::valid_guid(op.text)) {
         return false;   // a second create of one instance, or a GUID no server makes: bad data
     }

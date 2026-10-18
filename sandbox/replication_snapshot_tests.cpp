@@ -11,6 +11,8 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <functional>
+
 using engine_core::InstanceId;
 using replication::require_same_world;
 
@@ -44,7 +46,7 @@ void build_place(engine_core::DataModel& game) {
     game.set_parent(part.id(), level.id());
     engine_core::PointLight& lamp = game.create<engine_core::PointLight>();
     game.set_parent(lamp.id(), workspace);
-    engine_core::Script& on_server = add_script(game, "ServerLogic", "print('secret')");
+    engine_core::Script& on_server = add_script(game, "ServerLogic", "_G.server_ran = true");
     engine_core::Script& on_client = add_script(game, "ClientLogic", "_G.client_ran = true");
     engine_core::Script& anywhere = add_script(game, "Shared", "_G.shared_ran = true");
     REQUIRE_FALSE(on_server.set_run_context(static_cast<int>(engine_core::RunContext::Server)));
@@ -190,6 +192,13 @@ TEST_CASE("RP25 client scripts in the snapshot run on the client; a Server shell
     REQUIRE(ran);
     REQUIRE(client.runtime.global_boolean("shared_ran", ran));
     REQUIRE(ran);
+    // The Server script arrived as a shell: no Source, and nothing it would have set.
+    bool server_ran = false;
+    (void)client.runtime.global_boolean("server_ran", server_ran);
+    REQUIRE_FALSE(server_ran);
+    const InstanceId shell = client.game.find_first_child(client.game.scene_service("Workspace"), "ServerLogic");
+    REQUIRE(shell != 0);
+    REQUIRE(static_cast<engine_core::Script*>(client.game.instance(shell))->source().empty());
 }
 
 TEST_CASE("RP26 a large snapshot splits into parts; a missing or corrupt part is bad data", "[replication][snapshot]") {
@@ -224,4 +233,47 @@ TEST_CASE("RP26 a large snapshot splits into parts; a missing or corrupt part is
     engine_network::ReplicaApplier applier(client.game);
     REQUIRE(replication::deliver(applier, messages) == engine_network::ApplyResult::SnapshotApplied);
     require_same_world(replicator, server.game, client.game);
+}
+
+TEST_CASE("RP27 a subtree destroyed and made again under the same netids is accepted", "[replication][snapshot]") {
+    ScriptRig server;
+    ScriptRig client;
+    const InstanceId workspace = server.game.scene_service("Workspace");
+    engine_core::Folder& box = add_folder(server.game, workspace, "Box");
+    engine_core::Folder& child = add_folder(server.game, box.id(), "Child");
+    replication::start_server(server);
+    replication::start_client(client);
+    engine_network::Replicator replicator(server.game);
+    std::vector<std::vector<std::uint8_t>> messages;
+    replicator.snapshot_messages(0, messages);
+    engine_network::ReplicaApplier applier(client.game);
+    REQUIRE(replication::deliver(applier, messages) == engine_network::ApplyResult::SnapshotApplied);
+
+    // A Changes message by hand, over the strings the snapshot defined.
+    engine_network::StringTable table = replicator.strings();
+    const auto send = [&](const std::function<void(engine_network::OpWriter&)>& build) {
+        engine_network::ByteWriter body;
+        body.u8(static_cast<std::uint8_t>(engine_network::MessageType::Changes));
+        body.u8(engine_network::kCodecVersion);
+        body.varuint(1);
+        engine_network::OpWriter writer(body, table);
+        build(writer);
+        return applier.receive_message(body.data().data(), body.data().size());
+    };
+    const auto create = [&](engine_network::OpWriter& writer, const engine_core::Folder& f, InstanceId parent) {
+        engine_core::PropertyBag bag;
+        f.save_properties(bag);
+        writer.create(f.id(), parent, "Folder", server.game.guid(f.id()), server.game.name(f.id()), bag, nullptr);
+    };
+    REQUIRE(send([&](engine_network::OpWriter& w) { w.destroy(box.id()); }) == engine_network::ApplyResult::Ok);
+    REQUIRE(client.game.find_first_child(client.game.scene_service("Workspace"), "Box") == 0);
+    REQUIRE(send([&](engine_network::OpWriter& w) {
+                create(w, box, workspace);
+                create(w, child, box.id());
+            }) == engine_network::ApplyResult::Ok);
+    require_same_world(replicator, server.game, client.game);
+    REQUIRE(applier.skipped() == 0);
+    // A second create of a live netid, and a Bind of netid 0, are bad data.
+    REQUIRE(send([&](engine_network::OpWriter& w) { create(w, box, workspace); }) == engine_network::ApplyResult::Bad);
+    REQUIRE(send([&](engine_network::OpWriter& w) { w.bind(0, server.game.guid(workspace)); }) == engine_network::ApplyResult::Bad);
 }

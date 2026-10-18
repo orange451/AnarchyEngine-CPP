@@ -6,6 +6,7 @@
 #include "DataModel.hpp"
 #include "Game.hpp"
 #include "IClock.hpp"
+#include "INetworkPump.hpp"
 #include "IRenderer.hpp"
 #include "PhysicsWorld.hpp"
 #include "SnapshotPump.hpp"
@@ -55,6 +56,9 @@ public:
 
     void set_renderer(IRenderer* renderer);
     void set_clock(IClock* clock);
+    // A server or client session, pumped at each step's ends. Null to stop.
+    // Set before start(); the engine does not own it.
+    void set_network(INetworkPump* pump);
     void set_timing(double render_dt, double physics_dt);
     // Frames a second. 0 runs as fast as the machine allows, or, with client
     // sync, once per paint. The IDE leaves it at 0 and syncs to the window.
@@ -163,6 +167,7 @@ private:
     double last_step_dt_ = 1.0 / 60.0;
     IRenderer* renderer_ = nullptr;
     IClock* clock_ = nullptr;
+    INetworkPump* network_ = nullptr;
     double render_dt_ = 1.0 / 60.0;
     double physics_dt_ = 1.0 / 240.0;
     double pace_hz_ = 0;

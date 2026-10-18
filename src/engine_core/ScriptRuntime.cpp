@@ -367,6 +367,19 @@ bool ScriptRuntime::global_boolean(const char* name, bool& out) {
     return ok;
 }
 
+bool ScriptRuntime::global_string(const char* name, std::string& out) {
+    bool ok = false;
+    with_global(play_.state, name, [&](lua_State* state) {
+        ok = lua_type(state, -1) == LUA_TSTRING;
+        if (ok) {
+            size_t length = 0;
+            const char* text = lua_tolstring(state, -1, &length);
+            out.assign(text, length);
+        }
+    });
+    return ok;
+}
+
 ScriptRuntime::Watch ScriptRuntime::watch_global(const char* name) {
     Watch watch;
     with_global(play_.state, name, [&](lua_State* state) {

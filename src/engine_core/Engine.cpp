@@ -31,6 +31,11 @@ constexpr std::chrono::milliseconds kToolInterval(16);
 // so a window that stops painting still runs the place at about 60 Hz.
 constexpr std::chrono::microseconds kSimulationClientFallback(16667);
 
+// Seconds on the steady clock, for the network's timers.
+double network_now() {
+    return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
 // Sleeps until the next slot of a fixed hz schedule. Sleeping for the budget
 // less the step's own work dropped each wake-up's lateness, and a sleep on
 // Windows can wake a whole 15.6 ms tick late, so 60 Hz ran near 32. On a fixed
@@ -111,6 +116,7 @@ Engine::~Engine() {
 void Engine::set_renderer(IRenderer* renderer) { renderer_ = renderer; }
 
 void Engine::set_clock(IClock* clock) { clock_ = clock; }
+void Engine::set_network(INetworkPump* pump) { network_ = pump; }
 
 void Engine::set_timing(double render_dt, double physics_dt) {
     render_dt_ = render_dt;
@@ -472,6 +478,11 @@ void Engine::run_step(double wall) {
     const bool measured = client_sync_.load() && !(pace_hz_ > 0.0);
     const double step_dt = measured && wall > 0.0 ? wall : render_dt_;
     int substeps = 0;
+    if (network_ != nullptr) {
+        // What arrived since the last step lands before anything else runs.
+        PROFILE_SCOPE("Network", profiler::Group::Engine);
+        network_->receive(network_now());
+    }
     {
         PROFILE_SCOPE("Commands", profiler::Group::Engine);
         game_.drain_commands();
@@ -583,6 +594,10 @@ void Engine::run_step(double wall) {
     audio_.step(game_, step_dt);
     last_substeps_.store(substeps);
     last_step_dt_ = step_dt;
+    if (network_ != nullptr) {
+        PROFILE_SCOPE("Network", profiler::Group::Engine);
+        network_->send(network_now());
+    }
 }
 
 void Engine::run_window(double dt) {
@@ -619,6 +634,11 @@ void Engine::run_window(double dt) {
 }
 
 void Engine::step_physics(double dt) {
+    // A client shows the server's world: its bodies move only as replication
+    // says, never by its own simulation.
+    if (game_.world_role() == WorldRole::Client) {
+        return;
+    }
     // Members are known before integrate_simulated skips them.
     game_.assemblies().sync_play(game_);
     game_.integrate_simulated(dt);

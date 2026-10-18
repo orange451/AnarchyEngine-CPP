@@ -202,6 +202,7 @@ public:
     bool global_is_nil(const char* name);
     bool global_number(const char* name, double& out);
     bool global_boolean(const char* name, bool& out);
+    bool global_string(const char* name, std::string& out);
     Watch watch_global(const char* name);
     // Null when the watch's world_generation is not the live one, or the id is dead.
     // A mismatched generation does not touch the instance slot.

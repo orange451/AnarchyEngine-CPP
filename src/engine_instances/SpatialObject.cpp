@@ -3,8 +3,12 @@
 #include "Ecs.hpp"
 #include "PropertyBag.hpp"
 
+#include <cstdint>
 #include <cstring>
 #include <type_traits>
+#include <unordered_map>
+#include <utility>
+#include <vector>
 
 namespace engine_core {
 
@@ -73,17 +77,50 @@ void SpatialObject::default_properties(PropertyBag& out) const {
     bag_set(out, "Transform", json_floats(identity.m, 16));
 }
 
-// The base answers first, so a class with its own saved Transform row answers from that row.
+namespace {
+
+// Whether class_name lists a saved Transform row of its own. Replication asks on
+// every Transform change, so the answer is cached per thread, keyed by the class
+// name's address (each class returns one literal) and the registry's revision:
+// no lock, no string, no scan once a class has been asked.
+bool has_saved_transform_row(const char* class_name) {
+    struct Answer {
+        std::uint64_t revision = 0;
+        bool has_row = false;
+    };
+    thread_local std::unordered_map<const char*, Answer> answers;
+    const std::uint64_t revision = lua_registry_revision();
+    auto [at, added] = answers.try_emplace(class_name);
+    if (added || at->second.revision != revision) {
+        bool has_row = false;
+        for (const LuaField& field : *lua_saved_field_list(class_name)) {
+            if (std::strcmp(field.name, "Transform") == 0) {
+                has_row = true;
+                break;
+            }
+        }
+        at->second = Answer{revision, has_row};
+    }
+    return at->second.has_row;
+}
+
+}  // namespace
+
+// A class with its own saved Transform row answers from that row. Otherwise each
+// float travels as the double it is, exactly, without the shortest-decimal text a
+// save writes: only replication reads this, and a client casts each back to the same float.
 bool SpatialObject::read_property_json(std::string_view name, JsonValue& out) const {
-    if (DataModel::read_property_json(name, out)) {
-        return true;
-    }
-    if (name == "Transform") {
+    if (name == "Transform" && !has_saved_transform_row(class_name())) {
         const Matrix4 value = transform();
-        out = json_floats(value.m, 16);
+        std::vector<JsonValue> items;
+        items.reserve(16);
+        for (const float f : value.m) {
+            items.push_back(JsonValue::number(static_cast<double>(f)));
+        }
+        out = JsonValue::array(std::move(items));
         return true;
     }
-    return false;
+    return DataModel::read_property_json(name, out);
 }
 
 bool SpatialObject::load_property(const std::string& key, const JsonValue& value, std::string& error) {

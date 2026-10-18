@@ -76,7 +76,20 @@ bool Replicator::replicated(InstanceId id) const {
 
 std::uint64_t Replicator::tick() const { return tick_; }
 
-void Replicator::on_change(const engine_core::TreeChange& change) { journal_.push_back(change); }
+// A Destroyed change keeps, in previous_parent, the top of the detached subtree
+// the instance was in as it went (the ancestor left nowhere), or kNoParent when
+// it was in the tree or was that top itself. end_tick needs it once the instance is gone.
+void Replicator::on_change(const engine_core::TreeChange& change) {
+    journal_.push_back(change);
+    if (change.kind != engine_core::TreeChange::Kind::Destroyed) {
+        return;
+    }
+    InstanceId top = DataModel::kNoParent;
+    for (InstanceId at = game_.parent(change.id); at != 0 && at != DataModel::kNoParent; at = game_.parent(at)) {
+        top = game_.parent(at) == DataModel::kNoParent ? at : DataModel::kNoParent;
+    }
+    journal_.back().previous_parent = top;
+}
 
 std::string Replicator::client_source(const DataModel& object) {
     const auto* lua = dynamic_cast<const engine_core::LuaSource*>(&object);
@@ -234,6 +247,8 @@ bool Replicator::end_tick(std::vector<std::uint8_t>& message) {
     std::vector<std::pair<InstanceId, std::string>> written;
     std::set<std::pair<InstanceId, std::string>> written_set;
     std::unordered_set<InstanceId> context_changed;
+    // Destroyed inside an orphan the client takes with its parent this tick, so it needs no Destroy of its own.
+    std::unordered_set<InstanceId> taken_under;
     const auto note_write = [&](InstanceId id, std::string name) {
         if (written_set.emplace(id, name).second) {
             written.emplace_back(id, std::move(name));
@@ -241,11 +256,18 @@ bool Replicator::end_tick(std::vector<std::uint8_t>& message) {
     };
     for (const engine_core::TreeChange& change : journal) {
         switch (change.kind) {
-            case engine_core::TreeChange::Kind::Destroyed:
+            case engine_core::TreeChange::Kind::Destroyed: {
+                // The orphan above it was noted when its parent went, earlier in this journal.
+                const InstanceId top = change.previous_parent;
+                const auto start = start_parent.find(top);
+                if (orphaned.count(top) != 0 && start != start_parent.end() && destroyed_set.count(start->second) != 0) {
+                    taken_under.insert(change.id);
+                }
                 if (destroyed_set.insert(change.id).second) {
                     destroyed.push_back(change.id);
                 }
                 break;
+            }
             case engine_core::TreeChange::Kind::Parented:
                 if (moved_set.insert(change.id).second) {
                     moved.push_back(change.id);
@@ -335,7 +357,7 @@ bool Replicator::end_tick(std::vector<std::uint8_t>& message) {
         }
     }
     for (const InstanceId id : destroyed) {
-        if (known_.erase(id) != 0 && !taken_with_parent(id)) {
+        if (known_.erase(id) != 0 && !taken_with_parent(id) && taken_under.count(id) == 0) {
             writer.destroy(id);
         }
     }

@@ -19,7 +19,33 @@ namespace {
 constexpr std::uint64_t kMaxSnapshotBytes = 256ull << 20;
 }  // namespace
 
-ReplicaApplier::ReplicaApplier(DataModel& game) : game_(game) { local_.emplace(0, 0); }
+ReplicaApplier::ReplicaApplier(DataModel& game) : game_(game) { map(0, 0); }
+
+void ReplicaApplier::map(std::uint32_t netid, InstanceId id) {
+    // Either side's old pairing goes, so the two maps always mirror each other.
+    unmap(netid);
+    const auto held = netid_.find(id);
+    if (held != netid_.end()) {
+        local_.erase(held->second);
+        netid_.erase(held);
+    }
+    local_[netid] = id;
+    netid_[id] = netid;
+}
+
+void ReplicaApplier::unmap(std::uint32_t netid) {
+    const auto found = local_.find(netid);
+    if (found == local_.end()) {
+        return;
+    }
+    const auto back = netid_.find(found->second);
+    if (back != netid_.end() && back->second == netid) {
+        netid_.erase(back);
+    }
+    local_.erase(found);
+}
+
+std::size_t ReplicaApplier::mapped() const { return local_.size(); }
 
 InstanceId ReplicaApplier::local(std::uint32_t netid) const {
     const auto found = local_.find(netid);
@@ -142,7 +168,7 @@ bool ReplicaApplier::apply(const Op& op) {
                 *found == game_.service("ServerStorage")) {
                 return false;
             }
-            local_[op.netid] = *found;
+            map(op.netid, *found);
             return true;
         }
         case Op::Kind::Create:
@@ -151,7 +177,7 @@ bool ReplicaApplier::apply(const Op& op) {
             // A refused destroy keeps its mapping; one already gone, or done here, frees the netid.
             const InstanceId id = alive_local(op.netid);
             if (id == DataModel::kNoParent) {
-                local_.erase(op.netid);
+                unmap(op.netid);
                 ++skipped_;
                 return true;
             }
@@ -159,7 +185,20 @@ bool ReplicaApplier::apply(const Op& op) {
                 ++skipped_;
                 return true;
             }
-            local_.erase(op.netid);
+            // The server sends no Destroy for what goes with id, so every netid
+            // in the subtree is freed here, before destroy_tree forgets the ids.
+            std::vector<InstanceId> pending{id};
+            while (!pending.empty()) {
+                const InstanceId next = pending.back();
+                pending.pop_back();
+                const auto held = netid_.find(next);
+                if (held != netid_.end()) {
+                    unmap(held->second);
+                }
+                for (InstanceId child = game_.first_child(next); child != 0; child = game_.next_sibling(child)) {
+                    pending.push_back(child);
+                }
+            }
             game_.destroy_tree(id);
             return true;
         }
@@ -211,7 +250,7 @@ bool ReplicaApplier::apply_create(const Op& op) {
     // A netid whose instance died with an ancestor is free again; a live one is a second create.
     const auto old = local_.find(op.netid);
     if (old != local_.end() && old->second != 0 && !game_.alive(old->second)) {
-        local_.erase(old);
+        unmap(op.netid);
     }
     if (local_.count(op.netid) != 0 || op.netid == 0 || !engine_core::valid_guid(op.text)) {
         return false;   // a second create of one instance, or a GUID no server makes: bad data
@@ -257,7 +296,7 @@ bool ReplicaApplier::apply_create(const Op& op) {
         return true;
     }
     game_.set_parent(id, parent);
-    local_[op.netid] = id;
+    map(op.netid, id);
     return true;
 }
 

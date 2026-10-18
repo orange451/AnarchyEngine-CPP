@@ -28,6 +28,8 @@ public:
     bool joined() const;               // the snapshot has been applied
     std::size_t skipped() const;       // operations refused or naming an instance this client no longer has
     std::uint64_t server_tick() const;
+    // How many netids this client maps: what it holds of the server's tree, the root included.
+    std::size_t mapped() const;
 
 private:
     ApplyResult snapshot_part(ByteReader& in);
@@ -35,10 +37,14 @@ private:
     // False only for bad data; a refused operation counts as skipped.
     bool apply(const Op& op);
     bool apply_create(const Op& op);
+    // Pairs netid and id in both maps, dropping either one's old pairing.
+    void map(std::uint32_t netid, engine_core::InstanceId id);
+    void unmap(std::uint32_t netid);
 
     engine_core::DataModel& game_;
     StringTable strings_;
     std::unordered_map<std::uint32_t, engine_core::InstanceId> local_;   // netid -> this world's id
+    std::unordered_map<engine_core::InstanceId, std::uint32_t> netid_;   // the reverse: this world's id -> netid
     std::vector<std::uint8_t> parts_;   // compressed snapshot bytes so far
     std::uint32_t parts_seen_ = 0;
     std::uint32_t parts_count_ = 0;

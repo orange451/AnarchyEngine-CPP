@@ -141,6 +141,40 @@ TEST_CASE("RP32 destroy_tree removes a subtree; a plain destroy's orphans leave 
     require_no_orphans(pair.client.game);
 }
 
+TEST_CASE("RP32b a client forgets the netids of children destroyed with their parent", "[replication][changes]") {
+    Pair pair;
+    engine_core::DataModel& game = pair.server.game;
+    const InstanceId workspace = game.scene_service("Workspace");
+    const std::size_t before = pair.applier->mapped();
+    for (int round = 0; round < 50; ++round) {
+        engine_core::Folder& folder = add_folder(game, workspace, "Crate");
+        add_folder(game, folder.id(), "A");
+        add_folder(game, add_folder(game, folder.id(), "B").id(), "B1");
+        REQUIRE(pair.tick());
+        REQUIRE(pair.applier->mapped() == before + 4);
+        // Alternate destroy_tree with a plain destroy, which sends one Destroy and
+        // leaves the children nowhere on the server: A stays alive there for a
+        // tick, and B goes with B1 in the same tick, under the orphan.
+        InstanceId orphan = 0;
+        if (round % 2 == 0) {
+            game.destroy_tree(folder.id());
+        } else {
+            orphan = game.find_first_child(folder.id(), "A");
+            const InstanceId b = game.find_first_child(folder.id(), "B");
+            game.destroy(folder.id());
+            game.destroy_tree(b);
+        }
+        REQUIRE(pair.tick());
+        REQUIRE(pair.applier->mapped() == before);
+        if (orphan != 0) {
+            game.destroy(orphan);
+            REQUIRE_FALSE(pair.tick());   // the client lost it with its parent
+        }
+    }
+    pair.same();
+    REQUIRE(pair.applier->skipped() == 0);
+}
+
 TEST_CASE("RP33 an instance moved into ServerStorage disappears; moved back, it returns whole", "[replication][changes]") {
     Pair pair;
     engine_core::DataModel& game = pair.server.game;

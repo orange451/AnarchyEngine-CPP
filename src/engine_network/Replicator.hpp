@@ -37,16 +37,23 @@ public:
     bool replicated(engine_core::InstanceId id) const;
     // A join snapshot for the client whose Connection is local_connection, as messages ready to send in order.
     void snapshot_messages(engine_core::InstanceId local_connection, std::vector<std::vector<std::uint8_t>>& out);
+    // Everything that changed since the last call, as one Changes message for
+    // every joined client. False, with message left empty, when nothing did.
+    bool end_tick(std::vector<std::uint8_t>& message);
     std::uint64_t tick() const;
-    // The strings every client is told; tests build messages against it.
-    const StringTable& strings() const { return strings_; }
 
 private:
     void on_change(const engine_core::TreeChange& change);
     // Source a client may hold: empty for a Server script, otherwise its source.
     static std::string client_source(const engine_core::DataModel& object);
     void write_record(OpWriter& writer, engine_core::InstanceId id) const;
-    void write_subtree(OpWriter& writer, engine_core::InstanceId id);
+    // Steps from the root to id; a child of the root is 1.
+    int depth(engine_core::InstanceId id) const;
+    // Creates id and its replicated subtree, skipping children clients already
+    // hold (they moved here this tick and get their own Parent op).
+    void write_subtree(OpWriter& writer, engine_core::InstanceId id,
+                       std::unordered_set<engine_core::InstanceId>& created);
+    // Clients no longer hold id or anything under it.
     void forget_subtree(engine_core::InstanceId id);
 
     engine_core::DataModel& game_;

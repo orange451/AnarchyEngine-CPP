@@ -2,6 +2,7 @@
 
 #include "ByteBuffer.hpp"
 #include "ConnectionInstance.hpp"
+#include "LuaApi.hpp"
 #include "LuaSource.hpp"
 #include "Script.hpp"
 
@@ -10,12 +11,33 @@
 #pragma warning(pop)
 
 #include <algorithm>
+#include <set>
 #include <stdexcept>
+#include <unordered_set>
+#include <utility>
 
 namespace engine_network {
 
 using engine_core::DataModel;
 using engine_core::InstanceId;
+
+namespace {
+
+// The property a change names, or "" for one never sent (LinearVelocity).
+std::string property_of(const engine_core::TreeChange& change) {
+    using engine_core::Field;
+    switch (change.field) {
+        case Field::Transform: return "Transform";
+        case Field::Source: return "Source";
+        case Field::Enabled: return "Enabled";
+        case Field::Simulated: return "Simulated";
+        case Field::VisualOnly: return "VisualOnly";
+        case Field::Reflected: return engine_core::lua_property_name(static_cast<std::uint32_t>(change.payload));
+        default: return std::string();
+    }
+}
+
+}  // namespace
 
 Replicator::Replicator(DataModel& game, ReplicatorOptions options)
     : game_(game), options_(options), core_(game.core()), server_storage_(game.service("ServerStorage")) {
@@ -145,6 +167,200 @@ void Replicator::snapshot_messages(InstanceId local_connection, std::vector<std:
         message.bytes(packed.data() + from, size);
         out.push_back(std::move(message.data()));
     }
+}
+
+int Replicator::depth(InstanceId id) const {
+    int steps = 0;
+    for (InstanceId at = id; at != 0 && at != DataModel::kNoParent; at = game_.parent(at)) {
+        ++steps;
+    }
+    return steps;
+}
+
+void Replicator::write_subtree(OpWriter& writer, InstanceId id, std::unordered_set<InstanceId>& created) {
+    std::vector<InstanceId> pending{id};
+    while (!pending.empty()) {
+        const InstanceId next = pending.back();
+        pending.pop_back();
+        write_record(writer, next);
+        known_.insert(next);
+        created.insert(next);
+        const std::size_t mark = pending.size();
+        for (InstanceId child = game_.first_child(next); child != 0; child = game_.next_sibling(child)) {
+            if (replicated(child) && known_.count(child) == 0) {
+                pending.push_back(child);
+            }
+        }
+        std::reverse(pending.begin() + static_cast<std::ptrdiff_t>(mark), pending.end());
+    }
+}
+
+void Replicator::forget_subtree(InstanceId id) {
+    std::vector<InstanceId> pending{id};
+    while (!pending.empty()) {
+        const InstanceId next = pending.back();
+        pending.pop_back();
+        known_.erase(next);
+        if (!game_.alive(next)) {
+            continue;
+        }
+        for (InstanceId child = game_.first_child(next); child != 0; child = game_.next_sibling(child)) {
+            pending.push_back(child);
+        }
+    }
+}
+
+bool Replicator::end_tick(std::vector<std::uint8_t>& message) {
+    message.clear();
+    ++tick_;
+    std::vector<engine_core::TreeChange> journal;
+    journal.swap(journal_);
+
+    // The tick's journal, coalesced: each instance once per kind, each property once.
+    std::vector<InstanceId> destroyed;
+    std::unordered_set<InstanceId> destroyed_set;
+    std::vector<InstanceId> moved;
+    std::unordered_set<InstanceId> moved_set;
+    // Left nowhere by its parent's destroy this tick and not moved since: the
+    // client's destroy_tree of that parent takes it, so it needs no op of its own.
+    std::unordered_set<InstanceId> orphaned;
+    std::vector<InstanceId> renamed;
+    std::unordered_set<InstanceId> renamed_set;
+    std::vector<std::pair<InstanceId, std::string>> written;
+    std::set<std::pair<InstanceId, std::string>> written_set;
+    std::unordered_set<InstanceId> context_changed;
+    const auto note_write = [&](InstanceId id, std::string name) {
+        if (written_set.emplace(id, name).second) {
+            written.emplace_back(id, std::move(name));
+        }
+    };
+    for (const engine_core::TreeChange& change : journal) {
+        switch (change.kind) {
+            case engine_core::TreeChange::Kind::Destroyed:
+                if (destroyed_set.insert(change.id).second) {
+                    destroyed.push_back(change.id);
+                }
+                break;
+            case engine_core::TreeChange::Kind::Parented:
+                if (moved_set.insert(change.id).second) {
+                    moved.push_back(change.id);
+                }
+                if (destroyed_set.count(change.previous_parent) != 0) {
+                    orphaned.insert(change.id);
+                } else {
+                    orphaned.erase(change.id);
+                }
+                break;
+            case engine_core::TreeChange::Kind::Renamed:
+                if (renamed_set.insert(change.id).second) {
+                    renamed.push_back(change.id);
+                }
+                break;
+            case engine_core::TreeChange::Kind::Property: {
+                std::string name = property_of(change);
+                if (name.empty()) {
+                    break;
+                }
+                // A new RunContext changes what source a client may hold.
+                if (name == "RunContext") {
+                    context_changed.insert(change.id);
+                    note_write(change.id, "Source");
+                }
+                note_write(change.id, std::move(name));
+                break;
+            }
+        }
+    }
+
+    ByteWriter out;
+    out.u8(static_cast<std::uint8_t>(MessageType::Changes));
+    out.u8(kCodecVersion);
+    out.varuint(tick_);
+    OpWriter writer(out, strings_);
+    // Strings a later snapshot added that the clients already joined have not heard.
+    writer.define_range(broadcast_strings_, static_cast<std::uint32_t>(strings_.size()));
+    std::unordered_set<InstanceId> created;
+
+    // 1. Creates and moves, shallowest first, so a parent exists before its children.
+    std::vector<std::pair<int, InstanceId>> by_depth;
+    for (const InstanceId id : moved) {
+        if (game_.alive(id)) {
+            by_depth.emplace_back(depth(id), id);
+        }
+    }
+    std::stable_sort(by_depth.begin(), by_depth.end(),
+                     [](const auto& a, const auto& b) { return a.first < b.first; });
+    std::vector<InstanceId> left_filter;
+    for (const auto& entry : by_depth) {
+        const InstanceId id = entry.second;
+        if (orphaned.count(id) != 0) {
+            forget_subtree(id);
+            continue;
+        }
+        if (replicated(id)) {
+            if (created.count(id) != 0) {
+                continue;
+            }
+            if (known_.count(id) == 0) {
+                write_subtree(writer, id, created);
+            } else {
+                writer.parent(id, game_.parent(id));
+            }
+        } else if (known_.count(id) != 0) {
+            left_filter.push_back(id);
+        }
+    }
+    // 2. Destroys: what left the filter, then what was destroyed. Moves came
+    // first, so an instance moved out of something destroyed here is safe.
+    for (const InstanceId id : left_filter) {
+        if (known_.count(id) != 0) {
+            writer.destroy(id);
+            forget_subtree(id);
+        }
+    }
+    for (const InstanceId id : destroyed) {
+        if (known_.erase(id) != 0 && orphaned.count(id) == 0) {
+            writer.destroy(id);
+        }
+    }
+    // 3. Renames, with the current name.
+    for (const InstanceId id : renamed) {
+        if (known_.count(id) != 0 && created.count(id) == 0 && game_.alive(id)) {
+            writer.rename(id, game_.name(id));
+        }
+    }
+    // 4. Property writes, with their current values.
+    for (const auto& [id, name] : written) {
+        if (known_.count(id) == 0 || created.count(id) != 0 || !game_.alive(id)) {
+            continue;
+        }
+        const DataModel& object = *game_.instance(id);
+        if (name == "Source") {
+            if (dynamic_cast<const engine_core::LuaSource*>(&object) == nullptr) {
+                continue;
+            }
+            const auto* script = dynamic_cast<const engine_core::Script*>(&object);
+            const bool shell = script != nullptr && script->run_context() == engine_core::RunContext::Server;
+            // A Server script's source edits stay on the server.
+            if (shell && context_changed.count(id) == 0) {
+                continue;
+            }
+            writer.source(id, client_source(object));
+            continue;
+        }
+        // A name it does not answer (view-local or derived) is not sent.
+        engine_core::JsonValue value;
+        if (object.read_property_json(name, value)) {
+            writer.set(id, name, value);
+        }
+    }
+
+    if (writer.ops() == 0) {
+        return false;   // the pending Define ops wait for the next message that carries an op
+    }
+    broadcast_strings_ = static_cast<std::uint32_t>(strings_.size());
+    message = std::move(out.data());
+    return true;
 }
 
 }  // namespace engine_network

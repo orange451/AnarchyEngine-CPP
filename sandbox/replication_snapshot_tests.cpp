@@ -11,8 +11,6 @@
 
 #include <catch2/catch_test_macros.hpp>
 
-#include <functional>
-
 using engine_core::InstanceId;
 using replication::require_same_world;
 
@@ -233,6 +231,14 @@ TEST_CASE("RP26 a large snapshot splits into parts; a missing or corrupt part is
     engine_network::ReplicaApplier applier(client.game);
     REQUIRE(replication::deliver(applier, messages) == engine_network::ApplyResult::SnapshotApplied);
     require_same_world(replicator, server.game, client.game);
+    // A tick's changes before any snapshot are out of order.
+    server.game.set_name(server.game.find_first_child(workspace, "F0"), "Renamed");
+    std::vector<std::uint8_t> changes;
+    REQUIRE(replicator.end_tick(changes));
+    ScriptRig fresh;
+    replication::start_client(fresh);
+    engine_network::ReplicaApplier unjoined(fresh.game);
+    REQUIRE(unjoined.receive_message(changes.data(), changes.size()) == engine_network::ApplyResult::Bad);
 }
 
 TEST_CASE("RP27 a subtree destroyed and made again under the same netids is accepted", "[replication][snapshot]") {
@@ -248,32 +254,31 @@ TEST_CASE("RP27 a subtree destroyed and made again under the same netids is acce
     replicator.snapshot_messages(0, messages);
     engine_network::ReplicaApplier applier(client.game);
     REQUIRE(replication::deliver(applier, messages) == engine_network::ApplyResult::SnapshotApplied);
+    const auto tick = [&](std::vector<std::uint8_t>& message) {
+        REQUIRE(replicator.end_tick(message));
+        return applier.receive_message(message.data(), message.size());
+    };
 
-    // A Changes message by hand, over the strings the snapshot defined.
-    engine_network::StringTable table = replicator.strings();
-    const auto send = [&](const std::function<void(engine_network::OpWriter&)>& build) {
-        engine_network::ByteWriter body;
-        body.u8(static_cast<std::uint8_t>(engine_network::MessageType::Changes));
-        body.u8(engine_network::kCodecVersion);
-        body.varuint(1);
-        engine_network::OpWriter writer(body, table);
-        build(writer);
-        return applier.receive_message(body.data().data(), body.data().size());
-    };
-    const auto create = [&](engine_network::OpWriter& writer, const engine_core::Folder& f, InstanceId parent) {
-        engine_core::PropertyBag bag;
-        f.save_properties(bag);
-        writer.create(f.id(), parent, "Folder", server.game.guid(f.id()), server.game.name(f.id()), bag, nullptr);
-    };
-    REQUIRE(send([&](engine_network::OpWriter& w) { w.destroy(box.id()); }) == engine_network::ApplyResult::Ok);
+    // Hidden in ServerStorage, the subtree is destroyed on the client.
+    std::vector<std::uint8_t> message;
+    server.game.set_parent(box.id(), server.game.service("ServerStorage"));
+    REQUIRE(tick(message) == engine_network::ApplyResult::Ok);
     REQUIRE(client.game.find_first_child(client.game.scene_service("Workspace"), "Box") == 0);
-    REQUIRE(send([&](engine_network::OpWriter& w) {
-                create(w, box, workspace);
-                create(w, child, box.id());
-            }) == engine_network::ApplyResult::Ok);
+    // Moved back, it is made again under the same netids.
+    server.game.set_parent(box.id(), workspace);
+    REQUIRE(tick(message) == engine_network::ApplyResult::Ok);
     require_same_world(replicator, server.game, client.game);
+    REQUIRE(applier.local(child.id()) != engine_core::DataModel::kNoParent);
     REQUIRE(applier.skipped() == 0);
-    // A second create of a live netid, and a Bind of netid 0, are bad data.
-    REQUIRE(send([&](engine_network::OpWriter& w) { create(w, box, workspace); }) == engine_network::ApplyResult::Bad);
-    REQUIRE(send([&](engine_network::OpWriter& w) { w.bind(0, server.game.guid(workspace)); }) == engine_network::ApplyResult::Bad);
+    // The same creates again name live netids: bad data.
+    REQUIRE(applier.receive_message(message.data(), message.size()) == engine_network::ApplyResult::Bad);
+    // A Bind of netid 0 is bad data too (a Bind names no table string).
+    engine_network::StringTable table;
+    engine_network::ByteWriter body;
+    body.u8(static_cast<std::uint8_t>(engine_network::MessageType::Changes));
+    body.u8(engine_network::kCodecVersion);
+    body.varuint(replicator.tick() + 1);
+    engine_network::OpWriter writer(body, table);
+    writer.bind(0, server.game.guid(workspace));
+    REQUIRE(applier.receive_message(body.data().data(), body.data().size()) == engine_network::ApplyResult::Bad);
 }

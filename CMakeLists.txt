@@ -774,6 +774,10 @@ target_link_libraries(engine_core PUBLIC Threads::Threads profiler engine_dataty
 target_link_libraries(engine_datatypes PUBLIC engine_core)
 target_link_libraries(engine_instances PUBLIC engine_core amesh aanim)
 target_link_libraries(engine_services PUBLIC engine_core)
+# The four packages need each other. GNU ld reads each archive once in order,
+# and CMake repeats the cycle only twice: a member one package pulls in on the
+# last pass can need another that was already read. Three passes resolve it.
+set_target_properties(engine_core PROPERTIES LINK_INTERFACE_MULTIPLICITY 3)
 # flecs stays private: only engine_core and GameObject include Ecs.hpp.
 target_link_libraries(engine_core PRIVATE flecs)
 target_link_libraries(engine_instances PRIVATE flecs)

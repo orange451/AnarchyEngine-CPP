@@ -115,6 +115,7 @@ TEST_CASE("PG5 a turned body under a scaled GameObject keeps its Transform bit f
             world.sync(rig.game);
         }
         INFO(session);
-        REQUIRE(std::equal(std::begin(before.m), std::end(before.m), std::begin(body.transform().m)));
+        const engine_core::Matrix4 after = body.transform();
+        REQUIRE(std::equal(std::begin(before.m), std::end(before.m), std::begin(after.m)));
     }
 }

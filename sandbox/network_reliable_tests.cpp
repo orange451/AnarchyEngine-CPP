@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <memory>
 #include <random>
 #include <vector>
 
@@ -269,4 +270,30 @@ TEST_CASE("N37d blocks queued behind one another all arrive, in order, within th
     }
     REQUIRE(b.received.size() == sent.size());
     for (std::size_t i = 0; i < sent.size(); ++i) REQUIRE(b.received[i] == sent[i]);
+}
+
+TEST_CASE("N38 one shared block goes to two channels without a copy each, and both receive it whole", "[network][reliable]") {
+    Side a, b, c, d;
+    const auto block = std::make_shared<const std::vector<std::uint8_t>>(message(11, 5 * 1000 + 17));
+    REQUIRE(a.channel.send(block));
+    REQUIRE(c.channel.send(block));
+    REQUIRE(block.use_count() == 3);   // both channels hold the one buffer
+    // A message that fits inline is copied, so the channel holds no reference to it.
+    const auto small = std::make_shared<const std::vector<std::uint8_t>>(message(12, 40));
+    REQUIRE(a.channel.send(small));
+    REQUIRE(small.use_count() == 1);
+    REQUIRE_FALSE(a.channel.send(network::SharedMessage{}));
+    for (int tick = 0; tick < 200 && (b.received.size() < 2 || d.received.empty()); ++tick) {
+        const double now = tick / 60.0;
+        b.take(a.build(now, 0.05));
+        a.learn_acks(b, now);
+        d.take(c.build(now, 0.05));
+        c.learn_acks(d, now);
+    }
+    REQUIRE(b.received.size() == 2);
+    REQUIRE(b.received[0] == *block);
+    REQUIRE(b.received[1] == *small);
+    REQUIRE(d.received.size() == 1);
+    REQUIRE(d.received[0] == *block);
+    REQUIRE(block.use_count() == 1);   // acked, the channels let it go
 }

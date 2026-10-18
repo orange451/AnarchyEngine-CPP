@@ -5,9 +5,9 @@
 
 namespace network {
 
-bool ReliableChannel::send(const std::uint8_t* bytes, std::size_t length) {
-    if (length > kMaxBlockBytes) return false;
-    if (unacked() >= kWindowSize) return false;
+ReliableChannel::Outgoing* ReliableChannel::begin_send(std::size_t length) {
+    if (length > kMaxBlockBytes) return nullptr;
+    if (unacked() >= kWindowSize) return nullptr;
     Outgoing& out = out_[next_send_id_ % kWindowSize];
     out.valid = true;
     out.acked = false;
@@ -15,17 +15,38 @@ bool ReliableChannel::send(const std::uint8_t* bytes, std::size_t length) {
     out.length = static_cast<std::uint32_t>(length);
     out.fragments_acked = 0;
     out.last_send = -1e9;
+    out.block.reset();
     if (length <= kFragmentBytes) {
         out.fragment_count = 0;
-        if (length > 0) std::memcpy(out.inline_bytes, bytes, length);
-        out.block = std::vector<std::uint8_t>();
     } else {
         out.fragment_count = static_cast<std::uint16_t>((length + kFragmentBytes - 1) / kFragmentBytes);
-        out.block.assign(bytes, bytes + length);
         out.fragment_last_send.assign(out.fragment_count, -1e9);
         out.fragment_acked.assign(out.fragment_count, 0);
     }
     ++next_send_id_;
+    return &out;
+}
+
+bool ReliableChannel::send(const std::uint8_t* bytes, std::size_t length) {
+    Outgoing* out = begin_send(length);
+    if (out == nullptr) return false;
+    if (out->fragment_count == 0) {
+        if (length > 0) std::memcpy(out->inline_bytes, bytes, length);
+    } else {
+        out->block = std::make_shared<std::vector<std::uint8_t>>(bytes, bytes + length);
+    }
+    return true;
+}
+
+bool ReliableChannel::send(SharedMessage message) {
+    if (!message) return false;
+    Outgoing* out = begin_send(message->size());
+    if (out == nullptr) return false;
+    if (out->fragment_count == 0) {
+        if (!message->empty()) std::memcpy(out->inline_bytes, message->data(), message->size());
+    } else {
+        out->block = std::move(message);
+    }
     return true;
 }
 
@@ -82,7 +103,7 @@ void ReliableChannel::write(BitWriter& writer, double now, double rtt, SentPacke
             writer.bits(out.fragment_count, 16);
             writer.bits(f, 16);
             writer.bits(static_cast<std::uint32_t>(length), 16);
-            writer.bytes(out.block.data() + f * kFragmentBytes, length);
+            writer.bytes(out.block->data() + f * kFragmentBytes, length);
             out.fragment_last_send[f] = now;
             packet.refs[packet.ref_count++] = MessageRef{out.id, f};
         }
@@ -206,7 +227,7 @@ void ReliableChannel::acked(const MessageRef& ref) {
         Outgoing& front = out_[oldest_unacked_ % kWindowSize];
         if (!front.acked) break;
         front.valid = false;
-        front.block = std::vector<std::uint8_t>();
+        front.block.reset();
         front.fragment_last_send = std::vector<double>();
         front.fragment_acked = std::vector<std::uint8_t>();
         ++oldest_unacked_;

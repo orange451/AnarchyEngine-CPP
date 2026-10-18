@@ -74,6 +74,8 @@ public:
     ConnectionStats stats(PeerId peer, double now) const;
     const EndpointStats& stats() const { return stats_; }
     bool send_message(PeerId peer, const std::uint8_t* bytes, std::size_t length);
+    // The same, holding message rather than copying it: one buffer can go to many peers.
+    bool send_message(PeerId peer, SharedMessage message);
     std::size_t payload_budget(PeerId peer, double now) const;
     std::optional<std::uint16_t> send_payload(PeerId peer, const std::uint8_t* bytes, std::size_t length, std::uint32_t tag);
     std::vector<PeerId> peers() const;

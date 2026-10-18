@@ -6,6 +6,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <vector>
 
 namespace network {
@@ -24,9 +25,15 @@ constexpr std::size_t kMaxReassemblyBytes = 8u << 20;
 // that has room, until acked, no sooner than RTT × 1.25 after its last
 // send; a block's fragments are acked one by one. Small messages live
 // inline; only blocks use the heap.
+// A message several channels may hold at once: a server sends one tick's bytes to
+// every client without a copy each.
+using SharedMessage = std::shared_ptr<const std::vector<std::uint8_t>>;
+
 class ReliableChannel {
 public:
     bool send(const std::uint8_t* bytes, std::size_t length);
+    // As above; a block keeps a reference to message rather than copying it.
+    bool send(SharedMessage message);
     bool has_due(double now, double rtt) const;
     std::size_t bytes_due(double now, double rtt) const;
     // Appends the section and records what it carried in packet.refs. The
@@ -64,10 +71,9 @@ private:
         std::uint16_t fragments_acked = 0;
         double last_send = -1e9;
         std::uint8_t inline_bytes[kFragmentBytes];
-        std::vector<std::uint8_t> block;
+        SharedMessage block;   // a block's bytes, perhaps shared with other channels
         std::vector<double> fragment_last_send;
         std::vector<std::uint8_t> fragment_acked;
-        const std::uint8_t* data() const { return fragment_count == 0 ? inline_bytes : block.data(); }
     };
     struct Incoming {
         bool valid = false;
@@ -81,6 +87,8 @@ private:
         std::vector<std::uint8_t> fragment_present;
         const std::uint8_t* data() const { return fragment_count == 0 ? inline_bytes : block.data(); }
     };
+    // Claims the next slot for a message of length bytes; null when the window is full or it is too big.
+    Outgoing* begin_send(std::size_t length);
     static bool due(double last_send, double now, double rtt) { return now - last_send >= rtt * 1.25; }
     static std::size_t entry_bits(bool fragment, std::size_t length) {
         // The continuation bit, id, fragment count, index, length, alignment, bytes, and the terminating bit.

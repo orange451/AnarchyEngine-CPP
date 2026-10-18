@@ -366,6 +366,11 @@ bool Endpoint::send_message(PeerId id, const std::uint8_t* bytes, std::size_t le
     return peer != nullptr && peer->connection->send_message(bytes, length);
 }
 
+bool Endpoint::send_message(PeerId id, SharedMessage message) {
+    const Peer* peer = connected(id);
+    return peer != nullptr && peer->connection->send_message(std::move(message));
+}
+
 std::size_t Endpoint::payload_budget(PeerId id, double now) const {
     const Peer* peer = connected(id);
     return peer != nullptr ? peer->connection->payload_budget(now) : 0;

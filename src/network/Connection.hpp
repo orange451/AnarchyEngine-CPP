@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <functional>
 #include <optional>
+#include <utility>
 
 namespace network {
 
@@ -46,6 +47,7 @@ public:
     std::uint16_t session() const { return session_; }
 
     bool send_message(const std::uint8_t* bytes, std::size_t length) { return reliable_.send(bytes, length); }
+    bool send_message(SharedMessage message) { return reliable_.send(std::move(message)); }
     // Payload bytes this tick's packet may carry: the rate's share of a tick
     // (the reliable section is not rate-limited by it), less at most one
     // packet's share of the reliable backlog, never more than fits.

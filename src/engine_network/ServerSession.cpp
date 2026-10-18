@@ -75,7 +75,7 @@ void ServerSession::flush(network::PeerId peer, double now) {
     Peer& entry = peers_[peer];
     bool progressed = entry.queue.empty();
     while (!entry.queue.empty() &&
-           endpoint_->send_message(peer, entry.queue.front()->data(), entry.queue.front()->size())) {
+           endpoint_->send_message(peer, entry.queue.front())) {
         entry.queued_bytes -= entry.queue.front()->size();
         entry.queue.pop_front();
         progressed = true;

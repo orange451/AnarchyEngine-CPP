@@ -1,7 +1,7 @@
 // The DynamicSky toward any world direction: a single-scattering atmosphere
 // (Nishita 1993; the sun's glow after https://www.shadertoy.com/view/3djSzz)
-// lit by the sun and, at night, the moon; clouds on a layer overhead (after
-// https://www.shadertoy.com/view/wslyWs); stars; and the sun and moon. No
+// lit by the sun and, at night, the moon; volumetric clouds in a curved
+// layer overhead (after https://www.shadertoy.com/view/XtBXDw); stars; and the sun and moon. No
 // #version: Renderer puts it in after the main file's, after environment.glsl
 // (kPi, kMaxHalf, basis). SkyMath.hpp holds the CPU side of the same numbers.
 
@@ -24,6 +24,8 @@ uniform float uCloudCover;
 uniform float uCloudDensity;
 // How far the clouds have drifted, in units across X and Z.
 uniform vec2 uCloudOffset;
+// MakeCloudNoiseTexture's noise.
+uniform sampler2D uCloudNoise;
 // The tangent of each disc's half angle.
 uniform float uSunSize;
 uniform float uMoonSize;
@@ -47,9 +49,19 @@ const float kMoonSkyRadiance = kSunRadiance * 0.03;
 const vec3 kNightSky = vec3(0.002, 0.003, 0.006);
 const int kViewSteps = 12;
 const int kLightSteps = 4;
-// The cloud layer's height and a cloud's size, in units.
+// The cloud layer: its base above the eye and its thickness, in units; the
+// center of its curve this far below the eye; its biggest puffs' size; the
+// long steps across it through clear air, the most steps of any length, and
+// the first of the steps toward the light, and how many.
 const float kCloudHeight = 200.0;
-const float kCloudFeature = 120.0;
+const float kCloudThickness = 70.0;
+const float kCloudDrop = 1800.0;
+const float kCloudFeature = 110.0;
+const float kCloudLacunarity = 2.76434;
+const int kCloudSteps = 24;
+const int kCloudMaxSteps = 64;
+const float kCloudLightStep = 4.0;
+const int kCloudLightSteps = 5;
 // The bright stars' grid, and a finer one of faint stars behind them.
 const float kStarCells = 150.0;
 const float kFaintStarCells = 420.0;
@@ -136,44 +148,161 @@ float valueNoise(vec2 p) {
                mix(hash12(i + vec2(0.0, 1.0)), hash12(i + vec2(1.0, 1.0)), u.x), u.y);
 }
 
-// 0 to 1, five octaves, each turned so their grids do not line up.
-float fbm(vec2 p) {
-    float sum = 0.0;
-    float amplitude = 0.5;
-    mat2 turn = mat2(1.6, 1.2, -1.2, 1.6);
-    for (int i = 0; i < 5; ++i) {
-        sum += amplitude * valueNoise(p);
-        p = turn * p;
-        amplitude *= 0.5;
-    }
-    return sum / 0.96875;
+// 3D value noise, 0 to 1: one fetch of uCloudNoise gives two z slices.
+float cloudNoise(vec3 p) {
+    vec3 i = floor(p);
+    vec3 f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    vec2 uv = i.xy + vec2(37.0, 17.0) * i.z + f.xy;
+    vec2 slices = textureLod(uCloudNoise, (uv + 0.5) / 256.0, 0.0).yx;
+    return mix(slices.x, slices.y, f.z);
 }
 
-// The clouds toward dir: their light in rgb, and how much of what is behind them they hide in a.
+// The clouds' density at p (world units, drifted), height through the layer
+// 0 at its base to 1 at its top, against coverage edge; detail drops the two
+// finest octaves, for the light's march. The coarse octaves first: where
+// even the finest could not lift them over the edge, there is no cloud.
+float cloudDensity(vec3 p, float height, float edge, bool detail) {
+    if (height < 0.0 || height > 1.0) {
+        return 0.0;
+    }
+    // Rounder tops, and a softened base.
+    edge += 0.25 * height * height;
+    vec3 q = p / kCloudFeature;
+    float shape = 0.51749673 * cloudNoise(q);
+    q *= kCloudLacunarity;
+    shape += 0.25584929 * cloudNoise(q);
+    if (shape + 0.19 < edge) {
+        return 0.0;
+    }
+    if (detail) {
+        q *= kCloudLacunarity;
+        shape += 0.12527603 * cloudNoise(q);
+        q *= kCloudLacunarity;
+        shape += 0.06255931 * cloudNoise(q);
+    } else {
+        shape += 0.094;
+    }
+    // Softer edged for the light, whose few samples would show a sharp edge as a step.
+    float soft = detail ? 0.05 : 0.15;
+    return clamp(shape * smoothstep(edge, edge + soft, shape), 0.0, 1.0) * smoothstep(0.0, 0.12, height);
+}
+
+// Whether cloudDensity could find cloud at p: the coarse octaves alone,
+// which change too slowly over a long step for one to pass a cloud by.
+bool cloudNear(vec3 p, float height, float edge) {
+    if (height < 0.0 || height > 1.0) {
+        return false;
+    }
+    vec3 q = p / kCloudFeature;
+    float shape = 0.51749673 * cloudNoise(q) + 0.25584929 * cloudNoise(q * kCloudLacunarity);
+    return shape + 0.19 >= edge + 0.25 * height * height;
+}
+
+// Henyey-Greenstein, times 4 pi so light scattered evenly is 1.
+float cloudPhase(float mu, float g) {
+    float g2 = g * g;
+    return (1.0 - g2) / pow(max(1.0 + g2 - 2.0 * g * mu, 1e-4), 1.5);
+}
+
+// The clouds toward dir, after https://www.shadertoy.com/view/XtBXDw: marched
+// through a shell about a center far below, so they curve down to the
+// horizon. Their light in rgb, and how much of what is behind them they hide in a.
 vec4 clouds(vec3 dir, vec3 skyAround) {
-    if (dir.y < 0.01 || uCloudCover <= 0.0) {
+    if (dir.y < 0.0 || uCloudCover <= 0.0) {
         return vec4(0.0);
     }
-    vec2 at = (dir.xz / dir.y * kCloudHeight + uCloudOffset) / kCloudFeature;
-    float shape = fbm(at);
+    vec3 origin = vec3(0.0, kCloudDrop, 0.0);
+    float enter = sphereHits(origin, dir, kCloudDrop + kCloudHeight).y;
+    float leave = sphereHits(origin, dir, kCloudDrop + kCloudHeight + kCloudThickness).y;
+    float stepLength = (leave - enter) / float(kCloudSteps);
     float edge = 1.0 - uCloudCover;
-    float coverage = smoothstep(edge, edge + 0.3, shape);
-    if (coverage <= 0.0) {
+    // Per unit through the densest cloud.
+    float extinction = mix(0.06, 0.4, uCloudDensity);
+    vec3 drift = vec3(uCloudOffset.x, 0.0, uCloudOffset.y);
+    // A sky thick and full of cloud: grayer, dimmer, and less of the light through.
+    float overcast = uCloudCover * uCloudDensity;
+    vec3 toward = uBodyLightDirection;
+    float mu = dot(dir, toward);
+    // Bright toward the light (a silver lining), a little back toward it too;
+    // thick cloud spreads the light more evenly.
+    float phase = mix(cloudPhase(mu, mix(0.6, 0.3, uCloudDensity)), cloudPhase(mu, -0.2), 0.55);
+    vec3 direct = uBodyLightColor / kPi * phase * mix(1.0, 0.45, overcast * overcast);
+    // The sky's light on them, grayer as the clouds hide more of the blue.
+    vec3 gray = vec3(dot(skyAround, vec3(0.2126, 0.7152, 0.0722)));
+    vec3 ambient = mix(skyAround, gray, 0.35 + 0.55 * overcast) * mix(1.0, 0.7, overcast);
+    vec3 light = vec3(0.0);
+    float transmittance = 1.0;
+    // Long steps through clear air; in cloud, a step back and short ones,
+    // none through more than about half the light, so thick cloud shows no
+    // slices; long again once a few find nothing.
+    float fineLength = min(stepLength * 0.5, 0.6 / extinction);
+    // Each pixel starts a different way into its first step, so the steps show as fine grain, not bands.
+    float jitter = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
+    float t = enter + stepLength * jitter;
+    bool fine = false;
+    int empty = 0;
+    for (int i = 0; i < kCloudMaxSteps; ++i) {
+        if (t > leave) {
+            break;
+        }
+        vec3 at = dir * t;
+        float height = (length(at + origin) - kCloudDrop - kCloudHeight) / kCloudThickness;
+        if (!fine) {
+            if (cloudNear(at + drift, height, edge)) {
+                fine = true;
+                empty = 0;
+                t = max(t - stepLength + fineLength * jitter, enter);
+            } else {
+                t += stepLength;
+            }
+            continue;
+        }
+        t += fineLength;
+        float density = cloudDensity(at + drift, height, edge, true);
+        if (density <= 0.0) {
+            // Long steps again only well clear of any cloud.
+            if (++empty >= 4 && !cloudNear(at + drift, height, edge)) {
+                fine = false;
+            }
+            continue;
+        }
+        empty = 0;
+        // How much of the light reaches here: the cloud toward it, over
+        // steps each longer than the last, each sampled at this pixel's own
+        // place along it. A few fixed samples would print each cloud's edge
+        // into the shading again, shifted, as bands.
+        float shadow = 0.0;
+        float along = 0.0;
+        for (int k = 1; k <= kCloudLightSteps; ++k) {
+            float span = kCloudLightStep * float(k);
+            float to = along + span * jitter;
+            shadow += cloudDensity(at + drift + toward * to, height + toward.y * to / kCloudThickness, edge, false) * span;
+            along += span;
+        }
+        // Mostly the light straight through; some scattered on through
+        // thicker cloud, so a dense heart is not a cliff of dark.
+        float depth = extinction * shadow * 0.3;
+        float reach = 0.7 * exp(-depth) + 0.3 * exp(-depth * 0.2);
+        // Tops brighter than bases, as https://www.shadertoy.com/view/XtBXDw fakes the light through the layer.
+        float lift = exp(height) / 1.75;
+        vec3 here = direct * reach * lift + ambient * mix(0.7, 1.1, height);
+        float through = exp(-extinction * density * fineLength);
+        light += transmittance * (1.0 - through) * here;
+        transmittance *= through;
+        if (transmittance < 0.01) {
+            transmittance = 0.0;
+            break;
+        }
+    }
+    float opacity = 1.0 - transmittance;
+    if (opacity <= 0.0) {
         return vec4(0.0);
     }
-    float opacity = coverage * mix(0.4, 1.0, uCloudDensity) * smoothstep(0.01, 0.12, dir.y);
-    // Thicker toward the light is darker: the shape a little way toward it, against here.
-    vec2 toward = uBodyLightDirection.xz;
-    float lean = length(toward);
-    toward = lean > 1e-4 ? toward / lean : vec2(0.0);
-    float ahead = fbm(at + toward * 0.2);
-    float shade = clamp(1.0 - (ahead - shape) * 4.0 * mix(0.5, 1.5, uCloudDensity), 0.2, 1.0);
-    // Lit as a white matte surface, plus the sky around it; denser is grayer.
-    vec3 light = uBodyLightColor / kPi * shade * mix(1.0, 0.55, uCloudDensity * coverage) + skyAround * 0.6;
-    // At night, thin edges near the moon catch its light forward: a silver lining.
-    float rim = coverage * (1.0 - coverage) * 4.0 * mix(1.0, 0.4, uCloudDensity);
-    light += uBodyLightColor * (rim * uStarVisibility * 3.0 * pow(max(dot(dir, uBodyLightDirection), 0.0), 24.0));
-    return vec4(light, opacity);
+    // A little hazy toward the horizon, through more air.
+    vec3 haze = mix(skyAround, gray, overcast);
+    vec3 color = mix(haze, light / opacity, mix(0.65, 1.0, smoothstep(0.0, 0.2, dir.y)));
+    return vec4(color, opacity);
 }
 
 // One grid of stars: those in a fraction rarity of cells, the brightest
@@ -276,16 +405,28 @@ vec3 proceduralSky(vec3 dir, bool detail) {
     vec3 color = air + uMoonColor * 0.02 * pow(max(dot(up, uMoonDirection), 0.0), 600.0) * above;
     if (detail) {
         color += stars(up) * uStarVisibility * above;
-        vec4 sun = body(up, uSunDirection, uSunSize, uSunTextureEnabled, uSunTexture, 0.0);
-        color += sun.rgb * uSunColor * sun.a * above;
         vec4 moon = body(up, uMoonDirection, uMoonSize, uMoonTextureEnabled, uMoonTexture, 1.0);
         color = mix(color, air + moon.rgb * uMoonColor, moon.a * above);
     }
-    vec4 cloud = clouds(up, air);
+    // Toward and below the horizon, the layer as a whole: an even veil as
+    // much as the sky is covered. Below it every direction down a column is
+    // the same horizon ray, whose clouds would draw down as streaks.
+    vec4 cloud = dir.y > 0.0 ? clouds(up, air) : vec4(0.0);
+    float overcast = uCloudCover * uCloudDensity;
+    vec3 veil = mix(air, vec3(dot(air, vec3(0.2126, 0.7152, 0.0722))), 0.5 + 0.5 * overcast) * mix(1.0, 0.6, overcast);
+    cloud = mix(cloud, vec4(veil, smoothstep(0.1, 0.8, uCloudCover)), smoothstep(0.03, 0.0, dir.y));
     color = mix(color, cloud.rgb, cloud.a);
-    // A wide halo round the moon, stronger through haze and cloud.
+    // The sun shows through thin cloud and not at all through thick: bright
+    // as it is, even the last hundredth of it would glare through.
+    float clear = 1.0 - cloud.a;
+    if (detail) {
+        vec4 sun = body(up, uSunDirection, uSunSize, uSunTextureEnabled, uSunTexture, 0.0);
+        color += sun.rgb * uSunColor * sun.a * above * clear * smoothstep(0.0, 0.25, clear);
+    }
+    // A wide halo round the moon, stronger through haze and thin cloud.
     float moonward = max(dot(up, uMoonDirection), 0.0);
-    color += uMoonColor * ((0.002 + 0.006 * uCloudCover) * pow(moonward, 40.0) + 0.0008 * pow(moonward, 6.0)) * above;
+    color += uMoonColor * ((0.002 + 0.006 * uCloudCover) * pow(moonward, 40.0) + 0.0008 * pow(moonward, 6.0)) * above *
+             mix(0.2, 1.0, clear);
     float ground = 1.0 - smoothstep(-0.25, 0.0, dir.y);
     color *= mix(1.0, 0.25, ground);
     return min(color, vec3(kMaxHalf));

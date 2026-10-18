@@ -884,6 +884,8 @@ private:
     // A small tileable value-noise texture (MeshDraw::terrainSurfaceA/B's
     // anti-tiling offset), made once on the first terrainArrays call.
     unsigned terrainNoiseTexture_ = 0;
+    // The DynamicSky clouds' noise (MakeCloudNoiseTexture).
+    unsigned cloudNoiseTexture_ = 0;
     // GL_MAX_ARRAY_TEXTURE_LAYERS, queried once in initialize(); clamps how
     // many of a TerrainTextureSet's layers an array pair can hold.
     int maxArrayLayers_ = 256;

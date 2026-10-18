@@ -190,6 +190,46 @@ unsigned MakeTerrainNoiseTexture() {
     return texture;
 }
 
+// The DynamicSky clouds' 3D value noise, after https://www.shadertoy.com/view/4sfGzS:
+// random texels in G, and in R the texel 37 across and 17 down, so one
+// bilinear fetch at xy + (37, 17) z gives slices z (G) and z + 1 (R).
+// Wraps every 256 under GL_REPEAT.
+unsigned MakeCloudNoiseTexture() {
+    constexpr int kSize = 256;
+    std::vector<unsigned char> random(static_cast<std::size_t>(kSize) * kSize);
+    std::uint32_t state = 0x9E3779B9u;
+    for (unsigned char& value : random) {
+        state ^= state << 13;
+        state ^= state >> 17;
+        state ^= state << 5;
+        value = static_cast<unsigned char>(state >> 24);
+    }
+    std::vector<unsigned char> pixels(random.size() * 2);
+    for (int y = 0; y < kSize; ++y) {
+        for (int x = 0; x < kSize; ++x) {
+            const std::size_t index = static_cast<std::size_t>(y) * kSize + static_cast<std::size_t>(x);
+            const std::size_t ahead =
+                static_cast<std::size_t>((y + 17) % kSize) * kSize + static_cast<std::size_t>((x + 37) % kSize);
+            pixels[index * 2 + 0] = random[ahead];
+            pixels[index * 2 + 1] = random[index];
+        }
+    }
+    unsigned texture = 0;
+    glGenTextures(1, &texture);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, texture);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    glTexImage2D(GL_TEXTURE_2D, 0, static_cast<GLint>(RT_GL_RG8), kSize, kSize, 0, RT_GL_RG, GL_UNSIGNED_BYTE,
+                 pixels.data());
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, static_cast<GLint>(GL_LINEAR));
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, static_cast<GLint>(GL_LINEAR));
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, static_cast<GLint>(GL_REPEAT));
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, static_cast<GLint>(GL_REPEAT));
+    glBindTexture(GL_TEXTURE_2D, 0);
+    return texture;
+}
+
 }  // namespace
 
 void SetSkyState(SceneDynamicSky& out, const SkyState& state) {
@@ -378,6 +418,7 @@ bool Renderer::buildProgram(Program& program, const char* name, const char* vert
     // The sky pass reads no Material, so the DynamicSky's textures take its units.
     sampler("uSunTexture", kUnitDiffuse);
     sampler("uMoonTexture", kUnitNormalMap);
+    sampler("uCloudNoise", kUnitRoughnessMap);
     sampler("uTerrainLook", kUnitTerrainLook);
     sampler("uBones", kUnitBones);
     // The terrain program's own three arrays and anti-tiling noise.
@@ -483,6 +524,7 @@ bool Renderer::initialize() {
     glBindTexture(RT_GL_TEXTURE_CUBE_MAP, 0);
 
     terrainNoiseTexture_ = MakeTerrainNoiseTexture();
+    cloudNoiseTexture_ = MakeCloudNoiseTexture();
 
     // Task 6: how many layers a terrain array pair can hold, and whether
     // anisotropic filtering is available (queried through glGetStringi, not
@@ -2101,6 +2143,7 @@ void Renderer::bindDynamicSky(const Program& program, const SceneDynamicSky& sky
     glUniform1f(program.moonTextureEnabled, sky.moonTexture != 0 ? 1.f : 0.f);
     BindTexture(kUnitDiffuse, sky.sunTexture != 0 ? sky.sunTexture : whiteTexture_);
     BindTexture(kUnitNormalMap, sky.moonTexture != 0 ? sky.moonTexture : whiteTexture_);
+    BindTexture(kUnitRoughnessMap, cloudNoiseTexture_);
 }
 
 bool Renderer::updateDynamicSkyLighting() {
@@ -3178,6 +3221,7 @@ void Renderer::shutdown() {
     }
     terrainArrays_.clear();
     DeleteTexture(terrainNoiseTexture_);
+    DeleteTexture(cloudNoiseTexture_);
     for (unsigned* vao : {&emptyVao_, &sphereVao_, &gridBandVao_, &outlineVao_, &handleVao_}) {
         if (*vao != 0) {
             glDeleteVertexArrays(1, vao);

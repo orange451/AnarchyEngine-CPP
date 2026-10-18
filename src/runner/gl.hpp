@@ -220,6 +220,7 @@ constexpr GLenum RT_GL_RGBA16F = 0x881A;
 constexpr GLenum RT_GL_R8 = 0x8229;
 constexpr GLenum RT_GL_R32F = 0x822E;
 constexpr GLenum RT_GL_RG = 0x8227;
+constexpr GLenum RT_GL_RG8 = 0x822B;
 constexpr GLenum RT_GL_RG16 = 0x822C;
 constexpr GLenum RT_GL_SRGB8_ALPHA8 = 0x8C43;
 constexpr GLenum RT_GL_R11F_G11F_B10F = 0x8C3A;

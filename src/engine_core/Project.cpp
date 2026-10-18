@@ -2275,7 +2275,7 @@ std::vector<SaveConflict> Project::outside_changes(const std::vector<AuthoredNod
                 edited.push_back(std::move(unreadable));
             } else {
                 const JsonValue none = JsonValue::object();
-                const JsonValue& mine = removed ? none : planned->second.props;
+                const JsonValue& mine = removed ? none : planned->second.props.get();
                 for (const KeyMerge& merged : merge_keys(base.props, disk, mine)) {
                     // The save would write over a value that changed on disk.
                     if (merged.change != KeyChange::DiskOnly && merged.change != KeyChange::Conflict) {
@@ -2841,7 +2841,7 @@ bool Project::read_changed(Comparison& out, std::vector<std::size_t>& compare,
         for (std::size_t index = 0; index < plan.size(); ++index) {
             docs.push_back(changed.count(plan[index].guid) != 0
                                ? written_doc(scratch, ids[index], plan[index].doc)
-                               : files_.at(plan[index].guid).props);
+                               : files_.at(plan[index].guid).props.get());
         }
         out.plan = std::move(plan);
         out.docs = std::move(docs);

@@ -193,3 +193,83 @@ TEST_CASE("RP14 truncated, garbled and hostile input fails without crashing", "[
     JsonValue value;
     REQUIRE_FALSE(engine_network::read_json(in, value));
 }
+
+TEST_CASE("RP14b hostile varints, counts, depths and string tables", "[replication][codec]") {
+    using engine_network::StringTable;
+    const auto reads = [](const std::vector<std::uint8_t>& bytes) {
+        StringTable fresh;
+        std::vector<Op> ops;
+        ByteReader in(bytes.data(), bytes.size());
+        return engine_network::read_ops(in, fresh, ops);
+    };
+    // A varint of ten bytes ends in 0 or 1; above that, or an eleventh byte, fails.
+    {
+        std::vector<std::uint8_t> ten(9, 0xFF);
+        ten.push_back(1);
+        ByteReader ok(ten.data(), ten.size());
+        REQUIRE(ok.varuint() == ~0ull);
+        REQUIRE_FALSE(ok.failed());
+        ten.back() = 2;
+        ByteReader bad(ten.data(), ten.size());
+        (void)bad.varuint();
+        REQUIRE(bad.failed());
+        std::vector<std::uint8_t> eleven(10, 0xFF);
+        eleven.push_back(0);
+        ByteReader longer(eleven.data(), eleven.size());
+        (void)longer.varuint();
+        REQUIRE(longer.failed());
+    }
+    // A JSON array or object claiming more items than bytes left.
+    {
+        const std::vector<std::uint8_t> array = {5, 100, 0};
+        const std::vector<std::uint8_t> object = {6, 100, 0};
+        JsonValue v;
+        ByteReader a(array.data(), array.size());
+        REQUIRE_FALSE(engine_network::read_json(a, v));
+        ByteReader o(object.data(), object.size());
+        REQUIRE_FALSE(engine_network::read_json(o, v));
+    }
+    // Depth: 32 nested arrays read, 33 do not.
+    for (const int levels : {32, 33}) {
+        ByteWriter nest;
+        for (int i = 0; i < levels; ++i) {
+            nest.u8(5);
+            nest.varuint(1);
+        }
+        nest.u8(0);
+        ByteReader in(nest.data().data(), nest.data().size());
+        JsonValue v;
+        REQUIRE(engine_network::read_json(in, v) == (levels == 32));
+    }
+    // A Create naming more properties than bytes remain; has_source of 2; a string index of 2^32.
+    {
+        ByteWriter w;
+        w.u8(1); w.varuint(0); w.string("Part");
+        w.u8(3); w.u32(5); w.u32(0); w.varuint(0); w.string("g"); w.string("n"); w.varuint(1000);
+        REQUIRE_FALSE(reads(w.data()));
+        ByteWriter s;
+        s.u8(1); s.varuint(0); s.string("Part");
+        s.u8(3); s.u32(5); s.u32(0); s.varuint(0); s.string("g"); s.string("n"); s.varuint(0); s.u8(2);
+        REQUIRE_FALSE(reads(s.data()));
+        ByteWriter big;
+        big.u8(1); big.varuint(0); big.string("Part");
+        big.u8(3); big.u32(5); big.u32(0); big.varuint(1ull << 32);
+        REQUIRE_FALSE(reads(big.data()));
+    }
+    // A Define again with the same text reads; with other text, or text already held at another index, it fails.
+    {
+        ByteWriter same;
+        same.u8(1); same.varuint(0); same.string("a");
+        same.u8(1); same.varuint(0); same.string("a");
+        same.u8(1); same.varuint(1); same.string("b");
+        REQUIRE(reads(same.data()));
+        ByteWriter other;
+        other.u8(1); other.varuint(0); other.string("a");
+        other.u8(1); other.varuint(0); other.string("b");
+        REQUIRE_FALSE(reads(other.data()));
+        ByteWriter drift;
+        drift.u8(1); drift.varuint(0); drift.string("a");
+        drift.u8(1); drift.varuint(1); drift.string("a");
+        REQUIRE_FALSE(reads(drift.data()));
+    }
+}

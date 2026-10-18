@@ -9,9 +9,6 @@ constexpr int kMaxDepth = 32;
 
 bool read_value(ByteReader& in, engine_core::JsonValue& out, int depth) {
     using engine_core::JsonValue;
-    if (depth > kMaxDepth) {
-        return false;
-    }
     switch (in.u8()) {
         case Null: out = JsonValue(); break;
         case False: out = JsonValue::boolean(false); break;
@@ -19,6 +16,9 @@ bool read_value(ByteReader& in, engine_core::JsonValue& out, int depth) {
         case Number: out = JsonValue::number(in.f64()); break;
         case String: out = JsonValue::string(in.string()); break;
         case Array: {
+            if (depth >= kMaxDepth) {
+                return false;
+            }
             const std::uint64_t count = in.varuint();
             // Each item takes at least one byte, so a count beyond what is left is a lie.
             if (in.failed() || count > in.left()) {
@@ -34,6 +34,9 @@ bool read_value(ByteReader& in, engine_core::JsonValue& out, int depth) {
             break;
         }
         case Object: {
+            if (depth >= kMaxDepth) {
+                return false;
+            }
             const std::uint64_t count = in.varuint();
             if (in.failed() || count > in.left()) {
                 return false;

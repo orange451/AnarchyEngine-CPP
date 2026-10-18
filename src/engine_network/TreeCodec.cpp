@@ -47,11 +47,13 @@ std::uint32_t OpWriter::ref(std::string_view text) {
     return index;
 }
 
-void OpWriter::define_all() {
-    for (std::uint32_t index = 0; index < strings_.size(); ++index) {
+void OpWriter::define_range(std::uint32_t from, std::uint32_t to) {
+    for (std::uint32_t index = from; index < to; ++index) {
         define(index);
     }
 }
+
+void OpWriter::define_all() { define_range(0, static_cast<std::uint32_t>(strings_.size())); }
 
 void OpWriter::bind(std::uint32_t netid, std::string_view guid) {
     out_.u8(static_cast<std::uint8_t>(Op::Kind::Bind));
@@ -145,13 +147,24 @@ bool read_ops(ByteReader& in, StringTable& strings, std::vector<Op>& out) {
             case Op::Kind::Define: {
                 const std::uint64_t index = in.varuint();
                 std::string text = in.string();
-                if (in.failed() || index != strings.size()) {
+                if (in.failed()) {
+                    return false;
+                }
+                // One table serves every client, so a client can be told a string
+                // twice: again is fine when it says the same thing.
+                if (index < strings.size()) {
+                    if (*strings.at(static_cast<std::uint32_t>(index)) != text) {
+                        return false;
+                    }
+                    continue;
+                }
+                if (index != strings.size()) {
                     return false;
                 }
                 bool added = false;
                 strings.intern(text, &added);
                 if (!added) {
-                    return false;   // a string defined twice would put every later index out of step
+                    return false;   // the text is already at another index: the tables would drift apart
                 }
                 continue;   // a Define is for the table, not the caller
             }

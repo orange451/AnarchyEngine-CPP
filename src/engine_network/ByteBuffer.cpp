@@ -68,6 +68,10 @@ std::uint64_t ByteReader::varuint() {
         if (failed_) {
             return 0;
         }
+        if (shift == 63 && byte > 1) {
+            failed_ = true;   // the tenth byte holds one bit; more would overflow 64
+            return 0;
+        }
         value |= static_cast<std::uint64_t>(byte & 0x7F) << shift;
         if ((byte & 0x80) == 0) {
             return value;

@@ -4,7 +4,7 @@
 // clients (docs/superpowers/specs/2026-10-13-server-client-design.md, section 2).
 // After a message's header (Replicator and ReplicaApplier write those), the
 // wire is a sequence of ops, each a u8 kind and then:
-//   Define   varuint index (the table's size), string text
+//   Define   varuint index (the table's size, or an earlier index with the same text), string text
 //   Bind     u32 netid, string guid
 //   Create   u32 netid, u32 parent, varuint class, string guid, string name,
 //            varuint count, count x (varuint property, json value),
@@ -68,6 +68,8 @@ class OpWriter {
 public:
     OpWriter(ByteWriter& out, StringTable& strings);
     // Every string in the table, in index order: a snapshot's start.
+    // The strings at indices [from, to): what a message adds to a table clients already hold.
+    void define_range(std::uint32_t from, std::uint32_t to);
     void define_all();
     void bind(std::uint32_t netid, std::string_view guid);
     void create(std::uint32_t netid, std::uint32_t parent, std::string_view class_name, std::string_view guid,

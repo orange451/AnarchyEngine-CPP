@@ -3,6 +3,7 @@
 #include "ShadowAtlas.hpp"
 #include "ShadowMath.hpp"
 
+#include <algorithm>
 #include <cstdint>
 #include <unordered_map>
 #include <vector>
@@ -161,6 +162,15 @@ struct CascadeDraw {
     float texelWorld = 0.f;
     // Indices into the casters planCascades was given.
     std::vector<int> casters;
+    // How it is drawn. All: every caster in casters, straight into its
+    // layer. With casters moving (CasterView::moving) it keeps the still ones
+    // in a layer of a second texture, so a frame when only the moving ones
+    // change draws those alone: Still draws casters (the still ones) into
+    // that layer, copies it into the cascade's, and draws moving over them;
+    // Moving copies the kept layer and draws moving.
+    enum class Kind { All, Still, Moving };
+    Kind kind = Kind::All;
+    std::vector<int> moving;
 };
 
 // The cascades as last drawn, which the light pass reads.
@@ -198,6 +208,9 @@ struct CasterView {
     // them. The rest cast nothing, so the planner looks at these alone.
     const int* live = nullptr;
     std::size_t liveCount = 0;
+    // Null, or nonzero for a caster that changed in the last frames, as a
+    // walking character does every frame: the cascades keep the rest apart.
+    const std::uint8_t* moving = nullptr;
 };
 
 // The casters a planner looks at: live's, or every one.
@@ -269,6 +282,9 @@ public:
     const CascadeShadow* cascades() const { return cascadeReady_ ? &cascade_ : nullptr; }
     // Drops the cascades, as when their texture is made again.
     void forgetCascades() { cascadeReady_ = false; }
+    // Drops the still casters kept for each cascade (CascadeDraw::Kind), as
+    // when the texture keeping them is made again.
+    void forgetCascadeCache() { std::fill(cacheKept_, cacheKept_ + kMaxCascades, false); }
 
 private:
     struct Record {
@@ -366,6 +382,16 @@ private:
     CascadeShadow pendingCascade_;
     std::uint64_t pendingCascadeHashes_[kMaxCascades] = {};
     bool cascadePending_ = false;
+    // Each cascade's box as last committed: one that still holds its slice
+    // is kept (kCascadeSlack), so a camera moving a little draws nothing again.
+    CascadeFit heldFits_[kMaxCascades];
+    CascadeFit pendingFits_[kMaxCascades];
+    bool heldReady_ = false;
+    // The still casters' hash each cascade's kept layer was drawn from, and whether it holds one.
+    std::uint64_t cacheHashes_[kMaxCascades] = {};
+    bool cacheKept_[kMaxCascades] = {};
+    std::uint64_t pendingCacheHashes_[kMaxCascades] = {};
+    bool pendingCacheKept_[kMaxCascades] = {};
     // Scratch kept between calls: each caster turned toward the sun, and the casters inside each cascade.
     struct LitCaster {
         float x = 0.f;
@@ -383,7 +409,10 @@ private:
         float pull[kMaxCascades] = {};
         std::vector<int> inside[kMaxCascades];
         std::vector<std::uint64_t> hashes[kMaxCascades];
+        std::vector<int> moving[kMaxCascades];
+        std::vector<std::uint64_t> movingHashes[kMaxCascades];
     };
+    std::vector<int> cascadeMoving_[kMaxCascades];
     std::vector<CascadeBlock> cascadeBlocks_;
     // A vector of casters made a CasterView: its arrays.
     const CasterView& viewOf(const std::vector<ShadowCaster>& casters);

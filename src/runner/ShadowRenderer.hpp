@@ -104,6 +104,8 @@ private:
     // Depth on, polygon offset on, both sides drawn, scissor on.
     void begin();
     void end();
+    // Copies the kept still casters' layer into the cascade's, which it leaves attached to cascadeFbo_.
+    void copyKeptLayer(int layer, int size);
     // Adds casters' runs, grouped by mesh, to casterRuns_ and their rows to
     // casterRows_; returns the first run's index. Their end is casterRuns_.size().
     // cutouts false casts every caster whole, holes and all.
@@ -118,6 +120,12 @@ private:
     // that casts nothing has fingerprint 0. Its bounds are draw's spheres.
     std::vector<std::uint64_t> casterOwners_;
     std::vector<std::uint64_t> casterFingerprints_;
+    // Per caster, nonzero while it changed in the last kMovingFrames frames
+    // (CasterView::moving): when it changed last, and the ones moving now.
+    std::vector<std::uint8_t> casterMoving_;
+    std::vector<std::uint32_t> casterMovedAt_;
+    std::vector<int> movingCasters_;
+    std::uint32_t casterFrame_ = 0;
     CasterView casterView_;
     const MeshDraw* castersMeshes_ = nullptr;
     // What noteDraws said since draw last made the casters.
@@ -169,6 +177,11 @@ private:
     unsigned cascadeFbo_ = 0;
     unsigned cascades_ = 0;
     int cascadeSize_ = 0;
+    // Each cascade's still casters alone (CascadeDraw::Kind), made once a
+    // cascade has moving casters, and the framebuffer it is copied from.
+    unsigned cacheFbo_ = 0;
+    unsigned cascadeCache_ = 0;
+    int cascadeCacheSize_ = 0;
     unsigned atlasStandIn_ = 0;
     unsigned cascadeStandIn_ = 0;
 };

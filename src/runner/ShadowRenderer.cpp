@@ -64,6 +64,8 @@ constexpr int kCutoutUnit = 0;
 // texels are too wide to show a leaf's holes: its cut-outs cast whole, depth
 // only, so the GPU's early depth test keeps drawing it as cheaply as before.
 constexpr float kCutoutTexel = 0.1f;
+// Frames a caster counts as moving after it last changed (CasterView::moving).
+constexpr std::uint32_t kMovingFrames = 30;
 
 }  // namespace
 
@@ -91,6 +93,7 @@ bool ShadowRenderer::initialize() {
     glUseProgram(0);
     glGenFramebuffers(1, &atlasFbo_);
     glGenFramebuffers(1, &cascadeFbo_);
+    glGenFramebuffers(1, &cacheFbo_);
     atlasStandIn_ = MakeDepth(1, 1, &kFarDepth);
     cascadeStandIn_ = MakeDepth(1, 1, &kFarDepth);
     return true;
@@ -111,9 +114,14 @@ void ShadowRenderer::shutdown() {
         glDeleteFramebuffers(1, &cascadeFbo_);
         cascadeFbo_ = 0;
     }
-    for (unsigned* texture : {&atlas_, &cascades_, &atlasStandIn_, &cascadeStandIn_}) {
+    if (cacheFbo_ != 0) {
+        glDeleteFramebuffers(1, &cacheFbo_);
+        cacheFbo_ = 0;
+    }
+    for (unsigned* texture : {&atlas_, &cascades_, &cascadeCache_, &atlasStandIn_, &cascadeStandIn_}) {
         DeleteTexture(*texture);
     }
+    cascadeCacheSize_ = 0;
     instances_.destroy();
     atlasTextureSize_ = 0;
     atlasTexturePages_ = 0;
@@ -269,9 +277,15 @@ bool ShadowRenderer::draw(const std::vector<ShadowRequest>& requests, const Mesh
         constexpr std::size_t kGrain = 8192;
         const auto total = static_cast<std::size_t>(std::max(count, 0));
         bool remade = casterOwners_.size() != total;
-        if (castersAll_ || meshes != castersMeshes_) {
+        // Made from scratch, nothing counts as moving: only a change seen frame to frame does.
+        const bool fresh = castersAll_ || meshes != castersMeshes_;
+        ++casterFrame_;
+        if (fresh) {
             castersChanged_.assign(1, DrawRange{0, total});
             remade = true;
+            casterMoving_.assign(total, 0);
+            casterMovedAt_.assign(total, 0);
+            movingCasters_.clear();
         } else {
             for (DrawRange& range : castersChanged_) {
                 range.count = range.first >= total ? 0 : std::min(range.count, total - range.first);
@@ -280,7 +294,19 @@ bool ShadowRenderer::draw(const std::vector<ShadowRequest>& requests, const Mesh
         }
         casterOwners_.resize(total);
         casterFingerprints_.resize(total);
+        casterMoving_.resize(total, 0);
+        casterMovedAt_.resize(total, 0);
         std::atomic<bool> changed{false};
+        // A caster that really changed, seen frame to frame: moving from now (2 until listed).
+        const auto moved = [&](std::size_t index) {
+            changed.store(true, std::memory_order_relaxed);
+            if (!fresh) {
+                casterMovedAt_[index] = casterFrame_;
+                if (casterMoving_[index] == 0) {
+                    casterMoving_[index] = 2;
+                }
+            }
+        };
         ParallelRanges(castersChanged_, kGrain, [&](std::size_t, std::size_t begin, std::size_t end) {
             for (std::size_t index = begin; index < end; ++index) {
                 const MeshDraw& mesh = meshes[index];
@@ -295,7 +321,7 @@ bool ShadowRenderer::draw(const std::vector<ShadowRequest>& requests, const Mesh
                     casterOwners_[index] = 0;
                     casterFingerprints_[index] = 0;
                     if (ownerWas != 0 || fingerprintWas != 0) {
-                        changed.store(true, std::memory_order_relaxed);
+                        moved(index);
                     }
                     continue;
                 }
@@ -310,10 +336,36 @@ bool ShadowRenderer::draw(const std::vector<ShadowRequest>& requests, const Mesh
                 casterOwners_[index] = mesh.owner;
                 casterFingerprints_[index] = ShadowCasterFingerprint(caster);
                 if (casterOwners_[index] != ownerWas || casterFingerprints_[index] != fingerprintWas) {
-                    changed.store(true, std::memory_order_relaxed);
+                    moved(index);
                 }
             }
         });
+        // The newly moving listed; those still a while settle, and the
+        // cascades draw them with the rest again.
+        if (!fresh) {
+            for (const DrawRange& range : castersChanged_) {
+                for (std::size_t index = range.first; index < range.first + range.count; ++index) {
+                    if (casterMoving_[index] == 2) {
+                        casterMoving_[index] = 1;
+                        movingCasters_.push_back(static_cast<int>(index));
+                    }
+                }
+            }
+        }
+        std::size_t stillMoving = 0;
+        for (const int index : movingCasters_) {
+            const auto at = static_cast<std::size_t>(index);
+            if (at >= total) {
+                continue;
+            }
+            if (casterFrame_ - casterMovedAt_[at] >= kMovingFrames) {
+                casterMoving_[at] = 0;
+                changed.store(true, std::memory_order_relaxed);
+                continue;
+            }
+            movingCasters_[stillMoving++] = index;
+        }
+        movingCasters_.resize(stillMoving);
         if (remade || changed.load(std::memory_order_relaxed) || hidden_ != revisionHidden_ ||
             hiddenRevision_ != revisionHiddenAt_) {
             ++casterRevision_;
@@ -325,6 +377,7 @@ bool ShadowRenderer::draw(const std::vector<ShadowRequest>& requests, const Mesh
         castersMeshes_ = meshes;
         casterView_ = CasterView{total,           spheres, casterOwners_.data(), casterFingerprints_.data(),
                                  hidden_,         casterRevision_};
+        casterView_.moving = movingCasters_.empty() ? nullptr : casterMoving_.data();
         // Only when it covers these casters: drawn items, from the same draws.
         if (live_ != nullptr && items_ != nullptr) {
             casterView_.live = live_->data();
@@ -449,6 +502,10 @@ bool ShadowRenderer::drawSun(const SunRequest* sun, const MeshDraw* meshes, cons
         glReadBuffer(RT_GL_NONE);
         planner_.forgetCascades();
     }
+    // The kept still casters are lost with a texture made again, or none yet.
+    if (cascadeCacheSize_ != size) {
+        planner_.forgetCascadeCache();
+    }
     std::vector<CascadeDraw> draws;
     {
         PROFILE_SCOPE("Cascade plan", profiler::Group::Render);
@@ -457,17 +514,32 @@ bool ShadowRenderer::drawSun(const SunRequest* sun, const MeshDraw* meshes, cons
     if (draws.empty()) {
         return true;
     }
+    const bool keeps = std::any_of(draws.begin(), draws.end(),
+                                   [](const CascadeDraw& draw) { return draw.kind != CascadeDraw::Kind::All; });
+    if (keeps && cascadeCacheSize_ != size) {
+        DeleteTexture(cascadeCache_);
+        cascadeCache_ = MakeDepth(size, kMaxCascades, nullptr);
+        cascadeCacheSize_ = size;
+        glBindFramebuffer(RT_GL_FRAMEBUFFER, cacheFbo_);
+        const GLenum none = RT_GL_NONE;
+        glDrawBuffers(1, &none);
+        glReadBuffer(RT_GL_NONE);
+    }
     // Unreadable until these draws commit: a layer redrawn before one fails
     // would no longer match the matrices the last commit kept.
     planner_.forgetCascades();
+    // Each draw's runs: its casters' (every one, or the still ones), then its moving ones'.
+    std::vector<int> movingFirst;
     {
         PROFILE_SCOPE("Cascade casters", profiler::Group::Render);
         casterRuns_.clear();
         casterRows_.clear();
         tileRuns_.clear();
         for (const CascadeDraw& draw : draws) {
-            const int first = addCasterRuns(draw.casters, meshes, draw.texelWorld <= kCutoutTexel);
+            const bool cutouts = draw.texelWorld <= kCutoutTexel;
+            const int first = addCasterRuns(draw.casters, meshes, cutouts);
             tileRuns_.emplace_back(first, static_cast<int>(casterRuns_.size()));
+            movingFirst.push_back(addCasterRuns(draw.moving, meshes, cutouts));
         }
         instances_.upload(casterRows_.data(), static_cast<int>(casterRows_.size()));
     }
@@ -478,21 +550,44 @@ bool ShadowRenderer::drawSun(const SunRequest* sun, const MeshDraw* meshes, cons
     bool asked = false;
     for (std::size_t c = 0; c < draws.size(); ++c) {
         const CascadeDraw& draw = draws[c];
-        glFramebufferTextureLayer(RT_GL_FRAMEBUFFER, RT_GL_DEPTH_ATTACHMENT, cascades_, 0, draw.layer);
-        if (glCheckFramebufferStatus(RT_GL_FRAMEBUFFER) != RT_GL_FRAMEBUFFER_COMPLETE) {
-            refuse(size, 1);
-            end();
-            return true;
+        const int movingEnd = c + 1 < draws.size() ? tileRuns_[c + 1].first : static_cast<int>(casterRuns_.size());
+        if (draw.kind != CascadeDraw::Kind::Moving) {
+            // Every caster into the cascade, or the still ones into the layer kept of them.
+            const bool kept = draw.kind == CascadeDraw::Kind::Still;
+            glBindFramebuffer(RT_GL_FRAMEBUFFER, kept ? cacheFbo_ : cascadeFbo_);
+            glFramebufferTextureLayer(RT_GL_FRAMEBUFFER, RT_GL_DEPTH_ATTACHMENT, kept ? cascadeCache_ : cascades_, 0,
+                                      draw.layer);
+            if (glCheckFramebufferStatus(RT_GL_FRAMEBUFFER) != RT_GL_FRAMEBUFFER_COMPLETE) {
+                refuse(size, 1);
+                end();
+                return true;
+            }
+            glClear(GL_DEPTH_BUFFER_BIT);
+            if (!drawCasters(draw.viewProjection, tileRuns_[c].first, tileRuns_[c].second, asked)) {
+                end();
+                return false;
+            }
         }
-        glClear(GL_DEPTH_BUFFER_BIT);
-        if (!drawCasters(draw.viewProjection, tileRuns_[c].first, tileRuns_[c].second, asked)) {
-            end();
-            return false;
+        if (draw.kind != CascadeDraw::Kind::All) {
+            copyKeptLayer(draw.layer, size);
+            if (!drawCasters(draw.viewProjection, movingFirst[c], movingEnd, asked)) {
+                end();
+                return false;
+            }
         }
     }
     end();
     planner_.commitCascades();
     return true;
+}
+
+void ShadowRenderer::copyKeptLayer(int layer, int size) {
+    glBindFramebuffer(RT_GL_READ_FRAMEBUFFER, cacheFbo_);
+    glFramebufferTextureLayer(RT_GL_READ_FRAMEBUFFER, RT_GL_DEPTH_ATTACHMENT, cascadeCache_, 0, layer);
+    glBindFramebuffer(RT_GL_DRAW_FRAMEBUFFER, cascadeFbo_);
+    glFramebufferTextureLayer(RT_GL_DRAW_FRAMEBUFFER, RT_GL_DEPTH_ATTACHMENT, cascades_, 0, layer);
+    glBlitFramebuffer(0, 0, size, size, 0, 0, size, size, GL_DEPTH_BUFFER_BIT, RT_GL_NEAREST);
+    glBindFramebuffer(RT_GL_FRAMEBUFFER, cascadeFbo_);
 }
 
 void ShadowRenderer::noteDraws(bool all, const std::vector<DrawRange>& changed) {

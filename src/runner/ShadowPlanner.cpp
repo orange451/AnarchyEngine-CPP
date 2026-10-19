@@ -14,6 +14,11 @@ namespace {
 using engine_core::Matrix4;
 using engine_core::Vec3;
 
+// How much wider than its slice a sun cascade is fitted, as a part of the
+// slice's radius: its texels that much coarser, unseen, for a box that holds
+// the slice while the camera moves that far, so the map is not drawn again.
+constexpr float kCascadeSlack = 1.f / 16.f;
+
 // A 64-bit hash of what is added, eight bytes at a step. Each step is a
 // bijection of the running value for a given word, so two inputs that differ
 // in one word never hash alike. Only ever compared with itself, frame to frame.
@@ -171,6 +176,8 @@ void ShadowPlanner::clear() {
     capPages_ = 0;
     cascadeReady_ = false;
     cascadePending_ = false;
+    heldReady_ = false;
+    forgetCascadeCache();
 }
 
 bool ShadowPlanner::takeTiles(int size, int count, AtlasTile* tiles) {
@@ -657,42 +664,78 @@ std::vector<CascadeDraw> ShadowPlanner::planCascadesView(const SunRequest* sun, 
         for (const CascadeBlock& block : cascadeBlocks_) {
             pull = std::max(pull, block.pull[i]);
         }
-        fits[i] = FitCascade(slices[i], sun->shine, settings.cascadeSize, std::min(pull, pullLimit));
+        pull = std::min(pull, pullLimit);
+        // Fitted with slack, so the box drawn last keeps holding the slice
+        // while the camera moves a little, and need not be drawn again.
+        Sphere padded = slices[i];
+        padded.radius *= 1.f + kCascadeSlack;
+        fits[i] = FitCascade(padded, sun->shine, settings.cascadeSize, pull);
+        const CascadeFit& held = heldFits_[i];
+        if (heldReady_ && i < cascade_.count && held.texelWorld == fits[i].texelWorld &&
+            std::equal(held.lightView.m, held.lightView.m + 16, fits[i].lightView.m)) {
+            const engine_core::Vec3 at = engine_core::matrix4_point(held.lightView, slices[i].center);
+            const float r = slices[i].radius;
+            const float depth = -at.z;
+            if (at.x - r >= held.left && at.x + r <= held.right && at.y - r >= held.bottom && at.y + r <= held.top &&
+                depth - r - pull >= held.nearPlane && depth + r <= held.farPlane) {
+                fits[i] = held;
+            }
+        }
     }
     ParallelBlocks(casterCount, grain, [&](std::size_t block, std::size_t begin, std::size_t end) {
         CascadeBlock& mine = cascadeBlocks_[block];
         for (int i = 0; i < count; ++i) {
             mine.inside[i].clear();
             mine.hashes[i].clear();
+            mine.moving[i].clear();
+            mine.movingHashes[i].clear();
         }
         for (std::size_t k = begin; k < end; ++k) {
             const std::size_t c = CasterAt(casters, k);
             if (own(c)) {
                 continue;
             }
+            const bool moves = casters.moving != nullptr && casters.moving[c] != 0;
             for (int i = 0; i < count; ++i) {
                 if (!in_box(lit_[k], fits[i], false)) {
                     continue;
                 }
-                mine.inside[i].push_back(static_cast<int>(c));
-                mine.hashes[i].push_back(casters.fingerprints[c]);
+                (moves ? mine.moving[i] : mine.inside[i]).push_back(static_cast<int>(c));
+                (moves ? mine.movingHashes[i] : mine.hashes[i]).push_back(casters.fingerprints[c]);
             }
         }
     });
     std::uint64_t hashes[kMaxCascades] = {};
+    std::uint64_t stillHashes[kMaxCascades] = {};
     for (int i = 0; i < count; ++i) {
-        Hasher hash;
-        hash.add(fits[i].viewProjection);
+        Hasher still;
+        still.add(fits[i].viewProjection);
+        Hasher moving;
         // Kept from frame to frame, so a frame that changes nothing allocates nothing.
         std::vector<int>& inside = cascadeCasters_[i];
+        std::vector<int>& movers = cascadeMoving_[i];
         inside.clear();
+        movers.clear();
         for (const CascadeBlock& block : cascadeBlocks_) {
             inside.insert(inside.end(), block.inside[i].begin(), block.inside[i].end());
+            movers.insert(movers.end(), block.moving[i].begin(), block.moving[i].end());
             for (const std::uint64_t fingerprint : block.hashes[i]) {
-                hash.add(fingerprint);
+                still.add(fingerprint);
+            }
+            for (const std::uint64_t fingerprint : block.movingHashes[i]) {
+                moving.add(fingerprint);
             }
         }
-        hashes[i] = hash.value();
+        stillHashes[i] = still.value();
+        // With nothing moving, the hash is the still one alone, as it always was.
+        if (movers.empty()) {
+            hashes[i] = stillHashes[i];
+        } else {
+            Hasher both;
+            both.add(stillHashes[i]);
+            both.add(moving.value());
+            hashes[i] = both.value();
+        }
         next.viewProjection[i] = fits[i].viewProjection;
         next.texelWorld[i] = fits[i].texelWorld;
     }
@@ -700,6 +743,8 @@ std::vector<CascadeDraw> ShadowPlanner::planCascadesView(const SunRequest* sun, 
     // car or a character moving by a still camera redraws the near ones, not
     // the far one that holds most of a forest's casters.
     const bool whole = !cascadeReady_ || cascade_.count != count;
+    std::copy(cacheHashes_, cacheHashes_ + kMaxCascades, pendingCacheHashes_);
+    std::copy(cacheKept_, cacheKept_ + kMaxCascades, pendingCacheKept_);
     for (int i = 0; i < count; ++i) {
         if (!whole && hashes[i] == cascadeHashes_[i]) {
             continue;
@@ -708,7 +753,19 @@ std::vector<CascadeDraw> ShadowPlanner::planCascadesView(const SunRequest* sun, 
         draw.layer = i;
         draw.viewProjection = next.viewProjection[i];
         draw.texelWorld = next.texelWorld[i];
-        draw.casters = cascadeCasters_[i];
+        if (cascadeMoving_[i].empty()) {
+            draw.casters = cascadeCasters_[i];
+        } else if (!whole && cacheKept_[i] && cacheHashes_[i] == stillHashes[i]) {
+            // Only what moves changed: the still casters kept are copied under it.
+            draw.kind = CascadeDraw::Kind::Moving;
+            draw.moving = cascadeMoving_[i];
+        } else {
+            draw.kind = CascadeDraw::Kind::Still;
+            draw.casters = cascadeCasters_[i];
+            draw.moving = cascadeMoving_[i];
+            pendingCacheHashes_[i] = stillHashes[i];
+            pendingCacheKept_[i] = true;
+        }
         draws.push_back(std::move(draw));
     }
     if (draws.empty()) {
@@ -716,6 +773,7 @@ std::vector<CascadeDraw> ShadowPlanner::planCascadesView(const SunRequest* sun, 
     }
     pendingCascade_ = next;
     std::copy(hashes, hashes + kMaxCascades, pendingCascadeHashes_);
+    std::copy(fits, fits + count, pendingFits_);
     cascadePending_ = true;
     return draws;
 }
@@ -726,6 +784,10 @@ void ShadowPlanner::commitCascades() {
     }
     cascade_ = pendingCascade_;
     std::copy(pendingCascadeHashes_, pendingCascadeHashes_ + kMaxCascades, cascadeHashes_);
+    std::copy(pendingFits_, pendingFits_ + kMaxCascades, heldFits_);
+    std::copy(pendingCacheHashes_, pendingCacheHashes_ + kMaxCascades, cacheHashes_);
+    std::copy(pendingCacheKept_, pendingCacheKept_ + kMaxCascades, cacheKept_);
+    heldReady_ = true;
     cascadeReady_ = true;
     cascadePending_ = false;
 }

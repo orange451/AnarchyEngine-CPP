@@ -918,3 +918,83 @@ TEST_CASE("PN9 a skinned caster that holds still but changes its pose redraws it
     bent.pose = 9;
     REQUIRE_FALSE(planner.planCascades(&sun, {bent}, camera, Small()).empty());
 }
+
+TEST_CASE("CP7 a camera that moves a little keeps the sun's cascades", "[shadow]") {
+    ShadowPlanner planner;
+    SunRequest sun;
+    sun.shine = Normalize({0.3f, -1.f, 0.2f});
+    sun.shadowDistance = 20.f;
+    const std::vector<ShadowCaster> casters = {Box(100, {0.f, 0.f, 0.f})};
+    REQUIRE(planner.planCascades(&sun, casters, Camera({0.f, 2.f, 10.f}, {0.f, 0.f, 0.f}), Small()).size() == 4);
+    planner.commitCascades();
+    const CascadeShadow before = *planner.cascades();
+    // Well inside each box's slack: nothing is drawn again, and the boxes read as before.
+    REQUIRE(planner.planCascades(&sun, casters, Camera({0.f, 2.f, 10.001f}, {0.f, 0.f, 0.f}), Small()).empty());
+    for (int i = 0; i < 4; ++i) {
+        CHECK(std::equal(before.viewProjection[i].m, before.viewProjection[i].m + 16,
+                         planner.cascades()->viewProjection[i].m));
+    }
+    // Past it, they are fitted again.
+    REQUIRE_FALSE(planner.planCascades(&sun, casters, Camera({0.f, 2.f, 14.f}, {0.f, 0.f, 0.f}), Small()).empty());
+}
+
+TEST_CASE("CP8 a moving caster is drawn over the still ones kept for its cascade", "[shadow]") {
+    ShadowPlanner planner;
+    SunRequest sun;
+    sun.shine = Normalize({0.f, -1.f, 0.f});
+    sun.shadowDistance = 20.f;
+    const CameraView camera = Camera({0.f, 2.f, 10.f}, {0.f, 2.f, 0.f});
+    std::vector<ShadowCaster> casters = {Box(100, {0.f, 1.f, 9.f}), Box(101, {0.f, 1.f, 8.5f})};
+    std::vector<Sphere> bounds(2);
+    std::vector<std::uint64_t> owners(2, 0);
+    std::vector<std::uint64_t> fingerprints(2);
+    std::vector<std::uint8_t> moving(2, 0);
+    std::uint64_t revision = 1;
+    const auto view = [&](bool anyMoving) {
+        for (std::size_t c = 0; c < casters.size(); ++c) {
+            bounds[c] = casters[c].bounds;
+            fingerprints[c] = ShadowCasterFingerprint(casters[c]);
+        }
+        CasterView out{casters.size(), bounds.data(), owners.data(), fingerprints.data(), nullptr, ++revision};
+        out.moving = anyMoving ? moving.data() : nullptr;
+        return out;
+    };
+    std::vector<CascadeDraw> draws = planner.planCascadesView(&sun, view(false), camera, Small());
+    REQUIRE(draws.size() == 4);
+    CHECK(draws[0].kind == CascadeDraw::Kind::All);
+    planner.commitCascades();
+
+    // The second starts moving: its cascades keep the first apart, and draw it over them.
+    moving[1] = 1;
+    casters[1] = Box(101, {0.1f, 1.f, 8.5f});
+    draws = planner.planCascadesView(&sun, view(true), camera, Small());
+    REQUIRE_FALSE(draws.empty());
+    for (const CascadeDraw& draw : draws) {
+        INFO("layer " << draw.layer);
+        CHECK(draw.kind == CascadeDraw::Kind::Still);
+        CHECK(std::count(draw.moving.begin(), draw.moving.end(), 1) == 1);
+        CHECK(std::count(draw.casters.begin(), draw.casters.end(), 1) == 0);
+    }
+    planner.commitCascades();
+
+    // It moves again: only it is drawn, over the kept layer.
+    casters[1] = Box(101, {0.2f, 1.f, 8.5f});
+    draws = planner.planCascadesView(&sun, view(true), camera, Small());
+    REQUIRE_FALSE(draws.empty());
+    for (const CascadeDraw& draw : draws) {
+        INFO("layer " << draw.layer);
+        CHECK(draw.kind == CascadeDraw::Kind::Moving);
+        CHECK(draw.casters.empty());
+        CHECK(draw.moving == std::vector<int>{1});
+    }
+    planner.commitCascades();
+
+    // It settles: drawn with the rest again, as one.
+    moving[1] = 0;
+    draws = planner.planCascadesView(&sun, view(false), camera, Small());
+    REQUIRE_FALSE(draws.empty());
+    for (const CascadeDraw& draw : draws) {
+        CHECK(draw.kind == CascadeDraw::Kind::All);
+        CHECK(draw.moving.empty());
+    }
+}

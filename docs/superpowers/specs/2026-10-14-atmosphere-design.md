@@ -1,74 +1,86 @@
 # Atmosphere — design
 
-Reference: https://www.shadertoy.com/view/WlSSzK (Rayleigh, Mie, ozone, scattering in front of scene geometry).
+Revised 2026-10-19: Godot-style analytic fog instead of Hillaire LUTs and froxels. The physical version is parked under "Later".
+
+References:
+- Godot 4 `Environment` fog: exponential height fog, Sun Scatter, Aerial Perspective, Sky Affect.
+- Unreal's ExponentialHeightFog: the closed-form integral of height fog along a ray.
 
 ## Goal
 
-A new `Atmosphere` instance gives the scene physically based atmospheric scattering:
+A new `Atmosphere` instance makes distant geometry fade into air whose color follows the sky. It also adds a glow toward the sun and a hazy horizon on the sky itself. The renderer has no fog today.
 
-1. **Aerial perspective**: distant geometry fades into haze and picks up the air's color. The renderer has no fog today.
-2. **Ozone absorption**: a deeper blue at the zenith and purple twilight.
-3. **Tunable air**: the scattering constants in `procedural_sky.glsl` become properties.
-
-It works with a DynamicSky, with a Skybox, or with no sky at all.
+It works with a DynamicSky, with a Skybox, or with no sky at all. It adds no render pass and no texture. With no Atmosphere, or with Enabled false or Density 0, every frame is pixel-identical to today's.
 
 ## Instance
 
-`Atmosphere : DataModel`, under Lighting at any depth through Folders. Add it to the allowed list in `Containment.cpp`. The first one in the tree is used. Every property is a saved registry property (lua_saved_property), and setters refuse values that are not finite and clamp the rest.
+`Atmosphere : DataModel` lives under Lighting, at any depth through Folders. It is added to the allowed list in `Containment.cpp`, and the first one in the tree is used. Every property is a saved registry property (`lua_saved_property`). Setters refuse values that are not finite and clamp the rest.
 
-| Property | Type | Meaning | Default |
-|---|---|---|---|
-| Density | number | Multiplies all scattering. 0 means no effect | 1 |
-| Haze | number | Mie (aerosol) amount | 0.3 |
-| HazeAnisotropy | number | Mie g, 0 to 0.99 | 0.76 |
-| RayleighColor | Color3 | Rayleigh coefficients, normalized | Earth |
-| Ozone | number | Ozone absorption strength | 1 |
-| Scale | number | Atmosphere meters per unit; exaggerates distance so haze shows at game scale | tune on real places |
-| SeaLevel | number | World Y of the atmosphere's ground | 0 |
-| Color | Color3? | When set, overrides the haze color (art direction) | nil |
-| PlanetRadius, AtmosphereHeight | number | Advanced | 6371e3, 100e3 |
-
-Distances are "units".
-
-## What lights it
-
-| Setup | Haze on geometry | Sky scattering | Light source | Haze color |
+| Property | Type | Meaning | Range | Default |
 |---|---|---|---|---|
-| DynamicSky | Yes | Yes, from the Atmosphere's values | DynamicSky's sun or moon | Physical |
-| Skybox | Yes | No, the image is drawn as-is | First DirectionalLight | Pulled toward the sky's horizon color, sampled from the IBL cube |
-| No sky | Yes | No | First DirectionalLight, else a fixed overhead sun | Physical |
+| Enabled | boolean | false draws no atmosphere | | true |
+| Density | number | How thick the air is at BaseHeight. 0 means no effect | 0 to 1 | 0.25 |
+| HeightFalloff | number | How fast the air thins going up, per unit. 0 means the same everywhere | 0 to 0.2 | 0.01 |
+| BaseHeight | number | World Y where the air is Density thick | any | 0 |
+| Color | Color3 | The air's own color, sRGB | | (0.75, 0.8, 0.88) |
+| AerialPerspective | number | How much the air takes the sky's color in that direction instead of Color | 0 to 1 | 0.5 |
+| SunScatter | number | How strong the glow toward the sun (or moon) is, in that light's color | 0 to 1 | 0.25 |
+| SkyHaze | number | How much the air hazes the sky drawn behind everything | 0 to 1 | 1 |
 
-`Color`, when set, wins in every case.
+Distances are "units". Density maps to an extinction per unit, `Density * kDensityScale`. `kDensityScale` lives in `AtmosphereMath.hpp` and is tuned on Bald Eagle Valley so that the default looks like a clear day.
 
-When a DynamicSky is present, `proceduralSky()` and `SkyMath.hpp` read the Atmosphere's values instead of their constants, so the sky, the sunlight and the haze always agree. With no Atmosphere, they keep today's constants unchanged.
+## The model
 
-## Rendering (Hillaire 2020 LUTs, aimed at low-end hardware)
+For a ray from the camera at height `h0 = cameraY - BaseHeight`, with world-space direction `v` (`dy = v.y`) and length `d`:
 
-1. **Transmittance LUT**: 256×64 RG16F. Rebuilt only when Atmosphere values change.
-2. **Aerial-perspective froxels**: 32×32×32 RGBA16F over the camera frustum. rgb holds in-scatter, a holds transmittance. Filled once per frame with about 32 steps per column.
-3. **Apply**: one fullscreen pass after the merge, before transparency and tonemap: `color = color * T + inscatter`, with one 3D fetch keyed on depth. Skipped for sky pixels when a DynamicSky draws them; with a Skybox, the sky pixels are not hazed.
-4. **Forward draws** (transparent surfaces, particles) apply the same fetch in `forward.frag` and `particle.frag`.
-5. **Later**: a sky-view LUT for `dynamic_sky.frag`.
+- density along the ray: `σ(y) = σ0 * exp(-f * y)`, with `σ0 = Density * kDensityScale` and `f = HeightFalloff`;
+- optical depth: `τ = σ0 * exp(-f*h0) * d * g(f*dy*d)`, where `g(x) = (1 - exp(-x)) / x` and `g(x) → 1 - x/2` for `|x| < 1e-4`;
+- transmittance: `T = exp(-τ)`. The exponent `-f*h0` is clamped to at most 80, so a camera far below BaseHeight does not overflow.
 
-Budget: at most about 0.3 ms at 1080p on the UHD 770, measured warmed-up, Release against Release. Density 0 or no Atmosphere costs nothing (no passes run).
+The air's color `C` is built in three steps:
+
+1. Start from `Color`, made linear.
+2. Mix it toward the sky's prefiltered cube in direction `v`, by `AerialPerspective`. The cube's mip is `maxLod * T`, so nearby air is the sky's blurry average and far air is the sharp horizon. This step happens only when a sky's cube is ready; otherwise C stays `Color`.
+3. Add `lightColor * SunScatter * pow(max(dot(v, L), 0), 8)`, where L points toward the light.
+
+A surface's light becomes `color * T + C * (1 - T)`.
+
+**Which light L is:**
+- with a DynamicSky, its `lightDirection` and `lightColor` (the sun, or the moon at night);
+- otherwise, the first DirectionalLight (color times intensity);
+- otherwise, no glow.
+
+## Where it applies
+
+| What | Where | How |
+|---|---|---|
+| Opaque surfaces and terrain | `merge.frag`, before the see-through layer goes over | depth → view position → the formula |
+| Sky pixels (Skybox or DynamicSky, clouds included) | `merge.frag`, in the `depth >= 1` branch | the same formula with `d = kSkyDistance`, mixed in by SkyHaze. Height falloff keeps the zenith clear and the horizon hazy |
+| See-through surfaces | `forward.frag` | the same, before alpha |
+| Particles | `particle.frag` | **Normal:** fog the color. **Additive:** multiply by T, adding no air light. **Multiply:** multiply alpha by T |
+| Grid, outlines, handles, GUI | not fogged | |
+
+All of these share one include, `atmosphere.glsl`. It declares its own uniforms and its own cube sampler (`uAtmosphereSky`), so it does not depend on `image_lighting.glsl`, and `ParticleRenderer` can build with it as its only include.
 
 ## Plumbing
 
-- `VisualAtmosphere` row in the render snapshot (`SnapshotPump`), read at every Prepare.
-- Renderer: the transmittance-LUT and froxel programs, the apply program and FBO next to `merge_`.
-- Shared `atmosphere_common.glsl`: ray-sphere test, densities, phase functions.
+- `VisualAtmosphere` row in the render snapshot (`SnapshotPump`), filled at every Prepare from the first Atmosphere under Lighting. `SceneAtmosphere` lives in `SceneLighting`, and `GameView` maps one onto the other. Unlike bloom, the light it uses (DynamicSky or DirectionalLight) is resolved in the Renderer.
+- `Renderer::atmosphereUniforms()` works out the per-frame values once:
+  - σ0 and f;
+  - the camera's height above BaseHeight;
+  - world up in view space;
+  - L in view space, and the light's color;
+  - the cube's sky rotation and max LOD;
+  - whether the cube is ready.
 
-## Steps
+  `bindAtmosphere(program)` uploads them for merge, forward and particles.
+- The CPU mirror of the formula is `src/runner/AtmosphereMath.{hpp,cpp}`, for tests and tuning.
 
-1. Instance, properties, Lua bindings, Containment, save.
-2. Snapshot row and Renderer plumbing.
-3. Turn `procedural_sky.glsl`'s constants into uniforms and add ozone. Defaults must be identical to today (before/after screenshot).
-4. `atmosphere_common.glsl`, the transmittance LUT, the froxels, the apply pass.
-5. Fetch in the forward and particle shaders.
-6. Skybox horizon-color tint, and the `Color` override.
-7. `SkyMath.hpp` respects the Atmosphere.
-8. Verify in Studio: noon, sunset and night; Skybox and no-sky; large terrain; Density 0 matches having no Atmosphere; profile against main.
+## Budget
 
-## Open
+At most 0.1 ms at 1080p on the UHD 770, measured warmed-up and Release against Release. That is two `exp` calls and one cube fetch per pixel in a pass that already runs.
 
-- Should haze also shade the cloud layer and the sun disc? For now: the clouds yes (they are inside the air), the discs no.
+## Later
+
+- A froxel volume (Hillaire aerial perspective, or a lit volumetric fog grid) as a higher-quality setting, for light shafts and local fog volumes.
+- Feeding Rayleigh, Mie and ozone values into `procedural_sky.glsl`, so the DynamicSky's air is tunable.

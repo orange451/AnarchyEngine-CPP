@@ -5,26 +5,34 @@
 #include "support.hpp"
 
 #include "ClientJoinHost.hpp"
+#include "ClientWorld.hpp"
+#include "ConnectionInstance.hpp"
 #include "Connections.hpp"
 #include "Engine.hpp"
 #include "FileBytes.hpp"
 #include "Folder.hpp"
 #include "GameIdentity.hpp"
+#include "Gui.hpp"
 #include "Project.hpp"
 #include "ProjectIdentity.hpp"
 #include "ScriptAnalysis.hpp"
+#include "ScriptRuntime.hpp"
 #include "Sessions.hpp"
+#include "Skybox.hpp"
 #include "Socket.hpp"
 #include "server/ServerHost.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <filesystem>
 #include <future>
 #include <memory>
+#include <optional>
 #include <string>
+#include <thread>
 
 namespace {
 
@@ -34,13 +42,19 @@ using engine_core::JoinState;
 
 // A project with one Server-context script that adds Workspace.FromServer when
 // play starts, and fillers empty Folders beside it, to make its snapshot bigger.
-void make_project(const fs::path& root, int fillers = 0) {
+// client_source, when set, is a Client-context Script beside it, which replicates
+// and runs on each client that joins.
+void make_project(const fs::path& root, int fillers = 0, const std::string& client_source = {}) {
     engine_core::Engine authoring;
     engine_core::Project project = engine_core::Project::create(root, authoring.datamodel());
     engine_core::Script& script = add_script(authoring.datamodel(), "MakeFolder",
         "local f = Instance.new(\"Folder\") f.Name = \"FromServer\" f.Parent = workspace");
     REQUIRE_FALSE(script.set_run_context(static_cast<int>(engine_core::RunContext::Server)));
     engine_core::DataModel& game = authoring.datamodel();
+    if (!client_source.empty()) {
+        engine_core::Script& client = add_script(game, "OnClient", client_source.c_str());
+        REQUIRE_FALSE(client.set_run_context(static_cast<int>(engine_core::RunContext::Client)));
+    }
     for (int i = 0; i < fillers; ++i) {
         engine_core::Folder& folder = game.create<engine_core::Folder>();
         game.set_name(folder.id(), "Filler" + std::to_string(i));
@@ -207,7 +221,10 @@ TEST_CASE("JN21 Join by name resolves without blocking the frame", "[join]") {
     while (!client.heard("joined;") && std::chrono::steady_clock::now() < deadline) {
         const auto begun = std::chrono::steady_clock::now();
         client.engine.run_frame(1.0 / 60.0);
-        slowest = std::max(slowest, std::chrono::steady_clock::now() - begun);
+        // Only the frames before the join: the one that applies the snapshot does real work.
+        if (client.connections().join_state() != JoinState::Joined) {
+            slowest = std::max(slowest, std::chrono::steady_clock::now() - begun);
+        }
     }
 
     INFO(client.events());
@@ -291,10 +308,21 @@ TEST_CASE("JN24 a resolve that finishes after Leave is dropped", "[join]") {
 TEST_CASE("JN25 destroying the host while it resolves is safe", "[join]") {
     SimRole role;
     JoinClient client(network::GameIdentity{});
+    // A lookup that is still running when the host goes, and then answers.
+    auto answered = std::make_shared<std::atomic<bool>>(false);
+    client.host->set_lookup([answered](const std::string&, std::string&) -> std::optional<network::Address> {
+        std::this_thread::sleep_for(std::chrono::milliseconds(300));
+        answered->store(true);
+        return network::Address::loopback(1);
+    });
 
-    REQUIRE(client.join("localhost:1") == "ok");
+    REQUIRE(client.join("slow:1") == "ok");
+    REQUIRE(client.host->resolvers_running() == 1);
+    REQUIRE_FALSE(answered->load());
     client.game().set_join_host(nullptr);
     client.host.reset();
+    // The destructor waited for the lookup; its answer was dropped.
+    REQUIRE(answered->load());
     client.frames(60);
 
     REQUIRE(client.events().empty());
@@ -320,6 +348,7 @@ TEST_CASE("JN26 end_silently while joined ends the connection without Left", "[j
     REQUIRE(client.events() == "joined;");
     REQUIRE(client.host->session() == nullptr);
     REQUIRE(client.connections().join_state() == JoinState::Idle);
+    REQUIRE(client.game().world_role() == engine_core::WorldRole::Standalone);
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
     int held = server_connections(*server);
     while (held != 0 && std::chrono::steady_clock::now() < deadline) {
@@ -365,6 +394,12 @@ TEST_CASE("JN28 --connect through connect_from_empty behaves as in 2c", "[join]"
     REQUIRE_FALSE(client.game().alive(client.map));
     REQUIRE_FALSE(client.game().alive(client.loading));
     REQUIRE(client.host->session() != nullptr);
+    // The connect, and its timeout, wait for the engine's first step.
+    REQUIRE(client.host->session()->state() == engine_network::ClientState::Idle);
+    REQUIRE(client.host->status().state == engine_network::ClientState::Connecting);
+    client.frames(1);
+    REQUIRE(client.host->session()->state() != engine_network::ClientState::Idle);
+    REQUIRE(client.host->session()->state() != engine_network::ClientState::Disconnected);
     client.step_until(
         [&] {
             return client.host->session()->state() == engine_network::ClientState::Joined && client.sees("FromServer");
@@ -431,4 +466,196 @@ TEST_CASE("JN30 an unhashed identity hashes the resources at the first join", "[
         REQUIRE(client.connections().join_state() == JoinState::Idle);
         REQUIRE(client.game().alive(client.map));
     }
+}
+
+TEST_CASE("JN31 a script's Leave during --connect stops play between steps, not under the script", "[join]") {
+    SimRole role;
+    TempDir dir;
+    // A Client script from the server leaves as soon as it runs, inside the play
+    // VM that the leave closes, and carries on: the leave waits for the next step.
+    make_project(dir.path, 0,
+                 "local connections = game:GetService('Connections')\n"
+                 "connections:Leave()\n"
+                 "print('after leave: ' .. tostring(connections.JoinState))\n");
+    std::unique_ptr<server::ServerHost> server = serve(dir.path);
+    std::string left;
+    JoinClient client(identity_for(dir.path), false);
+    // Play stops with the leave, and the play VM with it, so Left is heard from here.
+    const auto link = client.connections().on_left.connect([&left](const std::string& reason) { left += reason + ";"; });
+
+    std::string error;
+    REQUIRE(client.host->connect_from_empty(network::Address::loopback(server->port()), error));
+    std::string printed;
+    std::string errors;
+    client.step_until(
+        [&] {
+            for (const auto& line : client.engine.scripts().drain_output().lines) {
+                if (line.kind == engine_core::ScriptRuntime::OutputKind::Error) {
+                    errors += line.text;
+                }
+                printed += line.text;
+            }
+            return !left.empty();
+        },
+        std::chrono::seconds(5));
+    client.frames(5);
+    client.connections().on_left.disconnect(link);
+
+    INFO(printed);
+    INFO(errors);
+    REQUIRE(left == "You left the game;");
+    REQUIRE(errors.empty());
+    // The script ran on after its Leave, with the connection still up.
+    REQUIRE(printed.find("after leave: Enum.JoinState.Joined") != std::string::npos);
+    REQUIRE_FALSE(client.game().simulation_running());
+    REQUIRE(client.host->status().state == engine_network::ClientState::Disconnected);
+    REQUIRE(client.host->status().reason == "You left the game");
+    REQUIRE(client.connections().join_state() == JoinState::Idle);
+    REQUIRE(client.game().world_role() == engine_core::WorldRole::Standalone);
+}
+
+TEST_CASE("JN32 a second Join while the first still looks its server up: only the second's answer counts", "[join]") {
+    SimRole role;
+    TempDir dir;
+    make_project(dir.path);
+    std::unique_ptr<server::ServerHost> server = serve(dir.path);
+    JoinClient client(identity_for(dir.path));
+    const std::uint16_t port = server->port();
+    client.host->set_lookup([port](const std::string& address, std::string& error) -> std::optional<network::Address> {
+        if (address == "slow:1") {
+            std::this_thread::sleep_for(std::chrono::milliseconds(400));
+            error = "the first lookup";
+            return std::nullopt;
+        }
+        return network::Address::loopback(port);
+    });
+
+    REQUIRE(client.join("slow:1") == "ok");
+    REQUIRE(client.command("Leave()") == "ok");
+    REQUIRE(client.join("fast:1") == "ok");
+    client.step_until([&] { return client.heard("joined;"); }, std::chrono::seconds(5));
+    // The first lookup answers late, and that answer must change nothing.
+    client.step_until([&] { return client.host->resolvers_running() == 0; }, std::chrono::seconds(5));
+    REQUIRE(client.host->resolvers_running() == 0);
+    client.frames(10);
+
+    REQUIRE(client.events() == "left:You left the game;joined;");
+    REQUIRE(client.connections().join_state() == JoinState::Joined);
+    REQUIRE(client.sees("FromServer"));
+}
+
+TEST_CASE("JN33 at most four lookups run at once, and a Join past that is refused", "[join]") {
+    SimRole role;
+    JoinClient client(network::GameIdentity{});
+    auto release = std::make_shared<std::atomic<bool>>(false);
+    client.host->set_lookup([release](const std::string&, std::string& error) -> std::optional<network::Address> {
+        while (!release->load()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        error = "released";
+        return std::nullopt;
+    });
+    // Destroyed before the client, so a failed check still lets the host's destructor join its lookups.
+    struct Release {
+        std::shared_ptr<std::atomic<bool>> flag;
+        ~Release() { flag->store(true); }
+    } releaser{release};
+
+    for (int i = 0; i < engine_network::ClientJoinHost::kMaxLookups; ++i) {
+        REQUIRE(client.join("held:1") == "ok");
+        REQUIRE(client.command("Leave()") == "ok");
+    }
+    REQUIRE(client.host->resolvers_running() == engine_network::ClientJoinHost::kMaxLookups);
+    const std::string refused = client.join("held:1");
+    INFO(refused);
+    REQUIRE(refused.find("Too many joins still looking up their server; try again in a moment") != std::string::npos);
+    REQUIRE(client.connections().join_state() == JoinState::Idle);
+
+    release->store(true);
+    client.step_until([&] { return client.host->resolvers_running() == 0; }, std::chrono::seconds(5));
+    client.frames(2);
+    REQUIRE(client.join("held:1") == "ok");
+    client.step_until([&] { return client.heard("left:Could not find"); }, std::chrono::seconds(2));
+    REQUIRE(client.heard("left:Could not find the server: released;"));
+}
+
+TEST_CASE("JN34 Studio's Stop after a join brings the place back with no Connection left", "[join]") {
+    SimRole role;
+    TempDir dir;
+    make_project(dir.path);
+    std::unique_ptr<server::ServerHost> server = serve(dir.path);
+    JoinClient client(identity_for(dir.path));
+    REQUIRE(client.join(loopback(server->port())) == "ok");
+    client.step_until([&] { return client.heard("joined;") && client.sees("FromServer"); }, std::chrono::seconds(5));
+    REQUIRE(client.connections().local_connection() != 0);
+    REQUIRE_FALSE(client.game().get_children(client.game().connections()).empty());
+
+    // As stop_test does: play stops first, then the connection ends without Left, then the Connections go.
+    client.game().stop_simulation();
+    client.host->end_silently();
+    engine_network::clear_connections(client.game());
+    client.frames(5);
+
+    REQUIRE(client.sees("Map"));
+    REQUIRE_FALSE(client.sees("FromServer"));
+    REQUIRE(client.game().get_children(client.game().connections()).empty());
+    REQUIRE(client.connections().local_connection() == 0);
+    REQUIRE(client.game().world_role() == engine_core::WorldRole::Standalone);
+    REQUIRE(client.connections().join_state() == JoinState::Idle);
+    REQUIRE_FALSE(client.game().simulation_running());
+}
+
+TEST_CASE("JN35 a Persistent instance its service refuses goes at the swap, and the developer is told",
+          "[join][persistent]") {
+    SimRole role;
+    TempDir dir;
+    make_project(dir.path);
+    std::unique_ptr<server::ServerHost> server = serve(dir.path);
+    JoinClient client(identity_for(dir.path));
+    engine_core::DataModel& game = client.game();
+    engine_core::ScreenGui& screen = game.create<engine_core::ScreenGui>();
+    game.set_parent(screen.id(), game.scene_service("Gui"));
+    engine_core::ViewportPane& pane = game.create<engine_core::ViewportPane>();
+    game.set_parent(pane.id(), screen.id());
+    engine_core::Skybox& sky = game.create<engine_core::Skybox>();
+    game.set_name(sky.id(), "Backdrop");
+    game.set_parent(sky.id(), pane.id());
+    game.set_persistent(sky.id(), true);
+    const InstanceId kept = sky.id();
+
+    REQUIRE(client.join(loopback(server->port())) == "ok");
+    client.step_until([&] { return client.heard("joined;"); }, std::chrono::seconds(5));
+    REQUIRE(client.heard("joined;"));
+
+    std::string errors;
+    for (const auto& line : client.engine.scripts().drain_output().lines) {
+        if (line.kind == engine_core::ScriptRuntime::OutputKind::Error) {
+            errors += line.text;
+        }
+    }
+    REQUIRE(errors == "Persistent Skybox \"Backdrop\" could not move to Gui for the join, so it was destroyed: "
+                      "A Skybox must be in Lighting or a ViewportPane\n");
+    REQUIRE_FALSE(game.alive(kept));
+}
+
+TEST_CASE("JN36 clear_connections destroys every Connection and clears LocalConnection", "[join]") {
+    SimRole role;
+    engine_core::Engine engine;
+    engine_core::DataModel& game = engine.datamodel();
+    engine_core::ConnectionInstance& mine = game.create<engine_core::ConnectionInstance>();
+    game.set_parent(mine.id(), game.connections());
+    engine_core::ConnectionInstance& theirs = game.create<engine_core::ConnectionInstance>();
+    game.set_parent(theirs.id(), game.connections());
+    const InstanceId mine_id = mine.id();
+    const InstanceId theirs_id = theirs.id();
+    auto* list = dynamic_cast<engine_core::Connections*>(game.instance(game.connections()));
+    REQUIRE(list != nullptr);
+    list->set_local_connection(mine_id);
+
+    engine_network::clear_connections(game);
+
+    REQUIRE(game.get_children(game.connections()).empty());
+    REQUIRE_FALSE(game.alive(mine_id));
+    REQUIRE_FALSE(game.alive(theirs_id));
+    REQUIRE(list->local_connection() == 0);
 }

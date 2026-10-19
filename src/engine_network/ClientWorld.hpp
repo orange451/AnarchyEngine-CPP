@@ -7,6 +7,9 @@
 
 #include "DataModel.hpp"
 
+#include <functional>
+#include <string>
+
 namespace engine_network {
 
 // Destroys every instance a server would replicate (every non-service
@@ -19,7 +22,14 @@ void clear_for_client(engine_core::DataModel& game);
 // survive moves to the service it was under, keeping its name and children.
 // Every survivor, and everything under it, gets a fresh GUID: the client's
 // own instances must never share one with what the server is about to create.
-// Services reset to their defaults.
-void swap_for_client(engine_core::DataModel& game);
+// Services reset to their defaults. A survivor its service refuses (parent_error)
+// cannot stay, and goes with what held it; warn, when set, is told which and why
+// first, so the developer hears of it.
+void swap_for_client(engine_core::DataModel& game, const std::function<void(const std::string&)>& warn = {});
+
+// Destroys every Connection under Connections and clears LocalConnection: the
+// world after a connection ended keeps no trace of the server's peers. Studio's
+// Stop uses it, since the place it restores never captured Connections.
+void clear_connections(engine_core::DataModel& game);
 
 }  // namespace engine_network

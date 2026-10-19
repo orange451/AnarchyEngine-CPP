@@ -159,10 +159,6 @@ public:
             showMessage(stage, std::move(scene), error);
             return;
         }
-        // A packed game's empty resources folder comes out missing; made again, it hashes as the original.
-        if (packed_) {
-            runner::restore_packed_resources(project_->resources_root());
-        }
         // Connections:Join, and --connect, go through one host, made before the
         // engine starts since it binds a job. A game that cannot say which it is
         // gets none, and a script's Join then says only a client can join.
@@ -171,6 +167,11 @@ public:
         std::string identityError;
         if (engine_network::project_identity_unhashed(*project_, identity, resources, identityError)) {
             host_ = std::make_unique<engine_network::ClientJoinHost>(engine, identity, resources);
+            // A packed game's empty resources folder comes out missing; made again,
+            // just before the first join hashes it, it hashes as the original.
+            if (packed_) {
+                host_->set_before_hash([](const fs::path& folder) { runner::restore_packed_resources(folder); });
+            }
             engine.datamodel().set_join_host(host_.get());
         }
         // Joining a server: the world is the server's, so the project only says
@@ -262,10 +263,11 @@ protected:
 private:
     // Joins connect_ through the host, with the engine not yet started: the
     // server's address, then an empty world and a FromEmpty session the engine
-    // pumps. False, with why, when the game cannot say which it is
-    // (identityError), the server is not found, the resources cannot be read, or
-    // there is no socket. A connect the endpoint refuses still goes on: the
-    // overlay shows "Could not connect to the server" in place of "Connecting…".
+    // pumps, which connects on the engine's first step, once the window is up.
+    // False, with why, when the game cannot say which it is (identityError), the
+    // server is not found, the resources cannot be read, or there is no socket. A
+    // connect the endpoint refuses still goes on: the overlay shows "Could not
+    // connect to the server" in place of "Connecting…".
     bool joinServer(const std::string& identityError, std::string& error) {
         if (host_ == nullptr) {
             error = identityError;
@@ -278,11 +280,9 @@ private:
             error = "Could not find the server: " + why;
             return false;
         }
+        // The connect itself, and its timeout, wait for the engine's first step.
         if (!host_->connect_from_empty(*found, error)) {
-            if (host_->session() == nullptr) {
-                return false;
-            }
-            std::fprintf(stderr, "%s\n", error.c_str());
+            return false;
         }
         connecting_ = true;
         return true;

@@ -32,7 +32,8 @@ public:
     // How many netids this client maps: what it holds of the server's tree, the root included.
     std::size_t mapped() const;
     // Runs once a whole snapshot has arrived and unpacked, just before its ops apply:
-    // a join that swaps the world swaps it here, once the download can no longer fail.
+    // a join that swaps the world swaps it here, once the download itself can no longer
+    // fail. A malformed op can still fail the apply after it, leaving a half-built world.
     std::function<void()> before_snapshot;
 
 private:

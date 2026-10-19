@@ -1,7 +1,10 @@
 #include "ClientWorld.hpp"
 
+#include "Connections.hpp"
 #include "Project.hpp"
 
+#include <optional>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -42,7 +45,7 @@ void clear_for_client(engine_core::DataModel& game) {
     engine_core::Project::reset_services(game);
 }
 
-void swap_for_client(engine_core::DataModel& game) {
+void swap_for_client(engine_core::DataModel& game, const std::function<void(const std::string&)>& warn) {
     // The same walk as clear_for_client: down through services, Core skipped.
     // Each other child of a service tops a tree. A Persistent top survives
     // whole; any other is searched for its topmost Persistent descendants,
@@ -84,10 +87,19 @@ void swap_for_client(engine_core::DataModel& game) {
     }
     // Out first, so destroying what held them leaves them alone.
     for (const auto& [id, service] : rescued) {
-        if (game.alive(id) && !game.parent_error(id, service)) {
-            game.set_parent(id, service);
-            survivors.push_back(id);
+        if (!game.alive(id)) {
+            continue;
         }
+        if (const std::optional<std::string> refused = game.parent_error(id, service)) {
+            if (warn) {
+                warn("Persistent " + std::string(game.instance(id)->class_name()) + " \"" + game.name(id) +
+                     "\" could not move to " + game.name(service) + " for the join, so it was destroyed: " +
+                     *refused);
+            }
+            continue;
+        }
+        game.set_parent(id, service);
+        survivors.push_back(id);
     }
     for (const InstanceId id : doomed) {
         if (game.alive(id) && !game.destroy_error(id)) {
@@ -106,6 +118,19 @@ void swap_for_client(engine_core::DataModel& game) {
         }
     }
     engine_core::Project::reset_services(game);
+}
+
+void clear_connections(engine_core::DataModel& game) {
+    // The server put them there and only a session takes them out; a Connection
+    // is never a script's to keep, so none refuses to go.
+    for (const InstanceId id : game.get_children(game.connections())) {
+        if (game.alive(id)) {
+            game.destroy_tree(id);
+        }
+    }
+    if (auto* list = dynamic_cast<engine_core::Connections*>(game.instance(game.connections()))) {
+        list->set_local_connection(0);
+    }
 }
 
 }  // namespace engine_network

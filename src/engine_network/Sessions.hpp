@@ -143,6 +143,10 @@ public:
     bool connect(const network::Address& server, double now);
     // The player leaves; reason "You left the game".
     void disconnect(double now);
+    // As disconnect, at the start of the next receive: a script's Leave asks for
+    // it, and the end it brings (play stopped, a role put back, Left) runs then,
+    // outside any script, never under the one that asked.
+    void request_disconnect();
     void receive(double now) override;
     void send(double now) override;
     // state() and reason() are for a thread that may write them (see state_);
@@ -158,6 +162,8 @@ public:
     // Called on the simulation thread whenever state() or reason() changes, with both
     // as they now are. It may unhook the session from the engine, but never destroy it.
     std::function<void(ClientState, const std::string& reason)> on_state;
+    // Swap mode: told of each Persistent instance the swap had to destroy, and why.
+    std::function<void(const std::string&)> on_warning;
 
 private:
     void on_connected();
@@ -180,6 +186,7 @@ private:
     double now_ = 0.0;
     bool started_play_ = false;   // this connection started play, so its end stops it
     bool set_role_ = false;       // this connection made the world a Client, so its end puts previous_role_ back
+    bool leave_requested_ = false;   // request_disconnect: the next receive leaves
     // Swap mode: the applier's hook, run once the whole snapshot is in.
     void swap_world();
     engine_core::WorldRole previous_role_ = engine_core::WorldRole::Standalone;

@@ -3,6 +3,7 @@
 #include "ClientWorld.hpp"
 #include "Connections.hpp"
 #include "ProjectIdentity.hpp"
+#include "ScriptRuntime.hpp"
 
 #include <system_error>
 #include <utility>
@@ -44,7 +45,7 @@ engine_core::Connections* ClientJoinHost::connections() {
 }
 
 std::string ClientJoinHost::join(const std::string& address) {
-    if (resolving_ || (session_ != nullptr && session_->state() != ClientState::Disconnected &&
+    if (resolving_ || pending_connect_ || (session_ != nullptr && session_->state() != ClientState::Disconnected &&
                        session_->state() != ClientState::Idle)) {
         return "Already joining or joined; call Leave first";
     }
@@ -53,11 +54,17 @@ std::string ClientJoinHost::join(const std::string& address) {
         retire_session();
     }
     reap_resolvers(false);
+    // Each Leave and Join again leaves behind a lookup nothing can stop; a few
+    // may run at once, but never without end.
+    if (resolvers_running_.load() >= kMaxLookups) {
+        return kTooManyLookups;
+    }
     const std::uint64_t generation = ++generation_;
+    const Lookup lookup = lookup_ ? lookup_ : Lookup(&network::resolve);
     auto done = std::make_shared<std::atomic<bool>>(false);
     resolvers_running_.fetch_add(1);
     try {
-        std::thread thread([this, generation, address, done] {
+        std::thread thread([this, generation, address, done, lookup] {
             Resolved result;
             result.generation = generation;
             // The first join pays for the resources hash here, off the simulation thread.
@@ -65,7 +72,7 @@ std::string ClientJoinHost::join(const std::string& address) {
             if (!ready_identity(identity, result.error)) {
                 result.identity_failed = true;
             } else {
-                result.address = network::resolve(address, result.error);
+                result.address = lookup(address, result.error);
             }
             {
                 std::lock_guard<std::mutex> lock(mutex_);
@@ -101,9 +108,19 @@ void ClientJoinHost::leave() {
         }
         return;
     }
+    if (pending_connect_) {
+        // --connect before its first step: it never connected, so it just ends.
+        pending_connect_.reset();
+        set_status(ClientState::Disconnected, kLeft);
+        if (engine_core::Connections* list = connections()) {
+            list->note_left(kLeft);
+        }
+        return;
+    }
     if (session_ != nullptr) {
-        // Reported through on_state, as every end is.
-        session_->disconnect(engine_core::Engine::network_now());
+        // A script is calling: the session leaves at its next receive, between
+        // steps, and that end is reported through on_state, as every end is.
+        session_->request_disconnect();
     }
 }
 
@@ -114,6 +131,7 @@ bool ClientJoinHost::connect_from_empty(const network::Address& address, std::st
     ++generation_;
     resolving_ = false;
     silent_ = false;
+    pending_connect_.reset();
     std::unique_ptr<ClientSession> made = make_session(ClientMode::FromEmpty, error);
     if (made == nullptr) {
         return false;
@@ -127,17 +145,23 @@ bool ClientJoinHost::connect_from_empty(const network::Address& address, std::st
     if (engine_core::Connections* list = connections()) {
         list->set_join_state(engine_core::JoinState::Joining);
     }
-    ClientSession* session = session_.get();
-    if (!session->connect(address, engine_core::Engine::network_now())) {
-        error = session->reason();
-        return false;
-    }
+    // The overlay says Connecting from now; tick connects on the engine's first step.
+    set_status(ClientState::Connecting, {});
+    pending_connect_ = address;
     return true;
+}
+
+void ClientJoinHost::set_lookup(Lookup lookup) { lookup_ = std::move(lookup); }
+
+void ClientJoinHost::set_before_hash(std::function<void(const std::filesystem::path&)> before) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    before_hash_ = std::move(before);
 }
 
 void ClientJoinHost::end_silently() {
     ++generation_;
     resolving_ = false;
+    pending_connect_.reset();
     silent_ = true;
     if (session_ != nullptr) {
         session_->disconnect(engine_core::Engine::network_now());
@@ -170,6 +194,14 @@ void ClientJoinHost::set_status(ClientState state, const std::string& reason) {
 
 void ClientJoinHost::tick() {
     retired_.clear();
+    if (pending_connect_ && session_ != nullptr) {
+        // --connect's first step: the window is up and the engine runs, so the
+        // connect's timeout counts only time the game could have answered in.
+        const network::Address address = *pending_connect_;
+        pending_connect_.reset();
+        // A refusal ends the session through on_state, with why.
+        session_->connect(address, engine_core::Engine::network_now());
+    }
     if (answered_.load()) {
         std::vector<Resolved> answers;
         {
@@ -215,12 +247,17 @@ void ClientJoinHost::on_resolved(const Resolved& result) {
 bool ClientJoinHost::ready_identity(network::GameIdentity& out, std::string& error) {
     network::GameIdentity identity;
     std::filesystem::path folder;
+    std::function<void(const std::filesystem::path&)> before;
     {
         std::lock_guard<std::mutex> lock(mutex_);
         identity = identity_;
         folder = unhashed_;
+        before = before_hash_;
     }
     if (!folder.empty()) {
+        if (before) {
+            before(folder);
+        }
         // Outside the lock: a large folder takes a while. Two threads hashing at
         // once agree, so whichever stores it last changes nothing.
         if (!hash_identity(identity, folder, error)) {
@@ -251,6 +288,10 @@ std::unique_ptr<ClientSession> ClientJoinHost::make_session(ClientMode mode, std
     config.client_mode = mode;
     auto session = std::make_unique<ClientSession>(engine_.datamodel(), std::move(socket), config);
     session->on_state = [this](ClientState state, const std::string& reason) { on_session_state(state, reason); };
+    // The developer hears of a Persistent instance the swap had to destroy, as of a script's error.
+    session->on_warning = [this](const std::string& warning) {
+        engine_.scripts().append_output(engine_core::ScriptRuntime::OutputKind::Error, warning);
+    };
     return session;
 }
 

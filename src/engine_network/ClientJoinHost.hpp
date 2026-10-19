@@ -23,6 +23,7 @@
 #include <atomic>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -53,12 +54,19 @@ public:
     // Swap mode: resolves address off the simulation thread, then connects. ""
     // when started; a reason when a join is already under way or no thread starts.
     std::string join(const std::string& address) override;
-    // Ends the join or the connection; Left says "You left the game".
+    // Ends the join or the connection; Left says "You left the game". A script
+    // calls it, so a connection ends at the start of the next step (the session's
+    // next receive), never under the calling script: --connect's end stops play,
+    // which closes the VM that script runs in.
     void leave() override;
-    // --connect: clears the world (clear_for_client) and connects in FromEmpty
-    // mode to an address already resolved. False with why when no socket opens
-    // or the endpoint refuses. The session stays after its connection ends, so
-    // an overlay can still show why.
+    // --connect: readies the identity (hashing it if need be), opens the socket,
+    // clears the world (clear_for_client) and makes a FromEmpty session the engine
+    // pumps. The connect itself waits for the host's job on the next step, so its
+    // timeout starts only once the engine runs: a player calls this before its
+    // window is up. False with why when the identity or the socket fails, and the
+    // world is then left alone. A refused connect ends the session with "Could not
+    // connect to the server". The session stays after its connection ends, so an
+    // overlay can still show why.
     bool connect_from_empty(const network::Address& address, std::string& error);
     // Studio Stop: as leave, but Left does not fire; the session is unhooked
     // from the engine and destroyed now. JoinState goes back to Idle.
@@ -72,6 +80,19 @@ public:
     ClientStatus status() const;
     // Resolver threads still looking a name up, finished or not yet reaped. For tests.
     int resolvers_running() const { return resolvers_running_.load(); }
+    // How a join turns its address into a server's; network::resolve unless a test
+    // sets another. Set before the first join; it runs on a resolver thread.
+    using Lookup = std::function<std::optional<network::Address>(const std::string& address, std::string& error)>;
+    void set_lookup(Lookup lookup);
+    // Runs just before the resources are hashed, on whichever thread hashes them,
+    // with the folder: a packed game makes its empty resources folder again there
+    // (runner::restore_packed_resources). Set before the first join or connect.
+    void set_before_hash(std::function<void(const std::filesystem::path&)> before);
+    // At most this many lookups run at once; a Join past it is refused, with
+    // kTooManyLookups. Only a Leave and Join again, over and over, gets here.
+    static constexpr int kMaxLookups = 4;
+    static constexpr const char* kTooManyLookups =
+        "Too many joins still looking up their server; try again in a moment";
 
 private:
     struct Resolved {
@@ -106,6 +127,8 @@ private:
     std::uint64_t generation_ = 0;   // bumped by each join, leave and end; an answer for an older one is stale
     bool resolving_ = false;
     bool silent_ = false;            // the session's end tells no script
+    std::optional<network::Address> pending_connect_;   // connect_from_empty's, for the next tick
+    Lookup lookup_;
     std::unique_ptr<ClientSession> session_;
     ClientMode session_mode_ = ClientMode::Swap;
     ClientState reported_ = ClientState::Idle;   // the session state on_session_state last acted on
@@ -116,6 +139,7 @@ private:
     std::mutex mutex_;
     network::GameIdentity identity_;
     std::filesystem::path unhashed_;      // the resources folder still to hash; empty once hashed
+    std::function<void(const std::filesystem::path&)> before_hash_;
     bool closing_ = false;              // the destructor began: answers are dropped
     std::vector<Resolved> answers_;
     std::atomic<bool> answered_{false};   // answers_ holds something; read each frame without the lock

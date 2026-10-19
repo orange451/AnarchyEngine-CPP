@@ -130,6 +130,7 @@ bool ClientSession::connect(const network::Address& server, double now) {
         }
         return false;
     }
+    leave_requested_ = false;
     // Each connection builds its world from nothing.
     applier_ = std::make_unique<ReplicaApplier>(game_);
     if (config_.client_mode == ClientMode::Swap) {
@@ -151,8 +152,19 @@ void ClientSession::disconnect(double now) {
     endpoint_->disconnect(0, now);
 }
 
+void ClientSession::request_disconnect() {
+    if (state_ == ClientState::Connecting || state_ == ClientState::Joining || state_ == ClientState::Joined) {
+        leave_requested_ = true;
+    }
+}
+
 void ClientSession::receive(double now) {
     now_ = now;
+    if (leave_requested_) {
+        // Between steps: what the end stops or starts runs under no script.
+        leave_requested_ = false;
+        disconnect(now);
+    }
     endpoint_->receive(now);
 }
 
@@ -196,10 +208,17 @@ void ClientSession::set_reason(std::string reason) {
 }
 
 void ClientSession::swap_world() {
-    // The whole snapshot is in and unpacked, so the download can no longer fail
-    // and leave a half-swapped world: the menu goes, its Persistent part stays, and the
-    // world becomes a Client, which re-checks every script's RunContext.
-    swap_for_client(game_);
+    // The whole snapshot is in and unpacked, so the download itself can no longer
+    // fail: the menu goes, its Persistent part stays, and the world becomes a
+    // Client, which re-checks every script's RunContext. One of the snapshot's ops
+    // can still be malformed after this; the world is then left half built, the
+    // role goes back, and the reason is "Bad data from the server"
+    // (docs/superpowers/networking-parked.md).
+    swap_for_client(game_, [this](const std::string& warning) {
+        if (on_warning) {
+            on_warning(warning);
+        }
+    });
     if (game_.world_role() != engine_core::WorldRole::Client) {
         previous_role_ = game_.world_role();
         set_role_ = true;

@@ -1050,11 +1050,13 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
         "Starts joining the server at address, \"host:port\". Only a client program can join, from a standalone "
         "world that is playing, while JoinState is Idle; anything else raises. Once the server's world has "
         "arrived it replaces this one: only Persistent instances survive, and the world becomes a Client, so a "
-        "surviving Script keeps running only when its RunContext is Client or Any. Joined or Left says how it went.",
+        "surviving Script keeps running only when its RunContext is Client or Any. Joined or Left says how it went. "
+        "While a few earlier joins are still looking up their server, it raises \"Too many joins still looking "
+        "up their server; try again in a moment\".",
         nullptr, false, {P("address", "string")});
     add("Connections", "Leave",
-        "Ends the join, or the attempt at one, and Left fires with \"You left the game\". Does nothing while "
-        "JoinState is Idle.",
+        "Ends the join, or the attempt at one, and Left fires with \"You left the game\". A connection ends "
+        "at the start of the next step, not inside the calling script. Does nothing while JoinState is Idle.",
         nullptr, false, {});
     add("Connections", "JoinState", "Where a script's join stands: Idle, Joining, or Joined. Read-only.",
         "Enum.JoinState", false, {});

@@ -12,6 +12,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -25,6 +26,14 @@ namespace {
 
 double milliseconds_since(std::chrono::steady_clock::time_point start) {
     return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+}
+
+// The middle tick of those timed (the mean of the middle two for an even count):
+// a tick another process preempted under a full-suite run moves a mean, not this.
+double median(std::vector<double> ms) {
+    std::sort(ms.begin(), ms.end());
+    const std::size_t half = ms.size() / 2;
+    return ms.size() % 2 != 0 ? ms[half] : (ms[half - 1] + ms[half]) / 2.0;
 }
 
 // count Folders under Workspace, with a PointLight in every tenth.
@@ -141,10 +150,10 @@ TEST_CASE("RP61 1,000 changes a tick, sent to 50 clients, cost the server under 
     for (int i = 0; i < 120; ++i) tick(false);   // everyone joined and their snapshots drained
     REQUIRE(session->endpoint().peers().size() == 50);
     for (int i = 0; i < 30; ++i) tick(true);     // warm up
-    double total = 0.0;
-    for (int i = 0; i < 60; ++i) total += tick(true);
-    const double server_ms = total / 60.0;
-    WARN("server send with 1,000 changes to 50 clients: " << server_ms << " ms a tick");
+    std::vector<double> server_ticks;
+    for (int i = 0; i < 60; ++i) server_ticks.push_back(tick(true));
+    const double server_ms = median(server_ticks);
+    WARN("server send with 1,000 changes to 50 clients: " << server_ms << " ms the median tick");
     REQUIRE(session->fell_behind() == 0);
     REQUIRE(session->endpoint().peers().size() == 50);
 
@@ -170,16 +179,16 @@ TEST_CASE("RP61 1,000 changes a tick, sent to 50 clients, cost the server under 
     std::vector<std::vector<std::uint8_t>> snapshot;
     replicator.snapshot_messages(0, snapshot);
     REQUIRE(replication::deliver(applier, snapshot) == engine_network::ApplyResult::SnapshotApplied);
-    double client_total = 0.0;
+    std::vector<double> client_ticks;
     for (int i = 0; i < 30; ++i) {
         move_lights(server.game, lights, 2000.0f + static_cast<float>(i) * 0.37f);
         REQUIRE(replicator.end_tick(message));
         const auto start = std::chrono::steady_clock::now();
         REQUIRE(applier.receive_message(message.data(), message.size()) == engine_network::ApplyResult::Ok);
-        if (i >= 10) client_total += milliseconds_since(start);   // the first ten warm up
+        if (i >= 10) client_ticks.push_back(milliseconds_since(start));   // the first ten warm up
     }
-    const double client_ms = client_total / 20.0;
-    WARN("client apply of 1,000 changes: " << client_ms << " ms");
+    const double client_ms = median(client_ticks);
+    WARN("client apply of 1,000 changes: " << client_ms << " ms the median tick");
     REQUIRE(applier.skipped() == 0);
     replication::require_same_world(replicator, server.game, client_rig.game);
     // The targets are 1 ms and 0.5 ms. Measured on 2026-10-18 with fractional
@@ -241,13 +250,13 @@ TEST_CASE("RP62 server send at the default 1 MB/s budget, 1000 changes to 50 cli
     for (int i = 0; i < 30; ++i) tick(true);
     std::uint64_t sent_before = 0;
     for (const network::PeerId peer : session->endpoint().peers()) sent_before += session->endpoint().stats(peer, now).packets_sent;
-    double total = 0.0;
-    for (int i = 0; i < 60; ++i) total += tick(true);
-    const double server_ms = total / 60.0;
+    std::vector<double> server_ticks;
+    for (int i = 0; i < 60; ++i) server_ticks.push_back(tick(true));
+    const double server_ms = median(server_ticks);
     std::uint64_t sent_after = 0;
     for (const network::PeerId peer : session->endpoint().peers()) sent_after += session->endpoint().stats(peer, now).packets_sent;
     const double packets_per_tick = static_cast<double>(sent_after - sent_before) / 60.0;
-    WARN("server send at 1 MB/s with 1,000 changes to 50 clients: " << server_ms << " ms a tick, " << packets_per_tick
+    WARN("server send at 1 MB/s with 1,000 changes to 50 clients: " << server_ms << " ms the median tick, " << packets_per_tick
                                                                     << " packets a tick");
     REQUIRE(session->fell_behind() == 0);
     REQUIRE(session->endpoint().peers().size() == 50);

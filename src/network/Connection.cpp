@@ -1,6 +1,7 @@
 #include "Connection.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 
 namespace network {
@@ -29,7 +30,32 @@ std::optional<std::uint16_t> Connection::set_payload(const std::uint8_t* bytes, 
 }
 
 bool Connection::wants_packet(double now) const {
-    return has_payload_ || reliable_.has_due(now, rtt()) || last_send_ < 0.0 || now - last_send_ >= 0.1 - 1e-9;
+    return has_payload_ || heard_since_send_ || reliable_.has_due(now, rtt()) || last_send_ < 0.0 ||
+           now - last_send_ >= 0.1 - 1e-9;
+}
+
+void Connection::refill(double now) {
+    const double rate = flow_.bytes_per_second();
+    const double cap = std::max(rate * send_interval_ * 2.0, static_cast<double>(kMaxPacketBytes));
+    // A new connection starts with a full allowance; a clock that jumps cannot bank more than the cap.
+    const double added = last_refill_ < 0.0 ? cap : rate * std::max(0.0, now - last_refill_);
+    last_refill_ = now;
+    credit_ = std::min(cap, credit_ + added);
+}
+
+bool Connection::wants_extra_packet(double now) const {
+    if (credit_ < static_cast<double>(kMaxPacketBytes)) return false;
+    // After this tick's last write, its own record says whether anything due was left behind.
+    if (tick_time_ == now) return tick_packets_ < max_packets_per_tick() && reliable_.left_due();
+    return reliable_.has_due(now, rtt());
+}
+
+std::size_t Connection::max_packets_per_tick() const {
+    // Packets go out for a whole round trip before the first ack comes back, so a
+    // round trip's worth must fit in half the ring, or acks would name slots already reused.
+    const double ticks = std::max(1.0, std::ceil(rtt() / send_interval_ - 1e-9));
+    const double per_tick = static_cast<double>(kRingSize / 2) / ticks;
+    return static_cast<std::size_t>(std::clamp(per_tick, 1.0, 32.0));
 }
 
 std::size_t Connection::write_packet(std::uint8_t* out, std::size_t capacity, double now) {
@@ -53,6 +79,13 @@ std::size_t Connection::write_packet(std::uint8_t* out, std::size_t capacity, do
     const std::size_t length = writer.bytes_written();
     sent.bytes = static_cast<std::uint16_t>(length);
     has_payload_ = false;
+    heard_since_send_ = false;
+    credit_ -= static_cast<double>(length);
+    if (tick_time_ != now) {
+        tick_time_ = now;
+        tick_packets_ = 0;
+    }
+    ++tick_packets_;
     ++next_sequence_;
     last_send_ = now;
     ++stats_.packets_sent;
@@ -76,6 +109,10 @@ bool Connection::read_packet(const PacketHeader& header, BitReader& reader, cons
         for (int i = 0; i < sent.ref_count; ++i) reliable_.acked(sent.refs[i]);
         if (sent.has_payload && callbacks.on_delivered) callbacks.on_delivered(sent.sequence, sent.tag);
     });
+    // A packet that carried something is acked on our next tick; a bare keep-alive is not, or two idle
+    // peers would answer each other every tick.
+    BitReader entries = reader;
+    if (header.type == PacketType::Payload || entries.boolean()) heard_since_send_ = true;
     reliable_.read(reader);
     reader.align();
     const std::size_t offset = reader.byte_offset();

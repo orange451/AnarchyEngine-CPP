@@ -30,8 +30,17 @@
 
 namespace engine_network {
 
+// Bytes a second a session may send each peer: a join's snapshot drains in seconds, and flow
+// control still halves it on a bad link. A bare Endpoint keeps its own, smaller default.
+constexpr double kDefaultSendBudget = 1048576.0;   // bytes per second per client
+
 struct SessionConfig {
-    network::EndpointConfig endpoint;            // role is set by the session
+    // role is set by the session; the budget starts at kDefaultSendBudget.
+    network::EndpointConfig endpoint = [] {
+        network::EndpointConfig config;
+        config.bytes_per_second = kDefaultSendBudget;
+        return config;
+    }();
     ReplicatorOptions replicator;
     // A client is dropped when its queue makes no progress this long: nothing
     // handed to the channel and nothing acked. A big snapshot draining slowly

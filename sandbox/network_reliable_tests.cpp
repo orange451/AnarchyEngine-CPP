@@ -297,3 +297,28 @@ TEST_CASE("N38 one shared block goes to two channels without a copy each, and bo
     REQUIRE(d.received[0] == *block);
     REQUIRE(block.use_count() == 1);   // acked, the channels let it go
 }
+
+TEST_CASE("N77 has_due and write start at the first open fragment", "[network][reliable]") {
+    Side a;
+    const std::vector<std::uint8_t> block = message(11, 50 * network::kFragmentBytes);
+    REQUIRE(a.channel.send(block.data(), block.size()));
+    // One fragment entry: its header bits, alignment, a full fragment, and the terminating bit.
+    const std::size_t entry = (1 + 16 + 16 + 16 + 16 + 7 + network::kFragmentBytes * 8 + 1) / 8;
+    REQUIRE(a.channel.bytes_due(0.0, 0.1) == 50 * entry);
+    for (std::uint16_t f = 0; f < 40; ++f) a.channel.acked(MessageRef{0, f});
+    REQUIRE(a.channel.first_open_fragment(0) == 40);
+    REQUIRE(a.channel.has_due(0.0, 0.1));
+    REQUIRE(a.channel.bytes_due(0.0, 0.1) == 10 * entry);
+    SentPacket& sent = a.ring.record_sent(a.next_sequence++, 0.0);
+    std::vector<std::uint8_t> bytes(network::kMaxPayloadBytes);
+    BitWriter writer(bytes.data(), bytes.size());
+    a.channel.write(writer, 0.0, 0.1, sent);
+    REQUIRE(sent.ref_count >= 1);
+    REQUIRE(sent.refs[0].id == 0);
+    REQUIRE(sent.refs[0].fragment == 40);
+    // An ack out of order leaves the cursor at the lowest fragment still open.
+    a.channel.acked(MessageRef{0, 45});
+    REQUIRE(a.channel.first_open_fragment(0) == 40);
+    a.channel.acked(MessageRef{0, 40});
+    REQUIRE(a.channel.first_open_fragment(0) == 41);
+}

@@ -296,8 +296,16 @@ void Endpoint::send(double now) {
             }
             continue;
         }
-        if (peer.state == ConnectionState::Connected && peer.connection->wants_packet(now)) {
-            const std::size_t length = peer.connection->write_packet(send_buffer_, kMaxPacketBytes, now);
+        if (peer.state != ConnectionState::Connected) continue;
+        Connection& connection = *peer.connection;
+        connection.refill(now);
+        if (!connection.wants_packet(now)) continue;
+        // The first packet carries the payload and goes whatever the credit; more follow
+        // while reliable data is due and the budget and the in-flight cap allow.
+        std::size_t length = connection.write_packet(send_buffer_, kMaxPacketBytes, now);
+        conditioner_.send(peer.address, send_buffer_, length);
+        while (!conditioner_.failed() && connection.wants_extra_packet(now)) {
+            length = connection.write_packet(send_buffer_, kMaxPacketBytes, now);
             conditioner_.send(peer.address, send_buffer_, length);
         }
     }

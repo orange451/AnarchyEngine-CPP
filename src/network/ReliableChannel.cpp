@@ -14,6 +14,7 @@ ReliableChannel::Outgoing* ReliableChannel::begin_send(std::size_t length) {
     out.id = next_send_id_;
     out.length = static_cast<std::uint32_t>(length);
     out.fragments_acked = 0;
+    out.first_open_fragment = 0;
     out.last_send = -1e9;
     out.block.reset();
     if (length <= kFragmentBytes) {
@@ -50,7 +51,26 @@ bool ReliableChannel::send(SharedMessage message) {
     return true;
 }
 
-bool ReliableChannel::has_due(double now, double rtt) const { return bytes_due(now, rtt) > 0; }
+bool ReliableChannel::has_due(double now, double rtt) const {
+    for (std::uint16_t id = oldest_unacked_; id != next_send_id_; ++id) {
+        const Outgoing& out = out_[id % kWindowSize];
+        if (!out.valid || out.acked) continue;
+        if (out.fragment_count == 0) {
+            if (due(out.last_send, now, rtt)) return true;
+            continue;
+        }
+        if (out.id != oldest_unacked_) continue;   // see bytes_due
+        for (std::uint16_t f = out.first_open_fragment; f < out.fragment_count; ++f) {
+            if (!out.fragment_acked[f] && due(out.fragment_last_send[f], now, rtt)) return true;
+        }
+    }
+    return false;
+}
+
+std::uint16_t ReliableChannel::first_open_fragment(std::uint16_t id) const {
+    const Outgoing& out = out_[id % kWindowSize];
+    return out.valid && out.id == id && out.fragment_count > 0 ? out.first_open_fragment : 0;
+}
 
 std::size_t ReliableChannel::bytes_due(double now, double rtt) const {
     std::size_t total = 0;
@@ -65,7 +85,7 @@ std::size_t ReliableChannel::bytes_due(double now, double rtt) const {
         // has then delivered them all, so this block is the one it always accepts
         // and an honest sender stays inside its reassembly budget.
         if (out.id != oldest_unacked_) continue;
-        for (std::uint16_t f = 0; f < out.fragment_count; ++f) {
+        for (std::uint16_t f = out.first_open_fragment; f < out.fragment_count; ++f) {
             if (out.fragment_acked[f] || !due(out.fragment_last_send[f], now, rtt)) continue;
             total += entry_bits(true, std::min(kFragmentBytes, out.length - f * kFragmentBytes)) / 8;
         }
@@ -76,13 +96,20 @@ std::size_t ReliableChannel::bytes_due(double now, double rtt) const {
 void ReliableChannel::write(BitWriter& writer, double now, double rtt, SentPacket& packet, std::size_t reserve_bytes) {
     const std::size_t reserved = reserve_bytes * 8;
     const auto room = [&]() { return writer.bits_left() > reserved ? writer.bits_left() - reserved : 0; };
+    left_due_ = false;
     for (std::uint16_t id = oldest_unacked_; id != next_send_id_; ++id) {
         Outgoing& out = out_[id % kWindowSize];
         if (!out.valid || out.acked) continue;
-        if (packet.ref_count >= kMaxRefsPerPacket) break;
+        if (packet.ref_count >= kMaxRefsPerPacket) {
+            left_due_ = true;   // perhaps: it is not checked, so another packet looks
+            break;
+        }
         if (out.fragment_count == 0) {
             if (!due(out.last_send, now, rtt)) continue;
-            if (room() < entry_bits(false, out.length)) continue;   // a smaller one later may still fit
+            if (room() < entry_bits(false, out.length)) {
+                left_due_ = true;
+                continue;   // a smaller one later may still fit
+            }
             writer.boolean(true);
             writer.bits(out.id, 16);
             writer.bits(0, 16);
@@ -93,11 +120,13 @@ void ReliableChannel::write(BitWriter& writer, double now, double rtt, SentPacke
             continue;
         }
         if (out.id != oldest_unacked_) continue;   // see bytes_due
-        for (std::uint16_t f = 0; f < out.fragment_count; ++f) {
+        for (std::uint16_t f = out.first_open_fragment; f < out.fragment_count; ++f) {
             if (out.fragment_acked[f] || !due(out.fragment_last_send[f], now, rtt)) continue;
-            if (packet.ref_count >= kMaxRefsPerPacket) break;
             const std::size_t length = std::min(kFragmentBytes, out.length - f * kFragmentBytes);
-            if (room() < entry_bits(true, length)) break;
+            if (packet.ref_count >= kMaxRefsPerPacket || room() < entry_bits(true, length)) {
+                left_due_ = true;
+                break;
+            }
             writer.boolean(true);
             writer.bits(out.id, 16);
             writer.bits(out.fragment_count, 16);
@@ -219,6 +248,9 @@ void ReliableChannel::acked(const MessageRef& ref) {
     } else {
         if (ref.fragment >= out.fragment_count || out.fragment_acked[ref.fragment]) return;
         out.fragment_acked[ref.fragment] = 1;
+        while (out.first_open_fragment < out.fragment_count && out.fragment_acked[out.first_open_fragment]) {
+            ++out.first_open_fragment;
+        }
         if (++out.fragments_acked == out.fragment_count) out.acked = true;
     }
     ++acked_pieces_;

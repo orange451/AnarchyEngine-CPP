@@ -34,11 +34,18 @@ public:
     bool send(const std::uint8_t* bytes, std::size_t length);
     // As above; a block keeps a reference to message rather than copying it.
     bool send(SharedMessage message);
+    // Stops at the first due entry: Connection asks once per extra packet.
     bool has_due(double now, double rtt) const;
     std::size_t bytes_due(double now, double rtt) const;
+    // The lowest fragment of block id not yet acked; 0 when id is not a block in flight.
+    std::uint16_t first_open_fragment(std::uint16_t id) const;
     // Appends the section and records what it carried in packet.refs. The
     // last reserve_bytes of the writer are left for the payload.
     void write(BitWriter& writer, double now, double rtt, SentPacket& packet, std::size_t reserve_bytes = 0);
+    // After write: an entry due then did not fit (or the refs ran out), so another packet
+    // at the same time has something to carry. A write that fits everything due leaves
+    // nothing due at that time, so Connection asks this instead of walking with has_due.
+    bool left_due() const { return left_due_; }
     // Walks a section without applying it. Connection checks before it
     // records the packet as received, so a bad packet is as if it never came.
     bool validate(BitReader reader) const;
@@ -69,6 +76,9 @@ private:
         std::uint32_t length = 0;
         std::uint16_t fragment_count = 0;   // 0: a whole message in inline_bytes
         std::uint16_t fragments_acked = 0;
+        // Every fragment below it is acked, so the walks in has_due, bytes_due and write
+        // start here rather than at 0: a big block's acked front is not walked again.
+        std::uint16_t first_open_fragment = 0;
         double last_send = -1e9;
         std::uint8_t inline_bytes[kFragmentBytes];
         SharedMessage block;   // a block's bytes, perhaps shared with other channels
@@ -104,6 +114,7 @@ private:
     std::uint16_t next_deliver_ = 0;
     std::size_t reassembly_bytes_ = 0;
     std::uint64_t acked_pieces_ = 0;
+    bool left_due_ = false;
 };
 
 }  // namespace network

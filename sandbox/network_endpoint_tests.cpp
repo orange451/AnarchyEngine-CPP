@@ -10,6 +10,7 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <cstdint>
 #include <deque>
 #include <memory>
@@ -485,4 +486,117 @@ TEST_CASE("N69c a callback that disconnects the peer being read is deferred and 
     REQUIRE(server.state(0) == ConnectionState::Disconnected);
     REQUIRE(client_log.disconnected.size() == 1);
     REQUIRE(std::get<1>(client_log.disconnected[0]) == DisconnectReason::Requested);
+}
+
+namespace {
+
+// What happened to one big message the server sent its only client.
+struct BigSend {
+    int delivered_at_tick = -1;
+    std::size_t deliveries = 0;
+    bool bytes_equal = false;
+    bool halved = false;
+};
+
+// Connects a client, lets RTT settle, sends it one message of length bytes, and pumps at 60 Hz
+// until it lands or max_ticks pass.
+BigSend send_big(double bytes_per_second, float loss, std::size_t length, int max_ticks) {
+    network::LinkHub hub;
+    Log server_log, client_log;
+    EndpointConfig server_config;
+    server_config.role = Role::Server;
+    server_config.identity = identity();
+    server_config.bytes_per_second = bytes_per_second;
+    Endpoint server(hub.open(kServer), server_config, server_log.callbacks());
+    EndpointConfig client_config;
+    client_config.role = Role::Client;
+    client_config.identity = identity();
+    Endpoint client(hub.open(client_address(0)), client_config, client_log.callbacks());
+    server.conditioner().loss = loss;
+    client.conditioner().loss = loss;
+    const auto tick = [&](double now) {
+        server.receive(now);
+        client.receive(now);
+        server.send(now);
+        client.send(now);
+    };
+    REQUIRE(client.connect(kServer, 0.0));
+    int t = 0;
+    for (; t < 60; ++t) tick(t / 60.0);
+    REQUIRE(client.state(0) == ConnectionState::Connected);
+    std::vector<std::uint8_t> bytes(length);
+    for (std::size_t i = 0; i < length; ++i) bytes[i] = static_cast<std::uint8_t>(i * 131 + (i >> 8));
+    REQUIRE(server.send_message(0, bytes.data(), bytes.size()));
+    BigSend result;
+    for (int i = 1; i <= max_ticks; ++i) {
+        const double now = (t + i) / 60.0;
+        tick(now);
+        if (server.stats(0, now).budget_bytes_per_second == Approx(bytes_per_second * 0.5)) result.halved = true;
+        if (result.delivered_at_tick < 0 && !client_log.messages.empty()) result.delivered_at_tick = i;
+    }
+    result.deliveries = client_log.messages.size();
+    result.bytes_equal = result.deliveries == 1 && client_log.messages[0].second == bytes;
+    return result;
+}
+
+}  // namespace
+
+TEST_CASE("N73 a 600 KB message reaches a client with a 1 MB/s budget in under a second", "[network][endpoint]") {
+    const BigSend result = send_big(1048576.0, 0.0f, 600000, 120);
+    REQUIRE(result.delivered_at_tick > 0);
+    REQUIRE(result.delivered_at_tick <= 60);
+    REQUIRE(result.deliveries == 1);
+    REQUIRE(result.bytes_equal);
+}
+
+TEST_CASE("N74 the budget holds: the same message at 64 KB/s takes at least eight seconds", "[network][endpoint]") {
+    const BigSend result = send_big(65536.0, 0.0f, 600000, 60 * 20);
+    REQUIRE(result.delivered_at_tick >= 8 * 60);
+    REQUIRE(result.deliveries == 1);
+    REQUIRE(result.bytes_equal);
+}
+
+TEST_CASE("N75 under 10% loss a 600 KB message arrives exactly once and flow control halves the budget", "[network][endpoint]") {
+    // Pumped a while past delivery, so a duplicate would show.
+    const BigSend result = send_big(1048576.0, 0.10f, 600000, 60 * 35);
+    REQUIRE(result.delivered_at_tick > 0);
+    REQUIRE(result.delivered_at_tick <= 60 * 30);
+    REQUIRE(result.deliveries == 1);
+    REQUIRE(result.bytes_equal);
+    REQUIRE(result.halved);
+}
+
+TEST_CASE("N76 packets in flight stay inside the ring: at 250 ms RTT a tick carries at most 8 packets", "[network][endpoint]") {
+    Net net;
+    Endpoint& client = net.add_client();
+    for (Endpoint* e : {net.server.get(), &client}) e->conditioner().latency_seconds = 0.125;
+    // The server's own config sets the budget; Net's default is EndpointConfig's.
+    EndpointConfig config;
+    config.role = Role::Server;
+    config.identity = identity();
+    config.bytes_per_second = 1048576.0;
+    Log server_log;
+    net.server = std::make_unique<Endpoint>(net.hub.open(Address::loopback(2)), config, server_log.callbacks());
+    net.server->conditioner().latency_seconds = 0.125;
+    REQUIRE(client.connect(Address::loopback(2), 0.0));
+    double now = net.run(0.0, 2.0);
+    REQUIRE(client.state(0) == ConnectionState::Connected);
+    REQUIRE(net.server->stats(0, now).rtt > 0.2);
+    std::vector<std::uint8_t> bytes(2u << 20, 7);
+    REQUIRE(net.server->send_message(0, bytes.data(), bytes.size()));
+    std::uint64_t max_per_tick = 0;
+    std::uint64_t last = net.server->stats(0, now).packets_sent;
+    // The client's count over one second, from when the burst has had half a second to reach it.
+    std::uint64_t client_before = 0;
+    for (int i = 0; i < 60 * 4; ++i) {
+        now += 1.0 / 60.0;
+        net.tick(now);
+        const std::uint64_t sent = net.server->stats(0, now).packets_sent;
+        max_per_tick = std::max(max_per_tick, sent - last);
+        last = sent;
+        if (i == 29) client_before = client.stats(0, now).packets_sent;
+        if (i == 89) REQUIRE(client.stats(0, now).packets_sent - client_before >= 55);
+    }
+    REQUIRE(max_per_tick > 1);
+    REQUIRE(max_per_tick <= 8);
 }

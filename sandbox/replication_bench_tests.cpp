@@ -106,6 +106,9 @@ TEST_CASE("RP61 1,000 changes a tick, sent to 50 clients, cost the server under 
     engine_network::SessionConfig config;
     config.endpoint.identity = id;
     config.endpoint.max_peers = 64;
+    // It times replication and its fan-out, so each client gets one packet a tick as when
+    // the target was set; the default budget would add a dozen more per client.
+    config.endpoint.bytes_per_second = 32000.0;
     // Raw clients ack one packet a tick, so queues grow while this runs; none may be dropped.
     config.max_stall_seconds = 1.0e9;
     config.max_queued_bytes = std::size_t{1} << 31;

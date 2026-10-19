@@ -6,4 +6,6 @@ Bottom up: `Bits` (bit packing, quantization), `Sequence` (wrap-aware 16-bit seq
 
 No threads: every pump call takes `double now` in seconds. No heap use on the packet path; reliable blocks and the conditioner's queue are the exceptions. A reliable block can be handed over as a shared buffer (`SharedMessage`), so one message goes to many peers without a copy each.
 
+A tick's first packet to a peer, when one is due, carries the payload, reliable data, and acks, whatever the budget. While reliable data is still due, more packets follow in the same tick: each spends its length from a byte credit that refills at the flow-controlled rate (`EndpointConfig::bytes_per_second`, halved on loss over 10% or RTT over 250 ms) and holds at most two ticks' worth. A tick carries at most `kRingSize / 2` packets per round trip, between 1 and 32, so every packet in flight still has its slot when its ack comes back. A peer that heard a payload or reliable data since its last send acks on its next tick. Sessions default to 1 MB/s per client (`engine_network::kDefaultSendBudget`); a bare `Endpoint` to 32 000 bytes/s.
+
 Tests: `sandbox/network_*_tests.cpp`, tag `[network]`.

@@ -9,6 +9,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <unordered_map>
 #include <vector>
 
@@ -30,6 +31,9 @@ public:
     std::uint64_t server_tick() const;
     // How many netids this client maps: what it holds of the server's tree, the root included.
     std::size_t mapped() const;
+    // Runs once a whole snapshot has arrived and unpacked, just before its ops apply:
+    // a join that swaps the world swaps it here, once the download can no longer fail.
+    std::function<void()> before_snapshot;
 
 private:
     ApplyResult snapshot_part(ByteReader& in);

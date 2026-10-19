@@ -1,5 +1,7 @@
 #include "Sessions.hpp"
 
+#include "ClientWorld.hpp"
+
 #include <utility>
 
 namespace engine_network {
@@ -16,10 +18,18 @@ ClientSession::ClientSession(engine_core::DataModel& game, std::unique_ptr<netwo
     endpoint_ = std::make_unique<network::Endpoint>(std::move(socket), config_.endpoint, std::move(callbacks));
 }
 
-ClientSession::~ClientSession() { disconnect(now_); }
+// Whoever destroys a session has stopped listening to it, so on_state is not told of this last leave.
+ClientSession::~ClientSession() {
+    on_state = nullptr;
+    disconnect(now_);
+}
 
 void ClientSession::on_connected() {
     set_state(ClientState::Joining);
+    if (config_.client_mode == ClientMode::Swap) {
+        // The world plays on untouched while the snapshot arrives; swap_world runs once it is in.
+        return;
+    }
     // A client plays the server's world: it starts while still empty, and the
     // snapshot builds the place during play.
     if (game_.world_role() != engine_core::WorldRole::Client) {
@@ -122,6 +132,9 @@ bool ClientSession::connect(const network::Address& server, double now) {
     }
     // Each connection builds its world from nothing.
     applier_ = std::make_unique<ReplicaApplier>(game_);
+    if (config_.client_mode == ClientMode::Swap) {
+        applier_->before_snapshot = [this] { swap_world(); };
+    }
     // The old reason goes first, so status() never shows Connecting with the last connection's reason.
     set_reason(std::string());
     set_state(ClientState::Connecting);
@@ -157,13 +170,41 @@ ClientStatus ClientSession::status() const {
 }
 
 void ClientSession::set_state(ClientState state) {
-    std::lock_guard<std::mutex> lock(status_mutex_);
-    state_ = state;
+    {
+        std::lock_guard<std::mutex> lock(status_mutex_);
+        if (state_ == state) {
+            return;
+        }
+        state_ = state;
+    }
+    if (on_state) {
+        on_state(state_, reason_);
+    }
 }
 
 void ClientSession::set_reason(std::string reason) {
-    std::lock_guard<std::mutex> lock(status_mutex_);
-    reason_ = std::move(reason);
+    {
+        std::lock_guard<std::mutex> lock(status_mutex_);
+        if (reason_ == reason) {
+            return;
+        }
+        reason_ = std::move(reason);
+    }
+    if (on_state) {
+        on_state(state_, reason_);
+    }
+}
+
+void ClientSession::swap_world() {
+    // The whole snapshot is in and unpacked, so the download can no longer fail
+    // and leave a half-swapped world: the menu goes, its Persistent part stays, and the
+    // world becomes a Client, which re-checks every script's RunContext.
+    swap_for_client(game_);
+    if (game_.world_role() != engine_core::WorldRole::Client) {
+        previous_role_ = game_.world_role();
+        set_role_ = true;
+        game_.set_world_role(engine_core::WorldRole::Client);
+    }
 }
 
 network::Endpoint& ClientSession::endpoint() { return *endpoint_; }

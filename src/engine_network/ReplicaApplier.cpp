@@ -114,6 +114,9 @@ ApplyResult ReplicaApplier::snapshot_part(ByteReader& in) {
     if (!read_ops(body, strings_, ops)) {
         return ApplyResult::Bad;
     }
+    if (before_snapshot) {
+        before_snapshot();
+    }
     for (const Op& op : ops) {
         if (!apply(op)) {
             return ApplyResult::Bad;

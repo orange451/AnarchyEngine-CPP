@@ -57,7 +57,8 @@ public:
     void set_renderer(IRenderer* renderer);
     void set_clock(IClock* clock);
     // A server or client session, pumped at each step's ends. Null to stop.
-    // Set before start(); the engine does not own it.
+    // Set before start(), or on the engine thread between pumps (a join that
+    // starts or ends during play); the engine does not own it.
     void set_network(INetworkPump* pump);
     // The clock a session's now is on, seconds on the steady clock: the engine
     // pumps a session with it, and whoever connects one starts it on the same.

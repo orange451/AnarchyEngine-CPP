@@ -817,6 +817,7 @@ target_link_libraries(engine_core PRIVATE zstd)
 # through engine_core::INetworkPump.
 add_library(engine_network STATIC
     src/engine_network/ByteBuffer.cpp
+    src/engine_network/ClientJoinHost.cpp
     src/engine_network/ClientSession.cpp
     src/engine_network/ClientWorld.cpp
     src/engine_network/JsonWire.cpp
@@ -1281,6 +1282,7 @@ add_executable(sandbox
     sandbox/join_persistent_tests.cpp
     sandbox/join_swap_tests.cpp
     sandbox/join_api_tests.cpp
+    sandbox/join_host_tests.cpp
     sandbox/server_tests.cpp
     src/server/ServerHost.cpp
     sandbox/player_args_tests.cpp

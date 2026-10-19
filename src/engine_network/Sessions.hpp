@@ -23,6 +23,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <deque>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -34,6 +35,15 @@ namespace engine_network {
 // Bytes a second a session may send each peer: a join's snapshot drains in seconds, and flow
 // control still halves it on a bad link. A bare Endpoint keeps its own, smaller default.
 constexpr double kDefaultSendBudget = 1048576.0;   // bytes per second per client
+
+// How a client session meets the world it joins into.
+// - FromEmpty (--connect): the world was cleared before connecting. The accept
+//   makes it a Client and starts play while it is still empty.
+// - Swap (a script's Connections:Join): the world already plays standalone and
+//   stays exactly as it is until the whole snapshot is in. Then swap_for_client
+//   clears it, keeping what is Persistent, and it becomes a Client. A connection
+//   that ends never stops play, and the role goes back only if the swap ran.
+enum class ClientMode { FromEmpty, Swap };
 
 struct SessionConfig {
     // role is set by the session; the budget starts at kDefaultSendBudget.
@@ -48,6 +58,7 @@ struct SessionConfig {
     // into a busy world is progress, however long it takes.
     double max_stall_seconds = 30.0;
     std::size_t max_queued_bytes = 256u << 20;   // or when its queue holds more than this
+    ClientMode client_mode = ClientMode::FromEmpty;   // a client's; FromEmpty is --connect, as in 2c
 };
 
 // The server's side: each client that connects gets a Connection under
@@ -113,10 +124,11 @@ struct ClientStatus {
     std::string reason;
 };
 
-// The client's side: it connects, starts play while its world is still empty,
-// builds the world from the server's snapshot, then applies each tick's
-// changes. When the connection ends, play it started stops, the world role it
-// set goes back, and reason() says why.
+// The client's side: it connects, builds the world from the server's snapshot,
+// then applies each tick's changes. FromEmpty starts play while the world is
+// still empty; Swap swaps the playing world at the snapshot (see ClientMode).
+// When the connection ends, play it started stops, the world role it set goes
+// back, and reason() says why.
 class ClientSession : public engine_core::INetworkPump {
 public:
     ClientSession(engine_core::DataModel& game, std::unique_ptr<network::ISocket> socket, SessionConfig config);
@@ -143,6 +155,9 @@ public:
     network::Endpoint& endpoint();
     // A fresh one for each connect.
     ReplicaApplier& applier();
+    // Called on the simulation thread whenever state() or reason() changes, with both
+    // as they now are. It may unhook the session from the engine, but never destroy it.
+    std::function<void(ClientState, const std::string& reason)> on_state;
 
 private:
     void on_connected();
@@ -165,6 +180,8 @@ private:
     double now_ = 0.0;
     bool started_play_ = false;   // this connection started play, so its end stops it
     bool set_role_ = false;       // this connection made the world a Client, so its end puts previous_role_ back
+    // Swap mode: the applier's hook, run once the whole snapshot is in.
+    void swap_world();
     engine_core::WorldRole previous_role_ = engine_core::WorldRole::Standalone;
     std::unique_ptr<network::Endpoint> endpoint_;
 };

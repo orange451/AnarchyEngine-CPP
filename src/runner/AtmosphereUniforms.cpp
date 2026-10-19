@@ -30,6 +30,11 @@ void UploadAtmosphere(const AtmosphereLocations& where, const AtmosphereFrame& f
     glUniform1f(where.enabled, frame.enabled ? 1.f : 0.f);
     // The sampler points somewhere either way, so it never reads a unit holding a 2D texture.
     glUniform1i(where.sky, skyUnit);
+    if (frame.skyCube != 0) {
+        glActiveTexture(GL_TEXTURE0 + static_cast<GLenum>(skyUnit));
+        glBindTexture(RT_GL_TEXTURE_CUBE_MAP, frame.skyCube);
+        glActiveTexture(GL_TEXTURE0);
+    }
     if (!frame.enabled) {
         return;
     }
@@ -47,11 +52,6 @@ void UploadAtmosphere(const AtmosphereLocations& where, const AtmosphereFrame& f
     glUniformMatrix3fv(where.viewToSky, 1, GL_FALSE, frame.viewToSky);
     glUniform3fv(where.skyColor, 1, frame.skyColor);
     glUniform1f(where.skyMaxLod, frame.skyMaxLod);
-    if (frame.skyCube != 0) {
-        glActiveTexture(GL_TEXTURE0 + static_cast<GLenum>(skyUnit));
-        glBindTexture(RT_GL_TEXTURE_CUBE_MAP, frame.skyCube);
-        glActiveTexture(GL_TEXTURE0);
-    }
 }
 
 }  // namespace runner

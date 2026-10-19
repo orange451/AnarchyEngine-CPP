@@ -23,22 +23,20 @@ SceneAtmosphere ToSceneAtmosphere(const engine_core::VisualAtmosphere& row) {
 }
 
 float AtmosphereTransmittance(float sigma0, float falloff, float heightAboveBase, float dy, float distance) {
-    if (distance <= 0.f) {
+    if (distance <= 0.f || sigma0 <= 0.f) {
         return 1.f;
     }
-    // The air where the ray starts, along the ray's first unit.
-    const float start = sigma0 * std::exp(std::min(-falloff * heightAboveBase, kAtmosphereMaxExponent));
-    // (1 - exp(-x)) / x: how the air thins or thickens over the ray, as a share of the start's.
+    // (1 - exp(-y)) / y for y = |falloff * dy * distance|: how the air thins
+    // over the ray, as a share of the start's, 0 to 1, never overflowing.
     const float x = falloff * dy * distance;
-    float spread;
-    if (std::fabs(x) < kAtmosphereSeriesBelow) {
-        spread = 1.f - 0.5f * x;
-    } else {
-        // Climbing down far enough, exp(-x) overflows; the air there is past all light anyway.
-        spread = -std::expm1(std::min(-x, kAtmosphereMaxExponent)) / x;
-    }
-    const float depth = start * distance * spread;
-    return std::exp(-std::min(depth, kAtmosphereMaxExponent));
+    const float y = std::fabs(x);
+    const float shape = y < kAtmosphereSeriesBelow ? 1.f - 0.5f * y : -std::expm1(-y) / y;
+    // The air along the ray, as a log, so no one part overflows or underflows
+    // on its own: the air where the ray starts, its length, its shape, and,
+    // climbing down, the exp(|x|) the air thickens by.
+    const float logDepth = std::log(sigma0 * distance) - falloff * heightAboveBase + std::max(-x, 0.f) + std::log(shape);
+    const float depth = std::exp(std::min(logDepth, std::log(kAtmosphereMaxDepth)));
+    return std::exp(-depth);
 }
 
 float AtmosphereSunLobe(float cosAngle) {

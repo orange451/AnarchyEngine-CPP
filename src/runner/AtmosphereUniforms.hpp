@@ -32,6 +32,7 @@ struct AtmosphereFrame {
     float viewToSky[9] = {1.f, 0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 1.f};
     float skyColor[3] = {1.f, 1.f, 1.f};
     float skyMaxLod = 0.f;
+    // Bound even with no air; 0 binds nothing.
     unsigned skyCube = 0;
 };
 
@@ -60,7 +61,7 @@ AtmosphereLocations FindAtmosphere(unsigned program);
 
 // Uploads frame into the program in use at where, and binds its cube to
 // skyUnit, a unit the program samples nothing else from (or the same cube).
-// With the air off it uploads only uAtmosphereEnabled.
+// With the air off it uploads only uAtmosphereEnabled, and still binds the cube.
 void UploadAtmosphere(const AtmosphereLocations& where, const AtmosphereFrame& frame, int skyUnit);
 
 }  // namespace runner

@@ -32,21 +32,24 @@ uniform vec3 uAtmosphereSkyColor;
 uniform float uAtmosphereSkyMaxLod;
 uniform samplerCube uAtmosphereSky;
 
-const float kAtmosphereMaxExponent = 80.0;
+const float kAtmosphereMaxDepth = 80.0;
 const float kAtmosphereSeriesBelow = 1e-4;
 
 // How much light gets through distance units of air along a ray that climbs
 // dy per unit, from the camera.
 float atmosphereTransmittance(float dy, float distance) {
-    if (distance <= 0.0) {
+    if (distance <= 0.0 || uAtmosphereSigma0 <= 0.0) {
         return 1.0;
     }
-    float start = uAtmosphereSigma0 * exp(min(-uAtmosphereFalloff * uAtmosphereHeight, kAtmosphereMaxExponent));
+    // (1 - exp(-y)) / y: how the air thins over the ray, 0 to 1.
     float x = uAtmosphereFalloff * dy * distance;
-    float spread = abs(x) < kAtmosphereSeriesBelow ? 1.0 - 0.5 * x
-                                                    : (1.0 - exp(min(-x, kAtmosphereMaxExponent))) / x;
-    float depth = start * distance * spread;
-    return exp(-min(depth, kAtmosphereMaxExponent));
+    float y = abs(x);
+    float shape = y < kAtmosphereSeriesBelow ? 1.0 - 0.5 * y : (1.0 - exp(-y)) / y;
+    // As a log, so no one part overflows or underflows on its own.
+    float logDepth = log(uAtmosphereSigma0 * distance) - uAtmosphereFalloff * uAtmosphereHeight + max(-x, 0.0) +
+                     log(shape);
+    float depth = exp(min(logDepth, log(kAtmosphereMaxDepth)));
+    return exp(-depth);
 }
 
 // The air between the camera and a point distance units away along the unit

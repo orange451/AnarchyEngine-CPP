@@ -2180,6 +2180,9 @@ void Renderer::bindSky(const Program& program) {
 void Renderer::prepareAtmosphere(const LightDraw* lights, int lightCount) {
     const SceneAtmosphere& air = lighting_.atmosphere;
     atmosphere_ = AtmosphereFrame{};
+    // A cube is bound for the air's sampler even with no air: a sampler with
+    // nothing whole bound makes macOS's driver complain, as in bindSky.
+    atmosphere_.skyCube = blackCube_;
     if (!air.enabled) {
         return;
     }

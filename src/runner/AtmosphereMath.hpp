@@ -32,9 +32,9 @@ SceneAtmosphere ToSceneAtmosphere(const engine_core::VisualAtmosphere& row);
 constexpr float kAtmosphereDensityScale = 0.016f;
 // How far away the sky is taken to be, in units, when the air hazes it.
 constexpr float kAtmosphereSkyDistance = 20000.f;
-// The height term's exponent never goes past this, so a camera far below
-// BaseHeight sees thick air, not an overflow.
-constexpr float kAtmosphereMaxExponent = 80.f;
+// The air along a ray is never taken as deeper than this: past it no light
+// gets through anyway, and a camera far below BaseHeight does not overflow.
+constexpr float kAtmosphereMaxDepth = 80.f;
 // Below this |falloff * dy * distance| the closed form's 0 / 0 is its series.
 constexpr float kAtmosphereSeriesBelow = 1e-4f;
 

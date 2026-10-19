@@ -78,8 +78,10 @@ void main() {
             return;
         }
         vec3 sky = max(texture(uAccumulation, vUv).rgb, 0.0);
-        vec4 haze = atmosphereAt(normalize(viewPositionAt(vUv, 1.0)), uAtmosphereSkyDistance);
-        sky = mix(sky, sky * haze.a + haze.rgb, uAtmosphereSkyHaze);
+        if (uAtmosphereEnabled > 0.5) {
+            vec4 haze = atmosphereAt(normalize(viewPositionAt(vUv, 1.0)), uAtmosphereSkyDistance);
+            sky = mix(sky, sky * haze.a + haze.rgb, uAtmosphereSkyHaze);
+        }
         outColor = vec4(sky * (1.0 - seeThrough.a) + seeThrough.rgb, 1.0);
         return;
     }

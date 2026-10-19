@@ -15,8 +15,7 @@ namespace {
 
 // The same transmittance by brute force: the density summed along the ray in
 // small steps, in double.
-double Integrated(double sigma0, double falloff, double height, double dy, double distance) {
-    const int steps = 1000;
+double Integrated(double sigma0, double falloff, double height, double dy, double distance, int steps = 1000) {
     double depth = 0.0;
     for (int i = 0; i < steps; ++i) {
         const double t = (i + 0.5) / steps * distance;
@@ -60,6 +59,19 @@ TEST_CASE("ATMM3 a camera far below the base height stays finite", "[atmosphere-
     REQUIRE(std::isfinite(down));
     REQUIRE(down >= 0.f);
     REQUIRE(AtmosphereTransmittance(0.01f, 0.05f, 10.f, 0.3f, 0.f) == 1.f);
+}
+
+TEST_CASE("ATMM6 a camera far above the base height still sees the air below", "[atmosphere-math]") {
+    // Straight down from 9000 units through air that thins fast: the whole column is sigma0 / falloff deep.
+    for (float falloff : {0.01f, 0.2f}) {
+        INFO(falloff);
+        const double expected = Integrated(0.004, falloff, 9000.0, -1.0, 9000.0, 1000000);
+        REQUIRE(expected < 0.99);
+        REQUIRE(AtmosphereTransmittance(0.004f, falloff, 9000.f, -1.f, 9000.f) == Approx(expected).margin(1e-3));
+    }
+    // Down at a slant from high up, as a camera over a misty valley.
+    const double slant = Integrated(0.01, 0.2, 500.0, -0.5, 1000.0, 1000000);
+    REQUIRE(AtmosphereTransmittance(0.01f, 0.2f, 500.f, -0.5f, 1000.f) == Approx(slant).margin(1e-3));
 }
 
 TEST_CASE("ATMM4 air thins with height", "[atmosphere-math]") {

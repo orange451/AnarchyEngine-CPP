@@ -270,13 +270,31 @@ bool export_game(const GameExportRequest& request, fs::path& written, std::strin
         return false;
     }
     fs::create_directories(output.parent_path(), failure);
+    // The game's own path is checked before either file is written.
 #if defined(__APPLE__)
     // Only an earlier export is replaced: a bundle with a pack in it.
+    if (fs::exists(output, failure) &&
+        !fs::is_regular_file(output / "Contents" / "Resources" / runner::kBundlePack, failure)) {
+        error = utf8_path(output) + " is already there, and is not an exported game";
+        return false;
+    }
+#else
+    if (fs::is_directory(output, failure)) {
+        error = utf8_path(output) + " is a folder";
+        return false;
+    }
+#endif
+    // The server goes first, with the same pack, so the game is served as it
+    // plays. A server stays up while its game is played and exported again, so
+    // a running "<Name> Server" is the likelier to hold its file open; written
+    // first, its refusal fails the export before the game changes, rather than
+    // leaving a new game beside an old server. The server is written beside
+    // itself and renamed into place, so it is never half written.
+    if (!runner::write_game_pack(server, files, serverOutput, error)) {
+        return false;
+    }
+#if defined(__APPLE__)
     if (fs::exists(output, failure)) {
-        if (!fs::is_regular_file(output / "Contents" / "Resources" / runner::kBundlePack, failure)) {
-            error = utf8_path(output) + " is already there, and is not an exported game";
-            return false;
-        }
         fs::remove_all(output, failure);
         if (failure) {
             error = "cannot replace " + utf8_path(output) + ": " + failure.message();
@@ -288,18 +306,10 @@ bool export_game(const GameExportRequest& request, fs::path& written, std::strin
         return false;
     }
 #else
-    if (fs::is_directory(output, failure)) {
-        error = utf8_path(output) + " is a folder";
-        return false;
-    }
     if (!runner::write_game_pack(player, files, output, error)) {
         return false;
     }
 #endif
-    // The same pack in a copy of the server, so the game is served as it plays.
-    if (!runner::write_game_pack(server, files, serverOutput, error)) {
-        return false;
-    }
     written = output;
     return true;
 }

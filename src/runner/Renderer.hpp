@@ -1059,6 +1059,8 @@ private:
     static constexpr int kProbeSlots = 3;
     unsigned probeTargets_[kProbeSlots] = {0, 0, 0};
     unsigned probeFbos_[kProbeSlots] = {0, 0, 0};
+    // Each slot's texel read back into a buffer on the GPU's own time, mapped once its fence passes.
+    unsigned probeBuffers_[kProbeSlots] = {0, 0, 0};
     RtGLsyncObject* probeFences_[kProbeSlots] = {nullptr, nullptr, nullptr};
     bool probeFilled_[kProbeSlots] = {false, false, false};
     int probeNext_ = 0;

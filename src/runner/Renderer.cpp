@@ -1574,12 +1574,18 @@ void Renderer::copyProbe(int paneX, int paneY, int paneWidth, int paneHeight, do
     }
     if (probeFbos_[0] == 0) {
         glGenFramebuffers(kProbeSlots, probeFbos_);
+        glGenBuffers(kProbeSlots, probeBuffers_);
         for (int slot = 0; slot < kProbeSlots; ++slot) {
+            glBindBuffer(RT_GL_PIXEL_PACK_BUFFER, probeBuffers_[slot]);
+            glBufferData(RT_GL_PIXEL_PACK_BUFFER, sizeof(float), nullptr, RT_GL_STREAM_READ);
             probeTargets_[slot] = MakeTarget(RT_GL_R32F, RT_GL_RED, GL_FLOAT, 1, 1);
             glBindFramebuffer(RT_GL_FRAMEBUFFER, probeFbos_[slot]);
             if (!Attach({probeTargets_[slot]}, 0)) {
                 glBindFramebuffer(RT_GL_FRAMEBUFFER, gbufferFbo_);
+                glBindBuffer(RT_GL_PIXEL_PACK_BUFFER, 0);
                 glDeleteFramebuffers(kProbeSlots, probeFbos_);
+                glDeleteBuffers(kProbeSlots, probeBuffers_);
+                std::fill(std::begin(probeBuffers_), std::end(probeBuffers_), 0u);
                 for (unsigned& target : probeTargets_) {
                     DeleteTexture(target);
                 }
@@ -1588,6 +1594,7 @@ void Renderer::copyProbe(int paneX, int paneY, int paneWidth, int paneHeight, do
                 return;
             }
         }
+        glBindBuffer(RT_GL_PIXEL_PACK_BUFFER, 0);
     }
     // One texel of the finished depth into the float target, with nothing
     // but the target and the viewport changed for the passes after.
@@ -1598,6 +1605,12 @@ void Renderer::copyProbe(int paneX, int paneY, int paneWidth, int paneHeight, do
     BindTexture(kUnitDepth, depthTexture_);
     glBindVertexArray(emptyVao_);
     glDrawArrays(GL_TRIANGLES, 0, 3);
+    // Read into the slot's buffer, which waits for nothing now: takeProbe
+    // maps it once the fence says the GPU got this far. A read into memory
+    // there instead waited for every draw before it, a millisecond a paint.
+    glBindBuffer(RT_GL_PIXEL_PACK_BUFFER, probeBuffers_[probeNext_]);
+    glReadPixels(0, 0, 1, 1, RT_GL_RED, GL_FLOAT, nullptr);
+    glBindBuffer(RT_GL_PIXEL_PACK_BUFFER, 0);
     glBindFramebuffer(RT_GL_FRAMEBUFFER, gbufferFbo_);
     glViewport(0, 0, targetWidth_, targetHeight_);
     probeCopied_ = true;
@@ -1621,8 +1634,12 @@ void Renderer::takeProbe() {
             continue;
         }
         float depth = 1.f;
-        glBindFramebuffer(RT_GL_READ_FRAMEBUFFER, probeFbos_[slot]);
-        glReadPixels(0, 0, 1, 1, RT_GL_RED, GL_FLOAT, &depth);
+        glBindBuffer(RT_GL_PIXEL_PACK_BUFFER, probeBuffers_[slot]);
+        if (const void* mapped = glMapBufferRange(RT_GL_PIXEL_PACK_BUFFER, 0, sizeof(float), RT_GL_MAP_READ_BIT)) {
+            std::memcpy(&depth, mapped, sizeof(float));
+            glUnmapBuffer(RT_GL_PIXEL_PACK_BUFFER);
+        }
+        glBindBuffer(RT_GL_PIXEL_PACK_BUFFER, 0);
         probeTaken_ = depth;
         glDeleteSync(probeFences_[slot]);
         probeFences_[slot] = nullptr;
@@ -3396,6 +3413,8 @@ void Renderer::shutdown() {
     if (probeFbos_[0] != 0) {
         glDeleteFramebuffers(kProbeSlots, probeFbos_);
         std::fill(std::begin(probeFbos_), std::end(probeFbos_), 0u);
+        glDeleteBuffers(kProbeSlots, probeBuffers_);
+        std::fill(std::begin(probeBuffers_), std::end(probeBuffers_), 0u);
     }
     probeCopied_ = false;
     probeRefused_ = false;

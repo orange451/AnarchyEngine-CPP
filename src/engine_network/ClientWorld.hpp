@@ -10,8 +10,8 @@
 namespace engine_network {
 
 // Destroys every instance a server would replicate (every non-service
-// descendant of game, outside Core), leaving the services and their
-// properties, so a client starts from what the snapshot binds.
+// descendant of game, outside Core) and puts every service back at its
+// defaults, so a client starts from what the snapshot binds.
 void clear_for_client(engine_core::DataModel& game);
 
 }  // namespace engine_network

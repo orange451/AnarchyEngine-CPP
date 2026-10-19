@@ -45,7 +45,7 @@ void write_text(const std::filesystem::path& path, const std::string& text) {
 
 }  // namespace
 
-TEST_CASE("RP54 clear_for_client leaves only services", "[replication][session]") {
+TEST_CASE("RP54 clear_for_client leaves only services, each at its defaults", "[replication][session]") {
     ScriptRig rig;
     DataModel& game = rig.game;
     const InstanceId workspace = game.scene_service("Workspace");
@@ -73,7 +73,8 @@ TEST_CASE("RP54 clear_for_client leaves only services", "[replication][session]"
     engine_network::clear_for_client(game);
 
     for (const InstanceId id : services) REQUIRE(game.alive(id));
-    REQUIRE(static_cast<engine_core::Lighting*>(game.instance(game.service("Lighting")))->exposure() == 2.5);
+    REQUIRE(static_cast<engine_core::Lighting*>(game.instance(game.service("Lighting")))->exposure() ==
+            engine_core::Lighting::kDefaultExposure);
     std::vector<InstanceId> after;
     collect(game, 0, after);
     for (const InstanceId id : after) {

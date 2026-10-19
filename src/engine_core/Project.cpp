@@ -1211,11 +1211,7 @@ void clear_world(DataModel& world) {
             world.destroy(id);
         }
     }
-    for (const ServiceSpec& spec : kServices) {
-        if (DataModel* service = world.instance(world.service(spec.class_name))) {
-            reset_service(*service);
-        }
-    }
+    Project::reset_services(world);
     // The camera a view last used belongs to the place being cleared.
     if (auto* workspace = dynamic_cast<Workspace*>(world.instance(world.scene_service("Workspace")))) {
         workspace->set_current_camera(0);
@@ -2100,6 +2096,14 @@ void Project::reset_place(DataModel& game) {
     add_default_camera(game);
     add_default_light(game);
     rebuild.finish();
+}
+
+void Project::reset_services(DataModel& game) {
+    for (const ServiceSpec& spec : kServices) {
+        if (DataModel* service = game.instance(game.service(spec.class_name))) {
+            reset_service(*service);
+        }
+    }
 }
 
 InstanceId Project::add_default_camera(DataModel& game) {

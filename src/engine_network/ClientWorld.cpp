@@ -1,5 +1,7 @@
 #include "ClientWorld.hpp"
 
+#include "Project.hpp"
+
 #include <vector>
 
 namespace engine_network {
@@ -33,6 +35,10 @@ void clear_for_client(engine_core::DataModel& game) {
             game.destroy_tree(id);
         }
     }
+    // A snapshot's service records carry only the values that differ from the
+    // defaults, so a value the client's project set would outlive one the server
+    // put back to its default.
+    engine_core::Project::reset_services(game);
 }
 
 }  // namespace engine_network

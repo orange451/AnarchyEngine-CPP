@@ -4,9 +4,11 @@
 
 #include "replication_support.hpp"
 
+#include "ClientWorld.hpp"
 #include "Connections.hpp"
 #include "Folder.hpp"
 #include "GameIdentity.hpp"
+#include "Lighting.hpp"
 #include "Sessions.hpp"
 #include "Socket.hpp"
 
@@ -591,4 +593,36 @@ TEST_CASE("RP53 status() is safe from another thread", "[replication][session]")
     REQUIRE(reads.load() > 1);
     REQUIRE(last.state == engine_network::ClientState::Disconnected);
     REQUIRE(last.reason == "You left the game");
+}
+
+TEST_CASE("RP63 a service value the server put back to its default reaches a client whose project set it", "[replication][session]") {
+    using engine_core::Lighting;
+    Net net;
+    // The server's project set Exposure, and a server script put it back before anyone joined.
+    auto* server_lighting = static_cast<Lighting*>(net.server.game.instance(net.server.game.service("Lighting")));
+    REQUIRE_FALSE(server_lighting->set_exposure(2.5));
+    REQUIRE_FALSE(server_lighting->set_ambient({0.f, 0.f, 1.f, 1.f}));
+    net.tick();
+    REQUIRE_FALSE(server_lighting->set_exposure(Lighting::kDefaultExposure));
+    REQUIRE_FALSE(server_lighting->set_ambient(Lighting::kDefaultAmbient));
+    net.tick();
+    // The client loaded the same project, so it starts with the project's values.
+    net.clients.push_back(std::make_unique<Client>());
+    Client& client = *net.clients.back();
+    auto* client_lighting = static_cast<Lighting*>(client.rig.game.instance(client.rig.game.service("Lighting")));
+    REQUIRE_FALSE(client_lighting->set_exposure(2.5));
+    REQUIRE_FALSE(client_lighting->set_ambient({0.f, 0.f, 1.f, 1.f}));
+    engine_network::clear_for_client(client.rig.game);
+    engine_network::SessionConfig config;
+    config.endpoint.identity = identity();
+    client.session = std::make_unique<engine_network::ClientSession>(client.rig.game, net.hub.open(client_address(0)), config);
+    REQUIRE(client.session->connect(kServer, net.now));
+    net.run(0.5);
+    REQUIRE(client.session->state() == engine_network::ClientState::Joined);
+    REQUIRE(client_lighting->exposure() == Lighting::kDefaultExposure);
+    const engine_core::ColorRgb ambient = client_lighting->ambient();
+    REQUIRE(ambient.r == Lighting::kDefaultAmbient.r);
+    REQUIRE(ambient.g == Lighting::kDefaultAmbient.g);
+    REQUIRE(ambient.b == Lighting::kDefaultAmbient.b);
+    net.same(client);
 }

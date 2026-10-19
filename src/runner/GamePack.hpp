@@ -70,6 +70,13 @@ bool extract_game_pack(const std::filesystem::path& file, const PackLocation& wh
 bool unpack_game(const std::filesystem::path& file, const PackLocation& where, const std::filesystem::path& cache,
                  std::filesystem::path& folder, std::string& error);
 
+// A pack holds files, not folders, so a project whose resources folder held
+// nothing packed, such as only .gitkeep files, comes out with none. This makes
+// it again, empty, so it hashes as the original did; a missing one hashes to 0
+// and is refused. AnarchyServer and AnarchyPlayer call it on an unpacked game
+// before taking its identity.
+void restore_packed_resources(const std::filesystem::path& resources);
+
 // Where AnarchyPlayer saves a profile capture: the project folder it plays, or,
 // for a packed game, the folder holding the program, or holding its .app on a Mac.
 std::filesystem::path player_capture_folder(const std::filesystem::path& project, bool packed,

@@ -153,10 +153,9 @@ std::unique_ptr<ServerHost> ServerHost::open(const ServerOptions& options, std::
         error = std::string("The project could not be opened: ") + load_failure.what();
         return nullptr;
     }
-    // A pack holds files, not folders, so a project whose resources folder was
-    // empty comes out with none. Made again here, it hashes as the empty original.
+    // A packed game's empty resources folder comes out missing; made again, it hashes as the original.
     if (options.project.empty()) {
-        fs::create_directories(host->project_->resources_root(), failure);
+        runner::restore_packed_resources(host->project_->resources_root());
     }
     // Only a client of this exact game, version, and resources may join.
     engine_network::SessionConfig config;

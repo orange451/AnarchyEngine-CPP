@@ -1,4 +1,5 @@
 #include "ide/IdeResources.hpp"
+#include "player/PlayerArgs.hpp"
 #include "jadefx/jadefx.hpp"
 #include "runner/GamePack.hpp"
 #include "runner/GameView.hpp"
@@ -12,12 +13,18 @@
 #include "ScriptRuntime.hpp"
 #include "profiler/ProfileJson.hpp"
 
+#include "ClientWorld.hpp"
+#include "ProjectIdentity.hpp"
+#include "Sessions.hpp"
+#include "Socket.hpp"
+
 #include <fstream>
 #include <ctime>
 #include <cstdio>
 #include <exception>
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <string>
 #include <system_error>
 
@@ -36,6 +43,9 @@ namespace fs = std::filesystem;
 // Frames per second the player draws at most, the studio's default.
 constexpr double kFrameRate = 120.0;
 
+// Shown over the game while it joins a server.
+constexpr const char* kConnecting = "Connecting…";
+
 // The player draws only the game, so its stylesheet is only the view's own
 // background and the message shown when there is no game to play.
 constexpr const char* kStylesheet = R"(
@@ -53,12 +63,11 @@ constexpr const char* kStylesheet = R"(
 
 // The project to play: the folder named on the command line, or else the
 // game packed into this program, or on a Mac into its bundle, extracted.
-fs::path FindGame(int argc, char** argv, std::string& error, bool& packed) {
+fs::path FindGame(const fs::path& folder, std::string& error, bool& packed) {
     packed = false;
-    // A folder, for playing a project as the studio saved it. Finder may pass
-    // -psn_ arguments; flags are not folders.
-    if (argc > 1 && argv[1] != nullptr && argv[1][0] != '-') {
-        return fs::path(argv[1]);
+    // A folder, for playing a project as the studio saved it.
+    if (!folder.empty()) {
+        return folder;
     }
     const fs::path self = ide::executable_path();
     fs::path packs[] = {self, self.empty() ? fs::path() : self.parent_path() / ".." / "Resources" / runner::kBundlePack};
@@ -76,18 +85,18 @@ fs::path FindGame(int argc, char** argv, std::string& error, bool& packed) {
             error = "This system has no temporary folder to unpack the game into.";
             return {};
         }
-        fs::path folder;
-        if (!runner::unpack_game(pack, *where, temp / "AnarchyEngine" / "games", folder, error)) {
+        fs::path unpacked;
+        if (!runner::unpack_game(pack, *where, temp / "AnarchyEngine" / "games", unpacked, error)) {
             error = "The game could not be unpacked: " + error;
             return {};
         }
         // The shaders it was exported with come before any beside the program.
         // JadeFX looks for its own in shaders/ under the working folder.
-        const fs::path resources = folder / runner::kPackedResources;
+        const fs::path resources = unpacked / runner::kPackedResources;
         ide::set_resource_override(resources);
         fs::current_path(resources, failure);
         packed = true;
-        return folder / runner::kPackedProject;
+        return unpacked / runner::kPackedProject;
     }
     error = "There is no game in this player. Export one from the studio with File > Export Game, "
             "or start the player with a project folder: AnarchyPlayer <folder>";
@@ -107,9 +116,21 @@ void PrintOutput(engine_core::ScriptRuntime& scripts) {
 // studio, only the Scene View, playing from the first frame.
 class AnarchyPlayer : public jadefx::Application {
 public:
-    // root is the project to play, or error says why there is none.
-    AnarchyPlayer(fs::path root, std::string error, bool packed)
-        : root_(std::move(root)), error_(std::move(error)), packed_(packed) {}
+    // root is the project to play, or error says why there is none. connect is
+    // the server to join, "host:port"; empty, the game plays on its own.
+    AnarchyPlayer(fs::path root, std::string error, bool packed, std::string connect)
+        : root_(std::move(root)), error_(std::move(error)), packed_(packed), connect_(std::move(connect)) {}
+
+    // The session never outlives the Game it writes to, and the engine never
+    // pumps a session that is gone: the engine stops, lets go of it, then it goes.
+    ~AnarchyPlayer() override {
+        if (session_ != nullptr) {
+            engine_core::Engine& engine = runner_.simulation();
+            engine.stop();
+            engine.set_network(nullptr);
+            session_.reset();
+        }
+    }
 
     void start(jadefx::Stage& stage, int, char**) override {
         const jadefx::Size size = defaultWindowSize();
@@ -134,6 +155,14 @@ public:
             showMessage(stage, std::move(scene), error);
             return;
         }
+        // Joining a server: the world is the server's, so the project only says
+        // which game this is, and its own place is cleared before it connects.
+        network::Address server;
+        if (!connect_.empty() && !joinServer(engine, server, error)) {
+            std::fprintf(stderr, "%s\n", error.c_str());
+            showMessage(stage, std::move(scene), error);
+            return;
+        }
         // Grid, outlines, and the camera list belong to the studio.
         runner_.setSceneGrid(false);
         auto view = jadefx::make<runner::GameView>(runner_, project_->name());
@@ -141,25 +170,55 @@ public:
         view->setPrefWidthRatio(1);
         view->setPrefHeightRatio(1);
         runner::GameView* shown = view.get();
-        scene->setRoot(std::move(view));
+        if (session_ != nullptr) {
+            // The game, under a message that says how the connection is going.
+            auto stack = jadefx::make<jadefx::StackPane>();
+            stack->setPrefWidthRatio(1);
+            stack->setPrefHeightRatio(1);
+            stack->getChildren().add(std::move(view));
+            auto overlay = jadefx::make<jadefx::VBox>();
+            overlay->getClassList().add("player-message");
+            overlay->setPrefWidthRatio(1);
+            overlay->setPrefHeightRatio(1);
+            overlay->setAlignment(jadefx::Pos::Center);
+            auto label = jadefx::make<jadefx::Label>(kConnecting);
+            label_ = label.get();
+            overlay->getChildren().add(std::move(label));
+            overlay_ = overlay.get();
+            stack->getChildren().add(std::move(overlay));
+            scene->setRoot(std::move(stack));
+        } else {
+            scene->setRoot(std::move(view));
+        }
         stage.setScene(std::move(scene));
         stage.setTitle(project_->name());
         // Paced as the studio paces it: no swap wait, frames capped at kFrameRate.
         // Pacing by the swap interval held the player near 60 on a Mac laptop.
         stage.setMaxFrameRate(kFrameRate);
         engine_core::ScriptRuntime* scripts = &engine.scripts();
-        stage.setFrameTail([scripts] { PrintOutput(*scripts); });
+        stage.setFrameTail([this, scripts] {
+            PrintOutput(*scripts);
+            showStatus();
+        });
         // The window's own work each frame, on the profiler's UI row.
         runner::profile_ui_frames(stage);
         // The view's first paint is what lets the engine loop leave its wait.
         runner_.start();
-        // As Test does in the studio: the place as loaded is what plays.
-        engine.on_simulation([](engine_core::DataModel& game) {
-            if (!game.simulation_running()) {
-                game.capture_place();
-                game.start_simulation();
-            }
-        });
+        if (session_ != nullptr) {
+            // The session starts play itself once the server lets it in.
+            engine_network::ClientSession* session = session_.get();
+            engine.on_simulation([session, server](engine_core::DataModel&) {
+                session->connect(server, engine_core::Engine::network_now());
+            });
+        } else {
+            // As Test does in the studio: the place as loaded is what plays.
+            engine.on_simulation([](engine_core::DataModel& game) {
+                if (!game.simulation_running()) {
+                    game.capture_place();
+                    game.start_simulation();
+                }
+            });
+        }
         engine.resume();
         // Cmd+F6 shows the profiler; Save, while paused, writes beside the game.
         runner::ProfilerUi::get().save = [this] {
@@ -189,6 +248,64 @@ protected:
     int swapInterval() const override { return 0; }
 
 private:
+    // Gets ready to join connect_: this game's identity, the server's address,
+    // an empty world, and a session the engine pumps. False, with why, when the
+    // game cannot say which it is, the server is not found, or there is no socket.
+    bool joinServer(engine_core::Engine& engine, network::Address& server, std::string& error) {
+        // A packed game's empty resources folder comes out missing; made again, it hashes as the original.
+        if (packed_) {
+            runner::restore_packed_resources(project_->resources_root());
+        }
+        engine_network::SessionConfig config;
+        if (!engine_network::project_identity(*project_, config.endpoint.identity, error)) {
+            return false;
+        }
+        // The resolver blocks, once, before the game's first frame.
+        std::string why;
+        const std::optional<network::Address> found = network::resolve(connect_, why);
+        if (!found) {
+            error = "Could not find the server: " + why;
+            return false;
+        }
+        std::unique_ptr<network::UdpSocket> socket = network::UdpSocket::open(0, why);
+        if (!socket) {
+            error = "Could not open a socket to join the server: " + why;
+            return false;
+        }
+        server = *found;
+        engine_network::clear_for_client(engine.datamodel());
+        session_ = std::make_unique<engine_network::ClientSession>(engine.datamodel(), std::move(socket), config);
+        engine.set_network(session_.get());
+        return true;
+    }
+
+    // Each frame, the overlay follows the session: shown while connecting, gone
+    // once the world has arrived, and back with the reason when the connection ends.
+    void showStatus() {
+        if (session_ == nullptr || overlay_ == nullptr) {
+            return;
+        }
+        const engine_network::ClientStatus status = session_->status();
+        if (status.state == shownState_ && status.reason == shownReason_) {
+            return;
+        }
+        shownState_ = status.state;
+        shownReason_ = status.reason;
+        switch (status.state) {
+        case engine_network::ClientState::Joined:
+            overlay_->setVisible(false);
+            break;
+        case engine_network::ClientState::Disconnected:
+            label_->setText(status.reason);
+            overlay_->setVisible(true);
+            break;
+        default:
+            label_->setText(kConnecting);
+            overlay_->setVisible(true);
+            break;
+        }
+    }
+
     static void showMessage(jadefx::Stage& stage, std::shared_ptr<jadefx::Scene> scene, const std::string& text) {
         // A label does not wrap, so each sentence gets a line of its own.
         auto pane = jadefx::make<jadefx::VBox>();
@@ -215,8 +332,15 @@ private:
     fs::path root_;
     std::string error_;
     bool packed_ = false;
+    std::string connect_;
     runner::Runner runner_;
     std::unique_ptr<engine_core::Project> project_;
+    // Joining a server: the session, and the overlay that shows how it is going.
+    std::unique_ptr<engine_network::ClientSession> session_;
+    jadefx::Node* overlay_ = nullptr;
+    jadefx::Label* label_ = nullptr;
+    engine_network::ClientState shownState_ = engine_network::ClientState::Idle;
+    std::string shownReason_;
 };
 
 }  // namespace
@@ -226,7 +350,12 @@ int main(int argc, char** argv) {
     // before start, and a packed game's are only on disk once this is done.
     std::string error;
     bool packed = false;
-    fs::path root = FindGame(argc, argv, error, packed);
-    return jadefx::Application::launch(std::make_unique<AnarchyPlayer>(std::move(root), std::move(error), packed),
-                                       argc, argv);
+    fs::path root;
+    std::string connect;
+    if (const std::optional<player::PlayerArgs> args = player::parse_player_args(argc, argv, error)) {
+        root = FindGame(args->folder, error, packed);
+        connect = args->connect;
+    }
+    return jadefx::Application::launch(
+        std::make_unique<AnarchyPlayer>(std::move(root), std::move(error), packed, std::move(connect)), argc, argv);
 }

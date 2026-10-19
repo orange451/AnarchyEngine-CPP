@@ -220,6 +220,7 @@ endif()
 # with a project folder, it plays that folder instead.
 add_executable(AnarchyPlayer MACOSX_BUNDLE
     src/player/main.cpp
+    src/player/PlayerArgs.cpp
 )
 # The studio exports with the player beside it, so building the studio builds both.
 add_dependencies(AnarchyStudio AnarchyPlayer)
@@ -870,7 +871,8 @@ endif()
 target_link_libraries(studio PUBLIC studio_core jadefx amesh)
 
 target_link_libraries(AnarchyStudio PRIVATE studio)
-target_link_libraries(AnarchyPlayer PRIVATE studio)
+# --connect joins an AnarchyServer: the client session and its transport.
+target_link_libraries(AnarchyPlayer PRIVATE studio engine_network anarchy_network)
 
 # AMESH, the baked mesh format. Reading, writing, and validation need no
 # window or GL; GpuMesh (amesh_gl.cpp) builds into studio, beside the GL loader.
@@ -1269,6 +1271,8 @@ add_executable(sandbox
     sandbox/replication_bench_tests.cpp
     sandbox/server_tests.cpp
     src/server/ServerHost.cpp
+    sandbox/player_args_tests.cpp
+    src/player/PlayerArgs.cpp
 )
 target_link_libraries(sandbox PRIVATE studio_core anarchy_network engine_network Catch2::Catch2WithMain)
 # The dense views tests check flecs state the engine keeps private.

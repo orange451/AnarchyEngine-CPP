@@ -257,4 +257,14 @@ TEST_CASE("SV5 a game packed into a file serves as its folder would", "[server]"
     REQUIRE(served.game_id == identity.game_id);
     REQUIRE(served.version == identity.version);
     REQUIRE(served.resources_hash == identity.resources_hash);
+
+    // Each run's game has its own id, so its unpacked folder would pile up in the temp folder.
+    host.reset();
+    const std::optional<runner::PackLocation> where = runner::find_game_pack(pack);
+    fs::path unpacked;
+    std::error_code failure;
+    if (where && runner::unpack_game(pack, *where, fs::temp_directory_path(failure) / "AnarchyEngine" / "servers",
+                                     unpacked, error)) {
+        fs::remove_all(unpacked, failure);
+    }
 }

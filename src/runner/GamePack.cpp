@@ -359,6 +359,11 @@ bool unpack_game(const fs::path& file, const PackLocation& where, const fs::path
     return true;
 }
 
+void restore_packed_resources(const std::filesystem::path& resources) {
+    std::error_code failure;
+    fs::create_directories(resources, failure);
+}
+
 std::filesystem::path player_capture_folder(const std::filesystem::path& project, bool packed,
                                             const std::filesystem::path& executable) {
     if (!packed) {

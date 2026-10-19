@@ -55,7 +55,7 @@ Sub-projects 1 to 4 together make a playable networked game whose bodies react t
 
 A library under `src/network/` with no dependency on the engine: UDP sockets, packets with sequence numbers and piggybacked acks, an unreliable channel whose delivery the caller learns per packet, a reliable ordered message channel with fragmentation, flow control, a connect handshake that checks the game's identity, a network conditioner for testing, and bit-level serialization shared with the physics path. See its spec.
 
-### 2. Server and client
+### 2. Server and client (done, 2026-10-18)
 
 `AnarchyServer` runs a place headless; `AnarchyPlayer --connect` joins it and receives the filtered tree, then one change message per tick. `Script.RunContext` (Server, Client, Any) chooses where a script runs; `ServerStorage` never replicates; a hidden `Connections` service holds a `Connection` with a UUID per client and `LocalConnection` on the client. The engine has no players, names, or characters; those are the game's. See its spec, `2026-10-13-server-client-design.md`.
 

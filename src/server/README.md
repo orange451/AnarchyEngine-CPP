@@ -8,7 +8,7 @@ AnarchyServer [project folder] [--port N] [--max-connections 1-64] [--max-send B
 
 - `--port` defaults to 7777 (0 picks any free port), `--max-connections` to 64, and `--max-send` to 1048576 bytes a second for each client. Flow control still halves the budget on a lossy or slow link.
 - Started with no folder, it serves the game packed into its own file, as the player plays one. The game is unpacked under the temporary folder's `AnarchyEngine/servers`.
-- Exit codes: 2 for a bad argument (the usage line is printed), 1 when the project cannot be served (no project, no gameId, unreadable resources, port in use), 0 after Ctrl+C or SIGTERM.
+- Exit codes: 2 for a bad argument (the usage line is printed), 1 when the project cannot be served (no project, no gameId, unreadable resources, port in use), 0 after Ctrl+C or SIGTERM. A second Ctrl+C while it shuts down quits at once with 130.
 
 `ServerHost` does the work, so tests drive it without the program (`sandbox/server_tests.cpp`, tag `[server]`):
 

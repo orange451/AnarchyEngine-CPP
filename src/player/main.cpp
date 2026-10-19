@@ -14,7 +14,7 @@
 #include "ScriptRuntime.hpp"
 #include "profiler/ProfileJson.hpp"
 
-#include "ClientWorld.hpp"
+#include "ClientJoinHost.hpp"
 #include "ProjectIdentity.hpp"
 #include "Sessions.hpp"
 #include "Socket.hpp"
@@ -123,14 +123,16 @@ public:
     AnarchyPlayer(fs::path root, std::string error, bool packed, std::string connect)
         : root_(std::move(root)), error_(std::move(error)), packed_(packed), connect_(std::move(connect)) {}
 
-    // The session never outlives the Game it writes to, and the engine never
-    // pumps a session that is gone: the engine stops, lets go of it, then it goes.
+    // The host and its session never outlive the Game they write to, and the
+    // engine never pumps a session that is gone: the engine stops, the Game and
+    // the engine let go of the host, then it goes.
     ~AnarchyPlayer() override {
-        if (session_ != nullptr) {
+        if (host_ != nullptr) {
             engine_core::Engine& engine = runner_.simulation();
             engine.stop();
+            engine.datamodel().set_join_host(nullptr);
             engine.set_network(nullptr);
-            session_.reset();
+            host_.reset();
         }
     }
 
@@ -157,10 +159,23 @@ public:
             showMessage(stage, std::move(scene), error);
             return;
         }
+        // A packed game's empty resources folder comes out missing; made again, it hashes as the original.
+        if (packed_) {
+            runner::restore_packed_resources(project_->resources_root());
+        }
+        // Connections:Join, and --connect, go through one host, made before the
+        // engine starts since it binds a job. A game that cannot say which it is
+        // gets none, and a script's Join then says only a client can join.
+        network::GameIdentity identity;
+        fs::path resources;
+        std::string identityError;
+        if (engine_network::project_identity_unhashed(*project_, identity, resources, identityError)) {
+            host_ = std::make_unique<engine_network::ClientJoinHost>(engine, identity, resources);
+            engine.datamodel().set_join_host(host_.get());
+        }
         // Joining a server: the world is the server's, so the project only says
-        // which game this is, and its own place is cleared before it connects.
-        network::Address server;
-        if (!connect_.empty() && !joinServer(engine, server, error)) {
+        // which game this is, and its own place is cleared as it connects.
+        if (!connect_.empty() && !joinServer(identityError, error)) {
             std::fprintf(stderr, "%s\n", error.c_str());
             showMessage(stage, std::move(scene), error);
             return;
@@ -172,7 +187,7 @@ public:
         view->setPrefWidthRatio(1);
         view->setPrefHeightRatio(1);
         runner::GameView* shown = view.get();
-        if (session_ != nullptr) {
+        if (connecting_) {
             // The game, under a message that says how the connection is going.
             auto stack = jadefx::make<jadefx::StackPane>();
             stack->setPrefWidthRatio(1);
@@ -206,17 +221,8 @@ public:
         runner::profile_ui_frames(stage);
         // The view's first paint is what lets the engine loop leave its wait.
         runner_.start();
-        if (session_ != nullptr) {
-            // The session starts play itself once the server lets it in. A refused
-            // connect leaves it Disconnected with "Could not connect to the server",
-            // which the overlay shows in place of "Connecting…".
-            engine_network::ClientSession* session = session_.get();
-            engine.on_simulation([session, server](engine_core::DataModel&) {
-                if (!session->connect(server, engine_core::Engine::network_now())) {
-                    std::fprintf(stderr, "%s\n", session->reason().c_str());
-                }
-            });
-        } else {
+        // Joining, the session starts play itself once the server lets it in.
+        if (!connecting_) {
             // As Test does in the studio: the place as loaded is what plays.
             engine.on_simulation([](engine_core::DataModel& game) {
                 if (!game.simulation_running()) {
@@ -254,16 +260,15 @@ protected:
     int swapInterval() const override { return 0; }
 
 private:
-    // Gets ready to join connect_: this game's identity, the server's address,
-    // an empty world, and a session the engine pumps. False, with why, when the
-    // game cannot say which it is, the server is not found, or there is no socket.
-    bool joinServer(engine_core::Engine& engine, network::Address& server, std::string& error) {
-        // A packed game's empty resources folder comes out missing; made again, it hashes as the original.
-        if (packed_) {
-            runner::restore_packed_resources(project_->resources_root());
-        }
-        engine_network::SessionConfig config;
-        if (!engine_network::project_identity(*project_, config.endpoint.identity, error)) {
+    // Joins connect_ through the host, with the engine not yet started: the
+    // server's address, then an empty world and a FromEmpty session the engine
+    // pumps. False, with why, when the game cannot say which it is
+    // (identityError), the server is not found, the resources cannot be read, or
+    // there is no socket. A connect the endpoint refuses still goes on: the
+    // overlay shows "Could not connect to the server" in place of "Connecting…".
+    bool joinServer(const std::string& identityError, std::string& error) {
+        if (host_ == nullptr) {
+            error = identityError;
             return false;
         }
         // The resolver blocks, once, before the game's first frame.
@@ -273,25 +278,23 @@ private:
             error = "Could not find the server: " + why;
             return false;
         }
-        std::unique_ptr<network::UdpSocket> socket = network::UdpSocket::open(0, why);
-        if (!socket) {
-            error = "Could not open a socket to join the server: " + why;
-            return false;
+        if (!host_->connect_from_empty(*found, error)) {
+            if (host_->session() == nullptr) {
+                return false;
+            }
+            std::fprintf(stderr, "%s\n", error.c_str());
         }
-        server = *found;
-        engine_network::clear_for_client(engine.datamodel());
-        session_ = std::make_unique<engine_network::ClientSession>(engine.datamodel(), std::move(socket), config);
-        engine.set_network(session_.get());
+        connecting_ = true;
         return true;
     }
 
     // Each frame, the overlay follows the session: shown while connecting, gone
     // once the world has arrived, and back with the reason when the connection ends.
     void showStatus() {
-        if (session_ == nullptr || overlay_ == nullptr) {
+        if (host_ == nullptr || overlay_ == nullptr) {
             return;
         }
-        const engine_network::ClientStatus status = session_->status();
+        const engine_network::ClientStatus status = host_->status();
         if (status.state == shownState_ && status.reason == shownReason_) {
             return;
         }
@@ -341,8 +344,12 @@ private:
     std::string connect_;
     runner::Runner runner_;
     std::unique_ptr<engine_core::Project> project_;
-    // Joining a server: the session, and the overlay that shows how it is going.
-    std::unique_ptr<engine_network::ClientSession> session_;
+    // Connections:Join and --connect, through one session it owns. Null when
+    // the game cannot say which it is.
+    std::unique_ptr<engine_network::ClientJoinHost> host_;
+    // --connect only: the overlay shows how the connection is going. A script's
+    // join shows none, since the game draws its own loading screen.
+    bool connecting_ = false;
     jadefx::Node* overlay_ = nullptr;
     jadefx::Label* label_ = nullptr;
     engine_network::ClientState shownState_ = engine_network::ClientState::Idle;

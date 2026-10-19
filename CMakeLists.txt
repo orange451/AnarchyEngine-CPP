@@ -876,6 +876,8 @@ if(WIN32)
     target_link_libraries(studio_core PUBLIC ws2_32 crypt32)
 endif()
 target_link_libraries(studio PUBLIC studio_core jadefx amesh)
+# A test's Connections:Join goes through the client join host.
+target_link_libraries(studio PRIVATE engine_network)
 
 target_link_libraries(AnarchyStudio PRIVATE studio)
 # --connect joins an AnarchyServer: the client session and its transport.

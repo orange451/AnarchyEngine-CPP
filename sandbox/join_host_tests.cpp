@@ -7,6 +7,7 @@
 #include "ClientJoinHost.hpp"
 #include "Connections.hpp"
 #include "Engine.hpp"
+#include "FileBytes.hpp"
 #include "Folder.hpp"
 #include "GameIdentity.hpp"
 #include "Project.hpp"
@@ -89,10 +90,11 @@ struct JoinClient {
     InstanceId map = 0;
     InstanceId loading = 0;
 
-    explicit JoinClient(const network::GameIdentity& identity, bool play = true) {
+    // resources: a folder the host hashes at the first join; empty, identity is already whole.
+    explicit JoinClient(const network::GameIdentity& identity, bool play = true, const fs::path& resources = {}) {
         engine.analysis().set_enabled(false);
         engine_core::DataModel& game = engine.datamodel();
-        host = std::make_unique<engine_network::ClientJoinHost>(engine, identity);
+        host = std::make_unique<engine_network::ClientJoinHost>(engine, identity, resources);
         game.set_join_host(host.get());
         engine.resume();
         engine_core::Folder& map_folder = game.create<engine_core::Folder>();
@@ -375,4 +377,58 @@ TEST_CASE("JN28 --connect through connect_from_empty behaves as in 2c", "[join]"
     REQUIRE(client.game().simulation_running());
     REQUIRE(client.game().world_role() == engine_core::WorldRole::Client);
     REQUIRE(client.connections().join_state() == JoinState::Joined);
+    REQUIRE(client.host->status().state == engine_network::ClientState::Joined);
+}
+
+TEST_CASE("JN29 status() follows a script's join, and is Idle once its session is gone", "[join]") {
+    SimRole role;
+    TempDir dir;
+    make_project(dir.path);
+    std::unique_ptr<server::ServerHost> server = serve(dir.path);
+    JoinClient client(identity_for(dir.path));
+    REQUIRE(client.host->status().state == engine_network::ClientState::Idle);
+
+    REQUIRE(client.join(loopback(server->port())) == "ok");
+    // Still resolving: there is no session yet.
+    REQUIRE(client.host->status().state == engine_network::ClientState::Idle);
+    client.step_until([&] { return client.host->status().state == engine_network::ClientState::Joined; },
+                      std::chrono::seconds(5));
+    REQUIRE(client.host->status().state == engine_network::ClientState::Joined);
+
+    server->stop();
+    client.step_until([&] { return client.heard("left:"); }, std::chrono::seconds(2));
+    REQUIRE(client.heard("left:The server closed;"));
+    const engine_network::ClientStatus after = client.host->status();
+    REQUIRE(after.state == engine_network::ClientState::Idle);
+    REQUIRE(after.reason.empty());
+}
+
+TEST_CASE("JN30 an unhashed identity hashes the resources at the first join", "[join]") {
+    SimRole role;
+    TempDir dir;
+    make_project(dir.path);
+    std::unique_ptr<server::ServerHost> server = serve(dir.path);
+    engine_core::Project project = engine_core::Project::load(dir.path);
+    network::GameIdentity identity;
+    fs::path resources;
+    std::string error;
+    REQUIRE(engine_network::project_identity_unhashed(project, identity, resources, error));
+    REQUIRE(identity.resources_hash == 0);
+
+    SECTION("a readable folder joins") {
+        JoinClient client(identity, true, resources);
+        REQUIRE(client.join(loopback(server->port())) == "ok");
+        client.step_until([&] { return client.heard("joined;") || client.heard("left:"); }, std::chrono::seconds(5));
+        REQUIRE(client.events() == "joined;");
+    }
+    SECTION("a folder that cannot be read fails the join, with why") {
+        const fs::path missing = dir.path / "no-such-folder";
+        JoinClient client(identity, true, missing);
+        REQUIRE(client.join(loopback(server->port())) == "ok");
+        client.step_until([&] { return client.heard("left:"); }, std::chrono::seconds(5));
+        REQUIRE(client.events() == "left:Could not read the project's resources folder (" +
+                                       engine_core::utf8_path(missing) + ");");
+        REQUIRE(client.connections().join_state() == JoinState::Idle);
+        REQUIRE(client.game().alive(client.map));
+    }
 }

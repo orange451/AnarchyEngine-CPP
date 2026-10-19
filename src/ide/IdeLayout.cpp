@@ -16,6 +16,9 @@
 
 #include "EditorFont.hpp"
 
+#include "ClientJoinHost.hpp"
+#include "ProjectIdentity.hpp"
+
 namespace ide {
 
 IdeLayout::IdeLayout(double windowWidth, double windowHeight, const std::filesystem::path& config)
@@ -754,6 +757,16 @@ IdeLayout::~IdeLayout() {
     RemoveNativeMenuBar();
     // Before anything its tools reach is torn down.
     stop_mcp();
+    // Closed during a test: the join host goes as Stop takes it, never while a step runs.
+    if (join_host_ != nullptr) {
+        engine_core::Engine& engine = runner_.simulation();
+        engine.pause();
+        engine.on_simulation([this](engine_core::DataModel& game) {
+            join_host_->end_silently();
+            game.set_join_host(nullptr);
+            join_host_.reset();
+        });
+    }
     alive_.reset();
     // Window teardown calls the close hook. Drop it first so that hook does not
     // touch docks that are already being destroyed.
@@ -1083,12 +1096,27 @@ void IdeLayout::start_test() {
     // Edit mode is the authored place. Freeze that tree before play so
     // Stop restores it, including a folder removed while stopped.
     // start_simulation alone keeps the previous snapshot.
-    engine.on_simulation([](engine_core::DataModel& game) {
+    // A script's Connections:Join goes through a host made for this test from
+    // the project's identity, its resources hashed only when a join first needs
+    // them. With no project, or one that cannot say which game it is, there is
+    // none, and Join says only a client can join.
+    network::GameIdentity identity;
+    std::filesystem::path resources;
+    std::string identity_error;
+    const bool joinable = project_ != nullptr && join_host_ == nullptr &&
+                          engine_network::project_identity_unhashed(*project_, identity, resources, identity_error);
+    engine.on_simulation([this, &engine, joinable, identity, resources](engine_core::DataModel& game) {
         if (!game.simulation_running()) {
             // The place Stop brings back. Edits while stopped do not snapshot the
             // place each time; this one capture, as play starts, holds them all.
             game.capture_place();
             game.start_simulation();
+            // Here, with the step held off (the engine is paused, so this runs
+            // under the write lock): the host binds a scheduler job.
+            if (joinable) {
+                join_host_ = std::make_unique<engine_network::ClientJoinHost>(engine, identity, resources);
+                game.set_join_host(join_host_.get());
+            }
         }
     });
     engine.resume();
@@ -1123,7 +1151,14 @@ void IdeLayout::stop_test() {
     // the place before another Heartbeat can run. Already paused is the
     // same restore.
     engine.pause();
-    engine.on_simulation([](engine_core::DataModel& game) {
+    engine.on_simulation([this](engine_core::DataModel& game) {
+        // A connection ends first, without Left, so the restore below is of the
+        // place as captured, not a world the server was still writing.
+        if (join_host_ != nullptr) {
+            join_host_->end_silently();
+            game.set_join_host(nullptr);
+            join_host_.reset();
+        }
         if (game.simulation_running()) {
             game.stop_simulation();
         }

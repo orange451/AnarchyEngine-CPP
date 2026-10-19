@@ -32,6 +32,10 @@ class Project;
 struct SaveConflict;
 }
 
+namespace engine_network {
+class ClientJoinHost;
+}
+
 namespace runner {
 class GameView;
 }
@@ -818,6 +822,10 @@ private:
     // During a test the ribbon enables Stop and Shift+F5 stops. F5 resumes
     // only a paused one.
     PlayState play_ = PlayState::Stopped;
+    // During a test, Connections:Join's host, made as play starts and gone at
+    // Stop. Null while stopped, and in a test of a place with no project or one
+    // that cannot say which game it is.
+    std::unique_ptr<engine_network::ClientJoinHost> join_host_;
     // The ribbon's Test, Pause, Resume, and Stop.
     jadefx::Node* session_buttons_[4] = {};
     // The ribbon's Grid, and whether it is on: the Scene Views draw the floor

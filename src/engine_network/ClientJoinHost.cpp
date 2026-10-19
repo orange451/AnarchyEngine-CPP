@@ -2,6 +2,7 @@
 
 #include "ClientWorld.hpp"
 #include "Connections.hpp"
+#include "ProjectIdentity.hpp"
 
 #include <system_error>
 #include <utility>
@@ -13,7 +14,11 @@ constexpr const char* kLeft = "You left the game";
 }  // namespace
 
 ClientJoinHost::ClientJoinHost(engine_core::Engine& engine, network::GameIdentity identity)
-    : engine_(engine), identity_(std::move(identity)) {
+    : ClientJoinHost(engine, std::move(identity), std::filesystem::path()) {}
+
+ClientJoinHost::ClientJoinHost(engine_core::Engine& engine, network::GameIdentity identity,
+                               std::filesystem::path resources)
+    : engine_(engine), identity_(std::move(identity)), unhashed_(std::move(resources)) {
     // The resolver's answer and the sessions ended inside their own callbacks
     // are handled here, early in each step, on the thread stepping the world:
     // the engine thread in a program, the test thread for an engine never started.
@@ -55,7 +60,13 @@ std::string ClientJoinHost::join(const std::string& address) {
         std::thread thread([this, generation, address, done] {
             Resolved result;
             result.generation = generation;
-            result.address = network::resolve(address, result.error);
+            // The first join pays for the resources hash here, off the simulation thread.
+            network::GameIdentity identity;
+            if (!ready_identity(identity, result.error)) {
+                result.identity_failed = true;
+            } else {
+                result.address = network::resolve(address, result.error);
+            }
             {
                 std::lock_guard<std::mutex> lock(mutex_);
                 if (!closing_) {
@@ -138,12 +149,24 @@ void ClientJoinHost::end_silently() {
     session_.reset();
     retired_.clear();
     silent_ = false;
+    set_status(ClientState::Idle, {});
     if (engine_core::Connections* list = connections()) {
         list->set_join_state(engine_core::JoinState::Idle);
     }
 }
 
 ClientSession* ClientJoinHost::session() { return session_.get(); }
+
+ClientStatus ClientJoinHost::status() const {
+    std::lock_guard<std::mutex> lock(status_mutex_);
+    return status_;
+}
+
+void ClientJoinHost::set_status(ClientState state, const std::string& reason) {
+    std::lock_guard<std::mutex> lock(status_mutex_);
+    status_.state = state;
+    status_.reason = reason;
+}
 
 void ClientJoinHost::tick() {
     retired_.clear();
@@ -168,7 +191,7 @@ void ClientJoinHost::on_resolved(const Resolved& result) {
     engine_core::Connections* list = connections();
     if (!result.address) {
         if (list != nullptr) {
-            list->note_left("Could not find the server: " + result.error);
+            list->note_left(result.identity_failed ? result.error : "Could not find the server: " + result.error);
         }
         return;
     }
@@ -189,7 +212,33 @@ void ClientJoinHost::on_resolved(const Resolved& result) {
     session->connect(*result.address, engine_core::Engine::network_now());
 }
 
+bool ClientJoinHost::ready_identity(network::GameIdentity& out, std::string& error) {
+    network::GameIdentity identity;
+    std::filesystem::path folder;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        identity = identity_;
+        folder = unhashed_;
+    }
+    if (!folder.empty()) {
+        // Outside the lock: a large folder takes a while. Two threads hashing at
+        // once agree, so whichever stores it last changes nothing.
+        if (!hash_identity(identity, folder, error)) {
+            return false;
+        }
+        std::lock_guard<std::mutex> lock(mutex_);
+        identity_ = identity;
+        unhashed_.clear();
+    }
+    out = identity;
+    return true;
+}
+
 std::unique_ptr<ClientSession> ClientJoinHost::make_session(ClientMode mode, std::string& error) {
+    network::GameIdentity identity;
+    if (!ready_identity(identity, error)) {
+        return nullptr;
+    }
     std::string why;
     std::unique_ptr<network::UdpSocket> socket = network::UdpSocket::open(0, why);
     if (!socket) {
@@ -197,7 +246,7 @@ std::unique_ptr<ClientSession> ClientJoinHost::make_session(ClientMode mode, std
         return nullptr;
     }
     SessionConfig config;
-    config.endpoint.identity = identity_;
+    config.endpoint.identity = identity;
     config.endpoint.bytes_per_second = kDefaultSendBudget;
     config.client_mode = mode;
     auto session = std::make_unique<ClientSession>(engine_.datamodel(), std::move(socket), config);
@@ -206,6 +255,8 @@ std::unique_ptr<ClientSession> ClientJoinHost::make_session(ClientMode mode, std
 }
 
 void ClientJoinHost::on_session_state(ClientState state, const std::string& reason) {
+    // The overlay sees every change, the reason's included.
+    set_status(state, reason);
     // A reason that changes alone (it is set just before Disconnected) is not news here.
     if (state == reported_) {
         return;
@@ -241,6 +292,7 @@ void ClientJoinHost::retire_session() {
     if (session_ != nullptr) {
         retired_.push_back(std::move(session_));
     }
+    set_status(ClientState::Idle, {});
 }
 
 void ClientJoinHost::reap_resolvers(bool all) {

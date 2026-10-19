@@ -10,6 +10,18 @@ namespace engine_network {
 
 bool project_identity(const engine_core::Project& project, network::GameIdentity& out, std::string& error) {
     network::GameIdentity identity;
+    std::filesystem::path resources;
+    if (!project_identity_unhashed(project, identity, resources, error) || !hash_identity(identity, resources, error)) {
+        return false;
+    }
+    out = identity;
+    error.clear();
+    return true;
+}
+
+bool project_identity_unhashed(const engine_core::Project& project, network::GameIdentity& out,
+                               std::filesystem::path& resources, std::string& error) {
+    network::GameIdentity identity;
     const std::string& game_id = project.game_id();
     if (game_id.empty()) {
         error = "The project has no gameId in project.json";
@@ -25,14 +37,20 @@ bool project_identity(const engine_core::Project& project, network::GameIdentity
         return false;
     }
     identity.version = project.version();
+    out = identity;
+    resources = project.resources_root();
+    error.clear();
+    return true;
+}
+
+bool hash_identity(network::GameIdentity& out, const std::filesystem::path& resources, std::string& error) {
     // A server and its clients must ship the same files; 0 means the folder could not be read at all.
-    identity.resources_hash = network::hash_resources(project.resources_root());
-    if (identity.resources_hash == 0) {
-        error = "Could not read the project's resources folder (" + engine_core::utf8_path(project.resources_root()) + ")";
+    const std::uint64_t hash = network::hash_resources(resources);
+    if (hash == 0) {
+        error = "Could not read the project's resources folder (" + engine_core::utf8_path(resources) + ")";
         return false;
     }
-    out = identity;
-    error.clear();
+    out.resources_hash = hash;
     return true;
 }
 

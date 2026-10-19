@@ -555,6 +555,7 @@ private:
         int viewProjection = -1;
         int inverseProjection = -1;
         int inverseView = -1;
+        int inverseViewProjection = -1;
         int texel = -1;
         int keepAlpha = -1;
         int ambient = -1;
@@ -1026,18 +1027,31 @@ private:
     // Whether this frame shaded occlusion: when not, the passes read white.
     bool occlusionReady_ = false;
 
-    void readProbe(int paneX, int paneY, int paneWidth, int paneHeight, double sceneWidth, double sceneHeight,
-                   const int viewport[4]);
-    // The depth under the cursor into probeTarget_, right after the geometry
-    // pass, for readProbe to read back. Sets probeCopied_.
+    // At the start of a draw: reads back the copies the GPU has finished.
+    void takeProbe();
+    // At the end of a draw: publishes what takeProbe read, and fences this draw's copy.
+    void readProbe();
+    // The depth under the cursor into the next of probeTargets_, right after the
+    // geometry pass, for readProbe to read back. Sets probeCopied_.
     void copyProbe(int paneX, int paneY, int paneWidth, int paneHeight, double sceneWidth, double sceneHeight,
                    const int viewport[4]);
     // The G-buffer texel under the cursor, or false off the pane.
     bool probeTexel(int paneX, int paneY, int paneWidth, int paneHeight, double sceneWidth, double sceneHeight,
                     const int viewport[4], int& px, int& py) const;
-    unsigned probeTarget_ = 0;
-    unsigned probeFbo_ = 0;
+    // One-texel float targets in turn, each with a fence after the draw that
+    // copies into it: one is read back only once the GPU has done its copy, so
+    // the probe never makes the CPU wait for the GPU.
+    static constexpr int kProbeSlots = 3;
+    unsigned probeTargets_[kProbeSlots] = {0, 0, 0};
+    unsigned probeFbos_[kProbeSlots] = {0, 0, 0};
+    RtGLsyncObject* probeFences_[kProbeSlots] = {nullptr, nullptr, nullptr};
+    bool probeFilled_[kProbeSlots] = {false, false, false};
+    int probeNext_ = 0;
     bool probeCopied_ = false;
+    // What takeProbe read, until a draw that gets as far as readProbe publishes it.
+    std::optional<float> probeTaken_;
+    // Whether takeProbe left a copy the GPU had not done yet.
+    bool probePending_ = false;
     // The float target would not attach: no probe from then on.
     bool probeRefused_ = false;
     // The depth before this draw cleared it, kept while a read is on its way.
@@ -1046,13 +1060,6 @@ private:
     double probeX_ = -1;
     double probeY_ = -1;
     std::optional<float> probedDepth_;
-    // One-float buffers in turn, each with a fence: a read is taken back only
-    // once the GPU has done it, so the probe never makes the CPU wait for the GPU.
-    static constexpr int kProbeBuffers = 3;
-    unsigned probeBuffers_[kProbeBuffers] = {0, 0, 0};
-    RtGLsyncObject* probeFences_[kProbeBuffers] = {nullptr, nullptr, nullptr};
-    bool probeFilled_[kProbeBuffers] = {false, false, false};
-    int probeNext_ = 0;
 
     bool ready_ = false;
 

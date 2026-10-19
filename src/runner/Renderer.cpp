@@ -289,6 +289,7 @@ bool Renderer::buildProgram(Program& program, const char* name, const char* vert
     program.viewProjection = at("uViewProjection");
     program.inverseProjection = at("uInverseProjection");
     program.inverseView = at("uInverseView");
+    program.inverseViewProjection = at("uInverseViewProjection");
     program.texel = at("uTexel");
     program.keepAlpha = at("uKeepAlpha");
     program.ambient = at("uAmbient");
@@ -1296,6 +1297,10 @@ bool Renderer::draw(double x, double y, double width, double height, double scen
         PROFILE_SCOPE("Save GL state", profiler::Group::Render);
         return SavedState();
     }();
+    {
+        PROFILE_SCOPE("Take probe", profiler::Group::Render);
+        takeProbe();
+    }
     PixelRect clip = pane;
     if (saved.scissor == GL_TRUE) {
         const PixelRect outer{saved.scissorBox[0], saved.scissorBox[1], saved.scissorBox[2], saved.scissorBox[3]};
@@ -1515,8 +1520,7 @@ bool Renderer::draw(double x, double y, double width, double height, double scen
         drawn = onPane;
         if (drawn) {
             sceneDepth_ = SceneDepth{depthTexture_, pane.x, pane.y, pane.width, pane.height};
-            PROFILE_SCOPE("Read probe", profiler::Group::Render);
-            readProbe(pane.x, pane.y, pane.width, pane.height, sceneWidth, sceneHeight, viewport);
+            readProbe();
         }
     }
     // Over a pane that got only the clear, the grid would show through the
@@ -1561,26 +1565,31 @@ void Renderer::copyProbe(int paneX, int paneY, int paneWidth, int paneHeight, do
     probeCopied_ = false;
     int px = 0;
     int py = 0;
-    if (probeRefused_ ||
+    // Its target is free unless a copy three draws old is still on its way.
+    if (probeRefused_ || probeFilled_[probeNext_] ||
         !probeTexel(paneX, paneY, paneWidth, paneHeight, sceneWidth, sceneHeight, viewport, px, py)) {
         return;
     }
-    if (probeFbo_ == 0) {
-        probeTarget_ = MakeTarget(RT_GL_R32F, RT_GL_RED, GL_FLOAT, 1, 1);
-        glGenFramebuffers(1, &probeFbo_);
-        glBindFramebuffer(RT_GL_FRAMEBUFFER, probeFbo_);
-        if (!Attach({probeTarget_}, 0)) {
-            glBindFramebuffer(RT_GL_FRAMEBUFFER, gbufferFbo_);
-            glDeleteFramebuffers(1, &probeFbo_);
-            probeFbo_ = 0;
-            DeleteTexture(probeTarget_);
-            probeRefused_ = true;
-            return;
+    if (probeFbos_[0] == 0) {
+        glGenFramebuffers(kProbeSlots, probeFbos_);
+        for (int slot = 0; slot < kProbeSlots; ++slot) {
+            probeTargets_[slot] = MakeTarget(RT_GL_R32F, RT_GL_RED, GL_FLOAT, 1, 1);
+            glBindFramebuffer(RT_GL_FRAMEBUFFER, probeFbos_[slot]);
+            if (!Attach({probeTargets_[slot]}, 0)) {
+                glBindFramebuffer(RT_GL_FRAMEBUFFER, gbufferFbo_);
+                glDeleteFramebuffers(kProbeSlots, probeFbos_);
+                for (unsigned& target : probeTargets_) {
+                    DeleteTexture(target);
+                }
+                std::fill(std::begin(probeFbos_), std::end(probeFbos_), 0u);
+                probeRefused_ = true;
+                return;
+            }
         }
     }
     // One texel of the finished depth into the float target, with nothing
     // but the target and the viewport changed for the passes after.
-    glBindFramebuffer(RT_GL_FRAMEBUFFER, probeFbo_);
+    glBindFramebuffer(RT_GL_FRAMEBUFFER, probeFbos_[probeNext_]);
     glViewport(0, 0, 1, 1);
     glUseProgram(depthProbe_.id);
     glUniform2f(depthProbe_.probeTexel, static_cast<float>(px), static_cast<float>(py));
@@ -1592,69 +1601,53 @@ void Renderer::copyProbe(int paneX, int paneY, int paneWidth, int paneHeight, do
     probeCopied_ = true;
 }
 
-void Renderer::readProbe(int paneX, int paneY, int paneWidth, int paneHeight, double sceneWidth,
-                         double sceneHeight, const int viewport[4]) {
-    if (probeBuffers_[0] == 0) {
-        glGenBuffers(kProbeBuffers, probeBuffers_);
-        for (unsigned buffer : probeBuffers_) {
-            glBindBuffer(RT_GL_PIXEL_PACK_BUFFER, buffer);
-            glBufferData(RT_GL_PIXEL_PACK_BUFFER, sizeof(float), nullptr, RT_GL_STREAM_READ);
-        }
-        glBindBuffer(RT_GL_PIXEL_PACK_BUFFER, 0);
-    }
-    // Earlier draws' reads the GPU has done, oldest first so the newest wins.
-    // Mapping one it has not done would stall this thread until the GPU
-    // finished that whole frame, so those wait for a later draw.
-    bool pending = false;
-    bool took = false;
-    for (int age = kProbeBuffers; age >= 1; --age) {
-        const int slot = (probeNext_ + kProbeBuffers - age) % kProbeBuffers;
+void Renderer::takeProbe() {
+    // Earlier draws' copies the GPU has done, oldest first so the newest wins.
+    // Reading one back stalls this thread until the GPU has done everything
+    // asked of it before the read, on macOS even when the copy itself is done,
+    // so it is read here, before this draw asks anything, and only once its
+    // fence says the GPU is past it.
+    probePending_ = false;
+    for (int age = kProbeSlots; age >= 1; --age) {
+        const int slot = (probeNext_ + kProbeSlots - age) % kProbeSlots;
         if (!probeFilled_[slot]) {
             continue;
         }
-        PROFILE_SCOPE("Probe take", profiler::Group::Render);
         const GLenum state = glClientWaitSync(probeFences_[slot], 0, 0);
         if (state != RT_GL_ALREADY_SIGNALED && state != RT_GL_CONDITION_SATISFIED) {
-            pending = true;
+            probePending_ = true;
             continue;
         }
-        glBindBuffer(RT_GL_PIXEL_PACK_BUFFER, probeBuffers_[slot]);
-        if (const void* mapped = glMapBufferRange(RT_GL_PIXEL_PACK_BUFFER, 0, sizeof(float), RT_GL_MAP_READ_BIT)) {
-            probedDepth_ = *static_cast<const float*>(mapped);
-            took = true;
-            glUnmapBuffer(RT_GL_PIXEL_PACK_BUFFER);
-        }
+        float depth = 1.f;
+        glBindFramebuffer(RT_GL_READ_FRAMEBUFFER, probeFbos_[slot]);
+        glReadPixels(0, 0, 1, 1, RT_GL_RED, GL_FLOAT, &depth);
+        probeTaken_ = depth;
         glDeleteSync(probeFences_[slot]);
         probeFences_[slot] = nullptr;
         probeFilled_[slot] = false;
     }
-    (void)paneX;
-    (void)paneY;
-    (void)paneWidth;
-    (void)paneHeight;
-    (void)sceneWidth;
-    (void)sceneHeight;
-    (void)viewport;
+}
+
+void Renderer::readProbe() {
+    const bool took = probeTaken_.has_value();
+    if (took) {
+        probedDepth_ = probeTaken_;
+        probeTaken_.reset();
+    }
     const bool inPane = probeCopied_;
     probeCopied_ = false;
-    // Its buffer is free unless a read three draws old is still on its way.
-    if (inPane && !probeFilled_[probeNext_]) {
-        PROFILE_SCOPE("Probe read", profiler::Group::Render);
-        glBindFramebuffer(RT_GL_READ_FRAMEBUFFER, probeFbo_);
-        glBindBuffer(RT_GL_PIXEL_PACK_BUFFER, probeBuffers_[probeNext_]);
-        glReadPixels(0, 0, 1, 1, RT_GL_RED, GL_FLOAT, nullptr);
+    if (inPane) {
         probeFences_[probeNext_] = glFenceSync(RT_GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
         probeFilled_[probeNext_] = true;
+        probeNext_ = (probeNext_ + 1) % kProbeSlots;
     }
     // Off the pane, with nothing left on its way, there is no depth under the
-    // cursor; while a read is still on its way, the last one stands.
-    if (!inPane && !pending) {
+    // cursor; while a copy is still on its way, the last one stands.
+    if (!inPane && !probePending_) {
         probedDepth_.reset();
-    } else if (!took && pending) {
+    } else if (!took && probePending_) {
         probedDepth_ = probeLast_;
     }
-    glBindBuffer(RT_GL_PIXEL_PACK_BUFFER, 0);
-    probeNext_ = (probeNext_ + 1) % kProbeBuffers;
 }
 
 bool Renderer::paneHasDepth(int framebuffer) {
@@ -1695,6 +1688,10 @@ void Renderer::gridPass(unsigned depth, const float* projection, const float* in
     const engine_core::Matrix4 inverseView = engine_core::matrix4_inverse(view_);
     glUniformMatrix4fv(program.inverseProjection, 1, GL_FALSE, inverseProjection);
     glUniformMatrix4fv(program.inverseView, 1, GL_FALSE, inverseView.m);
+    engine_core::Matrix4 inverseProjectionMatrix;
+    std::copy(inverseProjection, inverseProjection + 16, inverseProjectionMatrix.m);
+    const engine_core::Matrix4 inverseViewProjection = engine_core::matrix4_multiply(inverseView, inverseProjectionMatrix);
+    glUniformMatrix4fv(program.inverseViewProjection, 1, GL_FALSE, inverseViewProjection.m);
     // Validation looks at the bound vertex array too, so it is bound first.
     glBindVertexArray(banded ? gridBandVao_ : emptyVao_);
     // A grid the driver is not ready for is left out of this frame, not the scene
@@ -3322,23 +3319,21 @@ void Renderer::shutdown() {
         }
     }
     sphereIndexCount_ = 0;
-    if (probeBuffers_[0] != 0) {
-        glDeleteBuffers(kProbeBuffers, probeBuffers_);
-    }
-    for (int slot = 0; slot < kProbeBuffers; ++slot) {
+    for (int slot = 0; slot < kProbeSlots; ++slot) {
         if (probeFences_[slot] != nullptr) {
             glDeleteSync(probeFences_[slot]);
         }
         probeFences_[slot] = nullptr;
-        probeBuffers_[slot] = 0;
         probeFilled_[slot] = false;
+        DeleteTexture(probeTargets_[slot]);
     }
     probeNext_ = 0;
-    if (probeFbo_ != 0) {
-        glDeleteFramebuffers(1, &probeFbo_);
-        probeFbo_ = 0;
+    probeTaken_.reset();
+    probePending_ = false;
+    if (probeFbos_[0] != 0) {
+        glDeleteFramebuffers(kProbeSlots, probeFbos_);
+        std::fill(std::begin(probeFbos_), std::end(probeFbos_), 0u);
     }
-    DeleteTexture(probeTarget_);
     probeCopied_ = false;
     probeRefused_ = false;
     probedDepth_.reset();

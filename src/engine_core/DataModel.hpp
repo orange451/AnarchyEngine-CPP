@@ -289,6 +289,11 @@ public:
     // non-archivable instance, so Stop restores it like any other.
     bool archivable(InstanceId id) const;
     void set_archivable(InstanceId id, bool archivable);
+    // Whether this instance and its subtree survive a world swap (a join).
+    // Saved like any property, but local: the Replicator never sends it. A
+    // service always survives, so it never takes true. False for a new instance.
+    bool persistent(InstanceId id) const;
+    void set_persistent(InstanceId id, bool persistent);
     // Direct children in sibling order. A missing parent returns an empty vector.
     std::vector<InstanceId> get_children(InstanceId parent) const;
 
@@ -806,6 +811,7 @@ private:
     std::string name_;
     std::string guid_;
     bool archivable_ = true;
+    bool persistent_ = false;
     PropertyBag extras_;
 
     bool lock_write_blocking();

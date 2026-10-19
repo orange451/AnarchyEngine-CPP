@@ -24,7 +24,10 @@ using engine_core::InstanceId;
 
 namespace {
 
-// The property a change names, or "" for one never sent (LinearVelocity).
+// Local to each world: what survives that world's own swap.
+constexpr const char* kLocalOnly = "Persistent";
+
+// The property a change names, or "" for one never sent (LinearVelocity, Persistent).
 std::string property_of(const engine_core::TreeChange& change) {
     using engine_core::Field;
     switch (change.field) {
@@ -33,7 +36,10 @@ std::string property_of(const engine_core::TreeChange& change) {
         case Field::Enabled: return "Enabled";
         case Field::Simulated: return "Simulated";
         case Field::VisualOnly: return "VisualOnly";
-        case Field::Reflected: return engine_core::lua_property_name(static_cast<std::uint32_t>(change.payload));
+        case Field::Reflected: {
+            std::string name = engine_core::lua_property_name(static_cast<std::uint32_t>(change.payload));
+            return name == kLocalOnly ? std::string() : name;
+        }
         default: return std::string();
     }
 }
@@ -111,6 +117,7 @@ void Replicator::write_record(OpWriter& writer, InstanceId id) const {
         writer.bind(id, game_.guid(id));
         engine_core::PropertyBag properties;
         object.save_properties(properties);
+        engine_core::bag_erase(properties, kLocalOnly);
         for (const auto& [key, value] : properties) {
             writer.set(id, key, value);
         }
@@ -118,6 +125,7 @@ void Replicator::write_record(OpWriter& writer, InstanceId id) const {
     }
     engine_core::PropertyBag properties;
     object.save_properties(properties);
+    engine_core::bag_erase(properties, kLocalOnly);
     if (const auto* connection = dynamic_cast<const engine_core::ConnectionInstance*>(&object)) {
         engine_core::bag_set(properties, "Id", engine_core::JsonValue::string(connection->connection_id()));
     }

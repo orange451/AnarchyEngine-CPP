@@ -585,6 +585,7 @@ DataModel* DataModel::pooled_object(InstancePool& pool, std::uint32_t storage, I
         object->rebind(id);
         // Reused storage starts as a new instance would.
         object->archivable_ = true;
+        object->persistent_ = false;
         object->on_reuse();
     }
     return object;
@@ -1994,6 +1995,26 @@ void DataModel::set_archivable(InstanceId id, bool archivable) {
     object->emit_property("Archivable");
 }
 
+bool DataModel::persistent(InstanceId id) const {
+    const DataModel* object = instance(id);
+    return object != nullptr && object->persistent_;
+}
+
+void DataModel::set_persistent(InstanceId id, bool persistent) {
+    DataModel* object = instance(id);
+    // A service always survives a swap: it never needs the mark.
+    if (object == nullptr || (object->is_service() && persistent) || object->persistent_ == persistent) {
+        return;
+    }
+    LuaSlot before;
+    before.kind = LuaSlot::Kind::Bool;
+    before.flag = object->persistent_;
+    object->persistent_ = persistent;
+    LuaSlot after = before;
+    after.flag = persistent;
+    object->note_property_change("Persistent", before, after);
+}
+
 InstanceId DataModel::core() const {
     // Game makes Core once; until then, and in a DataModel that is not a Game, there is none.
     if (state_->core_id == 0 || !alive(state_->core_id)) {
@@ -2775,6 +2796,25 @@ bool write_lua_archivable(DataModel& world, DataModel& object, LuaSlot& in) {
     return true;
 }
 
+bool read_lua_persistent(DataModel& world, DataModel& object, LuaSlot& out) {
+    out.kind = LuaSlot::Kind::Bool;
+    out.flag = world.persistent(object.id());
+    return true;
+}
+
+bool write_lua_persistent(DataModel& world, DataModel& object, LuaSlot& in) {
+    if (in.kind != LuaSlot::Kind::Bool) {
+        in.error = "Persistent must be true or false";
+        return false;
+    }
+    if (object.is_service() && in.flag) {
+        in.error = world.name(object.id()) + " is a service, and a service always survives";
+        return false;
+    }
+    world.set_persistent(object.id(), in.flag);
+    return true;
+}
+
 bool read_lua_changed(DataModel&, DataModel&, LuaSlot& out) {
     out.kind = LuaSlot::Kind::Signal;
     return true;
@@ -2793,6 +2833,7 @@ ANARCHY_LUA_REGISTER(register_datamodel_lua) {
         lua_property("Parent", "DataModel?", true, read_lua_parent, write_lua_parent),
         changed,
         lua_hidden(lua_property("Archivable", "boolean", true, read_lua_archivable, write_lua_archivable)),
+        lua_saved_property("Persistent", "boolean", read_lua_persistent, write_lua_persistent, "false"),
     };
     register_lua_class("DataModel", nullptr, fields, static_cast<int>(std::size(fields)));
 }

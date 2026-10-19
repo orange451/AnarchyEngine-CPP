@@ -1012,6 +1012,12 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
     add("DataModel", "Parent", "The instance this one is parented to, or game. nil means it has no parent.", "DataModel?",
         false, {});
     add("DataModel", "Changed", "Fires with the name of the property that changed.", "Signal", false, {});
+    add("DataModel", "Persistent",
+        "Whether this instance and everything under it survive a world swap, such as joining a server. A "
+        "survivor whose parent does not survive moves to the service it was under. Local: never replicated. "
+        "After a join the world is a Client, so a Persistent Script keeps running only when its RunContext is "
+        "Client or Any.",
+        "boolean", false, {});
     add("DataModel", "Destroy", "Unparents this instance and its descendants.", nullptr, false, {});
     add("DataModel", "Clone",
         "A copy of this instance and everything under it, with no parent. References inside the copy point at "

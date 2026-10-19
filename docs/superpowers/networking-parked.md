@@ -50,3 +50,8 @@ Left over from sub-project 1 (transport, `src/network/`), for the sub-projects t
 - `resolve` blocks; the player calls it once after its window opens, so a slow DNS answer shows a blank window until it returns. Resolve on another thread.
 - Exporting on a Mac appends the pack to a signed `AnarchyServer`; Apple Silicon may refuse it until the server is signed again after packing. Untested.
 - A 16 MB block still walks every sent-but-unacked fragment from the first open one on each packet; a cursor of the next unsent fragment would make that constant.
+- The player hashes the whole resources folder on the UI thread before its first frame, so a big project shows a blank window meanwhile. Compute the hash at export and store it in the pack.
+- Temporary unpack folders (`AnarchyEngine/games/`, `AnarchyEngine/servers/`) are never cleaned up, and two servers started together from one exe race on the same folder.
+- POSIX SIGHUP is not handled: closing the terminal ends the server without telling its clients.
+- Between `close` and `engine.stop` a closing server can still accept a ConnectRequest, and that client may not hear "The server closed".
+- `-NS` arguments to the player take the next argument as their value when it has no dash, so `-NSFoo game` (with no value) skips the folder. macOS always passes a value.

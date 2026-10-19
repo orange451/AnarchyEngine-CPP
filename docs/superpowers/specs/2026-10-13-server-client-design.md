@@ -100,7 +100,7 @@ On the client:
 
 ### 3. Executables
 
-**`AnarchyServer <project folder> [--port 7777] [--max-connections 64] [--max-send 1048576]`.** Loads the project, computes the identity (refusing to start if the game id or resources hash is zero), opens a UDP socket, builds an `Engine` with no renderer, no client sync, no audio device, `set_pace_hz(60)`, and world role Server, starts play, and runs. Script output goes to stdout with a timestamp. Ctrl+C (or SIGTERM) disconnects every client and exits. `--max-send` is each client's send budget in bytes per second (default 1 MB/s); a large reliable message (a snapshot part or a busy tick's changes) goes out as several fragments per tick up to that budget and what flow control allows, so a 600 KB join takes well under a second on a LAN. Packaging a game puts `AnarchyServer.exe` beside `AnarchyPlayer.exe`; run from a package folder, it reads the same packed game the player does. A port in use, a missing project, or a bad identity prints the reason and exits non-zero.
+**`AnarchyServer <project folder> [--port 7777] [--max-connections 64] [--max-send 1048576]`.** Loads the project, computes the identity (refusing to start if the game id or resources hash is zero), opens a UDP socket, builds an `Engine` with no renderer, no client sync, no audio device, `set_pace_hz(60)`, and world role Server, starts play, and runs. Script output goes to stdout with a timestamp. Ctrl+C (or SIGTERM) disconnects every client and exits. `--max-send` is each client's send budget in bytes per second (default 1 MB/s); a large reliable message (a snapshot part or a busy tick's changes) goes out as several fragments per tick up to that budget and what flow control allows, so a 600 KB join takes well under a second on a LAN. Exporting a game writes `<Name> Server[.exe]` beside it: a copy of `AnarchyServer` with its own copy of the game's pack, which it serves as the game plays it (the server is written first, so a running one fails the export before the game changes). A port in use, a missing project, or a bad identity prints the reason and exits non-zero.
 
 **`AnarchyPlayer --connect host:port [project folder]`.** Takes the identity from the packed game (or the folder), creates an empty place, connects, and waits for the snapshot; the window shows "Connecting…" until then. Failures and disconnects show their reason in the window: wrong game, needs an update (with the server's version), server full, timed out, server closed, bad data from the server. Without `--connect` the player runs Standalone as today.
 
@@ -109,12 +109,13 @@ On the client:
 | Situation | Behavior |
 | --- | --- |
 | Snapshot bigger than one block | Split into ≤1 MB parts; the reliable channel's 8 MB reassembly budget and one-block-at-a-time rule are never approached |
-| Client falls behind | Disconnected when its queue makes no progress for 30 s or holds more than 256 MB |
+| Client falls behind | Disconnected with "your connection could not keep up" when its queue makes no progress for 30 s or holds more than 256 MB |
 | Malformed or mismatched data from the server | Client disconnects with "bad data from server" |
 | Data from a client | Dropped and counted |
 | Operation on an instance the client destroyed locally | Skipped and counted |
 | Reference to a filtered or not-yet-created instance | Reads nil; resolves on creation |
 | Server shutdown | Every client disconnected with "server closed" |
+| The client's endpoint refuses to connect (its socket failed) | "could not connect to the server" in the window, not "Connecting…" forever |
 | A script destroys a client's Connection | That client is disconnected with "removed by the server" |
 | Zero game id or zero resources hash | Server refuses to start; client refuses to connect |
 
@@ -132,7 +133,8 @@ Catch2 in the sandbox, tags `[replication]`, `[server]`, plus existing tags for 
 
 | Measure | Target |
 | --- | --- |
-| Server replication cost, 1,000 changes per tick, 50 clients | under 1 ms per tick |
+| Server replication cost, 1,000 changes per tick, 50 clients, at the transport's base budget (RP61) | under 1 ms per tick (median tick) |
+| Server send at the default 1 MB/s per client, same load (RP62) | about 1.4 ms per tick on the in-process socket; the extra is per-packet sending, proportional to the bytes sent, not replication |
 | Client apply cost per tick | under 0.5 ms |
 | Join snapshot, 10,000 instances | encoded in under 50 ms and under 1 MB compressed. It arrives at up to the per-client send budget (default 1 MB/s, several fragments per tick), so a 600 KB snapshot takes under a second on a LAN |
 | Standalone cost of this sub-project | none measurable: the change sink is empty and RunContext is one comparison per script start |

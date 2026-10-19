@@ -42,6 +42,22 @@ public:
         float farSquared = 0.f;
         InstanceBuffer buffer;
         bool dirty = false;
+        // Its cards by cell of the ground, so a fade skips whole cells that
+        // sit at rest on one side of the band. Made again when rows change.
+        struct Cell {
+            float min[3];
+            float max[3];
+            std::uint32_t begin;
+            std::uint32_t end;
+            // Every card in it resting shown (kRestShown) or hidden (kRestHidden), or neither.
+            std::uint8_t rest;
+        };
+        std::vector<Cell> cells;
+        // Cells grouped kCellsPerBlock square: each block's bounds, and its cells, begin to end.
+        std::vector<Cell> blocks;
+        // Rows in cell order: cells index into it.
+        std::vector<int> order;
+        bool cellsStale = true;
     };
     // By slot number; most are empty.
     const std::vector<Slot>& slots() const { return slots_; }
@@ -56,6 +72,9 @@ public:
 private:
     void add(const MeshDraw& draw, int index);
     void remove(int index);
+    // A card still in its slot, its row brought up to date where it changed.
+    void refresh(const MeshDraw& draw, int index);
+    static void sortCells(Slot& slot);
 
     std::vector<Slot> slots_;
     // Per draw index: its slot and row, or -1.

@@ -4070,10 +4070,14 @@ TEST_CASE("S38 running out of Lua memory outside a script stops the scripts inst
             end
         end
         -- Big pieces first, so the loops fit in one step's budget, then smaller ones for the rest.
+        -- used is the fullest the heap got: a sweep late in the fill frees small blocks the
+        -- pages keep, so the last reading can sit well under the limit.
+        local used = 0
         for _, size in ipairs({1048576, 65536, 4096, 256, 0}) do
             pcall(grow, size)
+            used = math.max(used, gcinfo())
         end
-        _G.used = gcinfo()
+        _G.used = used
         _G.full = true
         while true do
             task.wait(1)

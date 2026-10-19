@@ -27,8 +27,9 @@ struct SceneAtmosphere {
 // The render snapshot's row, as the renderer reads it.
 SceneAtmosphere ToSceneAtmosphere(const engine_core::VisualAtmosphere& row);
 
-// The air's extinction per unit at Density 1, at BaseHeight.
-constexpr float kAtmosphereDensityScale = 0.004f;
+// The air's extinction per unit at Density 1, at BaseHeight. Tuned on Bald
+// Eagle Valley: the default Density reads as a clear day, distant ridges hazed.
+constexpr float kAtmosphereDensityScale = 0.016f;
 // How far away the sky is taken to be, in units, when the air hazes it.
 constexpr float kAtmosphereSkyDistance = 20000.f;
 // The height term's exponent never goes past this, so a camera far below

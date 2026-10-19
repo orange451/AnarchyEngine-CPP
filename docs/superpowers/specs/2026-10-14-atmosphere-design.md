@@ -27,7 +27,7 @@ It works with a DynamicSky, with a Skybox, or with no sky at all. It adds no ren
 | SunScatter | number | How strong the glow toward the sun (or moon) is, in that light's color | 0 to 1 | 0.25 |
 | SkyHaze | number | How much the air hazes the sky drawn behind everything | 0 to 1 | 1 |
 
-Distances are "units". Density maps to an extinction per unit, `Density * kDensityScale`. `kDensityScale` lives in `AtmosphereMath.hpp` and is tuned on Bald Eagle Valley so that the default looks like a clear day.
+Distances are "units". Density maps to an extinction per unit, `Density * kDensityScale`. `kDensityScale` (0.016 per unit) lives in `AtmosphereMath.hpp`; it was tuned on Bald Eagle Valley so that the default looks like a clear day.
 
 ## The model
 
@@ -78,7 +78,7 @@ All of these share one include, `atmosphere.glsl`. It declares its own uniforms 
 
 ## Budget
 
-At most 0.1 ms at 1080p on the UHD 770, measured warmed-up and Release against Release. That is two `exp` calls and one cube fetch per pixel in a pass that already runs.
+At most 0.1 ms at 1080p on the UHD 770, measured warmed-up and Release against Release. That is two `exp` calls and one cube fetch per pixel in a pass that already runs. Measured 2026-10-19 on Bald Eagle Valley in Studio (the GPU Studio renders on): the merge pass went from 0.062 to 0.066 ms with the air on; the see-through pass did not change measurably.
 
 ## Later
 

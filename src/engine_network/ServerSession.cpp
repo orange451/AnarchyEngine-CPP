@@ -142,16 +142,13 @@ void ServerSession::send(double now) {
         }
         entry.joined = true;
     }
-    std::vector<network::PeerId> ids;
-    ids.reserve(peers_.size());
-    for (const auto& [peer, entry] : peers_) {
-        ids.push_back(peer);
-    }
-    for (const network::PeerId peer : ids) {
+    // Through the endpoint's slots, which a kick in flush leaves in place, so
+    // a steady tick allocates nothing here.
+    endpoint_->for_each_peer([this, now](network::PeerId peer) {
         if (peers_.count(peer) != 0) {
             flush(peer, now);
         }
-    }
+    });
     endpoint_->send(now);
 }
 

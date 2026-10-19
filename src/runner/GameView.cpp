@@ -1050,6 +1050,19 @@ void GameView::renderContent(jadefx::UiRenderer& renderer, float opacity) {
     PROFILE_SCOPE("Scene View", profiler::Group::Render);
     notePaint();
     syncPointerLock();
+    // The engine loop waits on this when it is uncapped, so its frame follows
+    // the paint instead of looping again as soon as the step itself returns.
+    // Said once the snapshot is held, before the scene draws: the step then
+    // runs beside the draw, which reads only the snapshot, and is done before
+    // the next frame's layout reads the place. Said after the draw, the step
+    // ran into that layout, which waited on it every frame of a test.
+    bool noted = false;
+    const auto noteFrame = [&] {
+        if (engine_ != nullptr && !noted) {
+            noted = true;
+            engine_->note_client_frame();
+        }
+    };
     const jadefx::Scene* scene = getScene();
     if (scene != nullptr && scene->getWidth() > 0.0 && scene->getHeight() > 0.0 && getWidth() > 0.0 &&
         getHeight() > 0.0 && ensureGraphics()) {
@@ -1061,6 +1074,7 @@ void GameView::renderContent(jadefx::UiRenderer& renderer, float opacity) {
             PROFILE_SCOPE("Snapshot read", profiler::Group::Engine);
             collectMeshes();
         }
+        noteFrame();
         // The scene depth under the mouse, so a billboard the scene hides takes no clicks.
         renderer_.setDepthProbe(cursorX_, cursorY_);
         const bool drawn = renderer_.draw(getAbsoluteX(), getAbsoluteY(), getWidth(), getHeight(), scene->getWidth(),
@@ -1111,12 +1125,9 @@ void GameView::renderContent(jadefx::UiRenderer& renderer, float opacity) {
         }
         Node::renderChildren(renderer, opacity);
     }
-    // The engine loop waits on this when it is uncapped, so its frame follows
-    // the paint instead of looping again as soon as the step itself returns.
+    noteFrame();
     if (engine_ != nullptr) {
-        engine_->note_client_frame();
-        // This paint runs on the UI thread. The engine thread is waiting
-        // on the frame note above, so publishing analysis here is not on it.
+        // Published on the UI thread, so the engine thread's frame does not carry it.
         engine_->analysis().pump();
     }
     // The frame is painted: let the snapshot go, so the feed can reuse its buffer.

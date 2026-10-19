@@ -73,6 +73,9 @@ public:
     // Assets. Returns true when anything the views show may have changed since
     // the last call (the tree moved or the folder changed).
     bool refresh();
+    // Whether refresh would find nothing changed: the tree has not moved and
+    // the folder is the one last refreshed. Reads no instance, so it needs no lock.
+    bool current() const { return world_.tree_revision() == seen_tree_ && folder_ == seen_folder_; }
 
     // The class New <kind> makes in the folder shown: Material in Materials or
     // a Folder under it, and so on. Empty when there is none.

@@ -593,7 +593,12 @@ void IdeAssets::layoutChildren() {
         browser_.set_search(search_field_->getText());
         dirty_ = true;
     }
-    {
+    // Nothing it shows can have changed: the place is not read, so a frame
+    // does not wait for it while a test's steps hold it.
+    const bool quiet = built_ && !dirty_ && built_view_ == view_ && !edited_.peek() && browser_.current() &&
+                       world_.selection().revision() == selection_seen_ &&
+                       !(pending_insert_ && pending_insert_->done.load(std::memory_order_acquire));
+    if (!quiet) {
         engine_core::DataModelLock lock(world_, engine_core::DataModelLock::Read, kFrameLockWait);
         if (lock.owns()) {
             // Taken before the read, so a change made while reading reads again next frame.

@@ -23,6 +23,8 @@ public:
 
     // True once for each set, clearing it.
     bool take() { return flag_->exchange(false, std::memory_order_acq_rel); }
+    // Whether it is set, leaving it so.
+    bool peek() const { return flag_->load(std::memory_order_acquire); }
 
 private:
     std::shared_ptr<std::atomic<bool>> flag_;

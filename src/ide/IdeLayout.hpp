@@ -776,6 +776,8 @@ private:
     double plugin_poll_at_ = 0;
     // A plugin ribbon and widget sync is waiting for the next frame's start.
     bool plugin_sync_posted_ = false;
+    // Frames in a row the sync found the place busy, as a test's steps keep it.
+    int plugin_sync_missed_ = 0;
     // The ribbon, and the PluginUi revision its Plugins tab last showed.
     PluginRibbon* plugin_ribbon_ = nullptr;
     // The JadeFX menu bar, and what macOS's native bar moves or replaces.

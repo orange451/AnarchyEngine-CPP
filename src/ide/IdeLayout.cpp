@@ -647,9 +647,12 @@ void IdeLayout::flushFrame() {
         // Now if the place is free. The Scene View has just woken the engine,
         // though, whose step holds the place for a millisecond or two, so
         // rather than wait that out here every frame, a busy place is read at
-        // the start of the next frame, when the step is long done.
+        // the start of the next frame, when the step is usually done. A test
+        // steps all the time, so that read waits too only once many frames
+        // in a row have missed: waiting every frame stalled each paint.
         const bool ribbon = refresh_plugin_ribbon(std::chrono::milliseconds(0));
         const bool widgets = sync_plugin_widgets(std::chrono::milliseconds(0));
+        plugin_sync_missed_ = ribbon && widgets ? 0 : plugin_sync_missed_ + 1;
         if ((!ribbon || !widgets) && !plugin_sync_posted_) {
             plugin_sync_posted_ = true;
             jadefx::runLater([this, alive = std::weak_ptr<int>(alive_), ribbon, widgets] {
@@ -658,11 +661,17 @@ void IdeLayout::flushFrame() {
                 }
                 plugin_sync_posted_ = false;
                 PROFILE_SCOPE("Plugin sync", profiler::Group::Engine);
+                constexpr int kMissesBeforeWait = 30;
+                const std::chrono::milliseconds wait(plugin_sync_missed_ >= kMissesBeforeWait ? 1 : 0);
+                bool synced = true;
                 if (!ribbon) {
-                    refresh_plugin_ribbon(std::chrono::milliseconds(1));
+                    synced = refresh_plugin_ribbon(wait) && synced;
                 }
                 if (!widgets) {
-                    sync_plugin_widgets(std::chrono::milliseconds(1));
+                    synced = sync_plugin_widgets(wait) && synced;
+                }
+                if (synced) {
+                    plugin_sync_missed_ = 0;
                 }
             });
         }

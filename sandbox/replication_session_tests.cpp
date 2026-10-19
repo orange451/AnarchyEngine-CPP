@@ -626,3 +626,38 @@ TEST_CASE("RP63 a service value the server put back to its default reaches a cli
     REQUIRE(ambient.b == Lighting::kDefaultAmbient.b);
     net.same(client);
 }
+
+namespace {
+
+// A socket that has failed: it sends nothing and hears nothing.
+class FailedSocket : public network::ISocket {
+public:
+    bool send(const network::Address&, const std::uint8_t*, std::size_t) override { return false; }
+    std::size_t receive(network::Address&, std::uint8_t*, std::size_t) override { return 0; }
+    bool failed() const override { return true; }
+};
+
+}  // namespace
+
+TEST_CASE("RP64 a connect the endpoint refuses leaves the client Disconnected with a reason", "[replication][session]") {
+    ScriptRig rig;
+    engine_network::SessionConfig config;
+    config.endpoint.identity = identity();
+    engine_network::ClientSession client(rig.game, std::make_unique<FailedSocket>(), config);
+    client.send(0.0);   // the endpoint finds its socket failed
+    REQUIRE_FALSE(client.connect(kServer, 0.0));
+    REQUIRE(client.state() == engine_network::ClientState::Disconnected);
+    REQUIRE(client.reason() == "Could not connect to the server");
+    const engine_network::ClientStatus status = client.status();
+    REQUIRE(status.state == engine_network::ClientState::Disconnected);
+    REQUIRE(status.reason == "Could not connect to the server");
+    REQUIRE_FALSE(rig.game.simulation_running());
+    // A second connect while one is under way is refused and leaves that one alone.
+    Net net;
+    Client& joined = net.add_client();
+    net.run(0.5);
+    REQUIRE(joined.session->state() == engine_network::ClientState::Joined);
+    REQUIRE_FALSE(joined.session->connect(kServer, net.now));
+    REQUIRE(joined.session->state() == engine_network::ClientState::Joined);
+    REQUIRE(joined.session->reason().empty());
+}

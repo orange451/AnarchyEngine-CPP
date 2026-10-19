@@ -207,10 +207,14 @@ public:
         // The view's first paint is what lets the engine loop leave its wait.
         runner_.start();
         if (session_ != nullptr) {
-            // The session starts play itself once the server lets it in.
+            // The session starts play itself once the server lets it in. A refused
+            // connect leaves it Disconnected with "Could not connect to the server",
+            // which the overlay shows in place of "Connecting…".
             engine_network::ClientSession* session = session_.get();
             engine.on_simulation([session, server](engine_core::DataModel&) {
-                session->connect(server, engine_core::Engine::network_now());
+                if (!session->connect(server, engine_core::Engine::network_now())) {
+                    std::fprintf(stderr, "%s\n", session->reason().c_str());
+                }
             });
         } else {
             // As Test does in the studio: the place as loaded is what plays.

@@ -110,6 +110,12 @@ std::string ClientSession::describe(network::DisconnectReason why, network::Deny
 bool ClientSession::connect(const network::Address& server, double now) {
     now_ = now;
     if (!endpoint_->connect(server, now)) {
+        // A connection under way goes on; otherwise the refusal ends this one
+        // before it began, so status() says so rather than Connecting forever.
+        if (state_ != ClientState::Connecting && state_ != ClientState::Joining && state_ != ClientState::Joined) {
+            set_reason("Could not connect to the server");
+            set_state(ClientState::Disconnected);
+        }
         return false;
     }
     // Each connection builds its world from nothing.

@@ -125,7 +125,9 @@ public:
     ClientSession(const ClientSession&) = delete;
     ClientSession& operator=(const ClientSession&) = delete;
 
-    // Starts connecting; false when the endpoint refuses (already connected, or its socket failed).
+    // Starts connecting; false when the endpoint refuses (already connected, or its
+    // socket failed). A refusal while no connection is under way leaves the state
+    // Disconnected with the reason "Could not connect to the server".
     bool connect(const network::Address& server, double now);
     // The player leaves; reason "You left the game".
     void disconnect(double now);

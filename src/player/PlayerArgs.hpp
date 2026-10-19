@@ -12,8 +12,9 @@ struct PlayerArgs {
     std::filesystem::path folder;     // empty: the packed game
 };
 
-// argv as main gets it. Ignores macOS -psn_ arguments. nullopt with error on
-// --connect without a value or an unknown -- flag.
+// argv as main gets it. Skips the -psn_ and -NS arguments macOS adds (an -NS
+// one with its value). nullopt with error on --connect without a value, or any
+// other argument that starts with a dash.
 std::optional<PlayerArgs> parse_player_args(int argc, char** argv, std::string& error);
 
 }  // namespace player

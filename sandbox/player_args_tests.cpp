@@ -23,7 +23,7 @@ std::optional<player::PlayerArgs> parse(std::vector<std::string> args, std::stri
 
 }  // namespace
 
-TEST_CASE("PL1 parse_player_args reads a folder and --connect in either order", "[player]") {
+TEST_CASE("PL1 parse_player_args reads a folder and --connect in either order, skips what macOS adds, and refuses any other dash", "[player]") {
     std::string error;
 
     std::optional<player::PlayerArgs> args = parse({"AnarchyPlayer"}, error);
@@ -57,11 +57,20 @@ TEST_CASE("PL1 parse_player_args reads a folder and --connect in either order", 
     REQUIRE(args->connect.empty());
     REQUIRE(args->folder.empty());
 
+    // Xcode passes its -NS settings, each with a value.
+    args = parse({"AnarchyPlayer", "-NSDocumentRevisionsDebugMode", "YES", "game", "-NSQuitAlwaysKeepsWindows"}, error);
+    REQUIRE(args);
+    REQUIRE(args->connect.empty());
+    REQUIRE(args->folder == "game");
+
     error.clear();
     REQUIRE_FALSE(parse({"AnarchyPlayer", "--connect"}, error));
     REQUIRE_FALSE(error.empty());
 
-    error.clear();
-    REQUIRE_FALSE(parse({"AnarchyPlayer", "--bogus"}, error));
-    REQUIRE_FALSE(error.empty());
+    for (const char* wrong : {"--bogus", "-connect", "-x", "-"}) {
+        INFO(wrong);
+        error.clear();
+        REQUIRE_FALSE(parse({"AnarchyPlayer", wrong}, error));
+        REQUIRE(error.find("Usage: AnarchyPlayer") != std::string::npos);
+    }
 }

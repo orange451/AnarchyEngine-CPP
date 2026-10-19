@@ -10,8 +10,8 @@
 
 namespace network {
 
-// An IP address and port. Only literal addresses parse; a name is resolved
-// by whoever asks the user for one.
+// An IP address and port. Only literal addresses parse; resolve() below also
+// looks names up.
 struct Address {
     enum class Family : std::uint8_t { None, IPv4, IPv6 };
     Family family = Family::None;
@@ -29,6 +29,11 @@ struct Address {
     }
     bool operator!=(const Address& other) const { return !(*this == other); }
 };
+
+// "host:port": a literal, as Address::parse, or a name looked up with the
+// system resolver, preferring an IPv4 answer. nullopt with error worded for a player.
+// It blocks while the resolver works.
+std::optional<Address> resolve(std::string_view host_port, std::string& error);
 
 // What an Endpoint sends and receives through: a real socket, a link in one
 // process, or the conditioner wrapping either.
@@ -56,10 +61,13 @@ private:
 };
 
 // A non-blocking UDP socket over Winsock or BSD sockets, dual-stack: IPv4
-// peers arrive as mapped addresses and are given back as IPv4.
+// peers arrive as mapped addresses and are given back as IPv4. A host that
+// cannot make a dual-stack socket gets an IPv4 one, which cannot reach IPv6 peers.
 class UdpSocket : public ISocket {
 public:
     static std::unique_ptr<UdpSocket> open(std::uint16_t port, std::string& error);
+    // IPv4 only: a send to an IPv6 address returns false and leaves the socket working.
+    static std::unique_ptr<UdpSocket> open_ipv4(std::uint16_t port, std::string& error);
     ~UdpSocket() override;
     std::uint16_t port() const { return port_; }
     bool send(const Address& to, const std::uint8_t* bytes, std::size_t length) override;
@@ -71,6 +79,7 @@ private:
     std::uintptr_t handle_ = 0;
     std::uint16_t port_ = 0;
     bool failed_ = false;
+    bool ipv4_ = false;
 };
 
 }  // namespace network

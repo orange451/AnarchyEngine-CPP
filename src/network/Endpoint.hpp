@@ -23,7 +23,10 @@ constexpr PeerId kNoPeer = 0xFF;
 
 enum class Role { Server, Client };
 enum class ConnectionState { Disconnected, Connecting, Connected };
-enum class DisconnectReason { None, Requested, Timeout, Denied, Socket };
+// Closed and Removed are what the other side said when it left: it shut down, or it removed this peer.
+enum class DisconnectReason { None, Requested, Timeout, Denied, Socket, Closed, Removed };
+// Why a side is leaving, carried in its Disconnect packet's one trailing byte.
+enum class LeaveCode : std::uint8_t { Left = 0, Closed = 1, Removed = 2 };
 // WrongProtocol is reserved: a packet with another protocol id is dropped and
 // counted without a reply, so it is never sent.
 enum class DenyReason : std::uint8_t { None, Full, WrongProtocol, WrongGame, WrongVersion, WrongContent };
@@ -39,7 +42,8 @@ struct EndpointConfig {
 // Set once; the engine's tree may be touched from inside them, since the
 // pump runs under its lock. A callback may disconnect any peer, including the
 // one it was called for: that peer's remaining callbacks for the packet being
-// read are swallowed and on_disconnected fires once, after the packet.
+// read are swallowed and on_disconnected fires once, after the packet. An
+// exception from a callback leaves the pump, and such a drop is still made.
 struct EndpointCallbacks {
     std::function<void(PeerId)> on_connected;
     std::function<void(PeerId, DisconnectReason, DenyReason)> on_disconnected;
@@ -65,7 +69,10 @@ public:
     ConditionerSettings& conditioner() { return conditioner_.settings; }
 
     bool connect(const Address& server, double now);
-    void disconnect(PeerId peer, double now);
+    // Tells a connected peer why with code, then drops it; on_disconnected fires here with Requested.
+    void disconnect(PeerId peer, double now, LeaveCode code = LeaveCode::Left);
+    // Every peer is told Closed and dropped (on_disconnected fires for each, reason Requested on this side).
+    void close(double now);
     void receive(double now);
     void send(double now);
 
@@ -79,6 +86,13 @@ public:
     std::size_t payload_budget(PeerId peer, double now) const;
     std::optional<std::uint16_t> send_payload(PeerId peer, const std::uint8_t* bytes, std::size_t length, std::uint32_t tag);
     std::vector<PeerId> peers() const;
+    // Visits each connected peer's id without allocating.
+    template <class F>
+    void for_each_peer(F&& visit) const {
+        for (PeerId id = 0; id < peers_.size(); ++id) {
+            if (connected(id) != nullptr) visit(id);
+        }
+    }
     // The server's version after a WrongVersion deny; empty after any other outcome.
     const std::string& denied_version() const { return denied_version_; }
     bool failed() const { return failed_; }
@@ -108,7 +122,9 @@ private:
     void send_request(Peer& peer);
     void send_accept(const Peer& peer);
     void send_deny(const Address& to, DenyReason reason);
-    void send_disconnect(const Peer& peer);
+    void send_disconnect(const Peer& peer, LeaveCode code);
+    // Clears reading_ and carries out a drop a callback asked for while the packet was read.
+    void finish_read(PeerId id);
     // Reads one packet on a peer's connection; a disconnect requested by a callback inside it is carried out after.
     void read_connection(PeerId id, const PacketHeader& header, BitReader& reader, std::size_t length, double now);
     static std::uint16_t session_of(const Peer& peer) {

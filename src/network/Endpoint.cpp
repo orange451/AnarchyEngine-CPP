@@ -22,6 +22,20 @@ std::uint64_t read_u64(BitReader& reader) {
     return low | (high << 32);
 }
 
+// A Disconnect's trailing code byte. An older peer sends none, and a code this
+// build does not know reads as a plain leave.
+DisconnectReason leave_reason(BitReader& reader) {
+    if (reader.bytes_left() < 1) return DisconnectReason::Requested;
+    switch (static_cast<LeaveCode>(reader.bits(8))) {
+        case LeaveCode::Closed:
+            return DisconnectReason::Closed;
+        case LeaveCode::Removed:
+            return DisconnectReason::Removed;
+        default:
+            return DisconnectReason::Requested;
+    }
+}
+
 }  // namespace
 
 Endpoint::Endpoint(std::unique_ptr<ISocket> socket, EndpointConfig config, EndpointCallbacks callbacks)
@@ -59,12 +73,16 @@ bool Endpoint::connect(const Address& server, double now) {
     return true;
 }
 
-void Endpoint::disconnect(PeerId id, double now) {
+void Endpoint::disconnect(PeerId id, double now, LeaveCode code) {
     (void)now;
     if (id >= peers_.size() || !peers_[id].used) return;
     if (peers_[id].pending_drop) return;
-    if (peers_[id].state == ConnectionState::Connected) send_disconnect(peers_[id]);
+    if (peers_[id].state == ConnectionState::Connected) send_disconnect(peers_[id], code);
     drop_peer(id, DisconnectReason::Requested, DenyReason::None);
+}
+
+void Endpoint::close(double now) {
+    for (PeerId id = 0; id < peers_.size(); ++id) disconnect(id, now, LeaveCode::Closed);
 }
 
 void Endpoint::receive(double now) {
@@ -169,7 +187,7 @@ void Endpoint::receive_as_server(const Address& from, const PacketHeader& header
     }
     const PeerId id = static_cast<PeerId>(peer - peers_.data());
     if (header.type == PacketType::Disconnect) {
-        drop_peer(id, DisconnectReason::Requested, DenyReason::None);
+        drop_peer(id, leave_reason(reader), DenyReason::None);
         return;
     }
     read_connection(id, header, reader, length, now);
@@ -225,7 +243,7 @@ void Endpoint::receive_as_client(const Address& from, const PacketHeader& header
         return;
     }
     if (header.type == PacketType::Disconnect) {
-        drop_peer(0, DisconnectReason::Requested, DenyReason::None);
+        drop_peer(0, leave_reason(reader), DenyReason::None);
         return;
     }
     read_connection(0, header, reader, length, now);
@@ -233,7 +251,17 @@ void Endpoint::receive_as_client(const Address& from, const PacketHeader& header
 
 void Endpoint::read_connection(PeerId id, const PacketHeader& header, BitReader& reader, std::size_t length, double now) {
     reading_ = id;
-    peers_[id].connection->read_packet(header, reader, buffer_, length, now);
+    try {
+        peers_[id].connection->read_packet(header, reader, buffer_, length, now);
+    } catch (...) {
+        // A callback threw: the slot must not stay marked mid-read, or it never frees.
+        finish_read(id);
+        throw;
+    }
+    finish_read(id);
+}
+
+void Endpoint::finish_read(PeerId id) {
     reading_ = kNoPeer;
     Peer& peer = peers_[id];
     if (peer.pending_drop) {
@@ -344,12 +372,13 @@ void Endpoint::send_deny(const Address& to, DenyReason reason) {
     conditioner_.send(to, send_buffer_, encode_packet(send_buffer_, writer.bytes_written(), kMaxPacketBytes));
 }
 
-void Endpoint::send_disconnect(const Peer& peer) {
+void Endpoint::send_disconnect(const Peer& peer, LeaveCode code) {
     BitWriter writer(send_buffer_, kMaxPacketBytes);
     PacketHeader header;
     header.type = PacketType::Disconnect;
     header.session = peer.connection->session();
     write_header(writer, header);
+    writer.bits(static_cast<std::uint32_t>(code), 8);
     const std::size_t length = encode_packet(send_buffer_, writer.bytes_written(), kMaxPacketBytes);
     for (int i = 0; i < kDisconnectSends; ++i) conditioner_.send(peer.address, send_buffer_, length);
 }

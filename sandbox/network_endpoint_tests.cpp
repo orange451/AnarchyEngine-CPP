@@ -14,6 +14,7 @@
 #include <cstdint>
 #include <deque>
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <tuple>
 #include <vector>
@@ -727,4 +728,87 @@ TEST_CASE("N84 the loss estimate holds while bursting: 0 on a clean 100 ms link,
             REQUIRE(max_loss <= 0.10f);
         }
     }
+}
+
+TEST_CASE("N78 a server's close tells each client Closed, and a disconnect with Removed reaches the client as Removed", "[network][endpoint]") {
+    Net net;
+    Endpoint& a = net.add_client();
+    Endpoint& b = net.add_client();
+    a.connect(kServer, 0.0);
+    double now = net.run(0.0, 0.1);
+    b.connect(kServer, now);
+    now = net.run(now, 0.1);
+    REQUIRE(net.server->peers() == std::vector<PeerId>{0, 1});
+    std::vector<PeerId> visited;
+    net.server->for_each_peer([&](PeerId peer) { visited.push_back(peer); });
+    REQUIRE(visited == std::vector<PeerId>{0, 1});
+    net.server->disconnect(0, now, network::LeaveCode::Removed);
+    net.tick(now += 1.0 / 60.0);
+    REQUIRE(net.client_logs[0].disconnected.size() == 1);
+    REQUIRE(std::get<1>(net.client_logs[0].disconnected[0]) == DisconnectReason::Removed);
+    REQUIRE(a.state(0) == ConnectionState::Disconnected);
+    net.server->close(now);
+    REQUIRE(net.server->peers().empty());
+    REQUIRE(net.server_log.disconnected.size() == 2);
+    REQUIRE(std::get<1>(net.server_log.disconnected[1]) == DisconnectReason::Requested);
+    net.tick(now += 1.0 / 60.0);
+    REQUIRE(net.client_logs[1].disconnected.size() == 1);
+    REQUIRE(std::get<1>(net.client_logs[1].disconnected[0]) == DisconnectReason::Closed);
+    REQUIRE(b.state(0) == ConnectionState::Disconnected);
+}
+
+TEST_CASE("N79 a Disconnect packet with no code byte reads as Requested", "[network][endpoint]") {
+    Net net;
+    Endpoint& client = net.add_client();
+    client.connect(kServer, 0.0);
+    const double now = net.run(0.0, 0.1);
+    REQUIRE(client.state(0) == ConnectionState::Connected);
+    // An older peer's Disconnect: the header and nothing after it.
+    std::uint8_t buffer[network::kMaxPacketBytes];
+    network::BitWriter writer(buffer, sizeof(buffer));
+    network::PacketHeader header;
+    header.type = network::PacketType::Disconnect;
+    header.session = client.session(0);
+    network::write_header(writer, header);
+    REQUIRE(writer.bytes_written() == network::kHeaderBytes);
+    raw_send(net.hub, kServer, client_address(0), writer, buffer);
+    client.receive(now + 1.0 / 60.0);
+    REQUIRE(net.client_logs[0].disconnected.size() == 1);
+    REQUIRE(std::get<1>(net.client_logs[0].disconnected[0]) == DisconnectReason::Requested);
+    REQUIRE(client.state(0) == ConnectionState::Disconnected);
+}
+
+TEST_CASE("N81 a callback that throws leaves the endpoint usable", "[network][endpoint]") {
+    Net net;
+    net.client_logs.emplace_back();
+    // The client's first message throws out of its callback, and so out of the pump.
+    bool thrown = false;
+    EndpointCallbacks callbacks = net.client_logs[0].callbacks();
+    callbacks.on_message = [&](PeerId, const std::uint8_t*, std::size_t) {
+        if (!thrown) {
+            thrown = true;
+            throw std::runtime_error("callback failed");
+        }
+    };
+    EndpointConfig config;
+    config.role = Role::Client;
+    config.identity = identity();
+    net.clients.push_back(std::make_unique<Endpoint>(net.hub.open(client_address(0)), config, callbacks));
+    Endpoint& thrower = *net.clients[0];
+    thrower.connect(kServer, 0.0);
+    double now = net.run(0.0, 0.1);
+    REQUIRE(thrower.state(0) == ConnectionState::Connected);
+    const std::uint8_t hello[2] = {'h', 'i'};
+    REQUIRE(net.server->send_message(0, hello, 2));
+    REQUIRE_THROWS_AS(([&] {
+                          for (int i = 0; i < 30; ++i) net.tick(now += 1.0 / 60.0);
+                      }()),
+                      std::runtime_error);
+    thrower.disconnect(0, now);
+    REQUIRE(thrower.state(0) == ConnectionState::Disconnected);
+    REQUIRE(net.client_logs[0].disconnected.size() == 1);
+    REQUIRE(thrower.connect(kServer, now));
+    net.run(now, 0.3);
+    REQUIRE(thrower.state(0) == ConnectionState::Connected);
+    REQUIRE(net.server->peers().size() == 1);
 }

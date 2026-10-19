@@ -158,3 +158,50 @@ TEST_CASE("N26 a real UDP socket skips a zero-length datagram", "[network][socke
     REQUIRE(wait_receive(*b, from, buffer, sizeof(buffer)) == 3);
     REQUIRE(std::memcmp(buffer, three, 3) == 0);
 }
+
+TEST_CASE("N80 resolve takes literals and names", "[network][socket]") {
+    std::string error;
+    const auto literal = network::resolve("127.0.0.1:7777", error);
+    REQUIRE(literal.has_value());
+    REQUIRE(*literal == Address::loopback(7777));
+    const auto bracketed = network::resolve("[::1]:7777", error);
+    REQUIRE(bracketed.has_value());
+    REQUIRE(bracketed->family == Address::Family::IPv6);
+    const auto named = network::resolve("localhost:7777", error);
+    REQUIRE(named.has_value());
+    REQUIRE(named->port == 7777);
+    REQUIRE((named->family == Address::Family::IPv4 || named->family == Address::Family::IPv6));
+    error.clear();
+    REQUIRE_FALSE(network::resolve("no-such-host.invalid:7777", error).has_value());
+    REQUIRE_FALSE(error.empty());
+    error.clear();
+    REQUIRE_FALSE(network::resolve("localhost", error).has_value());
+    REQUIRE_FALSE(error.empty());
+    error.clear();
+    REQUIRE_FALSE(network::resolve("localhost:99999", error).has_value());
+    REQUIRE_FALSE(error.empty());
+    error.clear();
+    REQUIRE_FALSE(network::resolve(":7777", error).has_value());
+    REQUIRE_FALSE(error.empty());
+}
+
+TEST_CASE("N82 an IPv4-only socket sends and receives on loopback", "[network][socket]") {
+    std::string error;
+    auto a = UdpSocket::open_ipv4(0, error);
+    REQUIRE(a);
+    auto b = UdpSocket::open_ipv4(0, error);
+    REQUIRE(b);
+    REQUIRE(a->port() != 0);
+    const std::uint8_t data[4] = {1, 2, 3, 4};
+    REQUIRE(a->send(Address::loopback(b->port()), data, 4));
+    Address from;
+    std::uint8_t buffer[16];
+    REQUIRE(wait_receive(*b, from, buffer, sizeof(buffer)) == 4);
+    REQUIRE(from == Address::loopback(a->port()));
+    REQUIRE(std::memcmp(buffer, data, 4) == 0);
+    // An IPv6 address cannot be reached from an IPv4 socket: the send fails, the socket does not.
+    REQUIRE_FALSE(a->send(*Address::parse("[::1]:5"), data, 4));
+    REQUIRE_FALSE(a->failed());
+    REQUIRE(a->send(Address::loopback(b->port()), data, 4));
+    REQUIRE(wait_receive(*b, from, buffer, sizeof(buffer)) == 4);
+}

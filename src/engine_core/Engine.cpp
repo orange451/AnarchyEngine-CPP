@@ -31,11 +31,6 @@ constexpr std::chrono::milliseconds kToolInterval(16);
 // so a window that stops painting still runs the place at about 60 Hz.
 constexpr std::chrono::microseconds kSimulationClientFallback(16667);
 
-// Seconds on the steady clock, for the network's timers.
-double network_now() {
-    return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
-}
-
 // Sleeps until the next slot of a fixed hz schedule. Sleeping for the budget
 // less the step's own work dropped each wake-up's lateness, and a sleep on
 // Windows can wake a whole 15.6 ms tick late, so 60 Hz ran near 32. On a fixed
@@ -58,6 +53,10 @@ void WaitForSlot(std::chrono::steady_clock::time_point& next, std::chrono::stead
 }
 
 }  // namespace
+
+double Engine::network_now() {
+    return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+}
 
 Engine::Engine() : Engine(EngineOptions{}) {}
 

@@ -793,7 +793,9 @@ target_link_libraries(engine_core PRIVATE zstd)
 add_library(engine_network STATIC
     src/engine_network/ByteBuffer.cpp
     src/engine_network/ClientSession.cpp
+    src/engine_network/ClientWorld.cpp
     src/engine_network/JsonWire.cpp
+    src/engine_network/ProjectIdentity.cpp
     src/engine_network/ReplicaApplier.cpp
     src/engine_network/Replicator.cpp
     src/engine_network/ServerSession.cpp
@@ -1245,6 +1247,7 @@ add_executable(sandbox
     sandbox/replication_snapshot_tests.cpp
     sandbox/replication_changes_tests.cpp
     sandbox/replication_session_tests.cpp
+    sandbox/replication_client_world_tests.cpp
     sandbox/replication_bench_tests.cpp
 )
 target_link_libraries(sandbox PRIVATE studio_core anarchy_network engine_network Catch2::Catch2WithMain)

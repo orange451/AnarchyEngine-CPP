@@ -13,10 +13,12 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
+#include <atomic>
 #include <cstdint>
 #include <deque>
 #include <memory>
 #include <string>
+#include <thread>
 #include <vector>
 
 using engine_core::InstanceId;
@@ -237,7 +239,7 @@ TEST_CASE("RP45 the server closing tells clients so; a client that stops hearing
     net.run(0.5);
     net.session->close(net.now);
     net.run(0.5);
-    REQUIRE(closed.session->reason() == "The server closed the connection");
+    REQUIRE(closed.session->reason() == "The server closed");
     REQUIRE(net.server.game.get_children(net.server.game.connections()).empty());
     Net silent;
     Client& lost = silent.add_client();
@@ -419,24 +421,6 @@ TEST_CASE("RP42c a client leaving mid-snapshot leaves nothing behind", "[replica
     REQUIRE(next.session->applier().skipped() == 0);
 }
 
-TEST_CASE("RP42d a script destroying a client's Connection on the server", "[replication][session]") {
-    Net net;
-    Client& client = net.add_client();
-    net.run(0.5);
-    const network::PeerId peer = only_new_peer({}, net.session->endpoint().peers());
-    REQUIRE(!local_connection_id(client).empty());
-    net.server.game.destroy_tree(net.session->connection_of(peer));   // as Destroy from a script would
-    net.run(0.3);
-    REQUIRE(client.session->state() == engine_network::ClientState::Joined);
-    REQUIRE(client.rig.game.get_children(client.rig.game.connections()).empty());
-    REQUIRE(local_connection_id(client).empty());
-    net.same(client);
-    client.session->disconnect(net.now);
-    net.run(0.5);
-    REQUIRE(net.session->connection_of(peer) == 0);
-    REQUIRE(net.server.game.get_children(net.server.game.connections()).empty());
-}
-
 TEST_CASE("RP44b a refused connect leaves play it did not start alone", "[replication][session]") {
     Net net;
     network::GameIdentity other = identity();
@@ -469,7 +453,7 @@ TEST_CASE("RP45b destroying a session ends its connections", "[replication][sess
         a.session->receive(net.now);
         a.session->send(net.now);
     }
-    REQUIRE(a.session->reason() == "The server closed the connection");
+    REQUIRE(a.session->reason() == "The server closed");
     REQUIRE_FALSE(a.rig.game.simulation_running());
 }
 
@@ -499,4 +483,112 @@ TEST_CASE("RP45c a connection's end puts back the world role it set, and leaves 
     net.run(0.5);
     REQUIRE(already.session->state() == engine_network::ClientState::Disconnected);
     REQUIRE(already.rig.game.world_role() == engine_core::WorldRole::Client);
+}
+
+TEST_CASE("RP50 a server script destroying a client's Connection removes that client", "[replication][session]") {
+    Net net;
+    Client& a = net.add_client();
+    for (int i = 0; i < 60 && net.session->endpoint().peers().empty(); ++i) net.tick();
+    const network::PeerId peer_a = only_new_peer({}, net.session->endpoint().peers());
+    Client& b = net.add_client();
+    net.run(0.5);
+    REQUIRE(a.session->state() == engine_network::ClientState::Joined);
+    REQUIRE(b.session->state() == engine_network::ClientState::Joined);
+    REQUIRE(b.rig.game.get_children(b.rig.game.connections()).size() == 2);
+    net.server.game.destroy_tree(net.session->connection_of(peer_a));   // as Destroy from a script would
+    net.run(0.3);
+    REQUIRE(a.session->state() == engine_network::ClientState::Disconnected);
+    REQUIRE(a.session->reason() == "Removed by the server");
+    REQUIRE_FALSE(a.rig.game.simulation_running());
+    REQUIRE(net.session->connection_of(peer_a) == 0);
+    REQUIRE(b.session->state() == engine_network::ClientState::Joined);
+    const std::vector<InstanceId> left = b.rig.game.get_children(b.rig.game.connections());
+    REQUIRE(left.size() == 1);
+    REQUIRE(static_cast<engine_core::ConnectionInstance*>(b.rig.game.instance(left[0]))->connection_id() ==
+            local_connection_id(b));
+    net.same(b);
+    REQUIRE(b.session->applier().skipped() == 0);
+}
+
+TEST_CASE("RP51 closing the server tells each client \"The server closed\" at once", "[replication][session]") {
+    Net net;
+    Client& a = net.add_client();
+    Client& b = net.add_client();
+    net.run(0.5);
+    REQUIRE(a.session->state() == engine_network::ClientState::Joined);
+    REQUIRE(b.session->state() == engine_network::ClientState::Joined);
+    net.session->close(net.now);
+    net.tick();
+    for (Client* client : {&a, &b}) {
+        REQUIRE(client->session->reason() == "The server closed");
+        REQUIRE(client->session->state() == engine_network::ClientState::Disconnected);
+    }
+    REQUIRE(net.server.game.get_children(net.server.game.connections()).empty());
+}
+
+namespace {
+
+// status(), read as another thread would, says what state() and reason() say.
+void require_status_matches(engine_network::ClientSession& session) {
+    const engine_network::ClientStatus status = session.status();
+    REQUIRE(status.state == session.state());
+    REQUIRE(status.reason == session.reason());
+}
+
+}  // namespace
+
+TEST_CASE("RP52 status() matches state() and reason() through a whole connection", "[replication][session]") {
+    Net net;
+    Client& good = net.add_client();
+    REQUIRE(good.session->status().state == engine_network::ClientState::Connecting);
+    require_status_matches(*good.session);
+    net.run(0.5);
+    REQUIRE(good.session->status().state == engine_network::ClientState::Joined);
+    require_status_matches(*good.session);
+    network::GameIdentity other = identity();
+    other.game_id[0] ^= 0xFF;
+    Client& wrong = net.add_client(other);
+    net.run(0.5);
+    REQUIRE(wrong.session->status().state == engine_network::ClientState::Disconnected);
+    REQUIRE(wrong.session->status().reason == "This server runs a different game");
+    require_status_matches(*wrong.session);
+}
+
+TEST_CASE("RP53 status() is safe from another thread", "[replication][session]") {
+    Net net;
+    Client& client = net.add_client();
+    std::atomic<bool> stop{false};
+    std::atomic<int> reads{0};
+    engine_network::ClientStatus last;
+    std::thread reader([&] {
+        for (;;) {
+            const bool done = stop.load();
+            last = client.session->status();
+            reads.fetch_add(1);
+            if (done) break;
+        }
+    });
+    // A failed REQUIRE below still stops and joins the reader, rather than ending the run.
+    struct Join {
+        std::atomic<bool>& stop;
+        std::thread& thread;
+        ~Join() {
+            stop.store(true);
+            if (thread.joinable()) thread.join();
+        }
+    } join{stop, reader};
+    for (int round = 0; round < 20; ++round) {
+        if (round > 0) REQUIRE(client.session->connect(kServer, net.now));
+        for (int i = 0; i < 120 && client.session->state() != engine_network::ClientState::Joined; ++i) net.tick();
+        REQUIRE(client.session->state() == engine_network::ClientState::Joined);
+        client.session->disconnect(net.now);
+        for (int i = 0; i < 60 && client.session->state() != engine_network::ClientState::Disconnected; ++i) net.tick();
+        REQUIRE(client.session->state() == engine_network::ClientState::Disconnected);
+        net.run(0.1);   // the server forgets the client before it comes back
+    }
+    stop.store(true);
+    reader.join();
+    REQUIRE(reads.load() > 1);
+    REQUIRE(last.state == engine_network::ClientState::Disconnected);
+    REQUIRE(last.reason == "You left the game");
 }

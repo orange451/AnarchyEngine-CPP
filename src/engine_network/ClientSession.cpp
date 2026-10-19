@@ -19,7 +19,7 @@ ClientSession::ClientSession(engine_core::DataModel& game, std::unique_ptr<netwo
 ClientSession::~ClientSession() { disconnect(now_); }
 
 void ClientSession::on_connected() {
-    state_ = ClientState::Joining;
+    set_state(ClientState::Joining);
     // A client plays the server's world: it starts while still empty, and the
     // snapshot builds the place during play.
     if (game_.world_role() != engine_core::WorldRole::Client) {
@@ -42,11 +42,11 @@ void ClientSession::on_message(const std::uint8_t* data, std::size_t size) {
     }
     switch (applier_->receive_message(data, size)) {
         case ApplyResult::SnapshotApplied:
-            state_ = ClientState::Joined;
+            set_state(ClientState::Joined);
             break;
         case ApplyResult::Bad:
             if (reason_.empty()) {
-                reason_ = "Bad data from the server";
+                set_reason("Bad data from the server");
             }
             // Inside a packet's read, so the endpoint drops the server after it
             // and on_disconnected stops play then.
@@ -59,9 +59,9 @@ void ClientSession::on_message(const std::uint8_t* data, std::size_t size) {
 
 void ClientSession::on_disconnected(network::DisconnectReason why, network::DenyReason deny) {
     if (reason_.empty()) {
-        reason_ = describe(why, deny);
+        set_reason(describe(why, deny));
     }
-    state_ = ClientState::Disconnected;
+    set_state(ClientState::Disconnected);
     // Stopping puts back the empty place the client started play with; play
     // this connection did not start, as after a refused connect, is left alone.
     if (started_play_ && game_.simulation_running()) {
@@ -96,6 +96,10 @@ std::string ClientSession::describe(network::DisconnectReason why, network::Deny
             return state_ == ClientState::Connecting ? "Could not reach the server" : "Lost connection to the server";
         case DisconnectReason::Requested:
             return "The server closed the connection";
+        case DisconnectReason::Closed:
+            return "The server closed";
+        case DisconnectReason::Removed:
+            return "Removed by the server";
         case DisconnectReason::Socket:
             return "Network error";
         default:
@@ -110,8 +114,8 @@ bool ClientSession::connect(const network::Address& server, double now) {
     }
     // Each connection builds its world from nothing.
     applier_ = std::make_unique<ReplicaApplier>(game_);
-    state_ = ClientState::Connecting;
-    reason_.clear();
+    set_state(ClientState::Connecting);
+    set_reason(std::string());
     return true;
 }
 
@@ -121,7 +125,7 @@ void ClientSession::disconnect(double now) {
         return;
     }
     // The endpoint reports a leave we asked for as Requested, which reads as the server's doing.
-    reason_ = "You left the game";
+    set_reason("You left the game");
     endpoint_->disconnect(0, now);
 }
 
@@ -137,6 +141,22 @@ void ClientSession::send(double now) {
 
 ClientState ClientSession::state() const { return state_; }
 const std::string& ClientSession::reason() const { return reason_; }
+
+ClientStatus ClientSession::status() const {
+    std::lock_guard<std::mutex> lock(status_mutex_);
+    return ClientStatus{state_, reason_};
+}
+
+void ClientSession::set_state(ClientState state) {
+    std::lock_guard<std::mutex> lock(status_mutex_);
+    state_ = state;
+}
+
+void ClientSession::set_reason(std::string reason) {
+    std::lock_guard<std::mutex> lock(status_mutex_);
+    reason_ = std::move(reason);
+}
+
 network::Endpoint& ClientSession::endpoint() { return *endpoint_; }
 ReplicaApplier& ClientSession::applier() { return *applier_; }
 

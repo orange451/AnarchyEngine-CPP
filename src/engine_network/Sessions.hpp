@@ -24,6 +24,7 @@
 #include <cstdint>
 #include <deque>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -105,6 +106,13 @@ private:
 
 enum class ClientState { Idle, Connecting, Joining, Joined, Disconnected };
 
+// A client's state and why its connection ended, copied out together for a
+// thread other than the simulation's, such as a window drawing an overlay.
+struct ClientStatus {
+    ClientState state = ClientState::Idle;
+    std::string reason;
+};
+
 // The client's side: it connects, starts play while its world is still empty,
 // builds the world from the server's snapshot, then applies each tick's
 // changes. When the connection ends, play it started stops, the world role it
@@ -123,9 +131,12 @@ public:
     void disconnect(double now);
     void receive(double now) override;
     void send(double now) override;
+    // state() and reason() are for the simulation thread, which writes them.
     ClientState state() const;
     // Why the connection ended, worded for a player; empty until then.
     const std::string& reason() const;
+    // Any thread: the state and reason as of the last receive or send.
+    ClientStatus status() const;
     network::Endpoint& endpoint();
     // A fresh one for each connect.
     ReplicaApplier& applier();
@@ -135,10 +146,15 @@ private:
     void on_message(const std::uint8_t* data, std::size_t size);
     void on_disconnected(network::DisconnectReason why, network::DenyReason deny);
     std::string describe(network::DisconnectReason why, network::DenyReason deny) const;
+    // Every write of state_ or reason_ goes through these, under status_mutex_.
+    void set_state(ClientState state);
+    void set_reason(std::string reason);
 
     engine_core::DataModel& game_;
     SessionConfig config_;
     std::unique_ptr<ReplicaApplier> applier_;
+    // Written on the simulation thread only, under status_mutex_, so status() can copy them from any thread.
+    mutable std::mutex status_mutex_;
     ClientState state_ = ClientState::Idle;
     std::string reason_;
     double now_ = 0.0;

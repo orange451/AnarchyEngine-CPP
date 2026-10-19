@@ -101,6 +101,19 @@ void ServerSession::flush(network::PeerId peer, double now) {
 
 void ServerSession::send(double now) {
     now_ = now;
+    // A script that destroyed a client's Connection removed that client: it is
+    // told so, and its changes stop here. Outside a packet's read, the endpoint
+    // reports the drop at once; the second call covers an endpoint that did not.
+    std::vector<network::PeerId> removed;
+    for (const auto& [peer, entry] : peers_) {
+        if (!game_.alive(entry.connection)) {
+            removed.push_back(peer);
+        }
+    }
+    for (const network::PeerId peer : removed) {
+        endpoint_->disconnect(peer, now, network::LeaveCode::Removed);
+        on_disconnected(peer);
+    }
     std::vector<std::uint8_t> bytes;
     Message changes;
     if (replicator_.end_tick(bytes)) {
@@ -142,13 +155,15 @@ void ServerSession::send(double now) {
 }
 
 void ServerSession::close(double now) {
+    // Each client hears the server closed; the endpoint reports each drop at
+    // once, which destroys its Connection, and the second pass covers any it did not.
+    endpoint_->close(now);
     std::vector<network::PeerId> ids;
     ids.reserve(peers_.size());
     for (const auto& [peer, entry] : peers_) {
         ids.push_back(peer);
     }
     for (const network::PeerId peer : ids) {
-        endpoint_->disconnect(peer, now);
         on_disconnected(peer);
     }
     endpoint_->send(now);

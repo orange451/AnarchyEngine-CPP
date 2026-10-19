@@ -59,6 +59,9 @@ public:
     // A server or client session, pumped at each step's ends. Null to stop.
     // Set before start(); the engine does not own it.
     void set_network(INetworkPump* pump);
+    // The clock a session's now is on, seconds on the steady clock: the engine
+    // pumps a session with it, and whoever connects one starts it on the same.
+    static double network_now();
     void set_timing(double render_dt, double physics_dt);
     // Frames a second. 0 runs as fast as the machine allows, or, with client
     // sync, once per paint. The IDE leaves it at 0 and syncs to the window.

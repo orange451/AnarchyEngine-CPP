@@ -165,8 +165,8 @@ TEST_CASE("RP48 a server engine and a client engine: the client sees the server'
     engine_network::ClientSession client_session(cg, hub.open(network::Address::loopback(2)), client_config);
     client.set_network(&client_session);
     client.resume();
-    // The engines give the network seconds on the steady clock; the connect starts on the same clock.
-    const double started = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+    // The connect starts on the clock the engines pump the sessions with.
+    const double started = engine_core::Engine::network_now();
     REQUIRE(client_session.connect(network::Address::loopback(1), started));
 
     // The engines read the steady clock, so the handshake takes real time: step

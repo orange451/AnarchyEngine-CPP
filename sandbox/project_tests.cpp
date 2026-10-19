@@ -845,6 +845,23 @@ TEST_CASE("a hand-made folder with no children saves as a leaf, without its old 
     Project::load(dir.path);
 }
 
+TEST_CASE("a leaf the engine adds children to saves as a folder with its init.json", "[project]") {
+    // As a project saved before Storage held ServerStorage and ClientStorage:
+    // its Storage is a leaf, and the load adds the two services under it.
+    SimRole role;
+    TempDir dir;
+    write_bare_project(dir.path);
+    Project project = Project::load(dir.path);
+    DataModel& game = project.datamodel();
+    add_part(game, workspace_of(game), "Nudge");
+    project.save();
+    CHECK(fs::exists(dir.path / "src" / "Storage.storage" / "init.json"));
+    CHECK_FALSE(fs::exists(dir.path / "src" / "Storage.storage.json"));
+    engine_core::Game world;
+    Project loaded = Project::load(dir.path, world);
+    CHECK(Project::place_fingerprint(world) == Project::place_fingerprint(game));
+}
+
 TEST_CASE("save_as writes the whole tree under a new root", "[project]") {
     SimRole role;
     TempDir dir;

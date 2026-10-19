@@ -3819,6 +3819,22 @@ bool Project::plan_changed(const AuthoredDirty& dirty, PendingSave& save) const 
             }
         }
     }
+    // A leaf that gained a child, as a service the engine adds under one, saves
+    // as a folder. The new child is changed, so its parent is found from it;
+    // left unchanged, a save would write the folder without its init.json.
+    std::vector<InstanceId> grown;
+    for (InstanceId id : changed) {
+        const InstanceId parent = id == 0 ? 0 : world.parent(id);
+        if (parent == 0 || live.count(parent) == 0 || changed.count(parent) != 0) {
+            continue;
+        }
+        const auto known = id_guid_.find(parent);
+        const auto base = known == id_guid_.end() ? files_.end() : files_.find(known->second);
+        if (base != files_.end() && own_folder(base->second.props_path).empty()) {
+            grown.push_back(parent);
+        }
+    }
+    changed.insert(grown.begin(), grown.end());
     // Where each instance's files go, as plan_files names them.
     std::unordered_map<InstanceId, std::string> folder_of;
     std::vector<InstanceId> children;

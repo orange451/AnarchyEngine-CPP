@@ -106,8 +106,10 @@ private:
     void end();
     // Adds casters' runs, grouped by mesh, to casterRuns_ and their rows to
     // casterRows_; returns the first run's index. Their end is casterRuns_.size().
-    int addCasterRuns(const std::vector<int>& casters, const MeshDraw* meshes);
-    // Draws runs first to end (indices into casterRuns_) seen through viewProjection.
+    // cutouts false casts every caster whole, holes and all.
+    int addCasterRuns(const std::vector<int>& casters, const MeshDraw* meshes, bool cutouts);
+    // Draws runs first to end (indices into casterRuns_) seen through
+    // viewProjection: those cast whole, then the cut-outs.
     bool drawCasters(const engine_core::Matrix4& viewProjection, int first, int end, bool& asked);
 
     ShadowPlanner planner_;
@@ -136,6 +138,8 @@ private:
     // The casters of every tile or cascade drawn this frame, as instanced runs.
     struct CasterRun {
         const anarchy::amesh::GpuMesh* mesh = nullptr;
+        // The texture whose holes it leaves out, or 0 for one cast whole.
+        unsigned cutout = 0;
         int first = 0;
         int count = 0;
     };
@@ -147,6 +151,8 @@ private:
     InstanceBuffer instances_;
     int calls_ = 0;
     DepthProgram depth_;
+    // depth_ built with CUTOUT: alpha-tests each caster's texture.
+    DepthProgram cutout_;
     unsigned atlasFbo_ = 0;
     unsigned atlas_ = 0;
     int atlasTextureSize_ = 0;

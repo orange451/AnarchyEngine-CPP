@@ -11,6 +11,7 @@
 #include <atomic>
 #include <cstdio>
 #include <functional>
+#include <string>
 
 namespace runner {
 namespace {
@@ -47,18 +48,46 @@ unsigned MakeDepth(int size, int layers, const void* pixels) {
     return texture;
 }
 
+// source with #define name put in after its #version line.
+std::string WithDefine(std::string source, const char* name) {
+    const std::size_t line = source.find('\n');
+    if (!source.empty()) {
+        source.insert(line == std::string::npos ? source.size() : line + 1, std::string("#define ") + name + "\n");
+    }
+    return source;
+}
+
+// The cut-out program's texture unit.
+constexpr int kCutoutUnit = 0;
+// The widest cascade texel, in world units, that alpha-tests cut-outs. A
+// coarser cascade is the far one, holding most of a forest's casters, whose
+// texels are too wide to show a leaf's holes: its cut-outs cast whole, depth
+// only, so the GPU's early depth test keeps drawing it as cheaply as before.
+constexpr float kCutoutTexel = 0.1f;
+
 }  // namespace
 
 bool ShadowRenderer::initialize() {
     depth_ = DepthProgram{};
+    cutout_ = DepthProgram{};
     depth_.id = LinkProgram(LoadShader("pipeline/shadow.vert"), LoadShader("pipeline/shadow.frag"), "Shadow");
     if (depth_.id == 0) {
         return false;
     }
-    depth_.viewProjection = glGetUniformLocation(depth_.id, "uViewProjection");
-    // Skinned casters read their matrices from the bone texture's unit.
-    glUseProgram(depth_.id);
-    glUniform1i(glGetUniformLocation(depth_.id, "uBones"), kBoneTextureUnit);
+    cutout_.id = LinkProgram(WithDefine(LoadShader("pipeline/shadow.vert"), "CUTOUT"),
+                             WithDefine(LoadShader("pipeline/shadow.frag"), "CUTOUT"), "Shadow cut-out");
+    if (cutout_.id == 0) {
+        glDeleteProgram(depth_.id);
+        depth_ = DepthProgram{};
+        return false;
+    }
+    for (DepthProgram* program : {&depth_, &cutout_}) {
+        program->viewProjection = glGetUniformLocation(program->id, "uViewProjection");
+        // Skinned casters read their matrices from the bone texture's unit.
+        glUseProgram(program->id);
+        glUniform1i(glGetUniformLocation(program->id, "uBones"), kBoneTextureUnit);
+    }
+    glUniform1i(glGetUniformLocation(cutout_.id, "uDiffuse"), kCutoutUnit);
     glUseProgram(0);
     glGenFramebuffers(1, &atlasFbo_);
     glGenFramebuffers(1, &cascadeFbo_);
@@ -68,10 +97,12 @@ bool ShadowRenderer::initialize() {
 }
 
 void ShadowRenderer::shutdown() {
-    if (depth_.id != 0) {
-        glDeleteProgram(depth_.id);
+    for (DepthProgram* program : {&depth_, &cutout_}) {
+        if (program->id != 0) {
+            glDeleteProgram(program->id);
+        }
+        *program = DepthProgram{};
     }
-    depth_ = DepthProgram{};
     if (atlasFbo_ != 0) {
         glDeleteFramebuffers(1, &atlasFbo_);
         atlasFbo_ = 0;
@@ -152,17 +183,26 @@ void ShadowRenderer::end() {
     glDisable(GL_SCISSOR_TEST);
 }
 
-int ShadowRenderer::addCasterRuns(const std::vector<int>& casters, const MeshDraw* meshes) {
+int ShadowRenderer::addCasterRuns(const std::vector<int>& casters, const MeshDraw* meshes, bool cutouts) {
     const int begin = static_cast<int>(casterRuns_.size());
     casterOrder_.assign(casters.begin(), casters.end());
-    // Caster i is mesh i.
-    const auto meshOf = [&](int caster) { return meshes[caster].mesh; };
-    std::stable_sort(casterOrder_.begin(), casterOrder_.end(),
-                     [&](int a, int b) { return std::less<const void*>()(meshOf(a), meshOf(b)); });
+    // Caster i is mesh i. Those cast whole first, then the cut-outs by
+    // texture, so each program and texture is set once.
+    const auto cutoutOf = [&](int caster) { return cutouts && meshes[caster].cutout ? meshes[caster].texture : 0u; };
+    std::stable_sort(casterOrder_.begin(), casterOrder_.end(), [&](int a, int b) {
+        const unsigned cutoutA = cutoutOf(a);
+        const unsigned cutoutB = cutoutOf(b);
+        if (cutoutA != cutoutB) {
+            return cutoutA < cutoutB;
+        }
+        return std::less<const void*>()(meshes[a].mesh, meshes[b].mesh);
+    });
     for (const int caster : casterOrder_) {
         const MeshDraw& draw = meshes[caster];
-        if (static_cast<int>(casterRuns_.size()) == begin || casterRuns_.back().mesh != draw.mesh) {
-            casterRuns_.push_back(CasterRun{draw.mesh, static_cast<int>(casterRows_.size()), 0});
+        const unsigned cutout = cutoutOf(caster);
+        if (static_cast<int>(casterRuns_.size()) == begin || casterRuns_.back().mesh != draw.mesh ||
+            casterRuns_.back().cutout != cutout) {
+            casterRuns_.push_back(CasterRun{draw.mesh, cutout, static_cast<int>(casterRows_.size()), 0});
         }
         ++casterRuns_.back().count;
         // Depth reads the world matrix, and a skinned caster its bones.
@@ -175,16 +215,30 @@ int ShadowRenderer::addCasterRuns(const std::vector<int>& casters, const MeshDra
 }
 
 bool ShadowRenderer::drawCasters(const Matrix4& viewProjection, int first, int end, bool& asked) {
+    const DepthProgram* program = &depth_;
     glUseProgram(depth_.id);
     glUniformMatrix4fv(depth_.viewProjection, 1, GL_FALSE, viewProjection.m);
+    glActiveTexture(GL_TEXTURE0 + kCutoutUnit);
+    unsigned bound = 0;
+    bool askedCutout = false;
     for (int index = first; index < end; ++index) {
         const CasterRun& run = casterRuns_[static_cast<std::size_t>(index)];
+        if (run.cutout != 0 && program != &cutout_) {
+            program = &cutout_;
+            glUseProgram(cutout_.id);
+            glUniformMatrix4fv(cutout_.viewProjection, 1, GL_FALSE, viewProjection.m);
+        }
+        if (run.cutout != bound) {
+            glBindTexture(GL_TEXTURE_2D, run.cutout);
+            bound = run.cutout;
+        }
         run.mesh->bind();
         instances_.attach(run.first);
-        if (!asked && !CanDraw(depth_.id)) {
+        bool& programAsked = program == &cutout_ ? askedCutout : asked;
+        if (!programAsked && !CanDraw(program->id)) {
             return false;
         }
-        asked = true;
+        programAsked = true;
         run.mesh->draw_instanced(0, run.count);
         ++calls_;
     }
@@ -249,6 +303,7 @@ bool ShadowRenderer::draw(const std::vector<ShadowRequest>& requests, const Mesh
                 caster.mesh = reinterpret_cast<std::uintptr_t>(mesh.mesh);
                 caster.revision = mesh.mesh->generation();
                 caster.pose = mesh.bones != nullptr ? mesh.poseRevision : 0;
+                caster.cutout = mesh.cutout ? mesh.texture : 0;
                 caster.owner = mesh.owner;
                 caster.model = mesh.model;
                 caster.bounds = spheres[index];
@@ -322,7 +377,7 @@ bool ShadowRenderer::draw(const std::vector<ShadowRequest>& requests, const Mesh
         casterRows_.clear();
         tileRuns_.clear();
         for (const TileDraw* draw : byPage) {
-            const int first = addCasterRuns(draw->casters, meshes);
+            const int first = addCasterRuns(draw->casters, meshes, true);
             tileRuns_.emplace_back(first, static_cast<int>(casterRuns_.size()));
         }
         instances_.upload(casterRows_.data(), static_cast<int>(casterRows_.size()));
@@ -411,7 +466,7 @@ bool ShadowRenderer::drawSun(const SunRequest* sun, const MeshDraw* meshes, cons
         casterRows_.clear();
         tileRuns_.clear();
         for (const CascadeDraw& draw : draws) {
-            const int first = addCasterRuns(draw.casters, meshes);
+            const int first = addCasterRuns(draw.casters, meshes, draw.texelWorld <= kCutoutTexel);
             tileRuns_.emplace_back(first, static_cast<int>(casterRuns_.size()));
         }
         instances_.upload(casterRows_.data(), static_cast<int>(casterRows_.size()));

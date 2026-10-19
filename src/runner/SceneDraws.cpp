@@ -16,7 +16,8 @@ namespace {
 
 // draw drawn with source's Material: its textures, loaded through textures, and its numbers.
 void ApplyMaterial(const engine_core::VisualMesh& source, TextureCache& textures, MeshDraw& draw) {
-    draw.texture = textures.get(source.diffuse_texture, Usage::Color, source.diffuse_flip_y, source.diffuse_always_loaded);
+    draw.texture = textures.get(source.diffuse_texture, Usage::Color, source.diffuse_flip_y, source.diffuse_always_loaded,
+                                &draw.cutout);
     draw.normalTexture = textures.get(source.normal_texture, Usage::Normal, source.normal_flip_y, source.normal_always_loaded);
     draw.roughnessTexture = textures.get(source.roughness_texture, Usage::Mask, source.roughness_flip_y, source.roughness_always_loaded);
     draw.metalnessTexture = textures.get(source.metalness_texture, Usage::Mask, source.metalness_flip_y, source.metalness_always_loaded);
@@ -246,7 +247,8 @@ constexpr std::size_t kChunkGrain = 16;
 }  // namespace
 
 bool SameDraw(const MeshDraw& a, const MeshDraw& b) {
-    return a.mesh == b.mesh && SameBits(a.model, b.model) && a.texture == b.texture && SameBits(a.color, b.color) &&
+    return a.mesh == b.mesh && SameBits(a.model, b.model) && a.texture == b.texture && a.cutout == b.cutout &&
+           SameBits(a.color, b.color) &&
            a.normalTexture == b.normalTexture && a.roughnessTexture == b.roughnessTexture &&
            a.metalnessTexture == b.metalnessTexture && a.emissiveTexture == b.emissiveTexture &&
            SameBits(a.emissive, b.emissive) && SameBits(a.metalness, b.metalness) &&
@@ -385,7 +387,8 @@ void AppendBrushDraws(const std::vector<engine_core::VisualBrushDraw>& brushes, 
         draw.mesh = mesh;
         draw.model = source.world;
         draw.owner = source.owner;
-        draw.texture = textures.get(look.diffuse_texture, Usage::Color, look.diffuse_flip_y, look.diffuse_always_loaded);
+        draw.texture = textures.get(look.diffuse_texture, Usage::Color, look.diffuse_flip_y, look.diffuse_always_loaded,
+                                    &draw.cutout);
         draw.normalTexture = textures.get(look.normal_texture, Usage::Normal, look.normal_flip_y, look.normal_always_loaded);
         draw.roughnessTexture = textures.get(look.roughness_texture, Usage::Mask, look.roughness_flip_y, look.roughness_always_loaded);
         draw.metalnessTexture = textures.get(look.metalness_texture, Usage::Mask, look.metalness_flip_y, look.metalness_always_loaded);

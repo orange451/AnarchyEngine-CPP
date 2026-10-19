@@ -398,7 +398,19 @@ TextureCache::Entry& TextureCache::find(std::unordered_map<std::string, Entry>& 
     return entry;
 }
 
-unsigned TextureCache::get(const std::string& path, texture::Usage usage, bool flipY, bool alwaysLoaded) {
+namespace {
+
+// Whether a texture of format keeps alpha: BC3, or RGBA8, which a GPU
+// without S3TC gets for every image and so may hold holes.
+bool HasHoles(texture::PixelFormat format) {
+    return format == texture::PixelFormat::BC3 || format == texture::PixelFormat::RGBA8;
+}
+
+}  // namespace
+
+unsigned TextureCache::get(const std::string& path, texture::Usage usage, bool flipY, bool alwaysLoaded,
+                           bool* holes) {
+    if (holes != nullptr) *holes = false;
     if (root_.empty() || path.empty()) {
         return 0;
     }
@@ -417,8 +429,14 @@ unsigned TextureCache::get(const std::string& path, texture::Usage usage, bool f
     if (!streamed.tried || FileWatch::take(streamed.watched)) {
         check(streamed);
     }
-    if (streamed.visible) return streamed.texture;
-    if (streamed.old != 0) return streamed.old;
+    if (streamed.visible) {
+        if (holes != nullptr) *holes = HasHoles(streamed.format);
+        return streamed.texture;
+    }
+    if (streamed.old != 0) {
+        if (holes != nullptr) *holes = streamed.oldHoles;
+        return streamed.old;
+    }
     // Still loading: a Color texture draws mid grey meanwhile, as terrain
     // does, so a surface reads as loading rather than as a white material.
     // Other usages, and a file that is missing or failed, draw the
@@ -479,6 +497,7 @@ void TextureCache::start(Streamed& streamed) {
     if (streamed.visible) {
         if (streamed.old != 0) glDeleteTextures(1, &streamed.old);
         streamed.old = streamed.texture;
+        streamed.oldHoles = HasHoles(streamed.format);
     } else if (streamed.texture != 0) {
         glDeleteTextures(1, &streamed.texture);
     }

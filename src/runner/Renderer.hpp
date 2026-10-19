@@ -140,6 +140,10 @@ struct MeshDraw {
     bool billboard = false;
     // A billboard's width and height in units, before the row's Scale.
     float billboardSize[2] = {0.f, 0.f};
+    // Whether texture (above) keeps alpha (TextureCache::get's holes): its shadow
+    // leaves out the holes the G-buffer's alpha test does, at the cost of a
+    // texture read a texel. False casts the whole mesh, depth only.
+    bool cutout = false;
 };
 
 // A Terrain's look table: a 256 x 4 GL_RGBA32F texture, GL_NEAREST, from

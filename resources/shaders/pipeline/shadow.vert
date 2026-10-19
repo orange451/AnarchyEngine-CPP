@@ -2,8 +2,13 @@
 // A caster in a shadow map: a SpotLight's tile, a PointLight's cube-face
 // tile, or a DirectionalLight's cascade. Only depth is drawn. Each caster's
 // world matrix and bone base come from runner::InstanceBuffer, slots 7 to 10
-// and 15; a skinned caster is posed as geometry.vert poses it.
+// and 15; a skinned caster is posed as geometry.vert poses it. Built with
+// CUTOUT, it passes on the UVs shadow.frag tests alpha at.
 layout (location = 0) in vec3 aPosition;
+#ifdef CUTOUT
+layout (location = 2) in vec2 aUv;
+out vec2 vUv;
+#endif
 layout (location = 5) in uvec4 aBones;
 layout (location = 6) in vec4 aWeights;
 layout (location = 7) in mat4 aModel;
@@ -37,5 +42,8 @@ mat4 skin() {
 }
 
 void main() {
+#ifdef CUTOUT
+    vUv = aUv;
+#endif
     gl_Position = uViewProjection * (aModel * (skin() * vec4(aPosition, 1.0)));
 }

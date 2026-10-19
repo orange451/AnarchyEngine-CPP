@@ -95,6 +95,8 @@ public:
     }
     // The server's version after a WrongVersion deny; empty after any other outcome.
     const std::string& denied_version() const { return denied_version_; }
+    // What it was built with: its role, budget, peer limit, and the identity it presents.
+    const EndpointConfig& config() const { return config_; }
     bool failed() const { return failed_; }
 
 private:

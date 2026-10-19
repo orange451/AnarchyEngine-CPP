@@ -235,6 +235,24 @@ elseif(APPLE)
     target_sources(AnarchyPlayer PRIVATE "${ANARCHY_ICON_DIR}/anarchy.icns")
 endif()
 
+# AnarchyServer serves a project to AnarchyPlayer clients with no window: a
+# headless engine and a UDP session (src/server/README.md). Started with no
+# folder, it serves the game packed into its own file, as the player plays one.
+# It links no renderer, JadeFX, or studio_core; GamePack.cpp is compiled in.
+add_executable(AnarchyServer
+    src/server/main.cpp
+    src/server/ServerHost.cpp
+    src/runner/GamePack.cpp
+)
+target_include_directories(AnarchyServer PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_link_libraries(AnarchyServer PRIVATE engine_network engine_core anarchy_network)
+target_compile_features(AnarchyServer PRIVATE cxx_std_17)
+# The server ships beside the studio, so building the studio builds it too.
+add_dependencies(AnarchyStudio AnarchyServer)
+if(WIN32)
+    target_sources(AnarchyServer PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/anarchy.rc" "${ANARCHY_MANIFEST}")
+endif()
+
 # An explicit checkout wins. A sibling named JadeFX_CPP is next. Otherwise
 # CMake clones the library, so this tree is enough to build.
 set(JADEFX_CPP_DIR "" CACHE PATH "Path to a JadeFX checkout. Empty downloads it unless ../JadeFX_CPP exists.")
@@ -1249,6 +1267,8 @@ add_executable(sandbox
     sandbox/replication_session_tests.cpp
     sandbox/replication_client_world_tests.cpp
     sandbox/replication_bench_tests.cpp
+    sandbox/server_tests.cpp
+    src/server/ServerHost.cpp
 )
 target_link_libraries(sandbox PRIVATE studio_core anarchy_network engine_network Catch2::Catch2WithMain)
 # The dense views tests check flecs state the engine keeps private.
@@ -1269,7 +1289,7 @@ function(anarchy_warnings target)
         target_compile_options(${target} PRIVATE -Wall -Wextra)
     endif()
 endfunction()
-foreach(target IN ITEMS studio_core studio AnarchyStudio AnarchyPlayer engine-tests shell-tests properties-tests console-tests
+foreach(target IN ITEMS studio_core studio AnarchyStudio AnarchyPlayer AnarchyServer engine-tests shell-tests properties-tests console-tests
                         studio-tests mcp-tests explorer-tests assets-tests prefab-editor-tests terrain-editor-tests assets-demo billboard-demo viewport-demo prefab-demo terminal-tests terminal-probe anarchy-mcp
                         engine_network sandbox amesh aanim amesh-tests amesh-gl-check scene-render-check gpu-timer-check grid-check profiler-demo profiler profiler-tests ${ENGINE_PACKAGES})
     anarchy_warnings(${target})

@@ -23,6 +23,7 @@ std::string format_game_id(const std::array<std::uint8_t, 16>& id);
 
 // XXH64 over every file under folder: its path relative to folder with '/'
 // separators (UTF-8), a NUL, its size, then its bytes, in sorted path order.
+// Names starting with '.', and everything under them, are skipped, as a packed game skips them.
 // 0 for a missing folder or any read error; callers treat 0 as no identity.
 std::uint64_t hash_resources(const std::filesystem::path& folder);
 

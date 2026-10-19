@@ -107,3 +107,22 @@ TEST_CASE("N53b nested siblings and non-ASCII names hash stably; an empty folder
     REQUIRE(network::hash_resources(empty.path) != 0);
     REQUIRE(network::hash_resources(empty.path / "missing") == 0);
 }
+
+TEST_CASE("N85 the resources hash skips what a packed game leaves out: names starting with '.'", "[network][identity]") {
+    TempDir plain;
+    write(plain.path / "textures" / "a.png", "a");
+    TempDir dotted;
+    write(dotted.path / "textures" / "a.png", "a");
+    write(dotted.path / "textures" / ".gitkeep", "");
+    write(dotted.path / ".DS_Store", "finder");
+    write(dotted.path / ".git" / "objects" / "x", "x");
+    REQUIRE(network::hash_resources(dotted.path) != 0);
+    REQUIRE(network::hash_resources(dotted.path) == network::hash_resources(plain.path));
+
+    // A new project's resources hold only .gitkeep files: it hashes as an empty folder.
+    TempDir kept;
+    write(kept.path / "meshes" / ".gitkeep", "");
+    TempDir empty;
+    fs::create_directories(empty.path);
+    REQUIRE(network::hash_resources(kept.path) == network::hash_resources(empty.path));
+}

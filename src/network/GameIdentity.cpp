@@ -53,6 +53,14 @@ std::uint64_t hash_resources(const std::filesystem::path& folder) {
     if (error) return 0;
     for (const fs::recursive_directory_iterator end; it != end; it.increment(error)) {
         if (error) return 0;
+        // What a packed game leaves out (.gitkeep, .DS_Store, .git and all under it)
+        // is not hashed either, so an exported game matches the folder it came from.
+        const auto name = it->path().filename().u8string();
+        if (!name.empty() && name[0] == '.') {
+            if (it->is_directory(error)) it.disable_recursion_pending();
+            if (error) return 0;
+            continue;
+        }
         const bool regular = it->is_regular_file(error);
         if (error) return 0;
         if (!regular) continue;

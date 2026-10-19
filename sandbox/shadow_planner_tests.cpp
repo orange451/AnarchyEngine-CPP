@@ -478,6 +478,35 @@ TEST_CASE("PN13 a PointLight that turns keeps its map: its cube does not turn wi
     REQUIRE(planner.find(1) != nullptr);
 }
 
+TEST_CASE("CP6 a caster moving in the far cascade draws that cascade again, not the near one", "[shadow]") {
+    ShadowPlanner planner;
+    SunRequest sun;
+    sun.shine = Normalize({0.f, -1.f, 0.f});
+    sun.shadowDistance = 20.f;
+    const CameraView camera = Camera({0.f, 2.f, 10.f}, {0.f, 2.f, 0.f});
+    // One caster by the camera, one at the end of the ShadowDistance.
+    std::vector<ShadowCaster> casters = {Box(100, {0.f, 1.f, 9.f}), Box(101, {0.f, 1.f, -8.f})};
+    REQUIRE(planner.planCascades(&sun, casters, camera, Small()).size() == 4);
+    planner.commitCascades();
+    const CascadeShadow before = *planner.cascades();
+
+    casters[1] = Box(101, {0.5f, 1.f, -8.f});
+    const std::vector<CascadeDraw> draws = planner.planCascades(&sun, casters, camera, Small());
+    REQUIRE_FALSE(draws.empty());
+    for (const CascadeDraw& draw : draws) {
+        INFO("layer " << draw.layer);
+        CHECK(draw.layer != 0);
+    }
+    planner.commitCascades();
+    // The near cascade kept, and read as it was drawn.
+    REQUIRE(planner.cascades() != nullptr);
+    REQUIRE(planner.cascades()->count == 4);
+    CHECK(std::equal(before.viewProjection[0].m, before.viewProjection[0].m + 16,
+                     planner.cascades()->viewProjection[0].m));
+    // Nothing changed since: nothing to draw.
+    CHECK(planner.planCascades(&sun, casters, camera, Small()).empty());
+}
+
 TEST_CASE("CP5 cascades dropped before their redraw commits stay unreadable until it does", "[shadow]") {
     ShadowPlanner planner;
     SunRequest sun;

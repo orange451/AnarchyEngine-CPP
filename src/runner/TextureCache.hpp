@@ -89,9 +89,10 @@ public:
     // renderer draws its own white, or flat normal, for 0). Mipmapped and
     // repeating. flipY puts the image's top row at v 0. alwaysLoaded (a
     // Texture whose Streaming is AlwaysLoaded) shows it only once every
-    // level is uploaded, never blurry.
+    // level is uploaded, never blurry. holes, when given, says whether the
+    // texture returned keeps alpha (a cut-out's holes); a stand-in has none.
     unsigned get(const std::string& path, engine_core::texture::Usage usage, bool flipY = false,
-                 bool alwaysLoaded = false);
+                 bool alwaysLoaded = false, bool* holes = nullptr);
     // Uploads what finished loading, up to budgetBytes this call, smallest
     // levels first. Once a frame, before drawing.
     void pump(std::size_t budgetBytes = std::size_t(16) << 20);
@@ -138,6 +139,8 @@ private:
         bool failed = false;
         unsigned texture = 0;
         unsigned old = 0;
+        // Whether old keeps alpha, as format says of texture.
+        bool oldHoles = false;
         int width = 0;
         int height = 0;
         int levels = 0;

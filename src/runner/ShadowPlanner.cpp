@@ -53,6 +53,9 @@ std::uint64_t CasterHash(const ShadowCaster& caster) {
     hash.add(caster.revision);
     hash.add(caster.pose);
     hash.add(caster.model);
+    if (caster.cutout != 0) {
+        hash.add(caster.cutout);
+    }
     return hash.value();
 }
 
@@ -598,7 +601,6 @@ std::vector<CascadeDraw> ShadowPlanner::planCascadesView(const SunRequest* sun, 
     const float pullLimit = sun->shadowDistance * settings.cascadePullLimit;
     CascadeShadow next;
     next.count = count;
-    Hasher hash;
     // Every cascade sees the sun from the same turn (CascadeLightView), and
     // its frustum is a box in that view. So each caster is turned once, and
     // testing it against a cascade is comparing it with the box's six sides:
@@ -677,7 +679,9 @@ std::vector<CascadeDraw> ShadowPlanner::planCascadesView(const SunRequest* sun, 
             }
         }
     });
+    std::uint64_t hashes[kMaxCascades] = {};
     for (int i = 0; i < count; ++i) {
+        Hasher hash;
         hash.add(fits[i].viewProjection);
         // Kept from frame to frame, so a frame that changes nothing allocates nothing.
         std::vector<int>& inside = cascadeCasters_[i];
@@ -688,21 +692,30 @@ std::vector<CascadeDraw> ShadowPlanner::planCascadesView(const SunRequest* sun, 
                 hash.add(fingerprint);
             }
         }
+        hashes[i] = hash.value();
         next.viewProjection[i] = fits[i].viewProjection;
         next.texelWorld[i] = fits[i].texelWorld;
     }
-    if (cascadeReady_ && hash.value() == cascadeHash_) {
-        return draws;
-    }
+    // Only the cascades whose matrix or casters changed are drawn again: a
+    // car or a character moving by a still camera redraws the near ones, not
+    // the far one that holds most of a forest's casters.
+    const bool whole = !cascadeReady_ || cascade_.count != count;
     for (int i = 0; i < count; ++i) {
+        if (!whole && hashes[i] == cascadeHashes_[i]) {
+            continue;
+        }
         CascadeDraw draw;
         draw.layer = i;
         draw.viewProjection = next.viewProjection[i];
+        draw.texelWorld = next.texelWorld[i];
         draw.casters = cascadeCasters_[i];
         draws.push_back(std::move(draw));
     }
+    if (draws.empty()) {
+        return draws;
+    }
     pendingCascade_ = next;
-    pendingCascadeHash_ = hash.value();
+    std::copy(hashes, hashes + kMaxCascades, pendingCascadeHashes_);
     cascadePending_ = true;
     return draws;
 }
@@ -712,7 +725,7 @@ void ShadowPlanner::commitCascades() {
         return;
     }
     cascade_ = pendingCascade_;
-    cascadeHash_ = pendingCascadeHash_;
+    std::copy(pendingCascadeHashes_, pendingCascadeHashes_ + kMaxCascades, cascadeHashes_);
     cascadeReady_ = true;
     cascadePending_ = false;
 }

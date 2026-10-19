@@ -62,6 +62,9 @@ struct ShadowCaster {
     // Its pose's revision (engine_core::Pose::revision), which changes whenever a
     // skinned caster is posed again; 0 for one that is not skinned.
     std::uint64_t pose = 0;
+    // The texture whose holes it leaves out (MeshDraw::cutout), or 0 for
+    // one cast whole.
+    std::uint64_t cutout = 0;
     // The instance that draws it: a light never shadows itself.
     std::uint64_t owner = 0;
     engine_core::Matrix4 model = engine_core::matrix4_identity();
@@ -154,6 +157,8 @@ struct SunRequest {
 struct CascadeDraw {
     int layer = 0;
     engine_core::Matrix4 viewProjection = engine_core::matrix4_identity();
+    // World units across one of its texels.
+    float texelWorld = 0.f;
     // Indices into the casters planCascades was given.
     std::vector<int> casters;
 };
@@ -336,7 +341,8 @@ private:
     std::unordered_map<std::uint64_t, Record> records_;
     std::vector<Pending> pending_;
     CascadeShadow cascade_;
-    std::uint64_t cascadeHash_ = 0;
+    // Each cascade's matrix and casters, hashed: only one that changed is drawn again.
+    std::uint64_t cascadeHashes_[kMaxCascades] = {};
     bool cascadeReady_ = false;
     // What the last cascade plan was made from. The same again, with the
     // cascades still ready, plans nothing without sweeping a caster.
@@ -358,7 +364,7 @@ private:
     CascadeInputs cascadeInputs_;
     bool cascadeInputsKept_ = false;
     CascadeShadow pendingCascade_;
-    std::uint64_t pendingCascadeHash_ = 0;
+    std::uint64_t pendingCascadeHashes_[kMaxCascades] = {};
     bool cascadePending_ = false;
     // Scratch kept between calls: each caster turned toward the sun, and the casters inside each cascade.
     struct LitCaster {

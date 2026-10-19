@@ -17,6 +17,7 @@
 #include "EditorFont.hpp"
 
 #include "ClientJoinHost.hpp"
+#include "ClientWorld.hpp"
 #include "ProjectIdentity.hpp"
 
 namespace ide {
@@ -765,6 +766,7 @@ IdeLayout::~IdeLayout() {
             join_host_->end_silently();
             game.set_join_host(nullptr);
             join_host_.reset();
+            engine_network::clear_connections(game);
         });
     }
     alive_.reset();
@@ -1152,15 +1154,21 @@ void IdeLayout::stop_test() {
     // same restore.
     engine.pause();
     engine.on_simulation([this](engine_core::DataModel& game) {
-        // A connection ends first, without Left, so the restore below is of the
-        // place as captured, not a world the server was still writing.
+        // Play stops first, while a connection may still be up: the network is
+        // not pumped during this edit, so the server cannot write into the place
+        // being restored. Ending the connection after that puts the role back
+        // with play already stopped, so no Server script is started just to be
+        // cleared.
+        if (game.simulation_running()) {
+            game.stop_simulation();
+        }
+        // The connection ends without Left. The restored place never held
+        // Connections, so the server's Connection goes with it.
         if (join_host_ != nullptr) {
             join_host_->end_silently();
             game.set_join_host(nullptr);
             join_host_.reset();
-        }
-        if (game.simulation_running()) {
-            game.stop_simulation();
+            engine_network::clear_connections(game);
         }
     });
     // Stop put the authored scripts back. Open editors, and editors closed

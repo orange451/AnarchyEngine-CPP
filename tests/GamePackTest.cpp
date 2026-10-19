@@ -125,6 +125,15 @@ int RunGamePackTests() {
     const std::optional<runner::PackLocation> alone = runner::find_game_pack(pak);
     Expect(alone && alone->offset == 0 && alone->hash == where->hash, "pak: same archive, same hash");
 
+    // The server export writes beside the game carries the same pack.
+    const fs::path server = temp.path / "server.exe";
+    Write(server, "MZ the server program");
+    const fs::path serverGame = temp.path / "MyGame Server.exe";
+    Expect(runner::write_game_pack(server, files, serverGame, error), "server: writes the server");
+    const std::optional<runner::PackLocation> served = runner::find_game_pack(serverGame);
+    Expect(served && served->offset == fs::file_size(server), "server: the pack is found after the program");
+    Expect(served && served->hash == where->hash, "server: the pack is the game's");
+
     // No path that leads out of the folder is packed.
     std::vector<runner::PackFile> escaping = {{"../outside.txt", project / "project.json"}};
     Expect(!runner::write_game_pack({}, escaping, temp.path / "bad.pak", error), "pack: refuses ..");
@@ -151,6 +160,15 @@ int RunGamePackTests() {
     Expect(ide::game_path("/games/Pong") == fs::path("/games/Pong.app"), "export: adds .app");
 #else
     Expect(ide::game_path("/games/Pong") == fs::path("/games/Pong"), "export: no extension on Linux");
+#endif
+
+    // The game's server goes beside it, named for the game.
+#if defined(_WIN32)
+    Expect(ide::server_path("/out/Maze.exe") == fs::path("/out/Maze Server.exe"), "export: the server is Maze Server.exe");
+#elif defined(__APPLE__)
+    Expect(ide::server_path("/out/Maze.app") == fs::path("/out/Maze Server"), "export: the server is beside the .app");
+#else
+    Expect(ide::server_path("/out/Maze") == fs::path("/out/Maze Server"), "export: the server is Maze Server");
 #endif
 
     // Export packs the project's baked textures, so a player never bakes

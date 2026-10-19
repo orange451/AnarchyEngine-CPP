@@ -1358,7 +1358,8 @@ if(APPLE)
     # Copy the resources tree into the bundle, then sign it so Finder can launch it.
     # Source resources/ maps onto Contents/Resources, so resources/shaders lands in
     # Contents/Resources/shaders. JadeFX's interface shaders join that directory,
-    # and the signed player goes in beside them, where Export Game finds it.
+    # and the signed player goes in beside them, where Export Game finds it, with
+    # AnarchyServer, a plain program, beside it.
     add_custom_target(bundle-resources ALL
         COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_BUNDLE_CONTENT_DIR:AnarchyStudio>/Resources"
         COMMAND ${CMAKE_COMMAND} -E copy_directory
@@ -1371,8 +1372,11 @@ if(APPLE)
         COMMAND ${CMAKE_COMMAND} -E copy_directory
             "$<TARGET_BUNDLE_DIR:AnarchyPlayer>"
             "$<TARGET_BUNDLE_CONTENT_DIR:AnarchyStudio>/Resources/AnarchyPlayer.app"
+        COMMAND ${CMAKE_COMMAND} -E copy
+            "$<TARGET_FILE:AnarchyServer>"
+            "$<TARGET_BUNDLE_CONTENT_DIR:AnarchyStudio>/Resources/AnarchyServer"
         COMMAND codesign --force --sign - "$<TARGET_BUNDLE_DIR:AnarchyStudio>"
-        DEPENDS AnarchyStudio bundle-player
+        DEPENDS AnarchyStudio bundle-player AnarchyServer
         VERBATIM
     )
 else()

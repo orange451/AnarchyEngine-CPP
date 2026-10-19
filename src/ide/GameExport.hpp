@@ -33,6 +33,16 @@ std::filesystem::path game_path(const std::filesystem::path& path);
 // Mac AnarchyPlayer.app in the studio bundle's Resources. Empty when it is not there.
 std::filesystem::path find_player();
 
+// The server program export copies, found as find_player finds the player:
+// AnarchyServer beside the studio, or on a Mac in the studio bundle's
+// Resources. Empty when it is not there.
+std::filesystem::path find_server();
+
+// Where export writes the server for a game written to game: beside it, named
+// "<game stem> Server" with .exe on Windows ("Maze.exe" → "Maze Server.exe";
+// on a Mac, "Maze.app" → "Maze Server", a plain program beside the bundle).
+std::filesystem::path server_path(const std::filesystem::path& game);
+
 // What export packs, as {path in the pack, file on disk}: project.json, the
 // tree, the resources folder, the textures baked beside it, and the engine's
 // shaders. False, with why, when a folder cannot be read.
@@ -41,8 +51,10 @@ bool collect_export_files(const GameExportRequest& request, std::vector<runner::
 // Writes the game to game_path(request.output): a copy of the player with the
 // project and the engine's shaders packed into it (runner/GamePack.hpp). On
 // Windows and Linux that is one file to send. On a Mac it is an .app, the
-// player bundle with the pack in its Resources, signed again. A file already
-// there is replaced; on a Mac, only an earlier export is. Blocks
+// player bundle with the pack in its Resources, signed again. The same pack
+// goes into a copy of the server beside it, at server_path, so the game can be
+// served as it is played. A file already there is replaced; on a Mac, only an
+// earlier export is. Blocks
 // while it copies: call it off the UI thread. False, with why, when it fails;
 // written is the game's path when it succeeds.
 bool export_game(const GameExportRequest& request, std::filesystem::path& written, std::string& error);

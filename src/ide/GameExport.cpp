@@ -20,15 +20,22 @@ namespace {
 
 namespace fs = std::filesystem;
 
+// The server is a console program everywhere: on a Mac a plain executable, not a bundle.
 #if defined(_WIN32)
 constexpr const char* kPlayerName = "AnarchyPlayer.exe";
 constexpr const char* kGameExtension = ".exe";
+constexpr const char* kServerName = "AnarchyServer.exe";
+constexpr const char* kServerExtension = ".exe";
 #elif defined(__APPLE__)
 constexpr const char* kPlayerName = "AnarchyPlayer.app";
 constexpr const char* kGameExtension = ".app";
+constexpr const char* kServerName = "AnarchyServer";
+constexpr const char* kServerExtension = "";
 #else
 constexpr const char* kPlayerName = "AnarchyPlayer";
 constexpr const char* kGameExtension = "";
+constexpr const char* kServerName = "AnarchyServer";
+constexpr const char* kServerExtension = "";
 #endif
 
 // The archive path of a folder inside the project, such as "game/src/".
@@ -194,18 +201,21 @@ fs::path game_path(const fs::path& path) {
     return with;
 }
 
-fs::path find_player() {
+namespace {
+
+// A program shipped with the studio: in the studio bundle on a Mac, then
+// beside it, as a build folder has them; elsewhere beside the studio.
+fs::path FindBesideStudio(const char* name) {
     const fs::path exeDir = executable_directory();
     if (exeDir.empty()) {
         return {};
     }
     std::vector<fs::path> candidates;
 #if defined(__APPLE__)
-    // In the studio bundle, then beside it, as a build folder has them.
-    candidates.push_back(exeDir / ".." / "Resources" / kPlayerName);
-    candidates.push_back(exeDir / ".." / ".." / ".." / kPlayerName);
+    candidates.push_back(exeDir / ".." / "Resources" / name);
+    candidates.push_back(exeDir / ".." / ".." / ".." / name);
 #endif
-    candidates.push_back(exeDir / kPlayerName);
+    candidates.push_back(exeDir / name);
     for (const fs::path& candidate : candidates) {
         std::error_code failure;
         if (fs::exists(candidate, failure)) {
@@ -215,10 +225,33 @@ fs::path find_player() {
     return {};
 }
 
+}  // namespace
+
+fs::path find_player() {
+    return FindBesideStudio(kPlayerName);
+}
+
+fs::path find_server() {
+    return FindBesideStudio(kServerName);
+}
+
+fs::path server_path(const fs::path& game) {
+    // On Linux the game has no extension to drop, so a dot in its name stays.
+    fs::path name = std::string(kGameExtension).empty() ? game.filename() : game.stem();
+    name +=fs::u8path(std::string(" Server") + kServerExtension);
+    return game.parent_path() / name;
+}
+
 bool export_game(const GameExportRequest& request, fs::path& written, std::string& error) {
     const fs::path player = find_player();
     if (player.empty()) {
         error = std::string(kPlayerName) + " was not found beside the studio. Build it with the studio.";
+        return false;
+    }
+    // The server is checked before anything is written, so a failed export leaves nothing half done.
+    const fs::path server = find_server();
+    if (server.empty()) {
+        error = "AnarchyServer was not found beside the studio. Build it with the studio.";
         return false;
     }
     std::vector<runner::PackFile> files;
@@ -230,7 +263,12 @@ bool export_game(const GameExportRequest& request, fs::path& written, std::strin
         error = "no file name was given for the game";
         return false;
     }
+    const fs::path serverOutput = server_path(output);
     std::error_code failure;
+    if (fs::is_directory(serverOutput, failure)) {
+        error = utf8_path(serverOutput) + " is a folder";
+        return false;
+    }
     fs::create_directories(output.parent_path(), failure);
 #if defined(__APPLE__)
     // Only an earlier export is replaced: a bundle with a pack in it.
@@ -258,6 +296,10 @@ bool export_game(const GameExportRequest& request, fs::path& written, std::strin
         return false;
     }
 #endif
+    // The same pack in a copy of the server, so the game is served as it plays.
+    if (!runner::write_game_pack(server, files, serverOutput, error)) {
+        return false;
+    }
     written = output;
     return true;
 }

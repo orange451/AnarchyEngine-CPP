@@ -2330,7 +2330,15 @@ void DataModel::set_world_role(WorldRole role) {
     if (!mutation_thread()) {
         contract_fail("set_world_role runs on SimulationThread");
     }
+    if (state_->world_role == role) {
+        return;
+    }
     state_->world_role = role;
+    // RunContext was checked when each script started; during play a new role
+    // checks it again.
+    if (state_->simulation_running && state_->script_host != nullptr) {
+        state_->script_host->on_world_role_changed();
+    }
 }
 
 bool DataModel::physics_stepped() const { return state_->physics_stepped; }

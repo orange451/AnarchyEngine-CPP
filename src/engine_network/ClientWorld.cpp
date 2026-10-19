@@ -2,6 +2,7 @@
 
 #include "Project.hpp"
 
+#include <utility>
 #include <vector>
 
 namespace engine_network {
@@ -38,6 +39,72 @@ void clear_for_client(engine_core::DataModel& game) {
     // A snapshot's service records carry only the values that differ from the
     // defaults, so a value the client's project set would outlive one the server
     // put back to its default.
+    engine_core::Project::reset_services(game);
+}
+
+void swap_for_client(engine_core::DataModel& game) {
+    // The same walk as clear_for_client: down through services, Core skipped.
+    // Each other child of a service tops a tree. A Persistent top survives
+    // whole; any other is searched for its topmost Persistent descendants,
+    // which move up to that service, and then it is destroyed.
+    const InstanceId core = game.core();
+    std::vector<InstanceId> services{0};
+    std::vector<InstanceId> doomed;
+    std::vector<InstanceId> survivors;
+    std::vector<std::pair<InstanceId, InstanceId>> rescued;   // survivor, the service it moves to
+    while (!services.empty()) {
+        const InstanceId at = services.back();
+        services.pop_back();
+        for (const InstanceId child : game.get_children(at)) {
+            if (child == core) {
+                continue;
+            }
+            if (game.instance(child)->is_service()) {
+                services.push_back(child);
+                continue;
+            }
+            if (game.persistent(child)) {
+                survivors.push_back(child);
+                continue;
+            }
+            doomed.push_back(child);
+            std::vector<InstanceId> pending = game.get_children(child);
+            while (!pending.empty()) {
+                const InstanceId next = pending.back();
+                pending.pop_back();
+                if (game.persistent(next)) {
+                    rescued.emplace_back(next, at);
+                    continue;
+                }
+                for (const InstanceId below : game.get_children(next)) {
+                    pending.push_back(below);
+                }
+            }
+        }
+    }
+    // Out first, so destroying what held them leaves them alone.
+    for (const auto& [id, service] : rescued) {
+        if (game.alive(id) && !game.parent_error(id, service)) {
+            game.set_parent(id, service);
+            survivors.push_back(id);
+        }
+    }
+    for (const InstanceId id : doomed) {
+        if (game.alive(id) && !game.destroy_error(id)) {
+            game.destroy_tree(id);
+        }
+    }
+    // After the swap the survivors are this client's own: new GUIDs, the way
+    // Instance.new makes them.
+    std::vector<InstanceId> pending = survivors;
+    while (!pending.empty()) {
+        const InstanceId next = pending.back();
+        pending.pop_back();
+        game.set_guid(next, engine_core::make_guid());
+        for (const InstanceId below : game.get_children(next)) {
+            pending.push_back(below);
+        }
+    }
     engine_core::Project::reset_services(game);
 }
 

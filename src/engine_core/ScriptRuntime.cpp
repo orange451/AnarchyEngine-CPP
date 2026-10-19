@@ -485,6 +485,38 @@ void ScriptRuntime::on_script_context_changed(Script& script) {
     }
 }
 
+// A role change starts or stops a script as a RunContext change does: only when
+// whether it runs here changes. Core's Scripts are the engine's and run in any role.
+void ScriptRuntime::on_world_role_changed() {
+    if (game_ == nullptr || !game_->simulation_running() || play_.closing) {
+        return;
+    }
+    std::vector<Script*> scripts;
+    std::vector<InstanceId> pending;
+    for (const char* name : {"Workspace", "Scripts", "Gui"}) {
+        if (const InstanceId service = game_->scene_service(name)) {
+            pending.push_back(service);
+        }
+    }
+    while (!pending.empty()) {
+        const InstanceId next = pending.back();
+        pending.pop_back();
+        if (auto* script = dynamic_cast<Script*>(game_->instance(next))) {
+            scripts.push_back(script);
+        }
+        for (InstanceId child = game_->first_child(next); child != 0; child = game_->next_sibling(child)) {
+            pending.push_back(child);
+        }
+    }
+    for (Script* script : scripts) {
+        if (!runs_here(*script)) {
+            kill_script(script->id());
+        } else if (started_.count(script->id()) == 0 && script->enabled()) {
+            enqueue_start(*script);
+        }
+    }
+}
+
 void ScriptRuntime::on_script_destroyed(Script& script) {
     core_scripts_.erase(script.id());
     if (!play_.closing) {

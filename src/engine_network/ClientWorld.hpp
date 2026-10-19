@@ -14,4 +14,12 @@ namespace engine_network {
 // defaults, so a client starts from what the snapshot binds.
 void clear_for_client(engine_core::DataModel& game);
 
+// clear_for_client, keeping what survives a swap: every instance that is
+// Persistent or under a Persistent ancestor. A survivor whose parent does not
+// survive moves to the service it was under, keeping its name and children.
+// Every survivor, and everything under it, gets a fresh GUID: the client's
+// own instances must never share one with what the server is about to create.
+// Services reset to their defaults.
+void swap_for_client(engine_core::DataModel& game);
+
 }  // namespace engine_network

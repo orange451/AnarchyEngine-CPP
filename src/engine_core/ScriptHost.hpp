@@ -22,6 +22,11 @@ public:
     // now does, and otherwise keeps running: a change that leaves it running here is not a restart.
     virtual void on_script_context_changed(Script& script) = 0;
     virtual void on_script_destroyed(Script& script) = 0;
+    // The world role changed during play (a join, or the end of one). Every
+    // Script where scripts run is checked again: one RunContext now refuses
+    // stops, an enabled one that now runs here and has not started starts, and
+    // one that ran before and still runs keeps its state.
+    virtual void on_world_role_changed() = 0;
     // `child` is now under `parent` with this name, by a reparent or a rename.
     // Runs inside set_parent and set_name. WaitForChild wakes on it.
     virtual void on_child_named(InstanceId parent, InstanceId child, const std::string& name) {

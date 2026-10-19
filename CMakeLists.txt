@@ -1279,6 +1279,7 @@ add_executable(sandbox
     sandbox/replication_client_world_tests.cpp
     sandbox/replication_bench_tests.cpp
     sandbox/join_persistent_tests.cpp
+    sandbox/join_swap_tests.cpp
     sandbox/server_tests.cpp
     src/server/ServerHost.cpp
     sandbox/player_args_tests.cpp

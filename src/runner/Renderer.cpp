@@ -343,6 +343,7 @@ bool Renderer::buildProgram(Program& program, const char* name, const char* vert
     program.cinematic = at("uCinematic");
     program.fastShading = at("uFastShading");
     program.saturation = at("uSaturation");
+    program.atmosphere = FindAtmosphere(id);
     program.prefilter = at("uPrefilter");
     program.threshold = at("uThreshold");
     program.radius = at("uRadius");
@@ -463,7 +464,7 @@ bool Renderer::initialize() {
         buildProgram(terrain_, "Terrain", "pipeline/terrain.vert", "pipeline/terrain.frag", {"pipeline/gbuffer.glsl"}) &&
         buildProgram(forward_, "Transparency", "pipeline/geometry.vert", "pipeline/forward.frag",
                      {"pipeline/surface.glsl", "pipeline/lighting.glsl", "pipeline/environment.glsl",
-                      "pipeline/image_lighting.glsl"}) &&
+                      "pipeline/image_lighting.glsl", "pipeline/atmosphere.glsl"}) &&
         buildProgram(ibl_, "IBL", "pipeline/fullscreen.vert", "pipeline/ibl.frag",
                      {"pipeline/gbuffer.glsl", "pipeline/lighting.glsl", "pipeline/environment.glsl", "pipeline/occlusion.glsl",
                       "pipeline/image_lighting.glsl"}) &&
@@ -475,7 +476,7 @@ bool Renderer::initialize() {
                      {"pipeline/gbuffer.glsl", "pipeline/lighting.glsl", "pipeline/shadow.glsl"}) &&
         buildProgram(merge_, "Merge", "pipeline/fullscreen.vert", "pipeline/merge.frag",
                      {"pipeline/gbuffer.glsl", "pipeline/lighting.glsl", "pipeline/environment.glsl", "pipeline/occlusion.glsl",
-                      "pipeline/image_lighting.glsl"}) &&
+                      "pipeline/image_lighting.glsl", "pipeline/atmosphere.glsl"}) &&
         buildProgram(tonemap_, "Tone map", "pipeline/fullscreen.vert", "pipeline/tonemap.frag",
                      {"pipeline/bloom.glsl"}) &&
         buildProgram(bloomDown_, "Bloom down", "pipeline/fullscreen.vert", "pipeline/bloom_down.frag",
@@ -1444,6 +1445,7 @@ bool Renderer::draw(double x, double y, double width, double height, double scen
                 prepareSky();
             }
         }
+        prepareAtmosphere(lights, lightCount);
         glEnable(RT_GL_TEXTURE_CUBE_MAP_SEAMLESS);
 
         glDisable(GL_SCISSOR_TEST);
@@ -2173,6 +2175,59 @@ void Renderer::bindSky(const Program& program) {
     BindCube(kUnitIrradiance, environment_.irradiance());
     BindCube(kUnitPrefiltered, environment_.prefiltered());
     BindTexture(kUnitBrdf, environment_.brdf());
+}
+
+void Renderer::prepareAtmosphere(const LightDraw* lights, int lightCount) {
+    const SceneAtmosphere& air = lighting_.atmosphere;
+    atmosphere_ = AtmosphereFrame{};
+    if (!air.enabled) {
+        return;
+    }
+    // A world direction into view space: view_ is column-major, (i, j) at m[j * 4 + i].
+    const auto toView = [this](const float* world, float* view) {
+        for (int i = 0; i < 3; ++i) {
+            view[i] = view_.m[i] * world[0] + view_.m[4 + i] * world[1] + view_.m[8 + i] * world[2];
+        }
+    };
+    atmosphere_.enabled = true;
+    atmosphere_.sigma0 = std::max(air.density, 0.f) * kAtmosphereDensityScale;
+    atmosphere_.falloff = std::max(air.heightFalloff, 0.f);
+    const engine_core::Vec3 eye = engine_core::matrix4_position(engine_core::matrix4_inverse(view_));
+    atmosphere_.height = eye.y - air.baseHeight;
+    const float up[3] = {0.f, 1.f, 0.f};
+    toView(up, atmosphere_.up);
+    // Color is as picked, sRGB, made linear as the Skybox's Tint is.
+    for (int channel = 0; channel < 3; ++channel) {
+        atmosphere_.color[channel] = engine_core::srgb_to_linear(air.color[channel]);
+    }
+    atmosphere_.aerialPerspective = std::clamp(air.aerialPerspective, 0.f, 1.f);
+    atmosphere_.skyHaze = std::clamp(air.skyHaze, 0.f, 1.f);
+    atmosphere_.skyDistance = kAtmosphereSkyDistance;
+    for (int i = 0; i < lightCount; ++i) {
+        const LightDraw& light = lights[i];
+        if (light.kind != LightDraw::Kind::Directional) {
+            continue;
+        }
+        // It shines along direction, so the glow is toward the other way.
+        const float toward[3] = {-light.direction[0], -light.direction[1], -light.direction[2]};
+        toView(toward, atmosphere_.lightDirection);
+        const float length = std::sqrt(atmosphere_.lightDirection[0] * atmosphere_.lightDirection[0] +
+                                       atmosphere_.lightDirection[1] * atmosphere_.lightDirection[1] +
+                                       atmosphere_.lightDirection[2] * atmosphere_.lightDirection[2]);
+        const float scale = std::clamp(air.sunScatter, 0.f, 1.f) * std::max(light.intensity, 0.f);
+        for (int k = 0; k < 3; ++k) {
+            atmosphere_.lightDirection[k] = length > 0.f ? atmosphere_.lightDirection[k] / length : 0.f;
+            atmosphere_.lightColor[k] = length > 0.f ? light.color[k] * scale : 0.f;
+        }
+        break;
+    }
+    atmosphere_.skyReady = skyReady_;
+    atmosphere_.skyCube = skyReady_ ? environment_.prefiltered() : blackCube_;
+    if (skyReady_) {
+        std::copy(viewToSky_, viewToSky_ + 9, atmosphere_.viewToSky);
+        std::copy(skyColor_, skyColor_ + 3, atmosphere_.skyColor);
+        atmosphere_.skyMaxLod = EnvironmentMap::prefilteredMaxLod();
+    }
 }
 
 void Renderer::bindDynamicSky(const Program& program, const SceneDynamicSky& sky) {
@@ -2959,6 +3014,8 @@ bool Renderer::transparencyPass(const MeshDraw* meshes, const float* projection,
     glUniform3f(forward_.ambient, lighting_.ambient[0], lighting_.ambient[1], lighting_.ambient[2]);
     glUniform3f(forward_.skyRadiance, kSkyRadiance, kSkyRadiance, kSkyRadiance);
     bindSky(forward_);
+    // The same cube bindSky bound, so the air adds no texture unit.
+    UploadAtmosphere(forward_.atmosphere, atmosphere_, kUnitPrefiltered);
     const int lightCount = std::min(static_cast<int>(viewLights_.size()), kMaxForwardLights);
     float positionRadius[kMaxForwardLights * 4] = {};
     float colorIntensity[kMaxForwardLights * 4] = {};
@@ -3031,6 +3088,7 @@ bool Renderer::transparencyPass(const MeshDraw* meshes, const float* projection,
         frame.lightColorIntensity = colorIntensity;
         frame.lightDirections = directions;
         frame.lightCones = cones;
+        frame.atmosphere = &atmosphere_;
         if (!particles_.draw(particleBatches_.data(), static_cast<int>(particleBatches_.size()), frame,
                              transparencyFbo_)) {
             return false;
@@ -3064,6 +3122,8 @@ bool Renderer::mergePass(bool reflected, const float* inverseProjection) {
     // buffer at all, which for a DynamicSky is true even with no cubes.
     glUniform1f(merge_.skyDrawn, skyVisible_ ? 1.f : 0.f);
     bindOcclusion(merge_);
+    // The same cube bindSky bound, so the air adds no texture unit.
+    UploadAtmosphere(merge_.atmosphere, atmosphere_, kUnitPrefiltered);
     // With no trace, any texture keeps the sampler loadable.
     BindTexture(kUnitReflections, reflected ? reflectionTexture_ : whiteTexture_);
     glBindVertexArray(emptyVao_);

@@ -4,6 +4,7 @@
 
 #include "AmbientOcclusionEffect.hpp"
 #include "AssetInstances.hpp"
+#include "Atmosphere.hpp"
 #include "BloomEffect.hpp"
 #include "ColorSpace.hpp"
 #include "Dragger.hpp"
@@ -40,6 +41,19 @@ static_assert(VisualBloom{}.enabled == BloomEffect::kDefaultEnabled &&
                   VisualBloom{}.size == static_cast<float>(BloomEffect::kDefaultSize) &&
                   VisualBloom{}.threshold == static_cast<float>(BloomEffect::kDefaultThreshold),
               "a place with no BloomEffect carries BloomEffect's defaults");
+
+static_assert(VisualAtmosphere{}.enabled == Atmosphere::kDefaultEnabled &&
+                  VisualAtmosphere{}.density == static_cast<float>(Atmosphere::kDefaultDensity) &&
+                  VisualAtmosphere{}.height_falloff == static_cast<float>(Atmosphere::kDefaultHeightFalloff) &&
+                  VisualAtmosphere{}.base_height == static_cast<float>(Atmosphere::kDefaultBaseHeight) &&
+                  VisualAtmosphere{}.color.r == Atmosphere::kDefaultColor.r &&
+                  VisualAtmosphere{}.color.g == Atmosphere::kDefaultColor.g &&
+                  VisualAtmosphere{}.color.b == Atmosphere::kDefaultColor.b &&
+                  VisualAtmosphere{}.aerial_perspective ==
+                      static_cast<float>(Atmosphere::kDefaultAerialPerspective) &&
+                  VisualAtmosphere{}.sun_scatter == static_cast<float>(Atmosphere::kDefaultSunScatter) &&
+                  VisualAtmosphere{}.sky_haze == static_cast<float>(Atmosphere::kDefaultSkyHaze),
+              "a place with no Atmosphere carries Atmosphere's defaults");
 
 static_assert(VisualReflections{}.enabled == ScreenSpaceReflections::kDefaultEnabled &&
                   VisualReflections{}.intensity == static_cast<float>(ScreenSpaceReflections::kDefaultIntensity) &&
@@ -691,6 +705,20 @@ void SnapshotPump::resolve_lighting(DataModel& game) {
         bloom.size = static_cast<float>(effect->size());
         bloom.threshold = static_cast<float>(effect->threshold());
     }
+    const Atmosphere* air = lighting != nullptr ? find_first<Atmosphere>(game, lighting->id()) : nullptr;
+    VisualAtmosphere& atmosphere = base_.atmosphere;
+    atmosphere = VisualAtmosphere{};
+    if (air != nullptr) {
+        atmosphere.present = true;
+        atmosphere.enabled = air->enabled();
+        atmosphere.density = static_cast<float>(air->density());
+        atmosphere.height_falloff = static_cast<float>(air->height_falloff());
+        atmosphere.base_height = static_cast<float>(air->base_height());
+        atmosphere.color = air->color();
+        atmosphere.aerial_perspective = static_cast<float>(air->aerial_perspective());
+        atmosphere.sun_scatter = static_cast<float>(air->sun_scatter());
+        atmosphere.sky_haze = static_cast<float>(air->sky_haze());
+    }
     const ScreenSpaceReflections* traced =
         lighting != nullptr ? find_first<ScreenSpaceReflections>(game, lighting->id()) : nullptr;
     VisualReflections& reflections = base_.reflections;
@@ -735,6 +763,7 @@ void SnapshotPump::blit(VisualSnapshot& dst) const {
     dst.sky = base_.sky;
     dst.dynamic_sky = base_.dynamic_sky;
     dst.bloom = base_.bloom;
+    dst.atmosphere = base_.atmosphere;
     dst.reflections = base_.reflections;
     dst.occlusion = base_.occlusion;
     dst.resources_root = base_.resources_root;

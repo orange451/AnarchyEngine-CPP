@@ -18,6 +18,8 @@ using engine_core::particles::ParticleVertex;
 // Material units, which every mesh draw binds again for itself.
 constexpr int kUnitTexture = 0;
 constexpr int kUnitDepthCopy = 1;
+// The sky cube the air takes its color from.
+constexpr int kUnitAtmosphereSky = 2;
 
 float distance2(const ParticleDraw& draw, const float* eye) {
     const float x = (draw.bounds_min.x + draw.bounds_max.x) * 0.5f - eye[0];
@@ -60,7 +62,7 @@ bool in_view(const ParticleDraw& draw, const float* view, const float* projectio
 
 bool ParticleRenderer::create() {
     const std::string vertex = LoadShader("pipeline/particle.vert");
-    const std::string fragment = LoadShader("pipeline/particle.frag");
+    const std::string fragment = LoadShader("pipeline/particle.frag", {"pipeline/atmosphere.glsl"});
     if (vertex.empty() || fragment.empty()) {
         return false;
     }
@@ -93,9 +95,11 @@ bool ParticleRenderer::create() {
     u_.lightColorIntensity = at("uLightColorIntensity");
     u_.lightDirection = at("uLightDirection");
     u_.lightCone = at("uLightCone");
+    u_.atmosphere = FindAtmosphere(program_);
     glUseProgram(program_);
     glUniform1i(u_.texture, kUnitTexture);
     glUniform1i(u_.sceneDepth, kUnitDepthCopy);
+    glUniform1i(u_.atmosphere.sky, kUnitAtmosphereSky);
     glUseProgram(0);
 
     glGenVertexArrays(1, &vao_);
@@ -237,6 +241,8 @@ bool ParticleRenderer::draw(const ParticleBatch* batches, int count, const Parti
         glUniform4fv(u_.lightDirection, frame.lightCount, frame.lightDirections);
         glUniform4fv(u_.lightCone, frame.lightCount, frame.lightCones);
     }
+    UploadAtmosphere(u_.atmosphere, frame.atmosphere != nullptr ? *frame.atmosphere : AtmosphereFrame{},
+                     kUnitAtmosphereSky);
     glActiveTexture(GL_TEXTURE0 + kUnitDepthCopy);
     glBindTexture(GL_TEXTURE_2D, copied ? depthCopy_ : 0);
     glBindVertexArray(vao_);

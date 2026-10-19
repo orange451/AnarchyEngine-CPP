@@ -524,6 +524,8 @@ void GameView::collectMeshes() {
     lighting.bloom.intensity = bloom.intensity;
     lighting.bloom.size = bloom.size;
     lighting.bloom.threshold = bloom.threshold;
+    // The Atmosphere, if any; with none, one turned off, or Density 0, there is no air.
+    lighting.atmosphere = ToSceneAtmosphere(snapshot.atmosphere);
     // The ScreenSpaceReflections, if any; with none, or one turned off, nothing is traced.
     const engine_core::VisualReflections& reflections = snapshot.reflections;
     lighting.reflections.enabled = reflections.present && reflections.enabled;

@@ -1221,7 +1221,7 @@ void testInsertFilter() {
         "Brush", "PhysicsObject", "PlayerController",
         "GameObject", "Model",
         "DynamicSky", "Skybox",
-        "AmbientOcclusionEffect", "BloomEffect", "ScreenSpaceReflections",
+        "AmbientOcclusionEffect", "Atmosphere", "BloomEffect", "ScreenSpaceReflections",
         "DirectionalLight", "PointLight", "SpotLight",
         "ParticleEmitter", "Sound", "SoundEmitter",
         "Animator", "Attachment", "Bone", "DistanceConstraint", "NoCollisionConstraint", "PrismaticConstraint",

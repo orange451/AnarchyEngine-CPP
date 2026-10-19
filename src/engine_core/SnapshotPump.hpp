@@ -153,6 +153,23 @@ struct VisualBloom {
     float threshold = 0.f;
 };
 
+// The first Atmosphere under Lighting, in tree order, as the renderer reads
+// it. present is false with none, and the renderer draws no air.
+struct VisualAtmosphere {
+    bool present = false;
+    bool enabled = true;
+    float density = 0.25f;
+    // Per unit.
+    float height_falloff = 0.01f;
+    // World Y.
+    float base_height = 0.f;
+    // As the Color3 holds it (sRGB).
+    ColorRgb color{0.75f, 0.8f, 0.88f, 1.f};
+    float aerial_perspective = 0.5f;
+    float sun_scatter = 0.25f;
+    float sky_haze = 1.f;
+};
+
 // The first ScreenSpaceReflections under Lighting, in tree order, as the
 // renderer reads it. present is false with none, and nothing is traced.
 struct VisualReflections {
@@ -347,6 +364,7 @@ struct VisualSnapshot {
     VisualSky sky;
     VisualDynamicSky dynamic_sky;
     VisualBloom bloom;
+    VisualAtmosphere atmosphere;
     VisualReflections reflections;
     VisualAmbientOcclusion occlusion;
     // Rebuilt at every take_changes: there are few, and hover moves with the mouse.
@@ -460,8 +478,8 @@ private:
     // the DataModel is now, and clears every other row's.
     void resolve_poses(DataModel& game);
     // Fills base_.lighting, base_.sky, base_.dynamic_sky, base_.bloom,
-    // base_.reflections, and base_.occlusion from the place's Lighting, as
-    // the DataModel is now.
+    // base_.atmosphere, base_.reflections, and base_.occlusion from the
+    // place's Lighting, as the DataModel is now.
     void resolve_lighting(DataModel& game);
     // The first T under root, depth first in child order, or null.
     template <class T>

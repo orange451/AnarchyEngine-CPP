@@ -146,7 +146,8 @@ std::optional<std::string> placement_error(std::string_view holder_class, std::s
     // These affect the whole place, so they live where the place's lighting does;
     // a Skybox may also be a ViewportPane's own.
     if ((child_class == "Skybox" || child_class == "DynamicSky" || child_class == "BloomEffect" ||
-         child_class == "ScreenSpaceReflections" || child_class == "AmbientOcclusionEffect") &&
+         child_class == "ScreenSpaceReflections" || child_class == "AmbientOcclusionEffect" ||
+         child_class == "Atmosphere") &&
         holder_class != "Lighting") {
         if (child_class == "Skybox") {
             if (holder_class == "ViewportPane") {

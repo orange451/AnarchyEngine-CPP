@@ -5,6 +5,7 @@
 #include "Attachment.hpp"
 #include "Animator.hpp"
 #include "Bone.hpp"
+#include "Atmosphere.hpp"
 #include "BloomEffect.hpp"
 #include "Camera.hpp"
 #include "ChangeHistoryService.hpp"
@@ -227,6 +228,7 @@ DataModel& create_wheel_constraint(DataModel& world) { return world.create<Wheel
 DataModel& create_skybox(DataModel& world) { return world.create<Skybox>(); }
 DataModel& create_dynamic_sky(DataModel& world) { return world.create<DynamicSky>(); }
 DataModel& create_bloom_effect(DataModel& world) { return world.create<BloomEffect>(); }
+DataModel& create_atmosphere(DataModel& world) { return world.create<Atmosphere>(); }
 DataModel& create_screen_space_reflections(DataModel& world) { return world.create<ScreenSpaceReflections>(); }
 DataModel& create_ambient_occlusion_effect(DataModel& world) { return world.create<AmbientOcclusionEffect>(); }
 DataModel& create_screen_gui(DataModel& world) { return world.create<ScreenGui>(); }
@@ -292,6 +294,7 @@ ANARCHY_LUA_REGISTER(register_creatable_instances) {
     register_lua_creatable("Skybox", create_skybox);
     register_lua_creatable("DynamicSky", create_dynamic_sky);
     register_lua_creatable("BloomEffect", create_bloom_effect);
+    register_lua_creatable("Atmosphere", create_atmosphere);
     register_lua_creatable("ScreenSpaceReflections", create_screen_space_reflections);
     register_lua_creatable("AmbientOcclusionEffect", create_ambient_occlusion_effect);
     register_lua_creatable("ScreenGui", create_screen_gui);

@@ -2940,6 +2940,80 @@ int main(int argc, char** argv) {
                 Expect(runner::rt_glGetError() == runner::GL_NO_ERROR, "bloom leaves no GL error");
                 renderer.setLighting(runner::SceneLighting{});
             }
+            // The Atmosphere. A big gray cube far off, seen through red air of
+            // one density, with no sky: it turns red, the pane past it stays clear.
+            {
+                const auto snap = [&] {
+                    runner::ViewPixels pixels;
+                    renderer.read(0, 0, kSize, kSize, kSize, kSize, pixels);
+                    return pixels.rgba;
+                };
+                renderer.setCamera(engine_core::matrix4_look_at({0.f, 3.f, 500.f}, {0.f, 0.f, 0.f}, {0.f, 1.f, 0.f}),
+                                   runner::Renderer::kCameraFovYDegrees);
+                engine_core::Matrix4 big = engine_core::matrix4_identity();
+                big.m[0] = big.m[5] = big.m[10] = 60.f;
+                runner::MeshDraw far{cube, big};
+                far.color[0] = far.color[1] = far.color[2] = 0.5f;
+                renderer.setLighting(runner::SceneLighting{});
+                renderer.draw(0, 0, kSize, kSize, kSize, kSize, &far, 1);
+                const Pixel clearAir = ReadPixel(midX, midY);
+                const std::vector<unsigned char> noAir = snap();
+                Expect(!IsClear(clearAir), "the far cube covers the middle (" + Text(clearAir) + ")");
+
+                runner::SceneLighting red;
+                red.atmosphere.enabled = true;
+                red.atmosphere.density = 1.f;
+                red.atmosphere.heightFalloff = 0.f;
+                red.atmosphere.color[0] = 1.f;
+                red.atmosphere.color[1] = red.atmosphere.color[2] = 0.f;
+                red.atmosphere.aerialPerspective = 0.f;
+                red.atmosphere.sunScatter = 0.f;
+                renderer.setLighting(red);
+                renderer.draw(0, 0, kSize, kSize, kSize, kSize, &far, 1);
+                const Pixel fogged = ReadPixel(midX, midY);
+                Expect(fogged.r - fogged.g > clearAir.r - clearAir.g + 50,
+                       "red air turns a far cube red (" + Text(fogged) + " was " + Text(clearAir) + ")");
+                Expect(IsClear(ReadPixel(2, 2)), "with no sky, the pane past the cube stays clear");
+
+                // A see-through cube takes on the air too (forward.frag).
+                runner::MeshDraw glass = far;
+                glass.transparency = 0.5f;
+                renderer.setLighting(runner::SceneLighting{});
+                renderer.draw(0, 0, kSize, kSize, kSize, kSize, &glass, 1);
+                const Pixel clearGlass = ReadPixel(midX, midY);
+                renderer.setLighting(red);
+                renderer.draw(0, 0, kSize, kSize, kSize, kSize, &glass, 1);
+                const Pixel foggedGlass = ReadPixel(midX, midY);
+                Expect(foggedGlass.r - foggedGlass.g > clearGlass.r - clearGlass.g + 30,
+                       "red air turns a far see-through cube red (" + Text(foggedGlass) + " was " +
+                           Text(clearGlass) + ")");
+
+                // A camera far below BaseHeight sees thick air, never black or broken pixels.
+                runner::SceneLighting deep = red;
+                deep.atmosphere.heightFalloff = 0.2f;
+                deep.atmosphere.baseHeight = 5000.f;
+                renderer.setLighting(deep);
+                renderer.draw(0, 0, kSize, kSize, kSize, kSize, &far, 1);
+                const Pixel buried = ReadPixel(midX, midY);
+                Expect(buried.r > 150 && buried.g < 40, "far below the air's base the cube is all air (" +
+                                                          Text(buried) + ")");
+
+                // Turned off, the frame is exactly the one with no Atmosphere.
+                runner::SceneLighting off = red;
+                off.atmosphere.enabled = false;
+                renderer.setLighting(off);
+                renderer.draw(0, 0, kSize, kSize, kSize, kSize, &far, 1);
+                Expect(snap() == noAir, "an Atmosphere turned off draws exactly what none does");
+                Expect(runner::rt_glGetError() == runner::GL_NO_ERROR, "the Atmosphere leaves no GL error");
+                renderer.setLighting(runner::SceneLighting{});
+                renderer.setCamera(engine_core::matrix4_look_at(
+                                       {runner::Renderer::kCameraEye[0], runner::Renderer::kCameraEye[1],
+                                        runner::Renderer::kCameraEye[2]},
+                                       {runner::Renderer::kCameraTarget[0], runner::Renderer::kCameraTarget[1],
+                                        runner::Renderer::kCameraTarget[2]},
+                                       {0.f, 1.f, 0.f}),
+                                   runner::Renderer::kCameraFovYDegrees);
+            }
             // FXAA. A cube rolled 30 degrees has slanted edges; FXAA softens
             // the steps along them and leaves flat areas exactly as they were.
             {

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "AtmosphereUniforms.hpp"
 #include "ParticleWorld.hpp"
 
 #include <vector>
@@ -31,6 +32,8 @@ struct ParticleFrame {
     const float* lightColorIntensity = nullptr;
     const float* lightDirections = nullptr;
     const float* lightCones = nullptr;
+    // The air the particles are seen through; null for none.
+    const AtmosphereFrame* atmosphere = nullptr;
 };
 
 // Draws particles as instanced quads into the bound see-through target, one
@@ -73,6 +76,7 @@ private:
             hasTexture = -1, sceneDepth = -1, targetSize = -1, softEdge = -1, brightness = -1,
             lightInfluence = -1, blend = -1, ambient = -1, lightCount = -1, lightPositionRadius = -1,
             lightColorIntensity = -1, lightDirection = -1, lightCone = -1;
+        AtmosphereLocations atmosphere;
     } u_;
 };
 

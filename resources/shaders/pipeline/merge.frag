@@ -5,8 +5,10 @@
 // nothing opaque was drawn there is the Skybox, which the sky pass left in
 // the accumulation buffer; with no Skybox only the see-through surfaces are
 // left there, premultiplied, so the pane's color shows behind them. Renderer
-// puts lighting.glsl, environment.glsl, occlusion.glsl, and
-// image_lighting.glsl in after the #version line; occlusion.glsl declares
+// puts lighting.glsl, environment.glsl, occlusion.glsl, image_lighting.glsl,
+// and atmosphere.glsl in after the #version line. The Atmosphere fogs the
+// opaque surfaces and hazes the sky before the see-through surfaces go
+// over, since forward.frag fogs those itself; occlusion.glsl declares
 // uDepth and image_lighting.glsl uSkyEnabled: whether a surface lights and
 // reflects from the sky's cubes, which stays 0 for a DynamicSky whose
 // lighting cube is not ready. uSkyDrawn, below, is separate: whether the sky
@@ -76,6 +78,8 @@ void main() {
             return;
         }
         vec3 sky = max(texture(uAccumulation, vUv).rgb, 0.0);
+        vec4 haze = atmosphereAt(normalize(viewPositionAt(vUv, 1.0)), uAtmosphereSkyDistance);
+        sky = mix(sky, sky * haze.a + haze.rgb, uAtmosphereSkyHaze);
         outColor = vec4(sky * (1.0 - seeThrough.a) + seeThrough.rgb, 1.0);
         return;
     }
@@ -92,5 +96,7 @@ void main() {
             color = max(color + uReflectionsIntensity * (sky.weight * traced.rgb - traced.a * sky.light), 0.0);
         }
     }
+    vec4 air = atmosphereAtPoint(viewPositionAt(vUv, depth));
+    color = color * air.a + air.rgb;
     outColor = vec4(color * (1.0 - seeThrough.a) + seeThrough.rgb, 1.0);
 }

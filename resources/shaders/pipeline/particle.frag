@@ -1,7 +1,9 @@
 #version 330 core
 // A particle's color, lit by the scene's lights as a cloud is (no surface,
 // so no facing term), faded where it meets the scene, and written
-// premultiplied into the see-through buffer merge.frag composites.
+// premultiplied into the see-through buffer merge.frag composites, seen
+// through the Atmosphere's air. ParticleRenderer puts atmosphere.glsl in
+// after the #version line.
 const int kMaxLights = 32;
 const float kInvPi = 0.31830989;
 
@@ -70,7 +72,9 @@ void main() {
     if (uBlend == 2) {
         // Multiply: darken what is behind by the color's lightness, as a black over.
         float lightness = dot(c.rgb, vec3(0.2126, 0.7152, 0.0722));
-        outColor = vec4(0.0, 0.0, 0.0, c.a * (1.0 - clamp(lightness, 0.0, 1.0)));
+        // Far off, the air between hides the darkening.
+        float through = atmosphereAtPoint(vViewPosition).a;
+        outColor = vec4(0.0, 0.0, 0.0, c.a * (1.0 - clamp(lightness, 0.0, 1.0)) * through);
         return;
     }
     vec3 light = uAmbient;
@@ -78,6 +82,10 @@ void main() {
         light += lightAt(i, vViewPosition) * kInvPi;
     }
     vec3 rgb = c.rgb * mix(vec3(1.0), light, uLightInfluence) * uBrightness;
+    // Normal takes on the air like a surface; Additive only dims, adding no
+    // air of its own, so a far fire fades out rather than turning gray.
+    vec4 air = atmosphereAtPoint(vViewPosition);
+    rgb = uBlend == 1 ? rgb * air.a : rgb * air.a + air.rgb;
     // Premultiplied: Normal covers what is behind; Additive adds and covers nothing.
     outColor = vec4(rgb * c.a, uBlend == 1 ? 0.0 : c.a);
 }

@@ -1364,6 +1364,26 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
         "The brightness where bloom starts, from 0 to 10, fading in just below it. 0 blooms everything a little; "
         "above 1, only light brighter than white, such as a glowing Material or the sun in an .hdr sky.",
         "number", false, {});
+    add("Atmosphere", "Enabled", "When false, this Atmosphere draws no air.", "boolean", false, {});
+    add("Atmosphere", "Density",
+        "How thick the air is at BaseHeight, from 0 to 1. Distant surfaces fade into it; 0 draws no air.", "number",
+        false, {});
+    add("Atmosphere", "HeightFalloff",
+        "How fast the air thins going up, per unit, from 0 to 0.2. 0 is as thick at every height.", "number", false,
+        {});
+    add("Atmosphere", "BaseHeight", "The world height where the air is Density thick; it thins above and thickens below.",
+        "number", false, {});
+    add("Atmosphere", "Color", "The air's own color, which distant surfaces fade into.", "Color3", false, {});
+    add("Atmosphere", "AerialPerspective",
+        "How much the air takes the sky's color in each direction instead of Color, from 0 to 1. With no sky the air "
+        "is Color.",
+        "number", false, {});
+    add("Atmosphere", "SunScatter",
+        "How strong the air's glow toward the sun is, in the sun's color, from 0 to 1. With no DynamicSky the first "
+        "DirectionalLight is the sun.",
+        "number", false, {});
+    add("Atmosphere", "SkyHaze", "How much the air hazes the sky behind everything, from 0 to 1. The horizon hazes most.",
+        "number", false, {});
     add("Terrain", "Transform",
         "Where this island is and how it is turned. It may be moved and rotated, but not scaled: VoxelSize sets "
         "the size of its cells.",

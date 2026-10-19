@@ -1,8 +1,8 @@
 #version 330 core
 // A see-through surface, lit whole in one pass and blended over what is
-// behind it (the legacy forward.frag). Renderer puts surface.glsl,
-// lighting.glsl, environment.glsl, and image_lighting.glsl in after the
-// #version line.
+// behind it (the legacy forward.frag), seen through the Atmosphere's air.
+// Renderer puts surface.glsl, lighting.glsl, environment.glsl,
+// image_lighting.glsl, and atmosphere.glsl in after the #version line.
 in vec3 vViewPosition;
 in vec3 vViewNormal;
 in vec2 vUv;
@@ -62,5 +62,7 @@ void main() {
                             uLightPositionRadius[i].w, uLightColorIntensity[i].a);
     }
     color += s.emissive;
+    vec4 air = atmosphereAtPoint(vViewPosition);
+    color = color * air.a + air.rgb;
     outColor = vec4(color, s.alpha * (1.0 - uTransparency));
 }

@@ -48,6 +48,7 @@ set(STUDIO_CORE_SOURCES
     src/runner/ViewportQueue.cpp
     src/runner/GridBands.cpp
     src/runner/ShadowMath.cpp
+    src/runner/AtmosphereMath.cpp
     src/runner/BloomMath.cpp
     src/runner/ReflectionMath.cpp
     src/runner/OcclusionMath.cpp
@@ -94,6 +95,7 @@ set(STUDIO_SOURCES
     src/runner/gl.cpp
     src/runner/ShaderFile.cpp
     src/runner/Renderer.cpp
+    src/runner/AtmosphereUniforms.cpp
     src/runner/GpuTimer.cpp
     src/runner/ShadowRenderer.cpp
     src/runner/InstanceBuffer.cpp
@@ -665,6 +667,7 @@ add_library(engine_instances STATIC
     src/engine_instances/PhysicsObject.cpp
     src/engine_instances/PlayerController.cpp
     src/engine_instances/BloomEffect.cpp
+    src/engine_instances/Atmosphere.cpp
     src/engine_instances/ScreenSpaceReflections.cpp
     src/engine_instances/AmbientOcclusionEffect.cpp
     src/engine_instances/DynamicSky.cpp
@@ -1189,6 +1192,7 @@ add_executable(sandbox
     sandbox/skybox_tests.cpp
     sandbox/dynamic_sky_tests.cpp
     sandbox/bloom_tests.cpp
+    sandbox/atmosphere_tests.cpp
     sandbox/value_tests.cpp
     sandbox/curve_tests.cpp
     sandbox/engine_options_tests.cpp
@@ -1217,6 +1221,7 @@ add_executable(sandbox
     sandbox/billboard_tests.cpp
     sandbox/render_math_tests.cpp
     sandbox/shadow_math_tests.cpp
+    sandbox/atmosphere_math_tests.cpp
     sandbox/bloom_math_tests.cpp
     sandbox/antialiasing_tests.cpp
     sandbox/reflections_tests.cpp

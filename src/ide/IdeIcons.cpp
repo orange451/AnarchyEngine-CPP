@@ -44,6 +44,10 @@ const char* IconFileOverride(const std::string& class_name) {
     if (class_name == "LodLayer") {
         return "layers-stack.png";
     }
+    // A fog bank, for the air.
+    if (class_name == "Atmosphere") {
+        return "weather-fog.png";
+    }
     if (class_name == "DynamicSky") {
         return "icon-sky.png";
     }

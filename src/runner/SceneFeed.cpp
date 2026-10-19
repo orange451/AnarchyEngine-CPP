@@ -53,6 +53,7 @@ void SceneFeed::perform(const engine_core::VisualSnapshot& front) {
     out->sky = front.sky;
     out->dynamic_sky = front.dynamic_sky;
     out->bloom = front.bloom;
+    out->atmosphere = front.atmosphere;
     out->reflections = front.reflections;
     out->occlusion = front.occlusion;
     out->draggers = front.draggers;

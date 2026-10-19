@@ -1,5 +1,7 @@
 #pragma once
 
+#include "AtmosphereMath.hpp"
+#include "AtmosphereUniforms.hpp"
 #include "BloomMath.hpp"
 #include "DraggerMath.hpp"
 #include "DrawBatches.hpp"
@@ -353,6 +355,7 @@ struct SceneLighting {
     SceneSky sky;
     SceneDynamicSky dynamicSky;
     SceneBloom bloom;
+    SceneAtmosphere atmosphere;
     SceneReflections reflections;
     SceneOcclusion occlusion;
 };
@@ -683,6 +686,8 @@ private:
         int moonTextureEnabled = -1;
         // dynamic_sky.frag: whether skyLayersPass drew this frame's air and clouds.
         int skyLayersDrawn = -1;
+        // atmosphere.glsl's, in the programs that include it.
+        AtmosphereLocations atmosphere;
     };
 
     // A light as the shaders take it, in view space.
@@ -782,6 +787,10 @@ private:
     void prepareSky();
     // The Skybox's uniforms and cubes, or uSkyEnabled 0 with none.
     void bindSky(const Program& program);
+    // atmosphere_ from lighting_.atmosphere, the camera, the sky prepareSky
+    // worked out, and the first DirectionalLight in lights (a DynamicSky's
+    // light comes first), whose glow the air takes.
+    void prepareAtmosphere(const LightDraw* lights, int lightCount);
     // sky's uniforms and its two textures.
     void bindDynamicSky(const Program& program, const SceneDynamicSky& sky);
     // Starts drawing the DynamicSky's lighting cube again when LightingDue
@@ -853,6 +862,8 @@ private:
     // From view space to the sky's, column-major, and Brightness times Tint, linear.
     float viewToSky_[9] = {1.f, 0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 1.f};
     float skyColor_[3] = {1.f, 1.f, 1.f};
+    // The air, as atmosphere.glsl takes it this draw.
+    AtmosphereFrame atmosphere_;
     // The sky's LightScale and the 2D image bound for it: a DynamicSky's are 1 and white.
     float skyLightScale_ = 1.f;
     unsigned skyImage_ = 0;

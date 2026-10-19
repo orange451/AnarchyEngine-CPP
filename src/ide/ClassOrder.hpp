@@ -36,6 +36,7 @@ inline int class_rank(std::string_view class_name) {
         {"Skybox", 6},
         {"DynamicSky", 6},
         {"AmbientOcclusionEffect", 7},
+        {"Atmosphere", 7},
         {"BloomEffect", 7},
         {"ScreenSpaceReflections", 7},
         {"DirectionalLight", 8},

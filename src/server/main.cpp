@@ -104,7 +104,17 @@ void OnSignal(int) {
 
 int main(int argc, char** argv) {
 #if defined(_WIN32)
-    // Paths and script prints are UTF-8; the console shows them as such.
+    // Paths and script prints are UTF-8; the console shows them as such, and
+    // gets its own code page back on every way out of main, Ctrl+C included.
+    // A second Ctrl+C quits at once and leaves it as UTF-8.
+    struct ConsoleCodePage {
+        UINT previous = GetConsoleOutputCP();
+        ~ConsoleCodePage() {
+            if (previous != 0) {
+                SetConsoleOutputCP(previous);
+            }
+        }
+    } console_code_page;
     SetConsoleOutputCP(CP_UTF8);
 #endif
     std::vector<std::string> args = runner::utf8_arguments(argc, argv);

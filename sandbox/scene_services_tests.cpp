@@ -549,8 +549,16 @@ TEST_CASE("SS13 registry properties fire Changed by name and default to a new in
             continue;
         }
         DataModel* object = fresh.instance(fresh.scene_service(name));
+        // A nested service, as ServerStorage under Storage.
+        if (object == nullptr) {
+            object = fresh.instance(fresh.service(name));
+        }
         if (object == nullptr) {
             object = engine_core::lua_create_instance(fresh, name.c_str());
+        }
+        // A plain DataModel (Persistent is saved on every instance) has no Lua constructor.
+        if (object == nullptr && name == "DataModel") {
+            object = &fresh.create();
         }
         INFO(name);
         REQUIRE(object != nullptr);

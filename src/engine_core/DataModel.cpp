@@ -2811,6 +2811,11 @@ bool write_lua_persistent(DataModel& world, DataModel& object, LuaSlot& in) {
         in.error = world.name(object.id()) + " is a service, and a service always survives";
         return false;
     }
+    // The root is not an instance: nothing could hold the mark.
+    if (object.id() == 0 && in.flag) {
+        in.error = "game always survives";
+        return false;
+    }
     world.set_persistent(object.id(), in.flag);
     return true;
 }

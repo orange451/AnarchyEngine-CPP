@@ -155,12 +155,13 @@ TEST_CASE("M5 default_properties is what save_properties leaves out", "[M5][merg
         object->save_properties(saved);
         REQUIRE(saved.empty());
     }
-    REQUIRE(default_keys(game).empty());
-    REQUIRE(default_keys(*objects[0]) == std::vector<std::string>{"Simulated", "VisualOnly"});
+    // Persistent is on every instance, the root included; a save writes it only when true.
+    REQUIRE(default_keys(game) == std::vector<std::string>{"Persistent"});
+    REQUIRE(default_keys(*objects[0]) == std::vector<std::string>{"Persistent", "Simulated", "VisualOnly"});
     REQUIRE(default_keys(*objects[1]) ==
-            std::vector<std::string>{"Color", "Prefab", "Scale", "Simulated", "Transform", "Transparency",
+            std::vector<std::string>{"Color", "Persistent", "Prefab", "Scale", "Simulated", "Transform", "Transparency",
                                      "VisualOnly"});
-    REQUIRE(default_keys(*objects[2]) == std::vector<std::string>{"Enabled", "RunContext", "Simulated", "VisualOnly"});
+    REQUIRE(default_keys(*objects[2]) == std::vector<std::string>{"Enabled", "Persistent", "RunContext", "Simulated", "VisualOnly"});
     REQUIRE(default_keys(*objects[5]) ==
-            std::vector<std::string>{"FieldOfView", "Simulated", "Transform", "VisualOnly"});
+            std::vector<std::string>{"FieldOfView", "Persistent", "Simulated", "Transform", "VisualOnly"});
 }

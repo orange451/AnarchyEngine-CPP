@@ -109,6 +109,7 @@ TEST_CASE("JN2 a service refuses Persistent", "[join][persistent]") {
         print("ok", ok)
         print("err", err)
         print("still", workspace.Persistent)
+        print("root", (pcall(function() game.Persistent = true end)))
     )");
     rig.game.start_simulation();
     rig.frames(1);
@@ -124,6 +125,7 @@ TEST_CASE("JN2 a service refuses Persistent", "[join][persistent]") {
     }
     REQUIRE(found);
     REQUIRE(has_line(output, "still\tfalse\n"));
+    REQUIRE(has_line(output, "root\tfalse\n"));
     REQUIRE_FALSE(rig.game.persistent(rig.game.scene_service("Workspace")));
 }
 

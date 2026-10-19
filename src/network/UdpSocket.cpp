@@ -279,8 +279,12 @@ std::size_t UdpSocket::receive(Address& from, std::uint8_t* buffer, std::size_t 
 }
 
 std::optional<Address> resolve(std::string_view host_port, std::string& error) {
+    // Typed or pasted text may carry spaces around it.
+    const auto blank = [](char c) { return c == ' ' || c == '\t' || c == '\r' || c == '\n'; };
+    while (!host_port.empty() && blank(host_port.front())) host_port.remove_prefix(1);
+    while (!host_port.empty() && blank(host_port.back())) host_port.remove_suffix(1);
     if (std::optional<Address> literal = Address::parse(host_port)) return literal;
-    static const char* const kShape = "Enter the server as host:port, for example localhost:7777";
+    static const char* const kShape = "Enter the server as host:port, for example localhost:7777, or [::1]:7777 for an IPv6 address";
     // A bracketed literal that did not parse is malformed; a name never has brackets.
     const std::size_t colon = host_port.rfind(':');
     if (host_port.empty() || host_port.front() == '[' || colon == std::string_view::npos) {
@@ -289,7 +293,8 @@ std::optional<Address> resolve(std::string_view host_port, std::string& error) {
     }
     const std::string host(host_port.substr(0, colon));
     std::uint16_t port = 0;
-    if (host.empty() || !parse_port(host_port.substr(colon + 1), port)) {
+    // A host with a colon of its own is an IPv6 address without its brackets; port 0 is no server.
+    if (host.empty() || host.find(':') != std::string::npos || !parse_port(host_port.substr(colon + 1), port) || port == 0) {
         error = kShape;
         return std::nullopt;
     }

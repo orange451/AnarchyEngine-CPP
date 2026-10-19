@@ -183,6 +183,16 @@ TEST_CASE("N80 resolve takes literals and names", "[network][socket]") {
     error.clear();
     REQUIRE_FALSE(network::resolve(":7777", error).has_value());
     REQUIRE_FALSE(error.empty());
+    // Spaces around a pasted address are ignored; an unbracketed IPv6 address and port 0 are refused.
+    const auto spaced = network::resolve("  127.0.0.1:7777 \n", error);
+    REQUIRE(spaced.has_value());
+    REQUIRE(*spaced == Address::loopback(7777));
+    error.clear();
+    REQUIRE_FALSE(network::resolve("2001:db8::1", error).has_value());
+    REQUIRE(error.find("[::1]") != std::string::npos);
+    error.clear();
+    REQUIRE_FALSE(network::resolve("localhost:0", error).has_value());
+    REQUIRE_FALSE(error.empty());
 }
 
 TEST_CASE("N82 an IPv4-only socket sends and receives on loopback", "[network][socket]") {

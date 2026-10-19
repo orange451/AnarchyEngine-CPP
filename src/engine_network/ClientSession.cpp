@@ -114,8 +114,9 @@ bool ClientSession::connect(const network::Address& server, double now) {
     }
     // Each connection builds its world from nothing.
     applier_ = std::make_unique<ReplicaApplier>(game_);
-    set_state(ClientState::Connecting);
+    // The old reason goes first, so status() never shows Connecting with the last connection's reason.
     set_reason(std::string());
+    set_state(ClientState::Connecting);
     return true;
 }
 

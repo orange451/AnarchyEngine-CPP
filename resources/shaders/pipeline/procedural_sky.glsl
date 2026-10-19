@@ -52,7 +52,8 @@ const int kLightSteps = 4;
 // The cloud layer: its base above the eye and its thickness, in units; the
 // center of its curve this far below the eye; its biggest puffs' size; the
 // long steps across it through clear air, the most steps of any length, and
-// the first of the steps toward the light, and how many.
+// the first of the steps toward the light, and how many: each longer than
+// the last, 60 units in all.
 const float kCloudHeight = 200.0;
 const float kCloudThickness = 70.0;
 const float kCloudDrop = 1800.0;
@@ -60,8 +61,8 @@ const float kCloudFeature = 110.0;
 const float kCloudLacunarity = 2.76434;
 const int kCloudSteps = 24;
 const int kCloudMaxSteps = 64;
-const float kCloudLightStep = 4.0;
-const int kCloudLightSteps = 5;
+const float kCloudLightStep = 10.0;
+const int kCloudLightSteps = 3;
 // The bright stars' grid, and a finer one of faint stars behind them.
 const float kStarCells = 150.0;
 const float kFaintStarCells = 420.0;
@@ -258,7 +259,9 @@ vec4 clouds(vec3 dir, vec3 skyAround) {
             }
             continue;
         }
-        t += fineLength;
+        // Longer as less shows through: what lies deeper adds less and less.
+        float stepHere = fineLength * mix(1.0, 3.0, 1.0 - transmittance);
+        t += stepHere;
         float density = cloudDensity(at + drift, height, edge, true);
         if (density <= 0.0) {
             // Long steps again only well clear of any cloud.
@@ -287,7 +290,7 @@ vec4 clouds(vec3 dir, vec3 skyAround) {
         // Tops brighter than bases, as https://www.shadertoy.com/view/XtBXDw fakes the light through the layer.
         float lift = exp(height) / 1.75;
         vec3 here = direct * reach * lift + ambient * mix(0.7, 1.1, height);
-        float through = exp(-extinction * density * fineLength);
+        float through = exp(-extinction * density * stepHere);
         light += transmittance * (1.0 - through) * here;
         transmittance *= through;
         if (transmittance < 0.01) {
@@ -379,43 +382,64 @@ vec4 body(vec3 dir, vec3 toward, float size, float textured, sampler2D image, fl
     return vec4(vec3(shade), cover);
 }
 
-// The sky's linear radiance toward dir (unit length, world space). detail
-// adds the stars and the sun and moon discs, which the lighting cube leaves
-// out: the sky's light already gives the sun's highlight.
-vec3 proceduralSky(vec3 dir, bool detail) {
-    // At and below the horizon, the horizon the same way round (straight
-    // down, any); the ground darkens it below.
+// At and below the horizon, the horizon the same way round (straight down,
+// any): the ground darkens it below.
+vec3 skyUp(vec3 dir) {
     vec3 up = dir;
     if (dir.y <= 0.0) {
         float across = length(dir.xz);
         up = across > 1e-4 ? vec3(dir.x / across, 0.0, dir.z / across) : vec3(0.0, 0.0, -1.0);
     }
-    up = normalize(vec3(up.x, up.y + 1e-4, up.z));
-    vec3 air = atmosphere(up, uSunDirection, kSunRadiance);
+    return normalize(vec3(up.x, up.y + 1e-4, up.z));
+}
+
+// The sky's two costly layers toward dir (unit length, world space), both
+// smooth across the view, so dynamic_sky_layers.frag draws them at half
+// size: the air's light, and the clouds premultiplied, their light times how
+// much of what is behind them they hide in rgb and that in a.
+void skyLayers(vec3 dir, out vec3 air, out vec4 cloud) {
+    vec3 up = skyUp(dir);
+    air = atmosphere(up, uSunDirection, kSunRadiance);
     if (uStarVisibility > 0.0) {
         air += atmosphere(up, uMoonDirection, kMoonSkyRadiance);
     }
     // Darker overhead, paler toward the horizon, with airglow low down on a dark night.
     air += kNightSky * mix(1.4, 0.7, up.y);
     air += kAirglow * uStarVisibility * exp(-up.y * 14.0);
+    // Below the horizon every direction down a column is the same horizon
+    // ray, whose clouds would draw down as streaks: composeSky veils it instead.
+    cloud = vec4(0.0);
+    if (dir.y > 0.0) {
+        vec4 seen = clouds(up, air);
+        cloud = vec4(seen.rgb * seen.a, seen.a);
+    }
+}
+
+// The sky's linear radiance toward dir from its layers (skyLayers'). detail
+// adds the stars and the sun and moon discs, which the lighting cube leaves
+// out: the sky's light already gives the sun's highlight.
+vec3 composeSky(vec3 dir, vec3 air, vec4 cloud, bool detail) {
+    vec3 up = skyUp(dir);
     // The stars, the discs, and the moon's glow only above the horizon: below
     // it every direction down a column is the same horizon, which would smear
     // them down the ground.
     float above = smoothstep(-0.002, 0.002, dir.y);
     vec3 color = air + uMoonColor * 0.02 * pow(max(dot(up, uMoonDirection), 0.0), 600.0) * above;
     if (detail) {
-        color += stars(up) * uStarVisibility * above;
+        // Skipped by day: two grids of hashes, each pixel, all multiplied by 0.
+        if (uStarVisibility > 0.0) {
+            color += stars(up) * uStarVisibility * above;
+        }
         vec4 moon = body(up, uMoonDirection, uMoonSize, uMoonTextureEnabled, uMoonTexture, 1.0);
         color = mix(color, air + moon.rgb * uMoonColor, moon.a * above);
     }
     // Toward and below the horizon, the layer as a whole: an even veil as
-    // much as the sky is covered. Below it every direction down a column is
-    // the same horizon ray, whose clouds would draw down as streaks.
-    vec4 cloud = dir.y > 0.0 ? clouds(up, air) : vec4(0.0);
+    // much as the sky is covered.
     float overcast = uCloudCover * uCloudDensity;
     vec3 veil = mix(air, vec3(dot(air, vec3(0.2126, 0.7152, 0.0722))), 0.5 + 0.5 * overcast) * mix(1.0, 0.6, overcast);
-    cloud = mix(cloud, vec4(veil, smoothstep(0.1, 0.8, uCloudCover)), smoothstep(0.03, 0.0, dir.y));
-    color = mix(color, cloud.rgb, cloud.a);
+    float veiled = smoothstep(0.1, 0.8, uCloudCover);
+    cloud = mix(cloud, vec4(veil * veiled, veiled), smoothstep(0.03, 0.0, dir.y));
+    color = color * (1.0 - cloud.a) + cloud.rgb;
     // The sun shows through thin cloud and not at all through thick: bright
     // as it is, even the last hundredth of it would glare through.
     float clear = 1.0 - cloud.a;
@@ -430,4 +454,12 @@ vec3 proceduralSky(vec3 dir, bool detail) {
     float ground = 1.0 - smoothstep(-0.25, 0.0, dir.y);
     color *= mix(1.0, 0.25, ground);
     return min(color, vec3(kMaxHalf));
+}
+
+// The sky's linear radiance toward dir (unit length, world space), its layers and all.
+vec3 proceduralSky(vec3 dir, bool detail) {
+    vec3 air;
+    vec4 cloud;
+    skyLayers(dir, air, cloud);
+    return composeSky(dir, air, cloud, detail);
 }

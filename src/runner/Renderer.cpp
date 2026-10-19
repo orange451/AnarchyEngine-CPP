@@ -108,6 +108,10 @@ constexpr int kUnitReflections = kUnitScene;
 // Ambient occlusion shares the metalness map's unit: none of the passes that
 // read it (the light pass, the merge, its own blur) reads a Material.
 constexpr int kUnitOcclusion = kUnitMetalnessMap;
+// The sky pass reads no G-buffer but its depth, so a DynamicSky's half-size
+// air and clouds take the albedo's and normal's units.
+constexpr int kUnitSkyAir = kUnitAlbedo;
+constexpr int kUnitSkyCloud = kUnitNormal;
 // The terrain program reads no Material, so a Terrain's look table takes the diffuse unit.
 constexpr int kUnitTerrainLook = kUnitDiffuse;
 // The terrain program's third array (roughness + metalness) takes the unit
@@ -380,6 +384,7 @@ bool Renderer::buildProgram(Program& program, const char* name, const char* vert
     program.moonSize = at("uMoonSize");
     program.sunTextureEnabled = at("uSunTextureEnabled");
     program.moonTextureEnabled = at("uMoonTextureEnabled");
+    program.skyLayersDrawn = at("uSkyLayersDrawn");
 
     // Samplers keep their unit for the program's life. A name two passes use
     // for different things (uEmissive, uTransparency) is a sampler only in
@@ -420,6 +425,8 @@ bool Renderer::buildProgram(Program& program, const char* name, const char* vert
     sampler("uSunTexture", kUnitDiffuse);
     sampler("uMoonTexture", kUnitNormalMap);
     sampler("uCloudNoise", kUnitRoughnessMap);
+    sampler("uSkyAir", kUnitSkyAir);
+    sampler("uSkyCloud", kUnitSkyCloud);
     sampler("uTerrainLook", kUnitTerrainLook);
     sampler("uBones", kUnitBones);
     // The terrain program's own three arrays and anti-tiling noise.
@@ -497,6 +504,9 @@ bool Renderer::initialize() {
 
     dynamicSkyBuilt_ =
         buildProgram(dynamicSky_, "Dynamic sky", "pipeline/fullscreen.vert", "pipeline/dynamic_sky.frag",
+                     {"pipeline/lighting.glsl", "pipeline/environment.glsl", "pipeline/procedural_sky.glsl"}) &&
+        buildProgram(dynamicSkyLayers_, "Dynamic sky layers", "pipeline/fullscreen.vert",
+                     "pipeline/dynamic_sky_layers.frag",
                      {"pipeline/lighting.glsl", "pipeline/environment.glsl", "pipeline/procedural_sky.glsl"}) &&
         buildProgram(dynamicSkyCube_, "Dynamic sky cube", "pipeline/fullscreen.vert",
                      "pipeline/dynamic_sky_cube.frag", {"pipeline/environment.glsl", "pipeline/procedural_sky.glsl"});
@@ -783,6 +793,7 @@ Renderer::TargetSet Renderer::parkTargets() {
     destroyBloomChain();
     destroyReflectionBuffers();
     destroyOcclusionBuffers();
+    destroySkyLayerBuffers();
     TargetSet set;
     set.width = targetWidth_;
     set.height = targetHeight_;
@@ -841,6 +852,7 @@ void Renderer::destroyTargets() {
     destroyBloomChain();
     destroyReflectionBuffers();
     destroyOcclusionBuffers();
+    destroySkyLayerBuffers();
     fxaaValid_ = false;
     targetWidth_ = 0;
     targetHeight_ = 0;
@@ -1016,6 +1028,48 @@ void Renderer::destroyOcclusionBuffers() {
     occlusionHeight_ = 0;
     occlusionScale_ = 0;
     occlusionValid_ = false;
+}
+
+bool Renderer::ensureSkyLayerBuffers(int width, int height) {
+    if (skyLayersFbo_ != 0 && width == skyLayersWidth_ && height == skyLayersHeight_) {
+        return true;
+    }
+    if (width == skyLayersRefusedWidth_ && height == skyLayersRefusedHeight_) {
+        return false;
+    }
+    destroySkyLayerBuffers();
+    // Rounded up, so a texel is never more than two pixels across:
+    // dynamic_sky_layers.frag looks two pixels round each for the sky.
+    const int halfWidth = std::max((width + 1) / 2, 1);
+    const int halfHeight = std::max((height + 1) / 2, 1);
+    skyAirTexture_ = MakeTarget(RT_GL_RGBA16F, GL_RGBA, RT_GL_HALF_FLOAT, halfWidth, halfHeight, GL_LINEAR);
+    skyCloudTexture_ = MakeTarget(RT_GL_RGBA16F, GL_RGBA, RT_GL_HALF_FLOAT, halfWidth, halfHeight, GL_LINEAR);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    glGenFramebuffers(1, &skyLayersFbo_);
+    glBindFramebuffer(RT_GL_FRAMEBUFFER, skyLayersFbo_);
+    if (!Attach({skyAirTexture_, skyCloudTexture_}, 0)) {
+        std::fprintf(stderr,
+                     "The Scene View's %d by %d sky buffers are not supported; drawing the DynamicSky at full size.\n",
+                     halfWidth, halfHeight);
+        destroySkyLayerBuffers();
+        skyLayersRefusedWidth_ = width;
+        skyLayersRefusedHeight_ = height;
+        return false;
+    }
+    skyLayersWidth_ = width;
+    skyLayersHeight_ = height;
+    return true;
+}
+
+void Renderer::destroySkyLayerBuffers() {
+    if (skyLayersFbo_ != 0) {
+        glDeleteFramebuffers(1, &skyLayersFbo_);
+        skyLayersFbo_ = 0;
+    }
+    DeleteTexture(skyAirTexture_);
+    DeleteTexture(skyCloudTexture_);
+    skyLayersWidth_ = 0;
+    skyLayersHeight_ = 0;
 }
 
 namespace {
@@ -2743,12 +2797,38 @@ bool Renderer::lightPass(const float* projection, const float* inverseProjection
     return true;
 }
 
+bool Renderer::skyLayersPass(const float* inverseProjection) {
+    if (!ensureSkyLayerBuffers(targetWidth_, targetHeight_)) {
+        return false;
+    }
+    RENDER_PASS("Sky layers");
+    const Program& program = dynamicSkyLayers_;
+    glBindFramebuffer(RT_GL_FRAMEBUFFER, skyLayersFbo_);
+    glViewport(0, 0, std::max((targetWidth_ + 1) / 2, 1), std::max((targetHeight_ + 1) / 2, 1));
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_BLEND);
+    glUseProgram(program.id);
+    BindTexture(kUnitDepth, depthTexture_);
+    glUniformMatrix4fv(program.inverseProjection, 1, GL_FALSE, inverseProjection);
+    glUniformMatrix3fv(program.viewToSky, 1, GL_FALSE, viewToSky_);
+    bindDynamicSky(program, lighting_.dynamicSky);
+    glBindVertexArray(emptyVao_);
+    const bool drawn = CanDraw(program.id);
+    if (drawn) {
+        DrawFullscreen(emptyVao_);
+    }
+    glViewport(0, 0, targetWidth_, targetHeight_);
+    return drawn;
+}
+
 bool Renderer::skyPass(const float* inverseProjection) {
-    RENDER_PASS("Sky");
     if (!skyVisible_) {
         return true;
     }
     const bool dynamic = dynamicSkyDrawn();
+    // Before the sky's own timer, which would not nest with this one's.
+    const bool layered = dynamic && skyLayersPass(inverseProjection);
+    RENDER_PASS("Sky");
     const Program& program = dynamic ? dynamicSky_ : sky_;
     // Only where no opaque surface is, which no light pass wrote: no blending needed.
     glBindFramebuffer(RT_GL_FRAMEBUFFER, accumulationFbo_);
@@ -2765,6 +2845,10 @@ bool Renderer::skyPass(const float* inverseProjection) {
         glUniformMatrix3fv(program.viewToSky, 1, GL_FALSE, viewToSky_);
         glUniform3f(program.skyColor, skyColor_[0], skyColor_[1], skyColor_[2]);
         bindDynamicSky(program, lighting_.dynamicSky);
+        glUniform1f(program.skyLayersDrawn, layered ? 1.f : 0.f);
+        // Unread when not drawn, but bound to something whole for macOS's driver.
+        BindTexture(kUnitSkyAir, layered ? skyAirTexture_ : whiteTexture_);
+        BindTexture(kUnitSkyCloud, layered ? skyCloudTexture_ : whiteTexture_);
     } else {
         bindSky(program);
     }
@@ -3195,7 +3279,7 @@ void Renderer::shutdown() {
     ready_ = false;
     for (Program* program :
          {&geometry_, &terrain_, &forward_, &ibl_, &light_, &sun_, &merge_, &tonemap_, &bloomDown_, &bloomUp_, &fxaa_, &ssrScene_, &ssrBlur_, &ssr_, &gtao_, &aoBlur_, &sky_, &grid_,
-          &gridBands_, &outline_, &handle_, &dynamicSky_, &dynamicSkyCube_, &depthProbe_}) {
+          &gridBands_, &outline_, &handle_, &dynamicSky_, &dynamicSkyLayers_, &dynamicSkyCube_, &depthProbe_}) {
         if (program->id != 0) {
             glDeleteProgram(program->id);
         }
@@ -3276,6 +3360,8 @@ void Renderer::shutdown() {
     occlusionRefusedWidth_ = 0;
     occlusionRefusedHeight_ = 0;
     occlusionRefusedScale_ = 0;
+    skyLayersRefusedWidth_ = 0;
+    skyLayersRefusedHeight_ = 0;
 }
 
 engine_core::Matrix4 Renderer::DefaultView() {

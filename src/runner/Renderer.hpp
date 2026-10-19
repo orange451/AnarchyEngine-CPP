@@ -680,6 +680,8 @@ private:
         int moonSize = -1;
         int sunTextureEnabled = -1;
         int moonTextureEnabled = -1;
+        // dynamic_sky.frag: whether skyLayersPass drew this frame's air and clouds.
+        int skyLayersDrawn = -1;
     };
 
     // A light as the shaders take it, in view space.
@@ -729,6 +731,12 @@ private:
     bool lightPass(const float* projection, const float* inverseProjection);
     // The Skybox where no opaque surface was drawn. True with no Skybox.
     bool skyPass(const float* inverseProjection);
+    // A DynamicSky's air and clouds at half size, into skyAirTexture_ and
+    // skyCloudTexture_, for skyPass to read. False, with skyPass drawing them
+    // itself at full size, when the buffers are refused or the program cannot draw yet.
+    bool skyLayersPass(const float* inverseProjection);
+    bool ensureSkyLayerBuffers(int width, int height);
+    void destroySkyLayerBuffers();
     bool transparencyPass(const MeshDraw* meshes, const float* projection, const float* inverseProjection);
     bool mergePass(bool reflected, const float* inverseProjection);
     // Screen-space reflections into reflectionTexture_, from the lit opaque
@@ -820,6 +828,7 @@ private:
     // The DynamicSky's, built apart from the others: when they do not build,
     // only the DynamicSky goes undrawn.
     Program dynamicSky_;
+    Program dynamicSkyLayers_;
     Program dynamicSkyCube_;
     Program depthProbe_;
     bool dynamicSkyBuilt_ = false;
@@ -983,6 +992,16 @@ private:
     unsigned reflectionTexture_ = 0;
     int reflectionWidth_ = 0;
     int reflectionHeight_ = 0;
+    // A DynamicSky's air and premultiplied clouds, half the pane's size
+    // rounded up, which skyPass reads between texels. Made on the first frame
+    // that draws a DynamicSky, apart from the other buffers.
+    unsigned skyLayersFbo_ = 0;
+    unsigned skyAirTexture_ = 0;
+    unsigned skyCloudTexture_ = 0;
+    int skyLayersWidth_ = 0;
+    int skyLayersHeight_ = 0;
+    int skyLayersRefusedWidth_ = 0;
+    int skyLayersRefusedHeight_ = 0;
     int reflectionRefusedWidth_ = 0;
     int reflectionRefusedHeight_ = 0;
     // Whether ssrScene_, ssrBlur_ and ssr_ have passed validation since the programs or

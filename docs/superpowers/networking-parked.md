@@ -55,3 +55,13 @@ Left over from sub-project 1 (transport, `src/network/`), for the sub-projects t
 - POSIX SIGHUP is not handled: closing the terminal ends the server without telling its clients.
 - Between `close` and `engine.stop` a closing server can still accept a ConnectRequest, and that client may not hear "The server closed".
 - `-NS` arguments to the player take the next argument as their value when it has no dash, so `-NSFoo game` (with no value) skips the folder. macOS always passes a value.
+
+## Left over from join-from-Lua (Connections:Join and Persistent)
+
+- Going back to a menu waits for scenes: after a Leave the world keeps running locally (Standalone) with the server's last world, and a game cannot load its menu place back.
+- A malformed op in the snapshot, after the swap has run, fails the apply: the menu is already gone, so the world is left half built, the role goes back to Standalone, and Left says "Bad data from the server". Validating every op before the swap would keep the menu.
+- Closing Studio during a test, or pressing Stop, waits for any lookup still running (DNS) and for a first join's resources hash, since the host's destructor joins its threads.
+- Setting fresh GUIDs on the survivors marks the place dirty during play.
+- Warm the resources hash in the background at launch, so the first join does not pay for it.
+- After a leave, `Connections.LocalConnection` still names the old Connection until the next swap (only Studio's Stop clears it, with `clear_connections`).
+- Edit-mode plugins that call Join get "Only a client can join a server", which is misleading there: Studio is a client, but only during a test.

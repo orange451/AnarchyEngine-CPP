@@ -1046,6 +1046,23 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
     add("Connection", "Id", "The connection's UUID, chosen by the server. Read-only.", "string", false, {});
     add("Connections", "LocalConnection",
         "This client's own Connection. Nil on a server and in single-player.", "Connection?", false, {});
+    add("Connections", "Join",
+        "Starts joining the server at address, \"host:port\". Only a client program can join, from a standalone "
+        "world that is playing, while JoinState is Idle; anything else raises. Once the server's world has "
+        "arrived it replaces this one: only Persistent instances survive, and the world becomes a Client, so a "
+        "surviving Script keeps running only when its RunContext is Client or Any. Joined or Left says how it went.",
+        nullptr, false, {P("address", "string")});
+    add("Connections", "Leave",
+        "Ends the join, or the attempt at one, and Left fires with \"You left the game\". Does nothing while "
+        "JoinState is Idle.",
+        nullptr, false, {});
+    add("Connections", "JoinState", "Where a script's join stands: Idle, Joining, or Joined. Read-only.",
+        "Enum.JoinState", false, {});
+    add("Connections", "Joined", "Fires once the server's world has arrived and the join is done.", "Signal", false, {});
+    add("Connections", "Left",
+        "Fires when a join ends or fails, with why: a refusal, a lost connection, or Leave. JoinState is Idle "
+        "again.",
+        "Signal", false, {});
     add("ModuleScript", "Source", "The Luau source require runs.", "string", false, {});
 
     add("GameObject", "Transform", "Where this object is and how it is turned.", "Matrix4", false, {});

@@ -281,6 +281,7 @@ struct DataModel::State {
     std::function<void()> on_stop;
     std::function<void()> on_start;
     ScriptHost* script_host = nullptr;
+    IJoinHost* join_host = nullptr;
     ScriptAnalysis* script_analysis = nullptr;
     // The Engine's physics world, for scripts' queries. Null without an Engine.
     PhysicsWorld* physics = nullptr;

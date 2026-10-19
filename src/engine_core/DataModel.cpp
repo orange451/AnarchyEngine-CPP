@@ -2318,6 +2318,10 @@ void DataModel::emit_own(Field field) { emit_change(id_, field, current_origin()
 
 ScriptHost* DataModel::script_host() const { return state_->script_host; }
 
+void DataModel::set_join_host(IJoinHost* host) { state_->join_host = host; }
+
+IJoinHost* DataModel::join_host() const { return state_->join_host; }
+
 bool DataModel::on_gameplay_thread() const { return mutation_thread(); }
 
 std::uint32_t DataModel::world_generation() const { return state_->world_generation; }
@@ -2828,6 +2832,9 @@ bool write_lua_persistent(DataModel& world, DataModel& object, LuaSlot& in) {
     return true;
 }
 
+// Properties greys Persistent out where it could never be ticked: a service and game always survive.
+bool persistent_editable(DataModel&, DataModel& object) { return object.id() != 0 && !object.is_service(); }
+
 bool read_lua_changed(DataModel&, DataModel&, LuaSlot& out) {
     out.kind = LuaSlot::Kind::Signal;
     return true;
@@ -2846,7 +2853,8 @@ ANARCHY_LUA_REGISTER(register_datamodel_lua) {
         lua_property("Parent", "DataModel?", true, read_lua_parent, write_lua_parent),
         changed,
         lua_hidden(lua_property("Archivable", "boolean", true, read_lua_archivable, write_lua_archivable)),
-        lua_saved_property("Persistent", "boolean", read_lua_persistent, write_lua_persistent, "false"),
+        lua_enabled_when(lua_saved_property("Persistent", "boolean", read_lua_persistent, write_lua_persistent, "false"),
+                         persistent_editable),
     };
     register_lua_class("DataModel", nullptr, fields, static_cast<int>(std::size(fields)));
 }

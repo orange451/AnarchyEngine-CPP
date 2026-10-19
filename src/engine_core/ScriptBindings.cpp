@@ -8,6 +8,7 @@
 #include "BloomEffect.hpp"
 #include "Camera.hpp"
 #include "ChangeHistoryService.hpp"
+#include "Connections.hpp"
 #include "Contract.hpp"
 #include "CurveJson.hpp"
 #include "CurveLua.hpp"
@@ -36,6 +37,7 @@
 #include "WireframeAdornment.hpp"
 #include "Constraint.hpp"
 #include "InstanceFile.hpp"
+#include "JoinHost.hpp"
 #include "JointConstraint.hpp"
 #include "SoundEmitter.hpp"
 #include "Brush.hpp"
@@ -513,6 +515,16 @@ int ScriptBindings::instance_index(lua_State* state) {
             lua_setmetatable(state, -2);
             return 1;
         }
+        // A service instance's own signal, such as Connections.Joined: ScriptRuntime holds it.
+        if (field->host_signal) {
+            auto* signal = static_cast<SignalUd*>(lua_newuserdata(state, sizeof(SignalUd)));
+            *signal = SignalUd{};
+            signal->kind = kSignalHost;
+            signal->phase = field->tag;
+            luaL_getmetatable(state, kSignalMeta);
+            lua_setmetatable(state, -2);
+            return 1;
+        }
         LuaSlot slot;
         if (field->read == nullptr || !field->read(*runtime->game_, *object, slot)) {
             lua_pushnil(state);
@@ -860,7 +872,8 @@ Signal& ScriptBindings::signal_of(lua_State* state, ScriptRuntime& runtime, cons
 const char* ScriptBindings::signal_cause(const SignalUd& ud) {
     static const char* const kInput[] = {"InputBegan", "InputChanged", "InputEnded"};
     static const char* const kHost[] = {"SelectionChanged", "Started", "Stopped", "OnUndo",
-                                        "OnRedo", "OnRecordingStarted", "OnRecordingFinished"};
+                                        "OnRedo", "OnRecordingStarted", "OnRecordingFinished",
+                                        "Joined", "Left"};
     static const char* const kPhases[] = {"PreAnimation", "PreSimulation", "PhysicsSubstep", "PostSimulation",
                                           "Heartbeat", "RenderStepped", "PreRender"};
     if (ud.kind == kSignalChanged) {
@@ -873,7 +886,7 @@ const char* ScriptBindings::signal_cause(const SignalUd& ud) {
         return ud.phase >= 0 && ud.phase < 3 ? kInput[ud.phase] : "input";
     }
     if (ud.kind == kSignalHost) {
-        return ud.phase >= 0 && ud.phase < 7 ? kHost[ud.phase] : "event";
+        return ud.phase >= 0 && ud.phase < static_cast<int>(std::size(kHost)) ? kHost[ud.phase] : "event";
     }
     if (ud.kind == kSignalPlugin || ud.kind == kSignalTrack) {
         return ud.event_name != nullptr ? ud.event_name : "event";
@@ -1260,6 +1273,52 @@ int ScriptBindings::history_undo(lua_State* state) {
 int ScriptBindings::history_redo(lua_State* state) {
     return lua_guard(state, [&] {
         history_service(state).redo();
+        return 0;
+    });
+}
+
+Connections& ScriptBindings::connections_self(lua_State* state) {
+    auto* ud = static_cast<InstanceUd*>(luaL_checkudata(state, 1, kInstanceMeta));
+    ScriptRuntime* runtime = runtime_from(state);
+    auto* connections = runtime != nullptr ? dynamic_cast<Connections*>(runtime->resolve_id(ud->id, ud->world)) : nullptr;
+    if (connections == nullptr) {
+        luaL_error(state, "Connections is not available");
+    }
+    return *connections;
+}
+
+int ScriptBindings::connections_join(lua_State* state) {
+    return lua_guard(state, [&] {
+        Connections& connections = connections_self(state);
+        const std::string address = luaL_checkstring(state, 2);
+        DataModel& game = *runtime_from(state)->game_;
+        // The checks run in this order, so each refusal names the first thing in the way.
+        IJoinHost* host = game.join_host();
+        if (host == nullptr) {
+            luaL_error(state, "Only a client can join a server");
+        }
+        if (game.world_role() != WorldRole::Standalone || !game.simulation_running()) {
+            luaL_error(state, "Join needs a standalone world that is playing");
+        }
+        if (connections.join_state() != JoinState::Idle) {
+            luaL_error(state, "Already joining or joined; call Leave first");
+        }
+        // The host may report Joining before it returns; a refusal leaves the state as it was.
+        const std::string refused = host->join(address);
+        if (!refused.empty()) {
+            luaL_error(state, "%s", refused.c_str());
+        }
+        return 0;
+    });
+}
+
+int ScriptBindings::connections_leave(lua_State* state) {
+    return lua_guard(state, [&] {
+        Connections& connections = connections_self(state);
+        IJoinHost* host = runtime_from(state)->game_->join_host();
+        if (host != nullptr && connections.join_state() != JoinState::Idle) {
+            host->leave();
+        }
         return 0;
     });
 }
@@ -1699,6 +1758,13 @@ ANARCHY_LUA_REGISTER(register_script_methods) {
         lua_method("ResetWaypoints", "nil", reinterpret_cast<void*>(&ScriptBindings::history_reset_waypoints)),
     };
     register_lua_class("ChangeHistoryService", nullptr, history, static_cast<int>(sizeof(history) / sizeof(history[0])));
+
+    // Connections.cpp declares the class, JoinState, and its signals.
+    const LuaField connections[] = {
+        lua_method("Join", "nil", reinterpret_cast<void*>(&ScriptBindings::connections_join)),
+        lua_method("Leave", "nil", reinterpret_cast<void*>(&ScriptBindings::connections_leave)),
+    };
+    register_lua_class("Connections", nullptr, connections, static_cast<int>(std::size(connections)));
 
     // TerrainBindings.cpp registers Terrain's methods itself; this keeps it linked.
     ScriptBindings::link_terrain_methods();

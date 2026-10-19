@@ -6,6 +6,7 @@
 #include <optional>
 
 #include "ChangeHistoryService.hpp"
+#include "Connections.hpp"
 #include "Contract.hpp"
 #include "CurveLua.hpp"
 #include "Enum.hpp"
@@ -204,6 +205,17 @@ void ScriptRuntime::attach(DataModel& game, TaskScheduler& scheduler) {
             game_->events().emit_args(history_finished_.id(), 0,
                                       EventArgs{text_slot(name), text_slot(display), text_slot(id), operation_slot(op)});
         });
+    for (Signal* signal : {&joined_, &left_}) {
+        game.events().host_signal(signal);
+    }
+    // Connections' join reports, queued for the next drain like the history signals.
+    if (auto* connections = dynamic_cast<Connections*>(game.instance(game.connections()))) {
+        connections_id_ = connections->id();
+        join_links_[0] = connections->on_joined.connect([this] { game_->events().emit_args(joined_.id(), 0, {}); });
+        join_links_[1] = connections->on_left.connect([this](const std::string& reason) {
+            game_->events().emit_args(left_.id(), 0, EventArgs{text_slot(reason)});
+        });
+    }
     selection_revision_ = game.selection().revision();
     was_running_ = game.simulation_running();
     game.input().bind(game.events());
@@ -236,6 +248,14 @@ void ScriptRuntime::detach() {
         history.on_recording_started.disconnect(history_links_[2]);
         history.on_recording_finished.disconnect(history_links_[3]);
         for (Signal* signal : {&history_undo_, &history_redo_, &history_started_, &history_finished_}) {
+            game_->events().release_signal(*signal);
+        }
+        if (auto* connections = dynamic_cast<Connections*>(game_->instance(connections_id_))) {
+            connections->on_joined.disconnect(join_links_[0]);
+            connections->on_left.disconnect(join_links_[1]);
+        }
+        connections_id_ = 0;
+        for (Signal* signal : {&joined_, &left_}) {
             game_->events().release_signal(*signal);
         }
         game_->input().release(game_->events());
@@ -1005,6 +1025,10 @@ Signal* ScriptRuntime::host_signal(HostSignal which) {
         return &history_started_;
     case HostSignal::RecordingFinished:
         return &history_finished_;
+    case HostSignal::Joined:
+        return &joined_;
+    case HostSignal::Left:
+        return &left_;
     }
     return nullptr;
 }

@@ -95,6 +95,7 @@ class SpatialObject;
 class PhysicsWorld;
 class ScriptAnalysis;
 class ScriptHost;
+class IJoinHost;
 class SelectionService;
 class UserInputService;
 struct AuthoredRecord;
@@ -337,6 +338,11 @@ public:
     // Standalone until a server or client says otherwise, before Play starts.
     WorldRole world_role() const;
     void set_world_role(WorldRole role);
+    // What scripts join a server through (Connections:Join): a client program's.
+    // Null, the default, refuses every join. The program owns it and clears it
+    // before it goes away.
+    void set_join_host(IJoinHost* host);
+    IJoinHost* join_host() const;
     // Whether the physics world has stepped since play started. Until it has,
     // a driven body's GameObject decides where the body is (PhysicsWorld);
     // after, the body does, and a Transform written to it moves its GameObject

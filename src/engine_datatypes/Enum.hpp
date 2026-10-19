@@ -48,6 +48,9 @@ enum class TransformSpace { World = 0, Local = 1 };
 const EnumType& run_context_enum();
 // run_context_enum's items, by value.
 enum class RunContext { Server = 0, Client = 1, Any = 2 };
+// Idle 0, Joining 1, Joined 2. Connections.JoinState; JoinHost.hpp's JoinState
+// has the same values.
+const EnumType& join_state_enum();
 
 // ParticleEmitter.Shape: where particles are born.
 const EnumType& particle_shape_enum();

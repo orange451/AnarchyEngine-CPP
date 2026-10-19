@@ -26,6 +26,7 @@
 namespace engine_core {
 
 class ChangeHistoryService;
+class Connections;
 class CollisionGroups;
 class Mesh;
 class MeshEditor;
@@ -343,6 +344,11 @@ struct ScriptBindings {
     static int history_get_can_undo(lua_State* state);
     static int history_get_can_redo(lua_State* state);
     static int history_reset_waypoints(lua_State* state);
+    // Connections:Join and Leave, through the program's IJoinHost (DataModel::join_host).
+    // Join raises when no host, world, or state allows it, or when the host refuses.
+    static Connections& connections_self(lua_State* state);
+    static int connections_join(lua_State* state);
+    static int connections_leave(lua_State* state);
     // Mesh:Edit, and the game a state's script runs in, for MeshEditorBindings.cpp's handles.
     static Mesh& mesh_self(lua_State* state);
     static int mesh_edit(lua_State* state);

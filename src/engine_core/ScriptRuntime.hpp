@@ -535,6 +535,11 @@ private:
     Signal history_started_;
     Signal history_finished_;
     std::uint64_t history_links_[4] = {0, 0, 0, 0};
+    // Connections.Joined and Connections.Left, fired from its on_joined and on_left.
+    Signal joined_;
+    Signal left_;
+    InstanceId connections_id_ = 0;
+    std::uint64_t join_links_[2] = {0, 0};
     void fire_host_changes();
 };
 

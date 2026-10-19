@@ -195,7 +195,10 @@ enum class HostSignal {
     Undo = 3,
     Redo = 4,
     RecordingStarted = 5,
-    RecordingFinished = 6
+    RecordingFinished = 6,
+    // Connections.Joined and Connections.Left.
+    Joined = 7,
+    Left = 8
 };
 
 inline LuaField lua_host_signal(const char* name, HostSignal tag) {

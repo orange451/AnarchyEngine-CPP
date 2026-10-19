@@ -26,6 +26,8 @@ struct ConnectionStats {
     std::uint64_t dropped_malformed = 0;
     // Reliable messages and fragments the peer has acked so far: it goes up while a backlog drains.
     std::uint64_t reliable_acked = 0;
+    // Reliable messages and fragments sent again because no ack came in time.
+    std::uint64_t reliable_resent = 0;
 };
 
 // Set once at connect; none is called from inside another.
@@ -65,8 +67,8 @@ public:
     // True while this tick may carry one more packet: reliable data is due, the
     // credit holds a full packet, and fewer than max_packets_per_tick() went this tick.
     bool wants_extra_packet(double now) const;
-    // At most kRingSize / 2 packets in one round trip, never fewer than 1 or more than 32 a tick:
-    // clamp(kRingSize / 2 / ceil(rtt() / send_interval_), 1, 32).
+    // At most kMaxPacketsInFlight packets in one round trip, never fewer than 1 or more than 32 a tick:
+    // clamp(kMaxPacketsInFlight / ceil(max(rtt(), latest sample) / send_interval_), 1, 32).
     std::size_t max_packets_per_tick() const;
     std::size_t write_packet(std::uint8_t* out, std::size_t capacity, double now);
     bool read_packet(const PacketHeader& header, BitReader& reader, const std::uint8_t* bytes, std::size_t length, double now);
@@ -78,6 +80,8 @@ public:
 private:
     double loss_timeout() const { return rtt() * 2.0 > 0.1 ? rtt() * 2.0 : 0.1; }
     void sample_rtt(double sample);
+    // Two ticks' worth of the flow-controlled rate, never below one packet.
+    double credit_cap() const;
     void account(double& window_bytes, double& rate, double& window_start, std::size_t bytes, double now);
 
     PacketRing ring_;
@@ -87,10 +91,13 @@ private:
     std::uint16_t session_ = 0;
     std::uint16_t next_sequence_ = 0;
     double rtt_ = 0.0;
+    double last_rtt_sample_ = 0.0;
     bool has_rtt_ = false;
     double last_send_ = -1.0;
     double last_receive_ = -1.0;
-    // Bytes the next packets may spend; every packet written takes its length, so it may go negative.
+    // Bytes the next packets may spend; every packet written takes its length, so it may go
+    // negative, but never below -credit_cap(): a peer that always has data due sends one
+    // packet a tick whatever the budget, and that debt must not grow without end.
     double credit_ = 0.0;
     double last_refill_ = -1.0;
     // The time of the tick being written and how many packets it has carried.

@@ -115,6 +115,7 @@ void ReliableChannel::write(BitWriter& writer, double now, double rtt, SentPacke
             writer.bits(0, 16);
             writer.bits(out.length, 16);
             writer.bytes(out.inline_bytes, out.length);
+            if (out.last_send > -1e8) ++resent_pieces_;
             out.last_send = now;
             packet.refs[packet.ref_count++] = MessageRef{out.id, kWholeMessage};
             continue;
@@ -133,6 +134,7 @@ void ReliableChannel::write(BitWriter& writer, double now, double rtt, SentPacke
             writer.bits(f, 16);
             writer.bits(static_cast<std::uint32_t>(length), 16);
             writer.bytes(out.block->data() + f * kFragmentBytes, length);
+            if (out.fragment_last_send[f] > -1e8) ++resent_pieces_;
             out.fragment_last_send[f] = now;
             packet.refs[packet.ref_count++] = MessageRef{out.id, f};
         }

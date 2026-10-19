@@ -33,21 +33,21 @@ The physics path encodes each body against the last state a client *acknowledged
 ### 1. The wire
 
 ```
-header  (13 bytes)
+header  (25 bytes)
   protocol id     u16   this engine's wire version; mismatched packets are dropped silently
   type            u8    ConnectRequest, ConnectAccept, ConnectDeny, Disconnect, KeepAlive, Payload
   connection id   u16   low 16 bits of client salt XOR server salt; 0 during the handshake
   sequence        u16   this packet's number, wrapping; compared wrap-aware
   ack             u16   highest sequence received from the peer
-  ack bits        u32   bit n set: sequence (ack − n − 1) was also received
+  ack bits        128   bit n set: sequence (ack − n − 1) was also received (four u32 words)
 payload
   reliable section    count u8, then messages (id u16, length u16, bytes) or fragments
   unreliable section  the rest of the packet
 ```
 
-Every packet is one datagram. The sender keeps a ring of its last 256 sent packets: send time, size, the reliable message ids inside, and an opaque 32-bit user tag. When the peer's ack state covers a sequence, the Unreliable channel calls `on_delivered(sequence, tag)` once. A packet not acked within RTT × 2 (at least 100 ms) counts as lost for the loss estimate; an ack arriving later still fires `on_delivered`, since a baseline that arrived late is still a baseline the peer holds.
+Every packet is one datagram. The sender keeps a ring of its last 1024 sent packets: send time, size, the reliable message ids inside, and an opaque 32-bit user tag. When the peer's ack state covers a sequence, the Unreliable channel calls `on_delivered(sequence, tag)` once. A packet not acked within RTT × 2 (at least 100 ms) counts as lost for the loss estimate; an ack arriving later still fires `on_delivered`, since a baseline that arrived late is still a baseline the peer holds.
 
-Received sequences are tracked in a 256-entry ring; a sequence already seen, or older than the ring, is dropped and counted as a replay.
+Received sequences are tracked in a 1024-entry ring; a sequence already seen, or older than the ring, is dropped and counted as a replay.
 
 ### 2. Reliable channel
 

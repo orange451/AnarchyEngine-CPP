@@ -120,7 +120,7 @@ TEST_CASE("N48 a malformed reliable section drops the packet without marking its
     a.c.send_message(&byte, 1);
     std::uint8_t buffer[network::kMaxPacketBytes];
     const std::size_t length = a.c.write_packet(buffer, sizeof(buffer), 0.0);
-    // Corrupt the entry's length field (bits 49..64 after the 13-byte header and the continuation bit).
+    // Corrupt the entry's length field (bits 49..64 after the header and the continuation bit).
     std::uint8_t broken[network::kMaxPacketBytes];
     std::memcpy(broken, buffer, length);
     broken[network::kHeaderBytes + 4] = 0xFF;
@@ -138,12 +138,12 @@ TEST_CASE("N49 the payload budget is the tick's share of the rate, less what the
     REQUIRE(a.c.payload_budget(0.0) == 533);   // 32000 / 60
     std::vector<std::uint8_t> message(100, 1);
     a.c.send_message(message.data(), message.size());
-    REQUIRE(a.c.payload_budget(0.0) == 533);   // min(1186 - 107, 533)
+    REQUIRE(a.c.payload_budget(0.0) == 533);   // min(kMaxPayloadBytes - 1 - 107, 533)
     Peer blocked;
     std::vector<std::uint8_t> block(100 * 1024, 3);
     REQUIRE(blocked.c.send_message(block.data(), block.size()));
     REQUIRE(blocked.c.payload_budget(0.0) > 0);
-    REQUIRE(blocked.c.payload_budget(0.0) <= 1186 - 1000);
+    REQUIRE(blocked.c.payload_budget(0.0) <= network::kMaxPayloadBytes - 1 - 1000);
     Connection fast(10'000'000.0, 1.0 / 60.0);
     REQUIRE(fast.payload_budget(0.0) == network::kMaxPayloadBytes - 1);
 }
@@ -159,8 +159,8 @@ TEST_CASE("N50 stats count packets and bytes per second", "[network][connection]
     exchange(b, a, 1.0);
     REQUIRE(a.c.stats(1.0).packets_sent == 61);
     REQUIRE(b.c.stats(1.0).packets_received == 61);
-    REQUIRE(a.c.stats(1.0).bytes_out_per_second == Approx(60.0 * 14.0).epsilon(0.05));
-    REQUIRE(b.c.stats(1.0).bytes_in_per_second == Approx(60.0 * 14.0).epsilon(0.05));
+    REQUIRE(a.c.stats(1.0).bytes_out_per_second == Approx(60.0 * (network::kHeaderBytes + 1.0)).epsilon(0.05));
+    REQUIRE(b.c.stats(1.0).bytes_in_per_second == Approx(60.0 * (network::kHeaderBytes + 1.0)).epsilon(0.05));
     REQUIRE(a.c.stats(1.0).budget_bytes_per_second == Approx(32000.0));
 }
 

@@ -8,7 +8,7 @@ void write_header(BitWriter& writer, const PacketHeader& header) {
     writer.bits(header.session, 16);
     writer.bits(header.sequence, 16);
     writer.bits(header.ack, 16);
-    writer.bits(header.ack_bits, 32);
+    for (const std::uint32_t word : header.ack_bits.words) writer.bits(word, 32);
 }
 
 bool read_header(BitReader& reader, PacketHeader& header) {
@@ -17,7 +17,7 @@ bool read_header(BitReader& reader, PacketHeader& header) {
     header.session = static_cast<std::uint16_t>(reader.bits(16));
     header.sequence = static_cast<std::uint16_t>(reader.bits(16));
     header.ack = static_cast<std::uint16_t>(reader.bits(16));
-    header.ack_bits = reader.bits(32);
+    for (std::uint32_t& word : header.ack_bits.words) word = reader.bits(32);
     if (reader.failed() || header.protocol != kProtocolId || type > static_cast<std::uint32_t>(PacketType::Payload)) {
         return false;
     }

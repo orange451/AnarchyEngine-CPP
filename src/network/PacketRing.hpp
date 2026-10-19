@@ -1,14 +1,21 @@
 #pragma once
 
+#include "Packet.hpp"
 #include "Sequence.hpp"
 
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <vector>
 
 namespace network {
 
-constexpr std::size_t kRingSize = 256;
+// Packets remembered each way: at the in-flight cap, about eight round trips, so the
+// loss estimate still sees packets old enough to judge while a peer bursts.
+constexpr std::size_t kRingSize = 1024;
+// Packets one round trip may carry: an eighth of the ring, so acks always name live slots
+// and the loss estimate has history beyond the 2 x RTT it waits before judging a packet.
+constexpr std::size_t kMaxPacketsInFlight = 128;
 constexpr int kMaxRefsPerPacket = 64;
 // A MessageRef with this fragment is a whole reliable message.
 constexpr std::uint16_t kWholeMessage = 0xFFFF;
@@ -19,7 +26,7 @@ struct MessageRef {
     std::uint16_t fragment = kWholeMessage;
 };
 
-// One packet we sent, until its slot is reused 256 packets later.
+// One packet we sent, until its slot is reused kRingSize packets later.
 struct SentPacket {
     bool valid = false;
     bool acked = false;
@@ -42,7 +49,7 @@ public:
     Receive note_received(std::uint16_t sequence);
     bool any_received() const { return any_received_; }
     std::uint16_t ack() const { return any_received_ ? latest_ : 0xFFFF; }
-    std::uint32_t ack_bits() const;
+    AckBits ack_bits() const;
 
     // For each sequence the peer's ack covers that we sent and had not seen
     // acked: marks it and calls on_acked(SentPacket&, rtt_sample). Only the
@@ -50,13 +57,14 @@ public:
     // send interval; they get -1). A late ack
     // still counts: the peer holds that packet, whatever the loss estimate said.
     template <class F>
-    void process_acks(std::uint16_t ack, std::uint32_t ack_bits, double now, F&& on_acked) {
-        for (int n = -1; n < 32; ++n) {
-            if (n >= 0 && (ack_bits & (1u << n)) == 0) continue;
+    void process_acks(std::uint16_t ack, const AckBits& ack_bits, double now, F&& on_acked) {
+        for (int n = -1; n < kAckBits; ++n) {
+            if (n >= 0 && !ack_bits.test(n)) continue;
             const std::uint16_t sequence = static_cast<std::uint16_t>(n < 0 ? ack : ack - n - 1);
             SentPacket& sent = sent_[sequence % kRingSize];
             if (!sent.valid || sent.acked || sent.sequence != sequence) continue;
             sent.acked = true;
+            summary_[sequence % kRingSize].acked = 1;
             on_acked(sent, n < 0 ? std::max(0.0, now - sent.time) : -1.0);
         }
     }
@@ -66,9 +74,20 @@ public:
     float loss(double now, double timeout) const;
 
 private:
-    SentPacket sent_[kRingSize];
-    std::uint16_t received_[kRingSize] = {};
-    bool received_valid_[kRingSize] = {};
+    // What loss() reads of each sent packet, packed apart from the refs so its walk stays in cache.
+    struct SentSummary {
+        double time = 0.0;
+        std::uint16_t sequence = 0;
+        std::uint8_t valid = 0;
+        std::uint8_t acked = 0;
+    };
+
+    // On the heap, made once: a Connection stays small enough for a stack.
+    std::vector<SentPacket> sent_ = std::vector<SentPacket>(kRingSize);
+    std::vector<std::uint16_t> received_ = std::vector<std::uint16_t>(kRingSize, 0);
+    std::vector<std::uint8_t> received_valid_ = std::vector<std::uint8_t>(kRingSize, 0);
+    std::vector<SentSummary> summary_ = std::vector<SentSummary>(kRingSize);
+    std::uint16_t latest_sent_ = 0;
     std::uint16_t latest_ = 0;
     bool any_received_ = false;
 };

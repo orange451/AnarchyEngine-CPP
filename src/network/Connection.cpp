@@ -34,11 +34,16 @@ bool Connection::wants_packet(double now) const {
            now - last_send_ >= 0.1 - 1e-9;
 }
 
+double Connection::credit_cap() const {
+    return std::max(flow_.bytes_per_second() * send_interval_ * 2.0, static_cast<double>(kMaxPacketBytes));
+}
+
 void Connection::refill(double now) {
-    const double rate = flow_.bytes_per_second();
-    const double cap = std::max(rate * send_interval_ * 2.0, static_cast<double>(kMaxPacketBytes));
+    // Once a tick, not once a packet: a burst would scan the ring for each.
+    flow_.update(now, rtt(), ring_.loss(now, loss_timeout()));
+    const double cap = credit_cap();
     // A new connection starts with a full allowance; a clock that jumps cannot bank more than the cap.
-    const double added = last_refill_ < 0.0 ? cap : rate * std::max(0.0, now - last_refill_);
+    const double added = last_refill_ < 0.0 ? cap : flow_.bytes_per_second() * std::max(0.0, now - last_refill_);
     last_refill_ = now;
     credit_ = std::min(cap, credit_ + added);
 }
@@ -51,10 +56,12 @@ bool Connection::wants_extra_packet(double now) const {
 }
 
 std::size_t Connection::max_packets_per_tick() const {
-    // Packets go out for a whole round trip before the first ack comes back, so a
-    // round trip's worth must fit in half the ring, or acks would name slots already reused.
-    const double ticks = std::max(1.0, std::ceil(rtt() / send_interval_ - 1e-9));
-    const double per_tick = static_cast<double>(kRingSize / 2) / ticks;
+    // Packets go out for a whole round trip before the first ack comes back, so a round
+    // trip's worth stays within kMaxPacketsInFlight. The latest sample counts too: the
+    // smoothed RTT lags a sudden rise, and the cap should not.
+    const double round_trip = std::max(rtt(), last_rtt_sample_);
+    const double ticks = std::max(1.0, std::ceil(round_trip / send_interval_ - 1e-9));
+    const double per_tick = static_cast<double>(kMaxPacketsInFlight) / ticks;
     return static_cast<std::size_t>(std::clamp(per_tick, 1.0, 32.0));
 }
 
@@ -80,7 +87,7 @@ std::size_t Connection::write_packet(std::uint8_t* out, std::size_t capacity, do
     sent.bytes = static_cast<std::uint16_t>(length);
     has_payload_ = false;
     heard_since_send_ = false;
-    credit_ -= static_cast<double>(length);
+    credit_ = std::max(-credit_cap(), credit_ - static_cast<double>(length));
     if (tick_time_ != now) {
         tick_time_ = now;
         tick_packets_ = 0;
@@ -90,7 +97,6 @@ std::size_t Connection::write_packet(std::uint8_t* out, std::size_t capacity, do
     last_send_ = now;
     ++stats_.packets_sent;
     account(out_window_bytes_, out_rate_, out_window_start_, length, now);
-    flow_.update(now, rtt(), ring_.loss(now, loss_timeout()));
     return encode_packet(out, length, capacity);
 }
 
@@ -119,7 +125,6 @@ bool Connection::read_packet(const PacketHeader& header, BitReader& reader, cons
     last_receive_ = now;
     ++stats_.packets_received;
     account(in_window_bytes_, in_rate_, in_window_start_, length, now);
-    flow_.update(now, rtt(), ring_.loss(now, loss_timeout()));
     // Messages first: a "create instance" message lands before that instance's state.
     if (callbacks.on_message) {
         reliable_.deliver(callbacks.on_message);
@@ -134,6 +139,7 @@ bool Connection::read_packet(const PacketHeader& header, BitReader& reader, cons
 
 void Connection::sample_rtt(double sample) {
     sample = std::max(0.0, sample);
+    last_rtt_sample_ = sample;
     rtt_ = has_rtt_ ? rtt_ + (sample - rtt_) * 0.1 : sample;
     has_rtt_ = true;
 }
@@ -157,6 +163,7 @@ ConnectionStats Connection::stats(double now) const {
     stats.bytes_out_per_second = out_rate_;
     stats.budget_bytes_per_second = flow_.bytes_per_second();
     stats.reliable_acked = reliable_.acked_pieces();
+    stats.reliable_resent = reliable_.resent_pieces();
     return stats;
 }
 

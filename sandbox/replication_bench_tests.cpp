@@ -195,3 +195,66 @@ TEST_CASE("RP61 1,000 changes a tick, sent to 50 clients, cost the server under 
     REQUIRE(client_ms < 1.3);
 #endif
 }
+
+TEST_CASE("RP62 server send at the default 1 MB/s budget, 1000 changes to 50 clients", "[replication][bench]") {
+    network::LinkHub hub;
+    network::GameIdentity id;
+    network::parse_game_id("0123456789abcdef0123456789abcdef", id.game_id);
+    id.resources_hash = 7;
+    ScriptRig server;
+    std::vector<InstanceId> lights;
+    fill(server.game, 10000, lights);   // 1,000 lights
+    replication::start_server(server);
+    engine_network::SessionConfig config;
+    config.endpoint.identity = id;
+    config.endpoint.max_peers = 64;
+    REQUIRE(config.endpoint.bytes_per_second == engine_network::kDefaultSendBudget);
+    // Each busy tick is about 88 KB a client, past the budget, so every queue holds a
+    // backlog and every client gets a full burst each tick: the worst case for the send.
+    config.max_stall_seconds = 1.0e9;
+    config.max_queued_bytes = std::size_t{1} << 31;
+    auto session = std::make_unique<engine_network::ServerSession>(server.game, hub.open(network::Address::loopback(1)), config);
+    std::vector<std::unique_ptr<network::Endpoint>> clients;
+    for (int i = 0; i < 50; ++i) {
+        network::EndpointConfig client_config;
+        client_config.role = network::Role::Client;
+        client_config.identity = id;
+        clients.push_back(std::make_unique<network::Endpoint>(
+            hub.open(network::Address::loopback(static_cast<std::uint16_t>(100 + i))), client_config,
+            network::EndpointCallbacks{}));
+        REQUIRE(clients.back()->connect(network::Address::loopback(1), 0.0));
+    }
+    double now = 0.0;
+    auto tick = [&](bool busy) {
+        now += 1.0 / 60.0;
+        session->receive(now);
+        for (auto& c : clients) c->receive(now);
+        if (busy) move_lights(server.game, lights, static_cast<float>(now));
+        const auto start = std::chrono::steady_clock::now();
+        session->send(now);
+        const double ms = milliseconds_since(start);
+        for (auto& c : clients) c->send(now);
+        return ms;
+    };
+    for (int i = 0; i < 120; ++i) tick(false);
+    REQUIRE(session->endpoint().peers().size() == 50);
+    for (int i = 0; i < 30; ++i) tick(true);
+    std::uint64_t sent_before = 0;
+    for (const network::PeerId peer : session->endpoint().peers()) sent_before += session->endpoint().stats(peer, now).packets_sent;
+    double total = 0.0;
+    for (int i = 0; i < 60; ++i) total += tick(true);
+    const double server_ms = total / 60.0;
+    std::uint64_t sent_after = 0;
+    for (const network::PeerId peer : session->endpoint().peers()) sent_after += session->endpoint().stats(peer, now).packets_sent;
+    const double packets_per_tick = static_cast<double>(sent_after - sent_before) / 60.0;
+    WARN("server send at 1 MB/s with 1,000 changes to 50 clients: " << server_ms << " ms a tick, " << packets_per_tick
+                                                                    << " packets a tick");
+    REQUIRE(session->fell_behind() == 0);
+    REQUIRE(session->endpoint().peers().size() == 50);
+    REQUIRE(packets_per_tick > 50.0 * 10.0);   // bursts, not one packet a client
+    // Measured on 2026-10-18: 1.31 to 1.41 ms a tick for about 733 packets (LinkHub, not a
+    // real socket); the ceiling is the worst run x 1.5.
+#ifdef NDEBUG
+    REQUIRE(server_ms < 2.1);
+#endif
+}

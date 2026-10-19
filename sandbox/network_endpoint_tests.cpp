@@ -600,3 +600,131 @@ TEST_CASE("N76 packets in flight stay inside the ring: at 250 ms RTT a tick carr
     REQUIRE(max_per_tick > 1);
     REQUIRE(max_per_tick <= 8);
 }
+
+namespace {
+
+// Passes everything through except the one send it is told to drop.
+class DropOneSocket : public network::ISocket {
+public:
+    explicit DropOneSocket(std::unique_ptr<network::ISocket> inner) : inner_(std::move(inner)) {}
+    // Drops the nth send from now (1 is the next).
+    void drop_in(int n) { countdown_ = n; }
+    bool dropped() const { return dropped_; }
+    bool send(const Address& to, const std::uint8_t* bytes, std::size_t length) override {
+        if (countdown_ > 0 && --countdown_ == 0) {
+            dropped_ = true;
+            return true;
+        }
+        return inner_->send(to, bytes, length);
+    }
+    std::size_t receive(Address& from, std::uint8_t* buffer, std::size_t capacity) override {
+        return inner_->receive(from, buffer, capacity);
+    }
+    bool failed() const override { return inner_->failed(); }
+
+private:
+    std::unique_ptr<network::ISocket> inner_;
+    int countdown_ = 0;
+    bool dropped_ = false;
+};
+
+// A server and one client on the hub, ticked at 60 Hz the way the engine does.
+struct Pair {
+    network::LinkHub hub;
+    Log server_log, client_log;
+    std::unique_ptr<Endpoint> server, client;
+    DropOneSocket* client_socket = nullptr;
+    int ticks = 0;
+
+    Pair(double bytes_per_second, double latency, float loss) {
+        EndpointConfig server_config;
+        server_config.role = Role::Server;
+        server_config.identity = identity();
+        server_config.bytes_per_second = bytes_per_second;
+        server = std::make_unique<Endpoint>(hub.open(kServer), server_config, server_log.callbacks());
+        EndpointConfig client_config;
+        client_config.role = Role::Client;
+        client_config.identity = identity();
+        auto socket = std::make_unique<DropOneSocket>(hub.open(client_address(0)));
+        client_socket = socket.get();
+        client = std::make_unique<Endpoint>(std::move(socket), client_config, client_log.callbacks());
+        for (Endpoint* e : {server.get(), client.get()}) {
+            e->conditioner().latency_seconds = latency;
+            e->conditioner().loss = loss;
+        }
+        REQUIRE(client->connect(kServer, 0.0));
+    }
+    double now() const { return ticks / 60.0; }
+    void tick() {
+        ++ticks;
+        server->receive(now());
+        client->receive(now());
+        server->send(now());
+        client->send(now());
+    }
+};
+
+}  // namespace
+
+TEST_CASE("N83 one lost ack in a burst costs nothing: no fragment is resent and the budget holds", "[network][endpoint]") {
+    // 4 MB/s, so each tick carries the full 32 packets and one ack packet stands for a whole burst.
+    Pair pair(4.0 * 1048576.0, 0.0, 0.0f);
+    while (pair.ticks < 60) pair.tick();
+    REQUIRE(pair.client->state(0) == ConnectionState::Connected);
+    std::vector<std::uint8_t> bytes(600000, 5);
+    REQUIRE(pair.server->send_message(0, bytes.data(), bytes.size()));
+    // The client's sends from here are one ack packet a tick; the fifth is lost.
+    pair.client_socket->drop_in(5);
+    float max_loss = 0.0f;
+    double min_budget = 1e30;
+    std::uint64_t max_burst = 0;
+    std::uint64_t last = pair.server->stats(0, pair.now()).packets_sent;
+    for (int i = 0; i < 120; ++i) {
+        pair.tick();
+        const network::ConnectionStats stats = pair.server->stats(0, pair.now());
+        max_loss = std::max(max_loss, stats.loss);
+        min_budget = std::min(min_budget, stats.budget_bytes_per_second);
+        max_burst = std::max(max_burst, stats.packets_sent - last);
+        last = stats.packets_sent;
+    }
+    REQUIRE(pair.client_socket->dropped());
+    REQUIRE(max_burst == 32);
+    REQUIRE(pair.client_log.messages.size() == 1);
+    REQUIRE(pair.client_log.messages[0].second == bytes);
+    REQUIRE(pair.server->stats(0, pair.now()).reliable_resent == 0);
+    REQUIRE(max_loss < 0.10f);
+    REQUIRE(min_budget == Approx(4.0 * 1048576.0));
+}
+
+TEST_CASE("N84 the loss estimate holds while bursting: 0 on a clean 100 ms link, near 5% on a 5% one", "[network][endpoint]") {
+    for (const float loss : {0.0f, 0.05f}) {
+        CAPTURE(loss);
+        Pair pair(1048576.0, 0.05, loss);
+        while (pair.ticks < 120) pair.tick();
+        REQUIRE(pair.client->state(0) == ConnectionState::Connected);
+        std::vector<std::uint8_t> bytes(2u << 20, 9);
+        REQUIRE(pair.server->send_message(0, bytes.data(), bytes.size()));
+        float min_loss = 1.0f, max_loss = 0.0f;
+        double min_budget = 1e30;
+        int sampled = 0;
+        for (int i = 0; i < 60 * 10 && pair.client_log.messages.empty(); ++i) {
+            pair.tick();
+            const network::ConnectionStats stats = pair.server->stats(0, pair.now());
+            min_budget = std::min(min_budget, stats.budget_bytes_per_second);
+            // From a second in, the two-second window is mostly the burst.
+            if (i < 60) continue;
+            min_loss = std::min(min_loss, stats.loss);
+            max_loss = std::max(max_loss, stats.loss);
+            ++sampled;
+        }
+        REQUIRE(pair.client_log.messages.size() == 1);
+        REQUIRE(sampled > 30);
+        if (loss == 0.0f) {
+            REQUIRE(max_loss == 0.0f);
+            REQUIRE(min_budget == Approx(1048576.0));
+        } else {
+            REQUIRE(min_loss >= 0.02f);
+            REQUIRE(max_loss <= 0.10f);
+        }
+    }
+}

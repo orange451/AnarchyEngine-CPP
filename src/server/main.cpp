@@ -2,10 +2,12 @@
 // to AnarchyPlayer clients until Ctrl+C. See README.md beside this file.
 
 #include "ServerHost.hpp"
+#include "runner/CommandLine.hpp"
 
 #include <atomic>
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 #include <memory>
 #include <string>
@@ -34,6 +36,9 @@ namespace fs = std::filesystem;
 
 // Set by Ctrl+C, SIGTERM, or the console closing; the main loop then stops the server.
 std::atomic<bool> g_stop{false};
+// Ctrl+C and the like, counted: the first stops the server cleanly, a second
+// quits at once, for a server that is slow to stop.
+std::atomic<int> g_signals{0};
 // Set once the server has stopped, so a closing console's handler can return.
 std::atomic<bool> g_finished{false};
 
@@ -69,10 +74,13 @@ fs::path ExecutablePath() {
 }
 
 #if defined(_WIN32)
-// Ctrl+C and Ctrl+Break stop the server. Closing the console ends the process
-// when this returns, so for that it waits (a few seconds at most) until the
-// clients have been told.
+// Ctrl+C and Ctrl+Break stop the server; a second one quits at once. Closing
+// the console ends the process when this returns, so for that it waits (a few
+// seconds at most) until the clients have been told.
 BOOL WINAPI OnConsoleEvent(DWORD event) {
+    if ((event == CTRL_C_EVENT || event == CTRL_BREAK_EVENT) && g_signals.fetch_add(1) >= 1) {
+        ExitProcess(130);
+    }
     g_stop.store(true);
     if (event == CTRL_CLOSE_EVENT || event == CTRL_LOGOFF_EVENT || event == CTRL_SHUTDOWN_EVENT) {
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(4500);
@@ -83,15 +91,25 @@ BOOL WINAPI OnConsoleEvent(DWORD event) {
     return TRUE;
 }
 #else
-void OnSignal(int) { g_stop.store(true); }
+// The first signal stops the server; a second quits at once.
+void OnSignal(int) {
+    if (g_signals.fetch_add(1) >= 1) {
+        std::_Exit(130);
+    }
+    g_stop.store(true);
+}
 #endif
 
 }  // namespace
 
 int main(int argc, char** argv) {
-    std::vector<std::string> args;
-    for (int i = 1; i < argc; ++i) {
-        args.emplace_back(argv[i]);
+#if defined(_WIN32)
+    // Paths and script prints are UTF-8; the console shows them as such.
+    SetConsoleOutputCP(CP_UTF8);
+#endif
+    std::vector<std::string> args = runner::utf8_arguments(argc, argv);
+    if (!args.empty()) {
+        args.erase(args.begin());
     }
     std::string error;
     std::optional<server::ServerOptions> options = server::parse_server_args(args, error);

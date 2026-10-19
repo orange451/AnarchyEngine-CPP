@@ -1,5 +1,6 @@
 #include "ide/IdeResources.hpp"
 #include "player/PlayerArgs.hpp"
+#include "runner/CommandLine.hpp"
 #include "jadefx/jadefx.hpp"
 #include "runner/GamePack.hpp"
 #include "runner/GameView.hpp"
@@ -27,6 +28,7 @@
 #include <optional>
 #include <string>
 #include <system_error>
+#include <vector>
 
 #if defined(_WIN32)
 // As in the studio: run on the discrete GPU of a machine that has two.
@@ -352,7 +354,15 @@ int main(int argc, char** argv) {
     bool packed = false;
     fs::path root;
     std::string connect;
-    if (const std::optional<player::PlayerArgs> args = player::parse_player_args(argc, argv, error)) {
+    // UTF-8, so a project folder whose name is outside the Windows code page still opens.
+    std::vector<std::string> utf8 = runner::utf8_arguments(argc, argv);
+    std::vector<char*> pointers;
+    for (std::string& arg : utf8) {
+        pointers.push_back(arg.data());
+    }
+    pointers.push_back(nullptr);
+    if (const std::optional<player::PlayerArgs> args =
+            player::parse_player_args(static_cast<int>(utf8.size()), pointers.data(), error)) {
         root = FindGame(args->folder, error, packed);
         connect = args->connect;
     }

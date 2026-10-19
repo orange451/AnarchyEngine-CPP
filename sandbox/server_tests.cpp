@@ -268,3 +268,36 @@ TEST_CASE("SV5 a game packed into a file serves as its folder would", "[server]"
         fs::remove_all(unpacked, failure);
     }
 }
+
+TEST_CASE("SV6 stop is safe twice, before start, and a host never started is destroyed cleanly", "[server]") {
+    SimRole role;
+    TempDir dir;
+    { engine_core::Project::create(dir.path); }
+    server::ServerOptions options;
+    options.project = dir.path;
+    options.port = 0;
+    std::string error;
+    std::unique_ptr<server::ServerHost> host = server::ServerHost::open(options, error);
+    INFO(error);
+    REQUIRE(host != nullptr);
+
+    SECTION("stop twice after start") {
+        host->start();
+        const auto begun = std::chrono::steady_clock::now();
+        host->stop();
+        host->stop();
+        // Prompt: the close ran, so stop did not sit out its wait.
+        REQUIRE(std::chrono::steady_clock::now() - begun < std::chrono::seconds(2));
+        host.reset();
+    }
+    SECTION("stop before start, then start does nothing") {
+        host->stop();
+        host->start();
+        host->stop();
+        host.reset();
+    }
+    SECTION("destroyed without start or stop") {
+        host.reset();
+    }
+    REQUIRE(host == nullptr);
+}

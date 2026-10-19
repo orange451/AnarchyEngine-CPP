@@ -15,6 +15,7 @@
 #include <ctime>
 #include <exception>
 #include <future>
+#include <memory>
 #include <system_error>
 
 namespace server {
@@ -28,6 +29,8 @@ namespace {
 
 // The engine's frames a second: the simulation's step rate, with nothing to draw.
 constexpr double kServerHz = 60.0;
+// How long stop() waits for the clients to be told before it stops the engine regardless.
+constexpr std::chrono::seconds kClosingWait{5};
 
 // A whole decimal number from min to max, nothing else in text.
 bool ParseWhole(const std::string& text, unsigned long min, unsigned long max, unsigned long& out) {
@@ -212,15 +215,25 @@ void ServerHost::stop() {
         return;
     }
     // Every client hears "The server closed" from the engine thread, between steps,
-    // before the thread goes; this waits until it has.
-    std::promise<void> closed;
-    std::future<void> done = closed.get_future();
+    // before the thread goes; this waits until it has, or kClosingWait at most.
+    // The promise is shared and set even when the close throws, so neither a
+    // failed close nor a late one leaves this waiting on a dead promise.
+    auto closed = std::make_shared<std::promise<void>>();
+    std::future<void> done = closed->get_future();
     engine_network::ServerSession* session = session_.get();
-    engine_->on_simulation([session, &closed](engine_core::DataModel&) {
-        session->close(engine_core::Engine::network_now());
-        closed.set_value();
+    engine_->on_simulation([session, closed](engine_core::DataModel&) {
+        try {
+            session->close(engine_core::Engine::network_now());
+        } catch (const std::exception& failure) {
+            std::fprintf(stderr, "Could not tell every client the server closed: %s\n", failure.what());
+        } catch (...) {
+            std::fprintf(stderr, "Could not tell every client the server closed.\n");
+        }
+        closed->set_value();
     });
-    done.wait();
+    if (done.wait_for(kClosingWait) != std::future_status::ready) {
+        std::fprintf(stderr, "The clients were not all told the server closed in time; stopping anyway.\n");
+    }
     engine_->stop();
     engine_->set_network(nullptr);
 }

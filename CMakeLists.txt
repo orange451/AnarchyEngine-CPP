@@ -221,6 +221,7 @@ endif()
 add_executable(AnarchyPlayer MACOSX_BUNDLE
     src/player/main.cpp
     src/player/PlayerArgs.cpp
+    src/runner/CommandLine.cpp
 )
 # The studio exports with the player beside it, so building the studio builds both.
 add_dependencies(AnarchyStudio AnarchyPlayer)
@@ -244,9 +245,14 @@ add_executable(AnarchyServer
     src/server/main.cpp
     src/server/ServerHost.cpp
     src/runner/GamePack.cpp
+    src/runner/CommandLine.cpp
 )
 target_include_directories(AnarchyServer PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
 target_link_libraries(AnarchyServer PRIVATE engine_network engine_core anarchy_network)
+# CommandLineToArgvW, for UTF-8 arguments (src/runner/CommandLine.hpp).
+if(WIN32)
+    target_link_libraries(AnarchyServer PRIVATE shell32)
+endif()
 target_compile_features(AnarchyServer PRIVATE cxx_std_17)
 # The server ships beside the studio, so building the studio builds it too.
 add_dependencies(AnarchyStudio AnarchyServer)
@@ -873,6 +879,9 @@ target_link_libraries(studio PUBLIC studio_core jadefx amesh)
 target_link_libraries(AnarchyStudio PRIVATE studio)
 # --connect joins an AnarchyServer: the client session and its transport.
 target_link_libraries(AnarchyPlayer PRIVATE studio engine_network anarchy_network)
+if(WIN32)
+    target_link_libraries(AnarchyPlayer PRIVATE shell32)
+endif()
 
 # AMESH, the baked mesh format. Reading, writing, and validation need no
 # window or GL; GpuMesh (amesh_gl.cpp) builds into studio, beside the GL loader.

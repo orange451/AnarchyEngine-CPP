@@ -763,7 +763,7 @@ TEST_CASE("N79 a Disconnect packet with no code byte reads as Requested", "[netw
     client.connect(kServer, 0.0);
     const double now = net.run(0.0, 0.1);
     REQUIRE(client.state(0) == ConnectionState::Connected);
-    // An older peer's Disconnect: the header and nothing after it.
+    // A Disconnect without a code byte: the header and nothing after it.
     std::uint8_t buffer[network::kMaxPacketBytes];
     network::BitWriter writer(buffer, sizeof(buffer));
     network::PacketHeader header;

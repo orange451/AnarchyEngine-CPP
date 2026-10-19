@@ -14,7 +14,7 @@ AnarchyServer [project folder] [--port N] [--max-connections 1-64] [--max-send B
 
 - `open` loads the project into a headless engine. That engine has no renderer, no audio device and no client sync, runs at 60 Hz in the Server role, and has a `ServerSession` on a UDP socket that presents `project_identity`.
 - `start` starts play and the engine thread.
-- `stop` closes every client ("The server closed") on the engine thread, waits for it, then stops the engine and unhooks the session.
+- `stop` closes every client ("The server closed") on the engine thread and waits for that, 5 seconds at most (a close that fails or never runs is reported on stderr), then stops the engine and unhooks the session.
 - `print_output` writes the scripts' prints as `[HH:MM:SS] text`, with errors going to stderr.
 
 The resources hash skips names that start with '.', as a packed game does. A packed project whose resources folder held only `.gitkeep` files has its empty folder made again, so it presents the same identity as its folder.

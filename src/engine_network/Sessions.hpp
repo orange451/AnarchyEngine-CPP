@@ -133,7 +133,8 @@ public:
     void disconnect(double now);
     void receive(double now) override;
     void send(double now) override;
-    // state() and reason() are for the simulation thread, which writes them.
+    // state() and reason() are for a thread that may write them (see state_);
+    // any other reads status().
     ClientState state() const;
     // Why the connection ended, worded for a player; empty until then.
     const std::string& reason() const;
@@ -155,7 +156,9 @@ private:
     engine_core::DataModel& game_;
     SessionConfig config_;
     std::unique_ptr<ReplicaApplier> applier_;
-    // Written on the simulation thread only, under status_mutex_, so status() can copy them from any thread.
+    // Written under status_mutex_, so status() can copy them from any thread, by
+    // the simulation thread, or by any thread while the engine is stopped or
+    // under its write lock.
     mutable std::mutex status_mutex_;
     ClientState state_ = ClientState::Idle;
     std::string reason_;

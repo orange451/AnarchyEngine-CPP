@@ -89,12 +89,13 @@ void ServerSession::flush(network::PeerId peer, double now) {
     if (progressed || entry.queue.empty()) {
         entry.last_progress = now;
     }
-    // A client this stuck, or this far behind, will not catch up: it starts again by reconnecting.
+    // A client this stuck, or this far behind, will not catch up: it is told so
+    // ("Your connection could not keep up") and starts again by reconnecting.
     if (now - entry.last_progress > config_.max_stall_seconds || entry.queued_bytes > config_.max_queued_bytes) {
         ++fell_behind_;
         // Outside a packet's read, the endpoint reports the drop at once, which
         // forgets the peer; the second call covers an endpoint that did not.
-        endpoint_->disconnect(peer, now);
+        endpoint_->disconnect(peer, now, network::LeaveCode::FellBehind);
         on_disconnected(peer);
     }
 }

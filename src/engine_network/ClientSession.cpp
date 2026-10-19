@@ -100,6 +100,8 @@ std::string ClientSession::describe(network::DisconnectReason why, network::Deny
             return "The server closed";
         case DisconnectReason::Removed:
             return "Removed by the server";
+        case DisconnectReason::FellBehind:
+            return "Your connection could not keep up";
         case DisconnectReason::Socket:
             return "Network error";
         default:

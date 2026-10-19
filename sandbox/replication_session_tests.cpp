@@ -260,10 +260,10 @@ TEST_CASE("RP45 the server closing tells clients so; a client that stops hearing
     REQUIRE(unreachable.session->reason() == "Could not reach the server");
 }
 
-TEST_CASE("RP46 a client too far behind is dropped", "[replication][session]") {
+TEST_CASE("RP46 a client too far behind is dropped, and told its connection could not keep up", "[replication][session]") {
     engine_network::SessionConfig config;
     SECTION("its queue stalls") {
-        config.max_stall_seconds = 1.0;
+        config.max_stall_seconds = 0.25;   // so the stall is seen before the server times the client out
     }
     SECTION("its queue grows too big") {
         config.max_queued_bytes = 256;
@@ -273,9 +273,10 @@ TEST_CASE("RP46 a client too far behind is dropped", "[replication][session]") {
     net.run(0.5);
     const network::PeerId peer = only_new_peer({}, net.session->endpoint().peers());
     REQUIRE(net.session->connection_of(peer) != 0);
-    net.session->endpoint().conditioner().loss = 1.0f;   // the client never acks
+    client.session->endpoint().conditioner().loss = 1.0f;   // the client hears the server, but its acks never arrive
     engine_core::Folder& churn = add_folder(net.server.game, net.server.game.scene_service("Workspace"), "Churn");
-    // The window fills in about four seconds; the client gives up on a silent server at five.
+    // The window (256 messages, one a tick) fills in about 4.3 s; the server gives up
+    // on a silent client at 5, so the client is dropped for falling behind first.
     for (int i = 0; i < 60 * 9 && net.session->fell_behind() == 0; ++i) {
         net.server.game.set_name(churn.id(), "Churn" + std::to_string(i));
         net.tick();
@@ -284,7 +285,9 @@ TEST_CASE("RP46 a client too far behind is dropped", "[replication][session]") {
     REQUIRE(net.session->connection_of(peer) == 0);
     REQUIRE(net.session->queued_bytes(peer) == 0);
     REQUIRE(net.server.game.get_children(net.server.game.connections()).empty());
-    (void)client;
+    net.tick();   // the server's Disconnect reaches the client
+    REQUIRE(client.session->state() == engine_network::ClientState::Disconnected);
+    REQUIRE(client.session->reason() == "Your connection could not keep up");
 }
 
 TEST_CASE("RP47 bad data from the server ends the connection with a reason", "[replication][session]") {

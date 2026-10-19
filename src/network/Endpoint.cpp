@@ -22,8 +22,8 @@ std::uint64_t read_u64(BitReader& reader) {
     return low | (high << 32);
 }
 
-// A Disconnect's trailing code byte. An older peer sends none, and a code this
-// build does not know reads as a plain leave.
+// A Disconnect's trailing code byte. A Disconnect without one, and a code
+// this build does not know, read as a plain leave (Requested).
 DisconnectReason leave_reason(BitReader& reader) {
     if (reader.bytes_left() < 1) return DisconnectReason::Requested;
     switch (static_cast<LeaveCode>(reader.bits(8))) {
@@ -31,6 +31,8 @@ DisconnectReason leave_reason(BitReader& reader) {
             return DisconnectReason::Closed;
         case LeaveCode::Removed:
             return DisconnectReason::Removed;
+        case LeaveCode::FellBehind:
+            return DisconnectReason::FellBehind;
         default:
             return DisconnectReason::Requested;
     }

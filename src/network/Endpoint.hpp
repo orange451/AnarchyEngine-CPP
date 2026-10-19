@@ -23,10 +23,11 @@ constexpr PeerId kNoPeer = 0xFF;
 
 enum class Role { Server, Client };
 enum class ConnectionState { Disconnected, Connecting, Connected };
-// Closed and Removed are what the other side said when it left: it shut down, or it removed this peer.
-enum class DisconnectReason { None, Requested, Timeout, Denied, Socket, Closed, Removed };
+// Closed, Removed and FellBehind are what the other side said when it left: it
+// shut down, it removed this peer, or it dropped this peer for falling behind.
+enum class DisconnectReason { None, Requested, Timeout, Denied, Socket, Closed, Removed, FellBehind };
 // Why a side is leaving, carried in its Disconnect packet's one trailing byte.
-enum class LeaveCode : std::uint8_t { Left = 0, Closed = 1, Removed = 2 };
+enum class LeaveCode : std::uint8_t { Left = 0, Closed = 1, Removed = 2, FellBehind = 3 };
 // WrongProtocol is reserved: a packet with another protocol id is dropped and
 // counted without a reply, so it is never sent.
 enum class DenyReason : std::uint8_t { None, Full, WrongProtocol, WrongGame, WrongVersion, WrongContent };

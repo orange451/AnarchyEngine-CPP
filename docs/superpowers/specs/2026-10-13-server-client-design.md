@@ -87,6 +87,7 @@ On join it encodes the filtered tree as `Create` operations in parent-before-chi
 
 - a peer connects: create a `Connection` with a fresh UUID under `Connections`; the snapshot goes out at the end of that tick;
 - a peer disconnects or times out: destroy its `Connection`;
+- a script destroys a peer's `Connection`: that peer is disconnected with "removed by the server", so a game kicks a player by destroying its Connection;
 - a reliable message from a client: dropped and counted (sub-project 3 gives it meaning);
 - a client whose queue makes no progress for 30 s (nothing handed to its reliable channel and nothing acked), or whose queue holds more than 256 MB: disconnected. A full send window alone is not a reason: a big snapshot draining slowly into a busy world is progress, however long it takes.
 
@@ -99,7 +100,7 @@ On the client:
 
 ### 3. Executables
 
-**`AnarchyServer <project folder> [--port 7777] [--max-connections 64]`.** Loads the project, computes the identity (refusing to start if the game id or resources hash is zero), opens a UDP socket, builds an `Engine` with no renderer, no client sync, no audio device, `set_pace_hz(60)`, and world role Server, starts play, and runs. Script output goes to stdout with a timestamp. Ctrl+C (or SIGTERM) disconnects every client and exits. A port in use, a missing project, or a bad identity prints the reason and exits non-zero.
+**`AnarchyServer <project folder> [--port 7777] [--max-connections 64] [--max-send 1048576]`.** Loads the project, computes the identity (refusing to start if the game id or resources hash is zero), opens a UDP socket, builds an `Engine` with no renderer, no client sync, no audio device, `set_pace_hz(60)`, and world role Server, starts play, and runs. Script output goes to stdout with a timestamp. Ctrl+C (or SIGTERM) disconnects every client and exits. `--max-send` is each client's send budget in bytes per second (default 1 MB/s); a large reliable message (a snapshot part or a busy tick's changes) goes out as several fragments per tick up to that budget and what flow control allows, so a 600 KB join takes well under a second on a LAN. Packaging a game puts `AnarchyServer.exe` beside `AnarchyPlayer.exe`; run from a package folder, it reads the same packed game the player does. A port in use, a missing project, or a bad identity prints the reason and exits non-zero.
 
 **`AnarchyPlayer --connect host:port [project folder]`.** Takes the identity from the packed game (or the folder), creates an empty place, connects, and waits for the snapshot; the window shows "Connecting…" until then. Failures and disconnects show their reason in the window: wrong game, needs an update (with the server's version), server full, timed out, server closed, bad data from the server. Without `--connect` the player runs Standalone as today.
 
@@ -114,6 +115,7 @@ On the client:
 | Operation on an instance the client destroyed locally | Skipped and counted |
 | Reference to a filtered or not-yet-created instance | Reads nil; resolves on creation |
 | Server shutdown | Every client disconnected with "server closed" |
+| A script destroys a client's Connection | That client is disconnected with "removed by the server" |
 | Zero game id or zero resources hash | Server refuses to start; client refuses to connect |
 
 ## Testing
@@ -132,5 +134,5 @@ Catch2 in the sandbox, tags `[replication]`, `[server]`, plus existing tags for 
 | --- | --- |
 | Server replication cost, 1,000 changes per tick, 50 clients | under 1 ms per tick |
 | Client apply cost per tick | under 0.5 ms |
-| Join snapshot, 10,000 instances | encoded in under 50 ms and under 1 MB compressed. It arrives at the transport's block rate, one 1,000-byte fragment per tick (about 60 KB/s at 60 Hz), so a 600 KB snapshot takes about 10 s; raising that rate is parked in `docs/superpowers/networking-parked.md` and is not this sub-project's |
+| Join snapshot, 10,000 instances | encoded in under 50 ms and under 1 MB compressed. It arrives at up to the per-client send budget (default 1 MB/s, several fragments per tick), so a 600 KB snapshot takes under a second on a LAN |
 | Standalone cost of this sub-project | none measurable: the change sink is empty and RunContext is one comparison per script start |

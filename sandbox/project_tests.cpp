@@ -3119,16 +3119,16 @@ TEST_CASE("Q6 a scene service edited outside is read from that file alone and lo
         }
     }
     REQUIRE_FALSE(lighting.empty());
-    edit_key(lighting, "Brightness", engine_core::JsonValue::number(3));
+    edit_key(lighting, "Exposure", engine_core::JsonValue::number(3));
     const std::size_t before = Project::partial_reads();
     const engine_core::DiskScan applied = project.apply_disk();
     REQUIRE(Project::partial_reads() > before);
     REQUIRE(applied.conflicts.empty());
     engine_core::PropertyBag saved;
     game.instance(game.scene_service("Lighting"))->save_properties(saved);
-    const engine_core::JsonValue* brightness = engine_core::bag_find(saved, "Brightness");
-    REQUIRE(brightness != nullptr);
-    REQUIRE(brightness->as_number() == 3.0);
+    const engine_core::JsonValue* exposure = engine_core::bag_find(saved, "Exposure");
+    REQUIRE(exposure != nullptr);
+    REQUIRE(exposure->as_number() == 3.0);
 }
 
 TEST_CASE("Q7 a class changed, a file added, or children reordered on disk reads the whole tree",

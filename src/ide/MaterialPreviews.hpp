@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Color.hpp"
+#include "SurfaceBinding.hpp"
 #include "runner/ViewCapture.hpp"
 #include "types.hpp"
 
@@ -42,6 +43,9 @@ struct MaterialLook {
     bool roughness_flip_y = false;
     bool metalness_flip_y = false;
     bool emissive_flip_y = false;
+    // The Material's surface Shader and its values, or null; looks compare its
+    // Shader, version, and values_hash.
+    std::shared_ptr<const engine_core::SurfaceBinding> surface;
 
     bool operator==(const MaterialLook& other) const;
     bool operator!=(const MaterialLook& other) const { return !(*this == other); }

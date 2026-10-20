@@ -30,6 +30,19 @@ void texture_of(const engine_core::DataModel& world, const engine_core::Material
 
 }  // namespace
 
+namespace {
+
+// One Shader at one version with the same values, or both none.
+bool same_surface(const std::shared_ptr<const engine_core::SurfaceBinding>& a,
+                  const std::shared_ptr<const engine_core::SurfaceBinding>& b) {
+    if (a == nullptr || b == nullptr) {
+        return a == b;
+    }
+    return a->shader == b->shader && a->version == b->version && a->values_hash == b->values_hash;
+}
+
+}  // namespace
+
 bool MaterialLook::operator==(const MaterialLook& other) const {
     return engine_core::same_color(color, other.color) && engine_core::same_color(emissive, other.emissive) &&
            metalness == other.metalness && roughness == other.roughness && reflectivity == other.reflectivity &&
@@ -38,7 +51,7 @@ bool MaterialLook::operator==(const MaterialLook& other) const {
            metalness_texture == other.metalness_texture && emissive_texture == other.emissive_texture &&
            diffuse_flip_y == other.diffuse_flip_y && normal_flip_y == other.normal_flip_y &&
            roughness_flip_y == other.roughness_flip_y && metalness_flip_y == other.metalness_flip_y &&
-           emissive_flip_y == other.emissive_flip_y;
+           emissive_flip_y == other.emissive_flip_y && same_surface(surface, other.surface);
 }
 
 std::optional<MaterialLook> material_look(const engine_core::DataModel& world, engine_core::InstanceId id) {
@@ -61,6 +74,7 @@ std::optional<MaterialLook> material_look(const engine_core::DataModel& world, e
     texture_of(world, *material, Material::kMetalnessTextureReference, look.metalness_texture,
                look.metalness_flip_y);
     texture_of(world, *material, Material::kEmissiveTextureReference, look.emissive_texture, look.emissive_flip_y);
+    look.surface = engine_core::make_surface_binding(world, *material);
     return look;
 }
 

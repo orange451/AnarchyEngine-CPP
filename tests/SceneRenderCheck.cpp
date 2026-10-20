@@ -5964,6 +5964,28 @@ int main(int argc, char** argv) {
         ball.draw(glowing, glow);
         Expect(glow.rgba.size() == 32 * 32 * 4 && glow.rgba[(16 * 32 + 16) * 4 + 1] > glow.rgba[(16 * 32 + 16) * 4] + 40,
                "an Emissive glows on a black ball");
+        // A white Material whose Shader paints it red previews red.
+        ide::MaterialLook shaded;
+        shaded.surface = SurfaceFor(9301, 1, "shader surface;\nvoid surface() {\n    ALBEDO = vec3(1.0, 0.0, 0.0);\n}\n");
+        runner::ViewPixels painted;
+        ball.draw(shaded, painted);
+        const unsigned char* paintedMiddle =
+            painted.rgba.size() == 32 * 32 * 4 ? painted.rgba.data() + (16 * 32 + 16) * 4 : nullptr;
+        Expect(paintedMiddle != nullptr && paintedMiddle[0] > paintedMiddle[1] + 20 && paintedMiddle[0] > paintedMiddle[2] + 20,
+               "a Material's Shader shows on its ball");
+        // Another value of the same Shader is another look; the same values are the same look.
+        engine_core::LuaSlot half;
+        half.kind = engine_core::LuaSlot::Kind::Number;
+        half.number = 0.5;
+        const char* tinted = "shader surface;\nuniform float Amount = 1.0;\nvoid surface() {\n    ALBEDO *= Amount;\n}\n";
+        ide::MaterialLook first;
+        first.surface = SurfaceFor(9302, 1, tinted);
+        ide::MaterialLook same;
+        same.surface = SurfaceFor(9302, 1, tinted);
+        ide::MaterialLook other;
+        other.surface = SurfaceFor(9302, 1, tinted, {half});
+        Expect(first == same && first != other && first != ide::MaterialLook{},
+               "a look compares its Shader, its version, and its values");
         runner::GLint viewportAfter[4] = {};
         glGetIntegerv(runner::GL_VIEWPORT, viewportAfter);
         runner::GLint framebuffer = -1;

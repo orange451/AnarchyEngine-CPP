@@ -91,6 +91,23 @@ bool MaterialBall::draw(const MaterialLook& look, runner::ViewPixels& out) {
     ball.roughnessTexture = textures_.get(look.roughness_texture, Usage::Mask, look.roughness_flip_y, true);
     ball.metalnessTexture = textures_.get(look.metalness_texture, Usage::Mask, look.metalness_flip_y, true);
     ball.emissiveTexture = textures_.get(look.emissive_texture, Usage::Color, look.emissive_flip_y, true);
+    // The Material's Shader, its samplers loaded as their hints say, as a scene's draws are.
+    ball.surface = look.surface;
+    if (look.surface != nullptr && look.surface->parse != nullptr) {
+        std::size_t sampler = 0;
+        for (const engine_core::ShaderParam& param : look.surface->parse->params) {
+            if (param.type != engine_core::ShaderParamType::Sampler) {
+                continue;
+            }
+            if (sampler >= std::size(ball.surfaceTextures) || sampler >= look.surface->samplers.size()) {
+                break;
+            }
+            const engine_core::SurfaceBinding::Sampler& bound = look.surface->samplers[sampler];
+            const Usage usage = param.srgb ? Usage::Color : param.normal ? Usage::Normal : Usage::Mask;
+            ball.surfaceTextures[sampler] = textures_.get(bound.path, usage, bound.flip_y, true);
+            ++sampler;
+        }
+    }
     if (textures_.loading()) {
         return false;
     }

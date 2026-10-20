@@ -2111,7 +2111,7 @@ void TestGroupTitlesAndEmptyGroups() {
     const InstanceId base = rig.add<GroupBase>("Base");
     rig.select({kid});
     rig.frame();
-    const std::vector<std::string> titles = {"Instance", "Look", "Extra", "Feel", "Data"};
+    const std::vector<std::string> titles = {"Instance", "Look", "Extra", "Feel", "Data", "Attributes"};
     Expect(rig.panel.group_titles() == titles, "one header per group, in sheet order");
 
     rig.click(rig.panel.group_header("Look"));
@@ -2398,6 +2398,96 @@ void TestAttributeEdit() {
     Expect(rig.game.instance(rig.a)->attribute("Health").number == 12, "typing into the Health row writes it");
 }
 
+void TestAttributeAddRemove() {
+    engine_core::set_thread_role(engine_core::ThreadRole::Simulation);
+    Rig rig;
+    const ide::EditResult added = ide::add_attribute(rig.game, {rig.a, rig.b}, "Health", ide::attribute_default("number"));
+    Expect(added.written == 2 && !added.rejected, "Add writes every selected instance");
+    Expect(rig.game.instance(rig.a)->attribute("Health").kind == engine_core::LuaSlot::Kind::Number &&
+               rig.game.instance(rig.a)->attribute("Health").number == 0 &&
+               rig.game.instance(rig.b)->attribute("Health").number == 0,
+           "a new number attribute is 0 on both");
+    const auto step = rig.game.history().can_undo();
+    Expect(step.first && step.second == "Add Health", "the add is one Add Health step");
+    rig.game.history().undo();
+    Expect(rig.game.instance(rig.a)->attributes().empty() && rig.game.instance(rig.b)->attributes().empty(),
+           "one undo removes it from both");
+
+    rig.game.instance(rig.b)->set_attribute("Health", AttrNumber(7));
+    const ide::EditResult taken = ide::add_attribute(rig.game, {rig.a, rig.b}, "Health", ide::attribute_default("string"));
+    Expect(taken.rejected && taken.error == "Health is already an attribute", "a name any instance has is refused");
+    Expect(rig.game.instance(rig.a)->attributes().empty() && rig.game.instance(rig.b)->attribute("Health").number == 7,
+           "a refused add changes nothing");
+    const ide::EditResult bad = ide::add_attribute(rig.game, {rig.a}, "has space", ide::attribute_default("number"));
+    Expect(bad.rejected && rig.game.instance(rig.a)->attributes().empty(), "a bad name is refused");
+
+    engine_core::LuaSlot white = ide::attribute_default("Color3");
+    Expect(white.kind == engine_core::LuaSlot::Kind::Color && white.color.r == 1.f, "a new Color3 is white");
+    Expect(ide::attribute_default("boolean").kind == engine_core::LuaSlot::Kind::Bool &&
+               ide::attribute_default("Vector2").kind == engine_core::LuaSlot::Kind::Vec2 &&
+               ide::attribute_default("Vector3").kind == engine_core::LuaSlot::Kind::Vec3 &&
+               ide::attribute_default("string").kind == engine_core::LuaSlot::Kind::String,
+           "each listed type has a default");
+
+    rig.game.instance(rig.a)->set_attribute("Health", AttrNumber(3));
+    rig.game.history().reset_waypoints();
+    const ide::EditResult removed = ide::remove_attribute(rig.game, {rig.a, rig.b}, "Health");
+    Expect(removed.written == 2 && rig.game.instance(rig.a)->attributes().empty() &&
+               rig.game.instance(rig.b)->attributes().empty(),
+           "Remove takes it off every selected instance");
+    const auto gone = rig.game.history().can_undo();
+    Expect(gone.first && gone.second == "Remove Health", "the remove is one Remove Health step");
+}
+
+void TestAttributesPanel() {
+    engine_core::set_thread_role(engine_core::ThreadRole::Simulation);
+    Rig rig;
+    rig.select({rig.a});
+    rig.frame();
+    const std::vector<std::string> titles = rig.panel.group_titles();
+    Expect(!titles.empty() && titles.back() == "Attributes", "an instance with no attributes still has the header");
+    Expect(rig.panel.attribute_plus() != nullptr && rig.panel.attribute_plus()->isVisible(), "the header has a +");
+    Expect(rig.panel.attribute_name_field() == nullptr || !rig.panel.attribute_name_field()->isVisible(),
+           "the add row is closed at first");
+
+    rig.click(rig.panel.attribute_plus());
+    rig.frame();
+    jadefx::TextField* name = rig.panel.attribute_name_field();
+    Expect(name != nullptr && name->isVisible(), "+ opens the add row");
+    rig.click(name);
+    if (name != nullptr) {
+        name->selectAll();
+    }
+    rig.scene->noteText("Speed");
+    rig.panel.attribute_type_choice()->select(0);
+    rig.click(rig.panel.attribute_add_button());
+    rig.frame();
+    rig.frame();
+    Expect(rig.game.instance(rig.a)->attribute("Speed").kind == engine_core::LuaSlot::Kind::Number,
+           "Add makes a number attribute");
+    Expect(AttributeRow(rig.panel.sheet(), "Speed") != nullptr, "its row shows");
+    Expect(!rig.panel.attribute_name_field()->isVisible(), "the add row closes after Add");
+
+    rig.click(rig.panel.attribute_remove("Speed"));
+    rig.frame();
+    rig.frame();
+    Expect(rig.game.instance(rig.a)->attributes().empty(), "the row's x removes the attribute");
+
+    // A name it already has: refused, the value kept.
+    rig.game.instance(rig.a)->set_attribute("Health", AttrNumber(7));
+    rig.frame();
+    rig.click(rig.panel.attribute_plus());
+    rig.frame();
+    rig.click(rig.panel.attribute_name_field());
+    rig.panel.attribute_name_field()->selectAll();
+    rig.scene->noteText("Health");
+    rig.panel.attribute_type_choice()->select(2);
+    rig.click(rig.panel.attribute_add_button());
+    rig.frame();
+    rig.frame();
+    Expect(rig.game.instance(rig.a)->attribute("Health").number == 7, "adding a name it has keeps the value");
+}
+
 int main() {
     TestGroupMarkersRegister();
     TestSheetGroupOrder();
@@ -2444,6 +2534,8 @@ int main() {
     TestPlayEditIsUndoable();
     TestAttributeRows();
     TestAttributeEdit();
+    TestAttributeAddRemove();
+    TestAttributesPanel();
     if (gFailures == 0) {
         std::printf("properties tests passed\n");
         return 0;

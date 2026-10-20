@@ -1058,6 +1058,12 @@ target_link_libraries(billboard-demo PRIVATE studio)
 add_executable(viewport-demo tests/ViewportDemo.cpp)
 target_link_libraries(viewport-demo PRIVATE studio)
 
+# By hand, not ctest: properties-demo out-dir light saves the Properties panel over a part with attributes as PNGs.
+add_executable(properties-demo
+    tests/PropertiesDemo.cpp
+)
+target_link_libraries(properties-demo PRIVATE studio)
+
 # By hand, not ctest: collision-groups-demo out-dir light saves the Collision Groups pane as PNGs.
 add_executable(collision-groups-demo
     tests/CollisionGroupsDemo.cpp

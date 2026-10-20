@@ -1016,3 +1016,93 @@ bool parse_number(const std::string& text, double& out) {
 }
 
 }  // namespace ide
+
+namespace ide {
+
+engine_core::LuaSlot attribute_default(std::string_view type) {
+    LuaSlot slot;
+    if (type == "number") {
+        slot.kind = LuaSlot::Kind::Number;
+    } else if (type == "boolean") {
+        slot.kind = LuaSlot::Kind::Bool;
+    } else if (type == "string") {
+        slot.kind = LuaSlot::Kind::String;
+    } else if (type == "Vector2") {
+        slot.kind = LuaSlot::Kind::Vec2;
+    } else if (type == "Vector3") {
+        slot.kind = LuaSlot::Kind::Vec3;
+    } else if (type == "Color3") {
+        slot.kind = LuaSlot::Kind::Color;
+        slot.color = engine_core::ColorRgb{1.f, 1.f, 1.f, 1.f};
+    }
+    return slot;
+}
+
+EditResult add_attribute(DataModel& world, const std::vector<InstanceId>& ids, const std::string& name,
+                         const LuaSlot& value) {
+    EditResult result;
+    const auto refuse = [&result](std::string why) {
+        result.rejected = true;
+        result.error = std::move(why);
+        return result;
+    };
+    if (world.history().applying_undo_redo()) {
+        return refuse("Undo is running");
+    }
+    if (const auto bad = engine_core::attribute_name_error(name)) {
+        return refuse(*bad);
+    }
+    if (value.kind == LuaSlot::Kind::Nil) {
+        return refuse("an attribute needs a type");
+    }
+    std::vector<DataModel*> targets;
+    for (InstanceId id : ids) {
+        DataModel* object = id != 0 && world.alive(id) ? object_of(world, id) : nullptr;
+        if (object == nullptr) {
+            continue;
+        }
+        if (object->attributes().find(name) != object->attributes().end()) {
+            return refuse(name + " is already an attribute");
+        }
+        targets.push_back(object);
+    }
+    const std::optional<std::string> recording = world.history().try_begin_recording("Add " + name);
+    for (DataModel* object : targets) {
+        if (const auto refused = object->set_attribute(name, value)) {
+            if (result.error.empty()) {
+                result.error = *refused;
+            }
+            continue;
+        }
+        ++result.written;
+    }
+    if (recording) {
+        world.history().finish_recording(*recording, engine_core::FinishRecordingOperation::Commit);
+    }
+    return result;
+}
+
+EditResult remove_attribute(DataModel& world, const std::vector<InstanceId>& ids, const std::string& name) {
+    EditResult result;
+    if (world.history().applying_undo_redo()) {
+        result.rejected = true;
+        result.error = "Undo is running";
+        return result;
+    }
+    const std::optional<std::string> recording = world.history().try_begin_recording("Remove " + name);
+    for (InstanceId id : ids) {
+        DataModel* object = id != 0 && world.alive(id) ? object_of(world, id) : nullptr;
+        if (object == nullptr || object->attributes().find(name) == object->attributes().end()) {
+            continue;
+        }
+        if (!object->set_attribute(name, LuaSlot{})) {
+            ++result.written;
+        }
+    }
+    if (recording) {
+        world.history().finish_recording(*recording, engine_core::FinishRecordingOperation::Commit);
+    }
+    return result;
+}
+
+}  // namespace ide

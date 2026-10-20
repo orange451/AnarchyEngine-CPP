@@ -2,6 +2,7 @@
 
 #include "Assemblies.hpp"
 #include "AssetPicker.hpp"
+#include "Attributes.hpp"
 #include "ChangeFlag.hpp"
 #include "CurveEditor.hpp"
 #include "IdeIcons.hpp"
@@ -532,6 +533,8 @@ struct RowView {
     std::shared_ptr<jadefx::Button> pick;
     std::shared_ptr<jadefx::Button> clear;
     std::shared_ptr<jadefx::Tooltip> tip;
+    // An attribute row's x, which removes the attribute.
+    std::shared_ptr<jadefx::Button> remove;
     // A reference to an asset, such as "Mesh": its Name opens the asset picker.
     // Empty for any other reference, which picks from the selection.
     std::string asset_class;
@@ -558,7 +561,8 @@ struct RowView {
                                    static_cast<jadefx::Node*>(lines[0].get()),
                                    static_cast<jadefx::Node*>(lines[1].get()),
                                    static_cast<jadefx::Node*>(curve.get()),
-                                   static_cast<jadefx::Node*>(gradient.get())}) {
+                                   static_cast<jadefx::Node*>(gradient.get()),
+                                   static_cast<jadefx::Node*>(remove.get())}) {
             if (node != nullptr) {
                 out.push_back(node);
             }
@@ -606,6 +610,13 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
     // The headers placed by the last layout, top to bottom.
     std::vector<std::string> shown_groups;
     std::shared_ptr<jadefx::Label> status_label;
+    // The Attributes header's +, and the row it opens under the header: a
+    // name, a type from kAttributeTypes, and Add.
+    std::shared_ptr<jadefx::Button> attribute_plus;
+    std::shared_ptr<PropertyField> attribute_name;
+    std::shared_ptr<jadefx::ComboBox> attribute_type;
+    std::shared_ptr<jadefx::Button> attribute_add;
+    bool adding_attribute = false;
     std::vector<std::shared_ptr<RowView>> rows;
     PropertySheet sheet;
     // The drag that shows on the instances as it goes, or null. Only the
@@ -689,6 +700,7 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
         status_label->setStyle(kErrorStyle);
         status_label->setVisible(false);
         body->getChildren().add(status_label);
+        build_attribute_add();
         build_preview();
     }
 
@@ -1425,6 +1437,19 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
             break;
         }
         }
+        if (row.attribute) {
+            view->remove = jadefx::make<jadefx::Button>("x");
+            view->remove->getClassList().add("properties-remove-attribute");
+            view->remove->setStyle(kButtonStyle);
+            view->remove->setOnAction([weak_self, weak_view](jadefx::ActionEvent&) {
+                const auto self = weak_self.lock();
+                const auto row_view = weak_view.lock();
+                if (self && row_view) {
+                    self->remove_attribute_row(*row_view);
+                }
+            });
+            body->getChildren().add(view->remove);
+        }
         return view;
     }
 
@@ -2138,6 +2163,83 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
         submit(view.ids, edit);
     }
 
+    // The Attributes header's + and the add row it opens, made once.
+    void build_attribute_add() {
+        // Made first, so the + added after it paints over its title.
+        header(kAttributesGroup);
+        std::weak_ptr<Impl> weak_self = shared_from_this();
+        attribute_plus = jadefx::make<jadefx::Button>("+");
+        attribute_plus->getClassList().add("properties-add-attribute");
+        attribute_plus->setStyle(kButtonStyle);
+        attribute_plus->setVisible(false);
+        attribute_plus->setOnAction([weak_self](jadefx::ActionEvent&) {
+            if (const auto self = weak_self.lock()) {
+                self->adding_attribute = !self->adding_attribute;
+                self->folded_groups.erase(kAttributesGroup);
+                if (self->adding_attribute) {
+                    self->attribute_name->setText("");
+                }
+            }
+        });
+        attribute_name = jadefx::make<PropertyField>();
+        attribute_name->setPromptText("Name");
+        attribute_name->setVisible(false);
+        attribute_name->setOnAction([weak_self](jadefx::ActionEvent&) {
+            if (const auto self = weak_self.lock()) {
+                self->commit_attribute_add();
+            }
+        });
+        attribute_type = jadefx::make<jadefx::ComboBox>();
+        attribute_type->getClassList().add("properties-choice");
+        std::vector<std::string> types(std::begin(kAttributeTypes), std::end(kAttributeTypes));
+        attribute_type->getItems().setAll(std::move(types));
+        attribute_type->select(0);
+        attribute_type->setVisible(false);
+        attribute_add = jadefx::make<jadefx::Button>("Add");
+        attribute_add->setStyle(kButtonStyle);
+        attribute_add->setVisible(false);
+        attribute_add->setOnAction([weak_self](jadefx::ActionEvent&) {
+            if (const auto self = weak_self.lock()) {
+                self->commit_attribute_add();
+            }
+        });
+        body->getChildren().add(attribute_plus);
+        body->getChildren().add(attribute_name);
+        body->getChildren().add(attribute_type);
+        body->getChildren().add(attribute_add);
+    }
+
+    // Add: the typed name with the picked type's zero value, on every selected
+    // instance, as one undo step. A bad or taken name shows under the rows.
+    void commit_attribute_add() {
+        const std::string name = attribute_name->getText();
+        const int index = attribute_type->getSelectionIndex();
+        if (world == nullptr || sheet.ids.empty() || index < 0 ||
+            index >= static_cast<int>(std::size(kAttributeTypes))) {
+            return;
+        }
+        if (const auto bad = engine_core::attribute_name_error(name)) {
+            status = *bad;
+            return;
+        }
+        const engine_core::LuaSlot value = attribute_default(kAttributeTypes[index]);
+        const std::vector<InstanceId> ids = sheet.ids;
+        adding_attribute = false;
+        if (attribute_name->isFocused()) {
+            release(*attribute_name);
+        }
+        post_recorded([ids, name, value](engine_core::DataModel& game) { return add_attribute(game, ids, name, value); });
+    }
+
+    void remove_attribute_row(RowView& view) {
+        if (world == nullptr || !view.row.attribute) {
+            return;
+        }
+        const std::vector<InstanceId> ids = view.ids;
+        const std::string name = view.row.name;
+        post_recorded([ids, name](engine_core::DataModel& game) { return remove_attribute(game, ids, name); });
+    }
+
     void clear_ref(RowView& view) {
         if (picking) {
             cancel_pick();
@@ -2368,7 +2470,7 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
         const double inner = std::max(0.0, width - 2 * kPad);
         const double name_width = std::clamp(inner * 0.38, 64.0, 180.0);
         const double editor_x = left + kPad + name_width;
-        const double editor_width = std::max(24.0, inner - name_width);
+        const double full_editor_width = std::max(24.0, inner - name_width);
 
         double y = kPad;
         auto place = [&](jadefx::Node& node, double x, double w, double h) {
@@ -2387,15 +2489,41 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
             hidden.arrow->setVisible(false);
         }
         shown_groups.clear();
+        for (jadefx::Node* node : {static_cast<jadefx::Node*>(attribute_plus.get()),
+                                   static_cast<jadefx::Node*>(attribute_name.get()),
+                                   static_cast<jadefx::Node*>(attribute_type.get()),
+                                   static_cast<jadefx::Node*>(attribute_add.get())}) {
+            node->setVisible(false);
+        }
         std::string group;
         bool any = false;
         bool group_open = true;
+        // Where the Attributes header went, or below 0 while it has no rows yet.
+        double attributes_top = -1;
+        // The Attributes header, its + at the right, and the add row under it when open.
+        const auto place_attributes_header = [&] {
+            attributes_top = y;
+            const bool open = place_header(place, kAttributesGroup, left, width);
+            attribute_plus->setVisible(true);
+            attribute_plus->performLayout(left + width - kClearWidth - 2, top + y + 1, kClearWidth, kRowHeight - 4);
+            y += kRowHeight - 2 + kRowGap;
+            if (open && adding_attribute) {
+                place(*attribute_name, left + kPad + kIndent, name_width - kIndent - 4, kRowHeight);
+                const double add_width = 44;
+                place(*attribute_type, editor_x, std::max(24.0, full_editor_width - add_width - kAxisGap), kRowHeight);
+                place(*attribute_add, editor_x + full_editor_width - add_width, add_width, kRowHeight);
+                y += kRowHeight + kRowGap;
+            }
+            return open;
+        };
         for (const auto& view : rows) {
             if (!any || view->row.group != group) {
                 group = view->row.group;
                 any = true;
-                group_open = place_header(place, group, left, width);
-                y += kRowHeight - 2 + kRowGap;
+                group_open = view->row.attribute ? place_attributes_header() : place_header(place, group, left, width);
+                if (!view->row.attribute) {
+                    y += kRowHeight - 2 + kRowGap;
+                }
             }
             view->top = y;
             if (!group_open) {
@@ -2403,6 +2531,13 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
                     node->setVisible(false);
                 }
                 continue;
+            }
+            // An attribute row keeps room at its right for its x.
+            const double editor_width = view->row.attribute
+                                            ? std::max(24.0, full_editor_width - kClearWidth - kAxisGap)
+                                            : full_editor_width;
+            if (view->remove) {
+                place(*view->remove, editor_x + editor_width + kAxisGap, kClearWidth, kRowHeight);
             }
             place(*view->name, left + kPad + kIndent, name_width - kIndent - 4, kRowHeight);
             const double each = (editor_width - 2 * kAxisGap) / 3;
@@ -2512,6 +2647,10 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
                 break;
             }
             y += kRowHeight + kRowGap;
+        }
+        // Every instance has the Attributes header, rows or not, so + is always there.
+        if (!sheet.ids.empty() && attributes_top < 0) {
+            place_attributes_header();
         }
         layout_preview(place, y, left, width, inner);
         status_label->setText(status);
@@ -2811,6 +2950,23 @@ std::string PropertiesPanel::preview_class() const {
 }
 
 jadefx::ScrollPane* PropertiesPanel::scroll_pane() const { return impl_->scroller.get(); }
+
+jadefx::Node* PropertiesPanel::attribute_plus() const { return impl_->attribute_plus.get(); }
+
+jadefx::TextField* PropertiesPanel::attribute_name_field() const { return impl_->attribute_name.get(); }
+
+jadefx::ComboBox* PropertiesPanel::attribute_type_choice() const { return impl_->attribute_type.get(); }
+
+jadefx::Node* PropertiesPanel::attribute_add_button() const { return impl_->attribute_add.get(); }
+
+jadefx::Node* PropertiesPanel::attribute_remove(const std::string& name) const {
+    for (const auto& view : impl_->rows) {
+        if (view->row.attribute && view->row.name == name) {
+            return view->remove.get();
+        }
+    }
+    return nullptr;
+}
 
 jadefx::Node* PropertiesPanel::group_header(const std::string& title) const {
     const auto found = impl_->headers.find(title);

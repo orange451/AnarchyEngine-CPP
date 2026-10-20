@@ -165,6 +165,21 @@ struct EditResult {
 EditResult apply_edit(engine_core::DataModel& world, const std::vector<engine_core::InstanceId>& ids,
                       const PropertyEdit& edit);
 
+// The types the Properties panel's Add offers, in its list's order.
+inline constexpr const char* kAttributeTypes[] = {"number", "boolean", "string", "Vector2", "Vector3", "Color3"};
+// A new attribute of type as Add makes it: 0, false, "", a zero vector, or
+// white. Nil for a type Add does not offer.
+engine_core::LuaSlot attribute_default(std::string_view type);
+// Gives every id the attribute name with value, as one recording named
+// "Add <name>". Refused, changing nothing, for a bad name or value, or when
+// any id already has an attribute of that name ("<name> is already an attribute").
+EditResult add_attribute(engine_core::DataModel& world, const std::vector<engine_core::InstanceId>& ids,
+                         const std::string& name, const engine_core::LuaSlot& value);
+// Takes the attribute name off every id that has it, as one recording named
+// "Remove <name>".
+EditResult remove_attribute(engine_core::DataModel& world, const std::vector<engine_core::InstanceId>& ids,
+                            const std::string& name);
+
 // A drag through an editor, such as a color chooser or a slider, that shows
 // on the instances as it goes. before is what each instance held when the
 // drag's first write reached it, as its property's read gave it.

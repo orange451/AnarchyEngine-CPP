@@ -13,6 +13,11 @@ class DataModel;
 class SelectionService;
 }  // namespace engine_core
 
+namespace jadefx {
+class ComboBox;
+class TextField;
+}  // namespace jadefx
+
 namespace ide {
 
 // Runs a write where the DataModel may be written: the simulation thread in
@@ -144,6 +149,13 @@ public:
     jadefx::Node* group_header(const std::string& title) const;
     // The section headers the last layout showed, top to bottom.
     std::vector<std::string> group_titles() const;
+    // The Attributes header's +, the add row's name field, type list, and Add
+    // button, and the x on the attribute row of that name (null when none).
+    jadefx::Node* attribute_plus() const;
+    jadefx::TextField* attribute_name_field() const;
+    jadefx::ComboBox* attribute_type_choice() const;
+    jadefx::Node* attribute_add_button() const;
+    jadefx::Node* attribute_remove(const std::string& name) const;
     // Silences the Preview's sound, as a test starting or stopping does, so
     // it is never heard over the game, nor left from before it.
     void stop_sound();

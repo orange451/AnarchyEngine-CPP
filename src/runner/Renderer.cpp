@@ -281,6 +281,11 @@ bool Renderer::buildProgram(Program& program, const char* name, const char* vert
     if (program.id == 0) {
         return false;
     }
+    finishProgram(program);
+    return true;
+}
+
+void Renderer::finishProgram(Program& program) {
     const unsigned id = program.id;
     const auto at = [id](const char* uniform) { return glGetUniformLocation(id, uniform); };
     program.model = at("uModel");
@@ -351,6 +356,7 @@ bool Renderer::buildProgram(Program& program, const char* name, const char* vert
     program.bloomLevelScale = at("uBloomLevelScale");
     program.bloomThreshold = at("uBloomThreshold");
     program.screenSize = at("uScreenSize");
+    program.time = at("uTime");
     program.nearPlane = at("uNear");
     program.maxDistance = at("uMaxDistance");
     program.maxRoughness = at("uMaxRoughness");
@@ -441,7 +447,6 @@ bool Renderer::buildProgram(Program& program, const char* name, const char* vert
         sampler("uTransparency", kUnitTransparency);
     }
     glUseProgram(0);
-    return true;
 }
 
 bool Renderer::initialize() {
@@ -526,6 +531,26 @@ bool Renderer::initialize() {
     glBindTexture(GL_TEXTURE_2D, 0);
 
     const unsigned char black[4] = {0, 0, 0, 255};
+    glGenTextures(1, &blackTexture_);
+    glBindTexture(GL_TEXTURE_2D, blackTexture_);
+    glTexImage2D(GL_TEXTURE_2D, 0, static_cast<GLint>(GL_RGBA8), 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, black);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, static_cast<GLint>(GL_LINEAR));
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, static_cast<GLint>(GL_LINEAR));
+    glBindTexture(GL_TEXTURE_2D, 0);
+    // A surface shader's hinted sampling: clamp, nearest, or both.
+    glGenSamplers(3, surfaceSamplers_ + 1);
+    for (int hints = 1; hints < 4; ++hints) {
+        const unsigned sampler = surfaceSamplers_[hints];
+        const GLint wrap = static_cast<GLint>((hints & 1) != 0 ? RT_GL_CLAMP_TO_EDGE : GL_REPEAT);
+        const bool nearest = (hints & 2) != 0;
+        glSamplerParameteri(sampler, GL_TEXTURE_WRAP_S, wrap);
+        glSamplerParameteri(sampler, GL_TEXTURE_WRAP_T, wrap);
+        glSamplerParameteri(sampler, GL_TEXTURE_MIN_FILTER,
+                            static_cast<GLint>(nearest ? RT_GL_NEAREST_MIPMAP_NEAREST : GL_LINEAR_MIPMAP_LINEAR));
+        glSamplerParameteri(sampler, GL_TEXTURE_MAG_FILTER, static_cast<GLint>(nearest ? RT_GL_NEAREST : GL_LINEAR));
+    }
+    surfacePrograms_.setFinish([this](Program& program) { finishProgram(program); });
+
     glGenTextures(1, &blackCube_);
     glBindTexture(RT_GL_TEXTURE_CUBE_MAP, blackCube_);
     for (int face = 0; face < 6; ++face) {
@@ -2138,6 +2163,88 @@ void Renderer::bindMaterial(const Program& program, const MeshDraw& draw) {
     glUniform1i(program.billboard, draw.billboard ? 1 : 0);
 }
 
+float Renderer::shaderTime() const {
+    const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - born_).count();
+    return static_cast<float>(std::fmod(seconds, 3600.0));
+}
+
+const SurfacePrograms::Variant* Renderer::surfaceVariant(const MeshDraw& draw) {
+    if (draw.surface == nullptr) {
+        return nullptr;
+    }
+    const SurfacePrograms::Built& built = surfacePrograms_.get(*draw.surface, shaderTime());
+    return built.gbuffer.program.id != 0 ? &built.gbuffer : nullptr;
+}
+
+void Renderer::useGeometryProgram(const Program& program, const float* projection) {
+    glUseProgram(program.id);
+    glUniformMatrix4fv(program.view, 1, GL_FALSE, view_.m);
+    glUniformMatrix4fv(program.projection, 1, GL_FALSE, projection);
+    if (program.inverseView >= 0) {
+        const engine_core::Matrix4 inverseView = engine_core::matrix4_inverse(view_);
+        glUniformMatrix4fv(program.inverseView, 1, GL_FALSE, inverseView.m);
+    }
+    glUniform2f(program.screenSize, static_cast<float>(targetWidth_), static_cast<float>(targetHeight_));
+    glUniform1f(program.time, shaderTime());
+}
+
+void Renderer::bindSurface(const SurfacePrograms::Variant& variant, const MeshDraw& draw) {
+    const engine_core::SurfaceBinding& binding = *draw.surface;
+    const std::vector<engine_core::ShaderParam>& params = binding.parse->params;
+    int sampler = 0;
+    for (std::size_t i = 0; i < params.size() && i < variant.locations.size() && i < binding.values.size(); ++i) {
+        const engine_core::ShaderParam& param = params[i];
+        const int location = variant.locations[i];
+        const engine_core::LuaSlot& value = binding.values[i];
+        if (param.type == engine_core::ShaderParamType::Sampler) {
+            const int unit = kSurfaceTextureUnit + sampler;
+            const unsigned texture = sampler < 3 ? draw.surfaceTextures[sampler] : 0u;
+            BindTexture(unit, texture != 0 ? texture : param.black ? blackTexture_ : whiteTexture_);
+            glBindSampler(static_cast<GLuint>(unit), surfaceSamplers_[(param.clamp ? 1 : 0) | (param.nearest ? 2 : 0)]);
+            surfaceSamplersBound_ = true;
+            ++sampler;
+            continue;
+        }
+        if (location < 0) {
+            continue;
+        }
+        switch (param.type) {
+        case engine_core::ShaderParamType::Float:
+            glUniform1f(location, static_cast<float>(value.number));
+            break;
+        case engine_core::ShaderParamType::Int:
+            glUniform1i(location, static_cast<int>(value.number));
+            break;
+        case engine_core::ShaderParamType::Bool:
+            glUniform1i(location, value.flag ? 1 : 0);
+            break;
+        case engine_core::ShaderParamType::Vec2:
+            glUniform2f(location, value.vec.x, value.vec.y);
+            break;
+        case engine_core::ShaderParamType::Vec3:
+            glUniform3f(location, value.vec.x, value.vec.y, value.vec.z);
+            break;
+        case engine_core::ShaderParamType::Color:
+            // Linear, so the shader does its math in light.
+            glUniform3f(location, engine_core::srgb_to_linear(value.color.r), engine_core::srgb_to_linear(value.color.g),
+                        engine_core::srgb_to_linear(value.color.b));
+            break;
+        case engine_core::ShaderParamType::Sampler:
+            break;
+        }
+    }
+}
+
+void Renderer::unbindSurfaceSamplers() {
+    if (!surfaceSamplersBound_) {
+        return;
+    }
+    for (int unit = kSurfaceTextureUnit; unit < kSurfaceTextureUnit + 3; ++unit) {
+        glBindSampler(static_cast<GLuint>(unit), 0);
+    }
+    surfaceSamplersBound_ = false;
+}
+
 void Renderer::prepareSky() {
     // The view's turn back to the world's: view_ is a rotation and a
     // translation, so its 3 by 3 transposed. Column-major, as GLSL takes it.
@@ -2406,6 +2513,7 @@ void Renderer::findVisible(const MeshDraw* meshes, int count, const CameraView& 
                 // other opaque draw so the geometry pass switches program once.
                 item.terrain = draw.terrainLook != 0;
                 item.shadowOnly = draw.shadowOnly;
+                item.program = draw.surface != nullptr ? draw.surface->shader : 0;
                 if (item.terrain) {
                     item.transparency = 0.f;
                     item.slot = 0;
@@ -2551,25 +2659,40 @@ bool Renderer::geometryPass(const MeshDraw* meshes, const float* projection) {
         }
     }
 
+    // Programs of Shaders no draw asked for in a minute go.
+    surfacePrograms_.reclaim(shaderTime());
+
     bool ok = true;
     if (terrainBegin > 0) {
         RENDER_PASS("Geometry");
-        glUseProgram(geometry_.id);
-        glUniformMatrix4fv(geometry_.view, 1, GL_FALSE, view_.m);
-        glUniformMatrix4fv(geometry_.projection, 1, GL_FALSE, projection);
-        bool asked = false;
+        // Each run with its Material's surface Shader when it has one that
+        // built; BuildBatches keeps one Shader's runs together.
+        const Program* current = nullptr;
+        std::vector<unsigned>& asked = askedPrograms_;
+        asked.clear();
         for (int index = 0; index < terrainBegin; ++index) {
             const DrawRun& run = batches_.runs[static_cast<std::size_t>(index)];
             const MeshDraw& draw = meshes[run.draw];
-            bindMaterial(geometry_, draw);
+            const SurfacePrograms::Variant* variant = surfaceVariant(draw);
+            const Program& program = variant != nullptr ? variant->program : geometry_;
+            if (&program != current) {
+                useGeometryProgram(program, projection);
+                current = &program;
+            }
+            bindMaterial(program, draw);
+            if (variant != nullptr) {
+                bindSurface(*variant, draw);
+            }
             glCullFace(run.mirrored ? RT_GL_FRONT : RT_GL_BACK);
             draw.mesh->bind();
             instances_.attach(run.first);
-            if (!asked && !CanDraw(geometry_.id)) {
-                ok = false;
-                break;
+            if (std::find(asked.begin(), asked.end(), program.id) == asked.end()) {
+                if (!CanDraw(program.id)) {
+                    ok = false;
+                    break;
+                }
+                asked.push_back(program.id);
             }
-            asked = true;
             draw.mesh->draw_instanced(run.lod, run.count);
             ++stats_.runs;
             ++stats_.instancedCalls;
@@ -2654,32 +2777,48 @@ bool Renderer::geometryPass(const MeshDraw* meshes, const float* projection) {
     // shader drops the ones outside the slot's band.
     if (ok && cards_.cards() > 0) {
         RENDER_PASS("Cards");
-        glUseProgram(geometry_.id);
-        glUniformMatrix4fv(geometry_.view, 1, GL_FALSE, view_.m);
-        glUniformMatrix4fv(geometry_.projection, 1, GL_FALSE, projection);
         glCullFace(RT_GL_BACK);
-        bool asked = false;
+        const Program* current = nullptr;
+        std::vector<unsigned>& asked = askedPrograms_;
+        asked.clear();
         for (const CardField::Slot& slot : cards_.slots()) {
             if (slot.rows.empty()) {
                 continue;
             }
             // Every card of a slot shares its template's quad and Material.
             const MeshDraw& draw = meshes[slot.draws.front()];
-            bindMaterial(geometry_, draw);
-            glUniform2f(geometry_.cardBand, slot.nearSquared, slot.farSquared);
+            const SurfacePrograms::Variant* variant = surfaceVariant(draw);
+            const Program& program = variant != nullptr ? variant->program : geometry_;
+            if (&program != current) {
+                if (current != nullptr) {
+                    glUniform2f(current->cardBand, 0.f, 0.f);
+                }
+                useGeometryProgram(program, projection);
+                current = &program;
+            }
+            bindMaterial(program, draw);
+            if (variant != nullptr) {
+                bindSurface(*variant, draw);
+            }
+            glUniform2f(program.cardBand, slot.nearSquared, slot.farSquared);
             draw.mesh->bind();
             slot.buffer.attach(0);
-            if (!asked && !CanDraw(geometry_.id)) {
-                ok = false;
-                break;
+            if (std::find(asked.begin(), asked.end(), program.id) == asked.end()) {
+                if (!CanDraw(program.id)) {
+                    ok = false;
+                    break;
+                }
+                asked.push_back(program.id);
             }
-            asked = true;
             draw.mesh->draw_instanced(draw.lod, static_cast<int>(slot.rows.size()));
             ++stats_.runs;
             ++stats_.instancedCalls;
         }
-        glUniform2f(geometry_.cardBand, 0.f, 0.f);
+        if (current != nullptr) {
+            glUniform2f(current->cardBand, 0.f, 0.f);
+        }
     }
+    unbindSurfaceSamplers();
     glDisable(RT_GL_FRAMEBUFFER_SRGB);
     glDisable(RT_GL_CULL_FACE);
     glCullFace(RT_GL_BACK);
@@ -3371,9 +3510,14 @@ void Renderer::shutdown() {
     skyVisible_ = false;
     dynamicSkyBuilt_ = false;
     skyLightingValid_ = false;
-    for (unsigned* texture : {&whiteTexture_, &blackCube_}) {
+    for (unsigned* texture : {&whiteTexture_, &blackTexture_, &blackCube_}) {
         DeleteTexture(*texture);
     }
+    surfacePrograms_.release();
+    if (surfaceSamplers_[1] != 0) {
+        glDeleteSamplers(3, surfaceSamplers_ + 1);
+    }
+    std::fill(std::begin(surfaceSamplers_), std::end(surfaceSamplers_), 0u);
     for (auto& [terrain, entry] : terrainLooks_) {
         DeleteTexture(entry.texture);
     }

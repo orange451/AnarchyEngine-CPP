@@ -320,3 +320,25 @@ TEST_CASE("skinned instances of one Model are one run, each with its own bone ba
         REQUIRE(bases[static_cast<std::size_t>(i) + 1] == static_cast<float>(i * 6));
     }
 }
+
+TEST_CASE("B-SH draws sort by surface Shader and never join a run across one", "[batches]") {
+    Frame frame;
+    frame.add(At(0.f, 0.f, -10.f), 1);
+    frame.add(At(0.f, 0.f, -11.f), 2);
+    frame.add(At(0.f, 0.f, -12.f), 3);
+    // Slot 4 twice, one of them on another Shader: a slot is one Material, so
+    // this never happens in a frame, but the run still splits.
+    frame.add(At(0.f, 0.f, -13.f), 4);
+    frame.add(At(0.f, 0.f, -14.f), 4);
+    frame.items[0].program = 7;
+    frame.items[2].program = 7;
+    frame.items[4].program = 9;
+    DrawBatches out;
+    BuildBatches(frame.ready(), frame.visible, kView, out);
+    REQUIRE(out.runs.size() == 5);
+    std::vector<std::uint64_t> programs;
+    for (const DrawRun& run : out.runs) {
+        programs.push_back(frame.items[static_cast<std::size_t>(run.draw)].program);
+    }
+    REQUIRE(programs == std::vector<std::uint64_t>{0, 0, 7, 7, 9});
+}

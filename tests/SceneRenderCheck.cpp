@@ -2,7 +2,9 @@
 #include "Camera.hpp"
 #include "Game.hpp"
 #include "SceneService.hpp"
+#include "ShaderSource.hpp"
 #include "SnapshotPump.hpp"
+#include "SurfaceBinding.hpp"
 #include "Terrain.hpp"
 #include "TerrainMaterial.hpp"
 #include "TerrainTextures.hpp"
@@ -2405,6 +2407,126 @@ void CheckParticleDepthCopy() {
 
 }  // namespace
 
+// A binding for a Shader with id and version: source parsed, each uniform at
+// its default unless values says otherwise.
+std::shared_ptr<engine_core::SurfaceBinding> SurfaceFor(engine_core::InstanceId id, std::uint64_t version,
+                                                        const char* source,
+                                                        std::vector<engine_core::LuaSlot> values = {}) {
+    auto binding = std::make_shared<engine_core::SurfaceBinding>();
+    binding->shader = id;
+    binding->version = version;
+    binding->parse = std::make_shared<engine_core::ShaderParse>(engine_core::parse_shader(source));
+    for (std::size_t i = 0; i < binding->parse->params.size(); ++i) {
+        const engine_core::ShaderParam& param = binding->parse->params[i];
+        binding->values.push_back(i < values.size() ? values[i] : param.fallback);
+        if (param.type == engine_core::ShaderParamType::Sampler) {
+            binding->samplers.emplace_back();
+        }
+    }
+    return binding;
+}
+
+// How many pixels of the width by height framebuffer are not the clear color.
+int DrawnPixels(int width, int height) {
+    std::vector<unsigned char> rgba(static_cast<std::size_t>(width) * static_cast<std::size_t>(height) * 4);
+    glReadPixels(0, 0, width, height, runner::GL_RGBA, runner::GL_UNSIGNED_BYTE, rgba.data());
+    int drawn = 0;
+    for (std::size_t i = 0; i < rgba.size(); i += 4) {
+        drawn += IsClear(Pixel{rgba[i], rgba[i + 1], rgba[i + 2]}) ? 0 : 1;
+    }
+    return drawn;
+}
+
+// A Material's surface Shader draws in the G-buffer pass, its uniforms its
+// own per binding, and a shader that does not build draws the Material plain.
+void CheckSurfaceShaders(const GpuMesh* cube, int size, int fbWidth, int fbHeight) {
+    runner::Renderer renderer;
+    Expect(renderer.initialize(), "surface shaders: the renderer builds");
+    runner::SurfacePrograms& programs = renderer.surfacePrograms();
+    const auto drawOne = [&](runner::MeshDraw draw) {
+        renderer.draw(0, 0, size, size, size, size, &draw, 1);
+        return ReadPixel(fbWidth / 2, fbHeight / 2);
+    };
+    const runner::MeshDraw plainDraw{cube, engine_core::matrix4_identity()};
+    const Pixel plain = drawOne(plainDraw);
+    const int plainDrawn = DrawnPixels(fbWidth, fbHeight);
+    const auto near = [](Pixel a, Pixel b) {
+        return std::abs(a.r - b.r) <= 3 && std::abs(a.g - b.g) <= 3 && std::abs(a.b - b.b) <= 3;
+    };
+
+    runner::MeshDraw red = plainDraw;
+    red.surface = SurfaceFor(9001, 1, "shader surface;\nvoid surface() {\n    ALBEDO = vec3(1.0, 0.0, 0.0);\n}\n");
+    const Pixel redPixel = drawOne(red);
+    Expect(redPixel.r > redPixel.g + 40 && redPixel.r > redPixel.b + 40,
+           "surface shaders: ALBEDO = red draws red (" + Text(redPixel) + ", plain " + Text(plain) + ")");
+    Expect(programs.take_errors().empty(), "surface shaders: a shader that builds reports nothing");
+
+    runner::MeshDraw holes = plainDraw;
+    holes.surface = SurfaceFor(9002, 1, "shader surface;\nvoid surface() {\n    if (UV.x < 0.5) {\n        discard;\n    }\n}\n");
+    drawOne(holes);
+    const int holesDrawn = DrawnPixels(fbWidth, fbHeight);
+    Expect(holesDrawn > plainDrawn * 3 / 10 && holesDrawn < plainDrawn * 7 / 10,
+           "surface shaders: discard where UV.x < 0.5 drops about half the cube (" + std::to_string(holesDrawn) +
+               " of " + std::to_string(plainDrawn) + ")");
+
+    // A missing semicolon: the driver's error, at the user's line, and the plain Material.
+    runner::MeshDraw broken = plainDraw;
+    broken.surface = SurfaceFor(9003, 1, "shader surface;\nvoid surface() {\n    ALBEDO = vec3(1.0, 0.0, 0.0)\n}\n");
+    const Pixel brokenPixel = drawOne(broken);
+    Expect(near(brokenPixel, plain), "surface shaders: a shader that fails draws plain (" + Text(brokenPixel) + ")");
+    const auto errors = programs.take_errors();
+    Expect(errors.size() == 1 && std::get<0>(errors[0]) == 9003 && std::get<1>(errors[0]) == 1,
+           "surface shaders: the failure is reported once, for its Shader and version");
+    if (!errors.empty()) {
+        const std::string& text = std::get<2>(errors[0]);
+        Expect(text.rfind("3: ", 0) == 0 || text.rfind("4: ", 0) == 0,
+               "surface shaders: the error is at the user's line (" + text + ")");
+    }
+    drawOne(broken);
+    Expect(programs.take_errors().empty(), "surface shaders: a failed version is not built again");
+
+    // A Shader with no parse draws plain.
+    runner::MeshDraw unparsed = plainDraw;
+    auto none = std::make_shared<engine_core::SurfaceBinding>();
+    none->shader = 9004;
+    unparsed.surface = none;
+    Expect(near(drawOne(unparsed), plain), "surface shaders: a binding with no parse draws plain");
+
+    // Two Materials on one Shader draw their own Tint.
+    renderer.setCamera(engine_core::matrix4_translation(0.f, 0.f, 5.f), 50.f);
+    const char* tinted = "shader surface;\nuniform vec3 Tint : color = vec3(1.0);\nvoid surface() {\n    ALBEDO = Tint;\n}\n";
+    engine_core::LuaSlot redSlot;
+    redSlot.kind = engine_core::LuaSlot::Kind::Color;
+    redSlot.color = engine_core::ColorRgb{1.f, 0.f, 0.f, 1.f};
+    engine_core::LuaSlot blueSlot = redSlot;
+    blueSlot.color = engine_core::ColorRgb{0.f, 0.f, 1.f, 1.f};
+    runner::MeshDraw pair[2] = {plainDraw, plainDraw};
+    pair[0].model = engine_core::matrix4_translation(-1.f, 0.f, 0.f);
+    pair[1].model = engine_core::matrix4_translation(1.f, 0.f, 0.f);
+    pair[0].surface = SurfaceFor(9005, 1, tinted, {redSlot});
+    pair[1].surface = SurfaceFor(9005, 1, tinted, {blueSlot});
+    renderer.draw(0, 0, size, size, size, size, pair, 2);
+    const Pixel left = ReadPixel(fbWidth * 26 / 100, fbHeight / 2);
+    const Pixel right = ReadPixel(fbWidth * 74 / 100, fbHeight / 2);
+    Expect(left.r > left.b + 40 && right.b > right.r + 40,
+           "surface shaders: one Shader, two Tints, draw red and blue (" + Text(left) + " / " + Text(right) + ")");
+
+    // 200 cubes on one binding build its program once.
+    const std::uint64_t before = programs.builds();
+    std::vector<runner::MeshDraw> many(200, plainDraw);
+    const auto shared = SurfaceFor(9006, 1, tinted, {redSlot});
+    for (std::size_t i = 0; i < many.size(); ++i) {
+        many[i].model = engine_core::matrix4_translation(static_cast<float>(i % 20) - 10.f,
+                                                         static_cast<float>(i / 20) - 5.f, -20.f);
+        many[i].surface = shared;
+    }
+    renderer.draw(0, 0, size, size, size, size, many.data(), static_cast<int>(many.size()));
+    renderer.draw(0, 0, size, size, size, size, many.data(), static_cast<int>(many.size()));
+    Expect(programs.builds() == before + 1,
+           "surface shaders: 200 draws of one Shader build it once (" + std::to_string(programs.builds() - before) + ")");
+    renderer.shutdown();
+}
+
 int main(int argc, char** argv) {
     // --save dir or --compare dir (the regression frames), --terrain-shots dir (the terrain PNGs).
     std::string regressionMode;
@@ -2499,6 +2621,7 @@ int main(int argc, char** argv) {
         CheckKeptDraws(cube);
         CheckBillboardUpright();
         CheckBillboardBake();
+        CheckSurfaceShaders(cube, kSize, fbWidth, fbHeight);
 
         // The cube at the origin, under the camera a Renderer starts with, fills the middle of the pane.
         runner::MeshDraw draw{cube, engine_core::matrix4_identity()};

@@ -59,6 +59,10 @@ struct DrawItem {
     bool billboard = false;
     // It may cast a shadow (MeshDraw::castsShadow).
     bool castsShadow = false;
+    // Its Material's surface Shader's id (MeshDraw::surface), 0 for none:
+    // opaque draws sort by it, so a pass changes program once per Shader, and
+    // never join a run across it.
+    std::uint64_t program = 0;
 };
 
 // A drawable mesh the camera may see.

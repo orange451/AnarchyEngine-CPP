@@ -97,6 +97,7 @@ set(STUDIO_SOURCES
     src/runner/gl.cpp
     src/runner/ShaderFile.cpp
     src/runner/Renderer.cpp
+    src/runner/SurfacePrograms.cpp
     src/runner/AtmosphereUniforms.cpp
     src/runner/GpuTimer.cpp
     src/runner/ShadowRenderer.cpp

@@ -356,6 +356,11 @@ extern void (*rt_glUniform4f)(GLint location, GLfloat v0, GLfloat v1, GLfloat v2
 extern void (*rt_glUniform2f)(GLint location, GLfloat v0, GLfloat v1);
 extern void (*rt_glUniform3fv)(GLint location, GLsizei count, const GLfloat* value);
 extern void (*rt_glUniform4fv)(GLint location, GLsizei count, const GLfloat* value);
+// Sampler objects (core in 3.3): a surface shader's hinted textures.
+extern void (*rt_glGenSamplers)(GLsizei n, GLuint* samplers);
+extern void (*rt_glDeleteSamplers)(GLsizei n, const GLuint* samplers);
+extern void (*rt_glBindSampler)(GLuint unit, GLuint sampler);
+extern void (*rt_glSamplerParameteri)(GLuint sampler, GLenum pname, GLint param);
 extern void (*rt_glGenFramebuffers)(GLsizei n, GLuint* framebuffers);
 extern void (*rt_glDeleteFramebuffers)(GLsizei n, const GLuint* framebuffers);
 extern void (*rt_glBindFramebuffer)(GLenum target, GLuint framebuffer);
@@ -501,6 +506,10 @@ bool LoadGl(GlGetProcAddress get_proc);
 #define glUniform2f ::runner::rt_glUniform2f
 #define glUniform3fv ::runner::rt_glUniform3fv
 #define glUniform4fv ::runner::rt_glUniform4fv
+#define glGenSamplers ::runner::rt_glGenSamplers
+#define glDeleteSamplers ::runner::rt_glDeleteSamplers
+#define glBindSampler ::runner::rt_glBindSampler
+#define glSamplerParameteri ::runner::rt_glSamplerParameteri
 #define glGenFramebuffers ::runner::rt_glGenFramebuffers
 #define glDeleteFramebuffers ::runner::rt_glDeleteFramebuffers
 #define glBindFramebuffer ::runner::rt_glBindFramebuffer

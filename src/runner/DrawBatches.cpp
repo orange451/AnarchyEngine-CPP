@@ -144,6 +144,7 @@ void BuildBatches(const DrawItem* items, const VisibilityResult& visible, const 
                 entry.index = draw.index;
                 entry.lod = draw.lod;
                 entry.terrain = item.terrain;
+                entry.program = item.program;
             }
         });
     }
@@ -152,6 +153,10 @@ void BuildBatches(const DrawItem* items, const VisibilityResult& visible, const 
         // Terrain chunks last, so the geometry pass changes program once.
         if (a.terrain != b.terrain) {
             return b.terrain;
+        }
+        // Then by surface Shader, so the pass changes program once per Shader.
+        if (a.program != b.program) {
+            return a.program < b.program;
         }
         if (a.key != b.key) {
             return a.key < b.key;
@@ -171,7 +176,7 @@ void BuildBatches(const DrawItem* items, const VisibilityResult& visible, const 
             const DrawBatches::Entry& entry = order[i];
             // The key's top half is the draw's slot: slot 0 never joins a run.
             const bool joins = i > 0 && (entry.key >> 32) != 0 && !entry.terrain && !order[i - 1].terrain &&
-                               order[i - 1].key == entry.key;
+                               order[i - 1].key == entry.key && order[i - 1].program == entry.program;
             if (!joins) {
                 DrawRun run;
                 run.first = static_cast<int>(i);

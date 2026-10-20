@@ -36,6 +36,28 @@ GLuint Compile(GLenum type, const char* source, const char* stage) {
     return shader;
 }
 
+std::string ShaderLog(GLuint shader) {
+    char log[4096] = {};
+    glGetShaderInfoLog(shader, sizeof log, nullptr, log);
+    return log;
+}
+
+// The compiled stage, or 0 with its log in log.
+GLuint CompileQuiet(GLenum type, const std::string& source, std::string& log) {
+    GLuint shader = glCreateShader(type);
+    const char* text = source.c_str();
+    glShaderSource(shader, 1, &text, nullptr);
+    glCompileShader(shader);
+    GLint ok = GL_FALSE;
+    glGetShaderiv(shader, GL_COMPILE_STATUS, &ok);
+    if (ok != GL_TRUE) {
+        log = ShaderLog(shader);
+        glDeleteShader(shader);
+        return 0;
+    }
+    return shader;
+}
+
 }  // namespace
 
 std::string LoadShader(const char* filename) {
@@ -106,6 +128,37 @@ GLuint LinkProgram(const std::string& vertexSource, const std::string& fragmentS
     glGetProgramiv(program, GL_LINK_STATUS, &linked);
     if (linked != GL_TRUE) {
         PrintProgramLog(program);
+        glDeleteProgram(program);
+        return 0;
+    }
+    return program;
+}
+
+GLuint LinkProgramLog(const std::string& vertexSource, const std::string& fragmentSource, std::string& log) {
+    log.clear();
+    if (vertexSource.empty() || fragmentSource.empty()) {
+        log = "a shader file of the engine's could not be read";
+        return 0;
+    }
+    GLuint vertex = CompileQuiet(GL_VERTEX_SHADER, vertexSource, log);
+    GLuint fragment = vertex != 0 ? CompileQuiet(GL_FRAGMENT_SHADER, fragmentSource, log) : 0;
+    if (vertex == 0 || fragment == 0) {
+        glDeleteShader(vertex);
+        glDeleteShader(fragment);
+        return 0;
+    }
+    GLuint program = glCreateProgram();
+    glAttachShader(program, vertex);
+    glAttachShader(program, fragment);
+    glLinkProgram(program);
+    glDeleteShader(vertex);
+    glDeleteShader(fragment);
+    GLint linked = GL_FALSE;
+    glGetProgramiv(program, GL_LINK_STATUS, &linked);
+    if (linked != GL_TRUE) {
+        char text[4096] = {};
+        glGetProgramInfoLog(program, sizeof text, nullptr, text);
+        log = text;
         glDeleteProgram(program);
         return 0;
     }

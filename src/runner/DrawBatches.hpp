@@ -52,6 +52,7 @@ struct DrawBatches {
         std::uint8_t lod = 0;
         // Its DrawItem's, kept here so sorting reads only the entries.
         bool terrain = false;
+        std::uint64_t program = 0;
     };
     std::vector<Entry> order;
 };

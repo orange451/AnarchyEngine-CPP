@@ -149,3 +149,127 @@ TEST_CASE("ATR4 the Attributes property is hidden, saved, and reads the map", "[
     REQUIRE(field->write(game, part, in));
     REQUIRE(part.attributes().empty());
 }
+
+TEST_CASE("ATR5 set_attribute refuses what the spec refuses", "[attributes]") {
+    SimRole role;
+    engine_core::Game game;
+    engine_core::GameObject& part = create_part(game);
+    REQUIRE(game.set_attribute("X", number_slot(1)) == "game cannot hold attributes");
+    REQUIRE(game.attributes().empty());
+    REQUIRE(part.set_attribute("bad name", number_slot(1)) ==
+            "an attribute name is letters, digits, and underscores, up to 100");
+    LuaSlot signal;
+    signal.kind = LuaSlot::Kind::Signal;
+    REQUIRE(part.set_attribute("X", signal) ==
+            "an attribute holds a number, boolean, string, Vector2, Vector3, Color3, Matrix4, or Instance");
+    LuaSlot gone;
+    gone.kind = LuaSlot::Kind::Instance;
+    gone.id = 99999;
+    REQUIRE(part.set_attribute("X", gone) == "the instance is gone");
+    REQUIRE(part.attributes().empty());
+}
+
+TEST_CASE("ATR6 an Instance attribute is held by GUID and reads nil once destroyed", "[attributes]") {
+    SimRole role;
+    engine_core::Game game;
+    engine_core::GameObject& part = create_part(game);
+    engine_core::GameObject& other = create_part(game);
+    const engine_core::InstanceId other_id = other.id();
+    const std::string other_guid = game.guid(other_id);
+    LuaSlot ref;
+    ref.kind = LuaSlot::Kind::Instance;
+    ref.id = other_id;
+    REQUIRE(!part.set_attribute("Target", ref));
+    REQUIRE(part.attribute("Target").kind == LuaSlot::Kind::Instance);
+    REQUIRE(part.attribute("Target").id == other_id);
+    REQUIRE(part.attributes().at("Target").text == other_guid);
+    game.destroy(other_id);
+    REQUIRE(part.attribute("Target").kind == LuaSlot::Kind::Nil);
+    REQUIRE(part.attributes().count("Target") == 1);
+}
+
+TEST_CASE("ATR7 set, replace, and remove each undo as one step, kinds exact", "[attributes]") {
+    SimRole role;
+    engine_core::Game game;
+    engine_core::GameObject& part = create_part(game);
+    engine_core::GameObject& other = create_part(game);
+    LuaSlot ref;
+    ref.kind = LuaSlot::Kind::Instance;
+    ref.id = other.id();
+    begin_step(game);
+    REQUIRE(!part.set_attribute("X", ref));
+    end_step(game);
+    begin_step(game);
+    REQUIRE(!part.set_attribute("X", number_slot(7)));
+    end_step(game);
+    begin_step(game);
+    REQUIRE(!part.set_attribute("X", LuaSlot{}));
+    end_step(game);
+    REQUIRE(part.attributes().empty());
+    game.history().undo();
+    REQUIRE(part.attribute("X").kind == LuaSlot::Kind::Number);
+    REQUIRE(part.attribute("X").number == 7);
+    game.history().undo();
+    REQUIRE(part.attribute("X").kind == LuaSlot::Kind::Instance);
+    REQUIRE(part.attribute("X").id == other.id());
+    game.history().undo();
+    REQUIRE(part.attributes().empty());
+    REQUIRE(!game.history().can_undo().first);
+    game.history().redo();
+    REQUIRE(part.attribute("X").kind == LuaSlot::Kind::Instance);
+    game.history().redo();
+    REQUIRE(part.attribute("X").number == 7);
+}
+
+TEST_CASE("ATR8 an equal value records nothing and fires nothing", "[attributes]") {
+    SimRole role;
+    engine_core::Game game;
+    engine_core::GameObject& part = create_part(game);
+    int fired = 0;
+    game.event_signal(part.id(), "AttributeChanged").connect([&](engine_core::InstanceId, engine_core::Field) {
+        ++fired;
+    });
+    begin_step(game);
+    REQUIRE(!part.set_attribute("X", number_slot(7)));
+    end_step(game);
+    game.events().drain();
+    REQUIRE(fired == 1);
+    REQUIRE(game.history().can_undo().first);
+    begin_step(game);
+    REQUIRE(!part.set_attribute("X", number_slot(7)));
+    end_step(game);
+    game.events().drain();
+    REQUIRE(fired == 1);
+    REQUIRE(!part.set_attribute("Absent", LuaSlot{}));
+    game.events().drain();
+    REQUIRE(fired == 1);
+    // Only the first set was a step: one undo empties the map.
+    game.history().undo();
+    REQUIRE(part.attributes().empty());
+    REQUIRE(!game.history().can_undo().first);
+}
+
+TEST_CASE("ATR9 AttributeChanged carries the name and Changed says Attributes", "[attributes]") {
+    SimRole role;
+    engine_core::Game game;
+    engine_core::GameObject& part = create_part(game);
+    std::string named;
+    std::string changed;
+    game.event_signal(part.id(), "AttributeChanged").connect([&](engine_core::InstanceId, engine_core::Field) {
+        const engine_core::EventArgs* args = game.events().current_args();
+        REQUIRE(args != nullptr);
+        REQUIRE(args->size() == 1);
+        named = args->at(0).text;
+    });
+    game.changed(part.id()).connect([&](engine_core::InstanceId, engine_core::Field) {
+        const char* name = engine_core::lua_property_name(static_cast<std::uint32_t>(game.events().payload()));
+        changed = name != nullptr ? name : "";
+    });
+    LuaSlot flag;
+    flag.kind = LuaSlot::Kind::Bool;
+    flag.flag = true;
+    REQUIRE(!part.set_attribute("Open", flag));
+    game.events().drain();
+    REQUIRE(named == "Open");
+    REQUIRE(changed == "Attributes");
+}

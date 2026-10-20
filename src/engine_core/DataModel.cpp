@@ -2044,16 +2044,37 @@ LuaSlot DataModel::attribute(std::string_view name) const {
 }
 
 std::optional<std::string> DataModel::set_attribute(std::string_view name, LuaSlot value) {
+    if (!on_gameplay_thread()) {
+        contract_fail("SetAttribute runs on SimulationThread");
+    }
+    if (id_ == 0) {
+        return std::string("game cannot hold attributes");
+    }
+    if (auto error = attribute_name_error(name)) {
+        return error;
+    }
+    if (auto error = attribute_value_error(value)) {
+        return error;
+    }
     AttributeMap next = attributes();
     if (value.kind == LuaSlot::Kind::Nil) {
         const auto found = next.find(name);
-        if (found != next.end()) {
-            next.erase(found);
+        if (found == next.end()) {
+            return std::nullopt;
         }
+        next.erase(found);
     } else {
         if (value.kind == LuaSlot::Kind::Instance) {
+            if (value.id == 0 || !alive(value.id)) {
+                return std::string("the instance is gone");
+            }
             value.text = guid(value.id);
             value.id = 0;
+        }
+        value.error.clear();
+        const auto found = next.find(name);
+        if (found != next.end() && same_slot(found->second, value)) {
+            return std::nullopt;
         }
         next[std::string(name)] = std::move(value);
     }
@@ -2062,14 +2083,49 @@ std::optional<std::string> DataModel::set_attribute(std::string_view name, LuaSl
 }
 
 void DataModel::set_attributes(AttributeMap next) {
-    if (next.empty()) {
-        attributes_.reset();
+    const AttributeMap& now = attributes();
+    // The names whose value differs, in name order: each fires AttributeChanged.
+    std::vector<std::string> moved;
+    for (const auto& [name, slot] : now) {
+        const auto other = next.find(name);
+        if (other == next.end() || !same_slot(slot, other->second)) {
+            moved.push_back(name);
+        }
+    }
+    for (const auto& [name, slot] : next) {
+        if (now.find(name) == now.end()) {
+            moved.push_back(name);
+        }
+    }
+    if (moved.empty()) {
         return;
     }
-    if (attributes_ == nullptr) {
-        attributes_ = std::make_unique<AttributeMap>();
+    std::sort(moved.begin(), moved.end());
+    LuaSlot before;
+    before.kind = LuaSlot::Kind::String;
+    before.text = attributes_to_json(now);
+    if (next.empty()) {
+        attributes_.reset();
+    } else {
+        if (attributes_ == nullptr) {
+            attributes_ = std::make_unique<AttributeMap>();
+        }
+        *attributes_ = std::move(next);
     }
-    *attributes_ = std::move(next);
+    LuaSlot after;
+    after.kind = LuaSlot::Kind::String;
+    after.text = attributes_to_json(attributes());
+    // One undo step holds the whole map, and Changed fires with "Attributes".
+    note_property_change("Attributes", before, after);
+    // A load or Stop writes attributes with nothing connected: no event to queue.
+    if (event_listened(id_, "AttributeChanged")) {
+        for (const std::string& name : moved) {
+            LuaSlot arg;
+            arg.kind = LuaSlot::Kind::String;
+            arg.text = name;
+            fire_event(id_, "AttributeChanged", {arg});
+        }
+    }
 }
 
 InstanceId DataModel::core() const {
@@ -2928,6 +2984,8 @@ bool write_lua_attributes(DataModel& world, DataModel& object, LuaSlot& in) {
 ANARCHY_LUA_REGISTER(register_datamodel_lua) {
     // Changed passes the name of the property that changed.
     static const LuaParam kChangedArgs[] = {{"property", "string"}};
+    // AttributeChanged passes the name of the attribute that was set or removed.
+    static const LuaParam kAttributeArgs[] = {{"attribute", "string"}};
     LuaField changed = lua_property("Changed", "Signal", false, read_lua_changed, nullptr);
     changed.params = kChangedArgs;
     changed.param_count = 1;
@@ -2942,6 +3000,7 @@ ANARCHY_LUA_REGISTER(register_datamodel_lua) {
                          persistent_editable),
         lua_hidden(lua_json_text(
             lua_saved_property("Attributes", "string", read_lua_attributes, write_lua_attributes, "null"))),
+        lua_event("AttributeChanged", kAttributeArgs, 1),
     };
     register_lua_class("DataModel", nullptr, fields, static_cast<int>(std::size(fields)));
 }

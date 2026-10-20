@@ -871,3 +871,44 @@ TEST_CASE("RE49 a raw client's message of more than 1024 arguments is dropped, a
     REQUIRE(number(net.server, "count") == 1024);
     REQUIRE(net.session->dropped_remotes() == 1);
 }
+
+TEST_CASE("RE56 refused messages are charged, so a stream of almost-valid ones stops being read at the cap",
+          "[remote][session]") {
+    // At full size these are 65535 values and a bad trailing byte each; this
+    // transport's in-flight limits keep enough of those from landing in one
+    // receive, so the test scales the cap and the messages down together.
+    engine_network::SessionConfig config;
+    config.max_remote_values_per_pass = 1000;
+    Net net(config);
+    const engine_core::RemoteEvent& open = add_remote(net.server.game, net.workspace(), "Open");
+    server_script(net, "Hear",
+        "_G.count = 0\n"
+        "workspace.Open.OnServerEvent:Connect(function() _G.count += 1 end)\n");
+    RawClient raw(net.hub, 0);
+    REQUIRE(raw.endpoint.connect(kServer, net.now));
+    pump(net, raw, 30);
+    REQUIRE(raw.connected);
+
+    // A table and 298 values in it, 299 values, then a byte too many.
+    std::vector<std::uint8_t> almost = remote_message(open.id(), {table_of_falses(298)});
+    almost.push_back(0);
+    constexpr int kSent = 8;
+    for (int i = 0; i < kSent; ++i) {
+        raw.send(almost);
+    }
+    net.now += 1.0 / 60.0;
+    raw.endpoint.send(net.now);
+    net.session->receive(net.now);
+    // Three read whole, the fourth up to the cap, and the other four not at all.
+    REQUIRE(net.session->dropped_remotes() == kSent);
+    REQUIRE(net.session->decoded_remote_values() == 1000);
+    pump(net, raw, 30);
+    REQUIRE(number(net.server, "count") == 0);
+    REQUIRE(raw.connected);
+
+    // The next receive starts the allowance again, and a good message is heard.
+    raw.send(remote_message(open.id(), {table_of_falses(10)}));
+    pump(net, raw, 30);
+    REQUIRE(number(net.server, "count") == 1);
+    REQUIRE(net.session->decoded_remote_values() == 1011);
+}

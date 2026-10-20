@@ -241,8 +241,10 @@ struct Decoder {
     std::size_t values = 0;   // counted so far, at every depth
 
     // Counts more values against max_values, before anything is made for them.
+    // A count past them spends all of them.
     bool take(std::uint64_t count) {
         if (count > max_values - values) {
+            values = max_values;
             return false;
         }
         values += static_cast<std::size_t>(count);
@@ -584,23 +586,28 @@ bool decode_remote(ByteReader& in, std::uint32_t& remote_netid, engine_core::Rem
     remote_netid = static_cast<std::uint32_t>(netid);
     const std::uint64_t count = in.varuint();
     Decoder decoder{in, to_id, max_values};
-    if (in.failed() || count > engine_core::kRemoteMaxArgs || count > in.left() || !decoder.take(count)) {
-        return false;
-    }
-    out.values.resize(static_cast<std::size_t>(count));
-    for (RemoteValue& value : out.values) {
-        if (!decoder.read(value, 0)) {
-            out.values.clear();
+    // What was read is reported whether the message holds up or not, so a
+    // refused one costs its sender as much as an accepted one.
+    const auto read_all = [&] {
+        if (in.failed() || count > engine_core::kRemoteMaxArgs || count > in.left() || !decoder.take(count)) {
             return false;
         }
-    }
-    if (!in.done()) {
-        return false;
+        out.values.resize(static_cast<std::size_t>(count));
+        for (RemoteValue& value : out.values) {
+            if (!decoder.read(value, 0)) {
+                return false;
+            }
+        }
+        return in.done();
+    };
+    const bool ok = read_all();
+    if (!ok) {
+        out.values.clear();
     }
     if (values_read != nullptr) {
         *values_read = decoder.values;
     }
-    return true;
+    return ok;
 }
 
 std::size_t pack_remote_payload(const std::vector<RemoteMessage>& messages, std::size_t budget,

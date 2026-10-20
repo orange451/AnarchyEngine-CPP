@@ -70,11 +70,13 @@ struct SessionConfig {
     double max_stall_seconds = 30.0;
     std::size_t max_queued_bytes = 256u << 20;   // or when its queue holds more than this
     ClientMode client_mode = ClientMode::FromEmpty;   // a client's; FromEmpty is --connect, as in 2c
-    // RemoteEvent messages the server accepts from one client in one receive;
-    // the rest of that receive's are dropped and counted. Protection, not rate limiting.
+    // RemoteEvent bytes the server reads from one client in one receive, each
+    // message charged whether it is accepted or refused; the rest of that
+    // receive's are dropped unread and counted. Protection, not rate limiting.
     std::size_t max_remote_bytes_per_pass = 4u << 20;
     // And the values those messages decode to, counted as kRemoteMaxValues
-    // counts them: a decoded value is a few hundred bytes, whatever its size on the wire.
+    // counts them, a refused message's up to where it failed: a decoded value
+    // is a few hundred bytes, whatever its size on the wire.
     std::size_t max_remote_values_per_pass = 262144;
 };
 
@@ -106,6 +108,9 @@ public:
     // clients do not have, a client not yet joined, too many values, or past
     // a per-receive cap (bytes or values).
     std::size_t dropped_remotes() const;
+    // Values read from clients' RemoteEvent messages, those refused included:
+    // what the per-receive value allowance has been charged, ever.
+    std::size_t decoded_remote_values() const;
     // Unreliable messages fired to clients that never went: past a payload's
     // budget in their tick, or to a client whose snapshot was not yet queued.
     std::size_t dropped_unreliable() const;
@@ -130,7 +135,7 @@ private:
         double last_progress = 0.0;       // when the queue was last empty, handed a message, or saw an ack
         std::uint64_t acked = 0;          // the channel's acked count then
         std::vector<Message> held;   // RemoteEvent messages fired before its snapshot was queued: they go after it
-        std::size_t remote_bytes = 0;   // RemoteEvent bytes accepted from it in this receive
+        std::size_t remote_bytes = 0;   // RemoteEvent bytes read from it in this receive
         std::size_t remote_values = 0;  // and the values they decoded to
         std::vector<Message> unreliable;   // unreliable messages for this tick's payload, in firing order
         std::size_t unreliable_bytes = 0;
@@ -160,6 +165,7 @@ private:
     std::unordered_map<network::PeerId, Peer> peers_;
     std::size_t dropped_messages_ = 0;
     std::size_t dropped_remotes_ = 0;
+    std::size_t decoded_remote_values_ = 0;
     std::vector<Outgoing> outbox_;
     std::size_t unreliable_outbox_bytes_ = 0;   // the unreliable messages in outbox_
     std::size_t dropped_unreliable_ = 0;

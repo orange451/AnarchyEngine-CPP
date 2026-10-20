@@ -43,6 +43,8 @@ network::Endpoint& ServerSession::endpoint() { return *endpoint_; }
 const Replicator& ServerSession::replicator() const { return replicator_; }
 std::size_t ServerSession::dropped_messages() const { return dropped_messages_; }
 std::size_t ServerSession::dropped_remotes() const { return dropped_remotes_; }
+
+std::size_t ServerSession::decoded_remote_values() const { return decoded_remote_values_; }
 std::size_t ServerSession::dropped_unreliable() const { return dropped_unreliable_; }
 std::size_t ServerSession::fell_behind() const { return fell_behind_; }
 
@@ -120,12 +122,25 @@ void ServerSession::accept_remote(network::PeerId peer, const std::uint8_t* data
     // A RemoteEvent message, by either path. Anything wrong with it drops it and
     // counts it; the client is never kicked for what it sent.
     const auto found = peers_.find(peer);
-    if (found == peers_.end() || !found->second.joined || !game_.alive(found->second.connection) ||
-        found->second.remote_bytes + size > config_.max_remote_bytes_per_pass) {
+    if (found == peers_.end() || !found->second.joined || !game_.alive(found->second.connection)) {
         ++dropped_remotes_;
         return;
     }
     Peer& entry = found->second;
+    // What is left of this receive's value allowance caps the message too, so
+    // nothing is made for values past it. Once either allowance is spent, the
+    // rest of this receive's messages are not read at all.
+    const std::size_t values_left = config_.max_remote_values_per_pass > entry.remote_values
+                                        ? config_.max_remote_values_per_pass - entry.remote_values
+                                        : 0;
+    if (entry.remote_bytes + size > config_.max_remote_bytes_per_pass || values_left == 0) {
+        ++dropped_remotes_;
+        return;
+    }
+    // A message is charged whether it holds up or not: its bytes, and the
+    // values read before it failed.
+    entry.remote_bytes += size;
+    remote_bytes_counted_ = true;
     // A client names only what it could have been sent: instances clients see.
     const NetToId to_id = [this](std::uint32_t netid) -> InstanceId {
         return game_.alive(netid) && replicator_.replicated(netid) ? netid : 0;
@@ -133,22 +148,16 @@ void ServerSession::accept_remote(network::PeerId peer, const std::uint8_t* data
     ByteReader in(data, size);
     std::uint32_t remote_netid = 0;
     auto values = std::make_shared<engine_core::RemoteValues>();
-    // What is left of this receive's value allowance caps the message too, so
-    // nothing is made for values past it.
-    const std::size_t values_left = config_.max_remote_values_per_pass > entry.remote_values
-                                        ? config_.max_remote_values_per_pass - entry.remote_values
-                                        : 0;
     std::size_t values_read = 0;
-    if (!decode_remote(in, remote_netid, *values, to_id, engine_core::kRemoteMaxReliableBytes,
-                       std::min(engine_core::kRemoteMaxValues, values_left), &values_read) ||
-        to_id(remote_netid) == 0 || remote_netid == 0 ||
+    const bool decoded = decode_remote(in, remote_netid, *values, to_id, engine_core::kRemoteMaxReliableBytes,
+                                       std::min(engine_core::kRemoteMaxValues, values_left), &values_read);
+    entry.remote_values += values_read;
+    decoded_remote_values_ += values_read;
+    if (!decoded || to_id(remote_netid) == 0 || remote_netid == 0 ||
         dynamic_cast<engine_core::RemoteEvent*>(game_.instance(remote_netid)) == nullptr) {
         ++dropped_remotes_;
         return;
     }
-    entry.remote_bytes += size;
-    entry.remote_values += values_read;
-    remote_bytes_counted_ = true;
     engine_core::EventArgs args(2);
     args[0].kind = engine_core::LuaSlot::Kind::Instance;
     args[0].id = entry.connection;

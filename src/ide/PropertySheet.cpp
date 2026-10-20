@@ -14,6 +14,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
+#include <iterator>
 #include <limits>
 #include <string_view>
 #include <unordered_map>
@@ -27,12 +28,13 @@ using engine_core::InstanceId;
 using engine_core::LuaField;
 using engine_core::LuaSlot;
 
-// Instance rows, in the order they are shown. Every other row takes its
-// field's group, or Data.
-constexpr const char* kInstanceRows[] = {"Name", "Parent", "ClassName"};
+// Instance rows, in the order they are shown: what every instance has as an
+// instance, Persistent included. Every other row takes its field's group, or
+// Data.
+constexpr const char* kInstanceRows[] = {"Name", "Parent", "ClassName", "Persistent"};
 
 int instance_rank(const std::string& name) {
-    for (int index = 0; index < 3; ++index) {
+    for (int index = 0; index < static_cast<int>(std::size(kInstanceRows)); ++index) {
         if (name == kInstanceRows[index]) {
             return index;
         }

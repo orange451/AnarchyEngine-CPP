@@ -7,6 +7,7 @@
 #include "SelectionService.hpp"
 
 #include "AssetInstances.hpp"
+#include "Shader.hpp"
 #include "Camera.hpp"
 #include "CollisionGroups.hpp"
 #include "Constraint.hpp"
@@ -2541,6 +2542,130 @@ void TestAttributesPanel() {
     Expect(rig.game.instance(rig.a)->attribute("Health").number == 7, "adding a name it has keeps the value");
 }
 
+void TestShaderParamRows() {
+    engine_core::set_thread_role(engine_core::ThreadRole::Simulation);
+    Rig rig;
+    engine_core::Shader& shader = rig.game.create<engine_core::Shader>();
+    rig.game.set_name(shader.id(), "Dissolve");
+    rig.game.set_parent(shader.id(), rig.game.service("Shaders"));
+    shader.set_source(
+        "shader surface;\nuniform float Progress : range(0, 1);\nuniform vec3 EdgeColor : color = vec3(1.0, 0.5, 0.1);\n"
+        "uniform sampler2D Noise;\nuniform float Secret : hidden;\nvoid surface() {}\n");
+    auto* material = dynamic_cast<engine_core::Material*>(
+        rig.game.instance(MakeAsset(rig.game, "Material", "Brick", rig.game.service("Materials"))));
+    engine_core::LuaSlot ref;
+    ref.kind = engine_core::LuaSlot::Kind::Instance;
+    ref.id = shader.id();
+    material->set_reference(engine_core::Material::kShaderReference, ref);
+    rig.game.history().reset_waypoints();
+
+    const auto row_named = [](const ide::PropertySheet& sheet, const std::string& name) -> const ide::PropertyRow* {
+        for (const ide::PropertyRow& row : sheet.rows) {
+            if (row.shader_param && row.name == name) {
+                return &row;
+            }
+        }
+        return nullptr;
+    };
+    ide::PropertySheet sheet = ide::read_sheet(rig.game, {material->id()});
+    const ide::PropertyRow* progress = row_named(sheet, "Progress");
+    Expect(progress != nullptr && progress->group == "Dissolve" && progress->kind == ide::PropertyKind::Number &&
+               progress->slider_min == 0 && progress->slider_max == 1 && progress->defaulted && progress->value.number == 0,
+           "Progress is a defaulted 0..1 slider under the Shader's name");
+    const ide::PropertyRow* edge = row_named(sheet, "EdgeColor");
+    Expect(edge != nullptr && edge->kind == ide::PropertyKind::Color3 && edge->defaulted && edge->value.color.g == 0.5f,
+           "EdgeColor is a color at its default");
+    const ide::PropertyRow* noise = row_named(sheet, "Noise");
+    Expect(noise != nullptr && noise->kind == ide::PropertyKind::Ref && noise->type_name == "Texture?" &&
+               noise->value.nil_ref(),
+           "Noise picks a Texture");
+    Expect(row_named(sheet, "Secret") == nullptr, "a hidden uniform has no row");
+    // The Shader's rows come after the Material's own and before Attributes.
+    std::size_t last_class = 0;
+    std::size_t first_param = sheet.rows.size();
+    for (std::size_t i = 0; i < sheet.rows.size(); ++i) {
+        if (!sheet.rows[i].attribute) {
+            last_class = i;
+        } else if (sheet.rows[i].shader_param) {
+            first_param = std::min(first_param, i);
+        }
+    }
+    Expect(first_param > last_class && first_param < sheet.rows.size(), "the Shader's rows follow the Material's");
+
+    // An edit writes the attribute, clamped to the range, as one step.
+    ide::PropertyEdit edit;
+    edit.property = "Progress";
+    edit.kind = ide::PropertyKind::Number;
+    edit.value.number = 2;
+    edit.attribute = true;
+    edit.shader_param = true;
+    const ide::EditResult wrote = ide::apply_edit(rig.game, {material->id()}, edit);
+    Expect(wrote.written == 1 && material->attribute("Progress").number == 1, "a write past the range is clamped");
+    const auto step = rig.game.history().can_undo();
+    Expect(step.first && step.second == "Set Progress", "as one Set Progress step");
+    sheet = ide::read_sheet(rig.game, {material->id()});
+    Expect(row_named(sheet, "Progress") != nullptr && !row_named(sheet, "Progress")->defaulted,
+           "a set uniform is no longer defaulted");
+    bool plain = false;
+    for (const ide::PropertyRow& row : sheet.rows) {
+        plain = plain || (row.attribute && !row.shader_param && row.name == "Progress");
+    }
+    Expect(!plain, "an attribute a uniform covers is not also a plain attribute row");
+
+    // An attribute of the wrong kind: the row warns and shows the default.
+    engine_core::LuaSlot text;
+    text.kind = engine_core::LuaSlot::Kind::String;
+    text.text = "fast";
+    material->set_attribute("Progress", text);
+    sheet = ide::read_sheet(rig.game, {material->id()});
+    progress = row_named(sheet, "Progress");
+    Expect(progress != nullptr && progress->mismatched && progress->value.number == 0, "a string Progress warns");
+
+    // No Shader, no rows.
+    material->set_reference(engine_core::Material::kShaderReference, engine_core::LuaSlot{});
+    Expect(row_named(ide::read_sheet(rig.game, {material->id()}), "EdgeColor") == nullptr, "clearing the Shader clears them");
+}
+
+void TestShaderParamPanel() {
+    engine_core::set_thread_role(engine_core::ThreadRole::Simulation);
+    Rig rig;
+    engine_core::Shader& shader = rig.game.create<engine_core::Shader>();
+    rig.game.set_name(shader.id(), "Dissolve");
+    rig.game.set_parent(shader.id(), rig.game.service("Shaders"));
+    shader.set_source("shader surface;\nuniform float Progress : range(0, 1);\nvoid surface() {}\n");
+    auto* material = dynamic_cast<engine_core::Material*>(
+        rig.game.instance(MakeAsset(rig.game, "Material", "Brick", rig.game.service("Materials"))));
+    engine_core::LuaSlot ref;
+    ref.kind = engine_core::LuaSlot::Kind::Instance;
+    ref.id = shader.id();
+    material->set_reference(engine_core::Material::kShaderReference, ref);
+    rig.select({material->id()});
+    rig.frame();
+    // The Shader's rows come last, above the Preview: scrolled into view.
+    const auto to_bottom = [&rig] {
+        rig.panel.scroll_pane()->setVvalue(rig.panel.scroll_pane()->getVmax());
+        rig.frame();
+        rig.frame();
+    };
+    to_bottom();
+    Expect(rig.panel.attribute_remove("Progress") == nullptr ||
+               !rig.panel.attribute_remove("Progress")->isVisible(),
+           "a uniform at its default has no reset button");
+    rig.typeInto("Progress", "0.25");
+    rig.enter();
+    rig.frame();
+    to_bottom();
+    Expect(material->attribute("Progress").kind == engine_core::LuaSlot::Kind::Number &&
+               material->attribute("Progress").number == 0.25,
+           "typing into a uniform's row sets the attribute");
+    Expect(rig.panel.attribute_remove("Progress") != nullptr && rig.panel.attribute_remove("Progress")->isVisible(),
+           "a set uniform has a reset button");
+    rig.click(rig.panel.attribute_remove("Progress"));
+    rig.frame();
+    rig.frame();
+    Expect(material->attributes().empty(), "reset removes the attribute, back to the shader's default");
+}
+
 int main() {
     TestGroupMarkersRegister();
     TestSheetGroupOrder();
@@ -2590,6 +2715,8 @@ int main() {
     TestAttributeEdit();
     TestAttributeAddRemove();
     TestAttributesPanel();
+    TestShaderParamRows();
+    TestShaderParamPanel();
     if (gFailures == 0) {
         std::printf("properties tests passed\n");
         return 0;

@@ -1,6 +1,8 @@
 #include "PropertySheet.hpp"
 
+#include "AssetInstances.hpp"
 #include "Attributes.hpp"
+#include "Shader.hpp"
 #include "ChangeHistoryService.hpp"
 #include "CurveEditModel.hpp"
 #include "CurveJson.hpp"
@@ -375,7 +377,9 @@ bool PropertyRow::operator==(const PropertyRow& other) const {
 }
 
 bool PropertyRow::same_slot(const PropertyRow& other) const {
-    return name == other.name && attribute == other.attribute && type_name == other.type_name && kind == other.kind &&
+    return name == other.name && attribute == other.attribute && shader_param == other.shader_param &&
+           defaulted == other.defaulted && mismatched == other.mismatched && type_name == other.type_name &&
+           kind == other.kind &&
            group == other.group &&
            slider_min == other.slider_min && slider_max == other.slider_max && enum_type == other.enum_type &&
            has_choices == other.has_choices;
@@ -421,6 +425,106 @@ bool property_kind_for(const std::string& type_name, PropertyKind& out) {
     }
     return true;
 }
+
+namespace {
+
+// The registry type a uniform's row edits: its attribute's.
+const char* param_type_name(engine_core::ShaderParamType type) {
+    switch (type) {
+    case engine_core::ShaderParamType::Float:
+    case engine_core::ShaderParamType::Int:
+        return "number";
+    case engine_core::ShaderParamType::Bool:
+        return "boolean";
+    case engine_core::ShaderParamType::Vec2:
+        return "Vector2";
+    case engine_core::ShaderParamType::Vec3:
+        return "Vector3";
+    case engine_core::ShaderParamType::Color:
+        return "Color3";
+    case engine_core::ShaderParamType::Sampler:
+        return "Texture?";
+    }
+    return nullptr;
+}
+
+// The attribute kind a uniform reads; a sampler's Texture is an Instance.
+LuaSlot::Kind param_slot_kind(engine_core::ShaderParamType type) {
+    switch (type) {
+    case engine_core::ShaderParamType::Float:
+    case engine_core::ShaderParamType::Int:
+        return LuaSlot::Kind::Number;
+    case engine_core::ShaderParamType::Bool:
+        return LuaSlot::Kind::Bool;
+    case engine_core::ShaderParamType::Vec2:
+        return LuaSlot::Kind::Vec2;
+    case engine_core::ShaderParamType::Vec3:
+        return LuaSlot::Kind::Vec3;
+    case engine_core::ShaderParamType::Color:
+        return LuaSlot::Kind::Color;
+    case engine_core::ShaderParamType::Sampler:
+        return LuaSlot::Kind::Instance;
+    }
+    return LuaSlot::Kind::Nil;
+}
+
+// param's row over ids, each a Material drawing with its Shader: the attribute
+// where one of the right kind is set, else the shader's default.
+bool shader_param_row(DataModel& world, const engine_core::ShaderParam& param, const std::string& shader_name,
+                      const std::vector<InstanceId>& ids, PropertyRow& row) {
+    const char* type_name = param_type_name(param.type);
+    PropertyKind kind{};
+    if (type_name == nullptr || !property_kind_for(type_name, kind)) {
+        return false;
+    }
+    row.name = param.name;
+    row.type_name = type_name;
+    row.kind = kind;
+    row.group = param.group.empty() ? shader_name : param.group;
+    row.attribute = true;
+    row.shader_param = true;
+    row.writable = true;
+    row.defaulted = true;
+    if (kind == PropertyKind::Number && param.ranged) {
+        row.slider_min = param.min;
+        row.slider_max = param.max;
+    }
+    bool have_first = false;
+    for (InstanceId id : ids) {
+        DataModel* object = object_of(world, id);
+        if (object == nullptr) {
+            return false;
+        }
+        const auto held = object->attributes().find(param.name);
+        LuaSlot slot = param.fallback;
+        if (held != object->attributes().end()) {
+            if (held->second.kind == param_slot_kind(param.type)) {
+                slot = object->attribute(param.name);
+                row.defaulted = false;
+            } else {
+                row.mismatched = true;
+            }
+        }
+        PropertyValue value;
+        if (!value_from_slot(slot, nullptr, kind, value)) {
+            return false;
+        }
+        if (!have_first) {
+            row.value = std::move(value);
+            have_first = true;
+        } else {
+            merge(row, value);
+        }
+    }
+    blank_mixed(row);
+    if (row.kind == PropertyKind::Ref && !row.mixed && !row.value.nil_ref()) {
+        row.label = ref_label(world, row.value.ref);
+        row.path = ref_path(world, row.value.ref);
+    }
+    return true;
+}
+
+}  // namespace
 
 PropertySheet read_sheet(DataModel& world, const std::vector<InstanceId>& selection, bool with_hidden) {
     PropertySheet sheet;
@@ -529,10 +633,42 @@ PropertySheet read_sheet(DataModel& world, const std::vector<InstanceId>& select
         sheet.rows.push_back(std::move(row));
     }
 
+    // Then the uniforms of the Shader every selected Material draws with, one
+    // row each, set or not; the attributes they cover are not plain rows too.
+    std::vector<std::string> covered;
+    {
+        const engine_core::Shader* shader = nullptr;
+        for (InstanceId id : sheet.ids) {
+            const auto* material = dynamic_cast<const engine_core::Material*>(object_of(world, id));
+            const engine_core::Shader* own = material != nullptr ? material->shader(world) : nullptr;
+            if (own == nullptr || (shader != nullptr && own != shader)) {
+                shader = nullptr;
+                break;
+            }
+            shader = own;
+        }
+        if (shader != nullptr) {
+            for (const engine_core::ShaderParam& param : shader->parse()->params) {
+                covered.push_back(param.name);
+                if (param.hidden) {
+                    continue;
+                }
+                PropertyRow row;
+                if (!shader_param_row(world, param, world.name(shader->id()), sheet.ids, row)) {
+                    continue;
+                }
+                sheet.rows.push_back(std::move(row));
+            }
+        }
+    }
+
     // Then the attributes the first instance holds, by name: a row when every
     // instance holds one of that name with the same kind.
     if (DataModel* first_object = object_of(world, sheet.ids.front())) {
         for (const auto& [name, held] : first_object->attributes()) {
+            if (std::find(covered.begin(), covered.end(), name) != covered.end()) {
+                continue;
+            }
             const char* type_name = engine_core::attribute_type_name(held.kind);
             PropertyKind kind{};
             if (type_name == nullptr || !property_kind_for(type_name, kind)) {
@@ -588,9 +724,9 @@ PropertySheet read_sheet(DataModel& world, const std::vector<InstanceId>& select
         }
     }
     const auto rank = [&order](const PropertyRow& row) -> std::size_t {
-        // Attributes after everything, Data included.
+        // A Shader's uniforms after everything, Data included; then attributes.
         if (row.attribute) {
-            return order.size() + 2;
+            return order.size() + (row.shader_param ? 2 : 3);
         }
         if (row.group == "Instance") {
             return 0;
@@ -652,8 +788,14 @@ EditResult finish_live_edit(DataModel& world, const std::vector<InstanceId>& ids
         for (auto& [id, slot] : live.before) {
             DataModel* object = world.alive(id) ? object_of(world, id) : nullptr;
             if (object != nullptr && live.attribute) {
-                // As it was held, an Instance by its GUID, through the whole map.
+                // As it was held, an Instance by its GUID, through the whole map;
+                // a Shader's uniform that was not set is not set again.
                 engine_core::AttributeMap next = object->attributes();
+                if (slot.kind == LuaSlot::Kind::Nil) {
+                    next.erase(live.property);
+                    object->set_attributes(std::move(next));
+                    continue;
+                }
                 next[live.property] = slot;
                 object->set_attributes(std::move(next));
                 continue;
@@ -677,9 +819,13 @@ namespace {
 // A target's value now, as an edit of one component starts from: its field's
 // read, or an attribute as a script reads it. False when there is none.
 bool read_target(DataModel& world, DataModel& object, const LuaField& field, bool attribute,
-                 const std::string& property, LuaSlot& out) {
+                 const std::string& property, LuaSlot& out, const LuaSlot* fallback = nullptr) {
     if (attribute) {
         out = object.attribute(property);
+        // A Shader's uniform not set yet reads its default.
+        if (out.kind == LuaSlot::Kind::Nil && fallback != nullptr) {
+            out = *fallback;
+        }
         return out.kind != LuaSlot::Kind::Nil;
     }
     return field.read != nullptr && field.read(world, object, out);
@@ -708,6 +854,12 @@ EditResult write_edit(DataModel& world, const std::vector<InstanceId>& ids, cons
         // An attribute edit: field holds only its type name, and reads and
         // writes go through the object's attributes.
         bool attribute = false;
+        // A Shader's uniform: what it reads while unset, and the range a number is held to.
+        LuaSlot fallback;
+        bool ranged = false;
+        double min = 0;
+        double max = 0;
+        bool whole = false;
     };
     std::vector<Target> targets;
     for (InstanceId id : ids) {
@@ -716,6 +868,32 @@ EditResult write_edit(DataModel& world, const std::vector<InstanceId>& ids, cons
         }
         DataModel* object = object_of(world, id);
         if (object == nullptr) {
+            continue;
+        }
+        if (edit.attribute && edit.shader_param) {
+            // A Material whose Shader declares the uniform, whether it holds it yet or not.
+            const auto* material = dynamic_cast<const engine_core::Material*>(object);
+            const engine_core::Shader* shader = material != nullptr ? material->shader(world) : nullptr;
+            const engine_core::ShaderParam* param = nullptr;
+            for (const engine_core::ShaderParam& candidate :
+                 shader != nullptr ? shader->parse()->params : std::vector<engine_core::ShaderParam>{}) {
+                if (candidate.name == edit.property) {
+                    param = &candidate;
+                }
+            }
+            PropertyKind kind{};
+            const char* type_name = param != nullptr ? param_type_name(param->type) : nullptr;
+            if (type_name == nullptr || !property_kind_for(type_name, kind) || kind != edit.kind) {
+                continue;
+            }
+            Target target{object, LuaField{}, true};
+            target.field.type_name = type_name;
+            target.fallback = param->fallback;
+            target.ranged = param->ranged;
+            target.min = param->min;
+            target.max = param->max;
+            target.whole = param->type == engine_core::ShaderParamType::Int;
+            targets.push_back(std::move(target));
             continue;
         }
         if (edit.attribute) {
@@ -783,8 +961,10 @@ EditResult write_edit(DataModel& world, const std::vector<InstanceId>& ids, cons
         for (const Target& target : targets) {
             LuaSlot current;
             if (target.attribute) {
-                // As held, an Instance by GUID, so the drag's end puts back exactly this.
-                current = target.object->attributes().find(edit.property)->second;
+                // As held, an Instance by GUID, so the drag's end puts back exactly
+                // this; Nil when a Shader's uniform was not set.
+                const auto held = target.object->attributes().find(edit.property);
+                current = held != target.object->attributes().end() ? held->second : LuaSlot{};
                 live->before.emplace_back(target.object->id(), std::move(current));
             } else if (target.field.read != nullptr && target.field.read(world, *target.object, current)) {
                 live->before.emplace_back(target.object->id(), std::move(current));
@@ -830,7 +1010,8 @@ EditResult write_edit(DataModel& world, const std::vector<InstanceId>& ids, cons
             if (edit.axis >= 0 && edit.axis < vector_axes(edit.kind)) {
                 // One component: the others stay what this instance has.
                 LuaSlot current;
-                if (!read_target(world, *target.object, target.field, target.attribute, edit.property, current) ||
+                if (!read_target(world, *target.object, target.field, target.attribute, edit.property, current,
+                                 &target.fallback) ||
                     current.kind != slot.kind) {
                     continue;
                 }
@@ -847,7 +1028,8 @@ EditResult write_edit(DataModel& world, const std::vector<InstanceId>& ids, cons
             if (edit.axis >= 0 && edit.axis < kTransformParts) {
                 // One part: the rest of this instance's Transform stays.
                 LuaSlot current;
-                if (!read_target(world, *target.object, target.field, target.attribute, edit.property, current) ||
+                if (!read_target(world, *target.object, target.field, target.attribute, edit.property, current,
+                                 &target.fallback) ||
                     current.kind != LuaSlot::Kind::Matrix4) {
                     continue;
                 }
@@ -901,6 +1083,13 @@ EditResult write_edit(DataModel& world, const std::vector<InstanceId>& ids, cons
             continue;
         }
         if (target.attribute) {
+            // A uniform's number stays in its range, and an int whole.
+            if (slot.kind == LuaSlot::Kind::Number && target.whole) {
+                slot.number = std::trunc(slot.number);
+            }
+            if (slot.kind == LuaSlot::Kind::Number && target.ranged) {
+                slot.number = std::clamp(slot.number, target.min, target.max);
+            }
             if (const auto refused = target.object->set_attribute(edit.property, slot)) {
                 // The first refusal shows under the rows, as a Parent's does.
                 if (result.error.empty()) {

@@ -76,6 +76,13 @@ struct PropertyRow {
     // An attribute (DataModel::attributes) rather than a class property: name is
     // the attribute's, group is "Attributes", and edits go through set_attribute.
     bool attribute = false;
+    // An attribute a Material's Shader declares as a uniform: it has a row
+    // whether set or not, under the Shader's group. defaulted: no selected
+    // instance sets it, so the row shows the shader's default. mismatched: one
+    // holds an attribute of that name but another kind, which the shader ignores.
+    bool shader_param = false;
+    bool defaulted = false;
+    bool mismatched = false;
     // "Instance", the field's registered group (lua_group), or "Data".
     std::string group = "Data";
     // The group comes before the others (lua_lead_group).
@@ -149,6 +156,9 @@ struct PropertyEdit {
     int axis = -1;
     // The row is an attribute: write it with set_attribute, not the class's field.
     bool attribute = false;
+    // It is a Shader's uniform: the attribute is made when absent, and a number
+    // is held to the uniform's range (an int to a whole number).
+    bool shader_param = false;
 };
 
 struct EditResult {

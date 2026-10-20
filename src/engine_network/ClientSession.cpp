@@ -6,8 +6,10 @@
 #include "RemoteEvent.hpp"
 #include "RemoteValues.hpp"
 
+#include <algorithm>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace engine_network {
 
@@ -114,8 +116,7 @@ void ClientSession::on_disconnected(network::DisconnectReason why, network::Deny
     outbox_bytes_ = 0;
     unreliable_.clear();
     unreliable_bytes_ = 0;
-    unheard_.clear();
-    unheard_bytes_ = 0;
+    clear_unheard();
     if (reason_.empty()) {
         set_reason(describe(why, deny));
     }
@@ -183,8 +184,7 @@ bool ClientSession::connect(const network::Address& server, double now) {
     outbox_bytes_ = 0;
     unreliable_.clear();
     unreliable_bytes_ = 0;
-    unheard_.clear();
-    unheard_bytes_ = 0;
+    clear_unheard();
     // Each connection builds its world from nothing.
     applier_ = std::make_unique<ReplicaApplier>(game_);
     if (config_.client_mode == ClientMode::Swap) {
@@ -312,7 +312,9 @@ bool ClientSession::on_remote(const std::uint8_t* data, std::size_t size) {
     ByteReader in(data, size);
     std::uint32_t remote_netid = 0;
     auto values = std::make_shared<engine_core::RemoteValues>();
-    if (!decode_remote(in, remote_netid, *values, to_id, engine_core::kRemoteMaxReliableBytes)) {
+    std::size_t values_read = 0;
+    if (!decode_remote(in, remote_netid, *values, to_id, engine_core::kRemoteMaxReliableBytes,
+                       engine_core::kRemoteMaxValues, &values_read)) {
         return false;
     }
     // A remote this client no longer holds (a script destroyed it) hears nothing.
@@ -321,15 +323,19 @@ bool ClientSession::on_remote(const std::uint8_t* data, std::size_t size) {
         return true;
     }
     // Nobody listens yet, or earlier ones for it still wait: it waits behind them.
-    bool waiting = !game_.event_listened(remote, "OnClientEvent");
-    for (const Unheard& held : unheard_) {
-        waiting = waiting || held.remote == remote;
-    }
-    if (waiting) {
-        if (unheard_bytes_ + size <= kMaxUnheardRemoteBytes) {
-            unheard_.push_back(Unheard{remote, std::move(values), size});
-            unheard_bytes_ += size;
+    const auto held = unheard_.find(remote);
+    if (held != unheard_.end() || !game_.event_listened(remote, "OnClientEvent")) {
+        // What it takes once decoded: a few hundred bytes a value, whatever its wire size.
+        const std::size_t bytes = size + values_read * sizeof(engine_core::RemoteValue);
+        if ((held != unheard_.end() && held->second.size() >= kMaxUnheardPerRemote) ||
+            unheard_bytes_ + bytes > kMaxUnheardRemoteBytes) {
+            ++dropped_unheard_;
+            return true;
         }
+        std::deque<Unheard>& queue = held != unheard_.end() ? held->second : unheard_[remote];
+        queue.push_back(Unheard{std::move(values), bytes, now_, ++unheard_order_});
+        unheard_bytes_ += bytes;
+        ++unheard_count_;
         return true;
     }
     engine_core::EventArgs args(1);
@@ -340,22 +346,60 @@ bool ClientSession::on_remote(const std::uint8_t* data, std::size_t size) {
 }
 
 void ClientSession::fire_unheard() {
-    // In order: a remote that has a listener now has it for every message of its own.
-    for (auto held = unheard_.begin(); held != unheard_.end();) {
-        const bool alive = dynamic_cast<engine_core::RemoteEvent*>(game_.instance(held->remote)) != nullptr;
-        if (alive && !game_.event_listened(held->remote, "OnClientEvent")) {
-            ++held;
+    // Messages to fire now, from every remote that has a listener, merged back
+    // into the order they arrived in, since reliable order spans remotes.
+    std::vector<std::pair<std::uint64_t, std::pair<engine_core::InstanceId, Unheard*>>> ready;
+    std::vector<engine_core::InstanceId> fired;
+    for (auto entry = unheard_.begin(); entry != unheard_.end();) {
+        const engine_core::InstanceId remote = entry->first;
+        std::deque<Unheard>& queue = entry->second;
+        const bool alive = dynamic_cast<engine_core::RemoteEvent*>(game_.instance(remote)) != nullptr;
+        // Oldest first, so the expired are at the front.
+        while (!queue.empty() && (!alive || now_ - queue.front().arrived >= kUnheardSeconds)) {
+            if (alive) {
+                ++dropped_unheard_;
+            }
+            unheard_bytes_ -= queue.front().bytes;
+            --unheard_count_;
+            queue.pop_front();
+        }
+        if (queue.empty()) {
+            entry = unheard_.erase(entry);
             continue;
         }
-        if (alive) {
-            engine_core::EventArgs args(1);
-            args[0].kind = engine_core::LuaSlot::Kind::Values;
-            args[0].values = std::move(held->values);
-            game_.fire_event(held->remote, "OnClientEvent", std::move(args));
+        if (game_.event_listened(remote, "OnClientEvent")) {
+            for (Unheard& message : queue) {
+                ready.push_back({message.order, {remote, &message}});
+            }
+            fired.push_back(remote);
         }
-        unheard_bytes_ -= held->bytes;
-        held = unheard_.erase(held);
+        ++entry;
     }
+    if (ready.empty()) {
+        return;
+    }
+    std::sort(ready.begin(), ready.end(),
+              [](const auto& a, const auto& b) { return a.first < b.first; });
+    for (auto& [order, target] : ready) {
+        engine_core::EventArgs args(1);
+        args[0].kind = engine_core::LuaSlot::Kind::Values;
+        args[0].values = std::move(target.second->values);
+        game_.fire_event(target.first, "OnClientEvent", std::move(args));
+    }
+    for (const engine_core::InstanceId remote : fired) {
+        const auto entry = unheard_.find(remote);
+        for (const Unheard& message : entry->second) {
+            unheard_bytes_ -= message.bytes;
+        }
+        unheard_count_ -= entry->second.size();
+        unheard_.erase(entry);
+    }
+}
+
+void ClientSession::clear_unheard() {
+    unheard_.clear();
+    unheard_bytes_ = 0;
+    unheard_count_ = 0;
 }
 
 bool ClientSession::fire_server(engine_core::InstanceId remote, std::shared_ptr<const engine_core::RemoteValues> values,
@@ -405,6 +449,8 @@ bool ClientSession::fire_clients(engine_core::InstanceId, const std::vector<engi
 
 network::Endpoint& ClientSession::endpoint() { return *endpoint_; }
 std::size_t ClientSession::dropped_unreliable() const { return dropped_unreliable_; }
+std::size_t ClientSession::held_unheard() const { return unheard_count_; }
+std::size_t ClientSession::dropped_unheard() const { return dropped_unheard_; }
 ReplicaApplier& ClientSession::applier() { return *applier_; }
 
 }  // namespace engine_network

@@ -34,9 +34,15 @@
 namespace engine_network {
 
 // A client holds a server's RemoteEvent messages that no script listens to
-// yet, up to this many bytes, and fires each once OnClientEvent has a listener:
-// a script that arrives in the snapshot connects after the messages behind it.
+// yet, and fires each once OnClientEvent has a listener: a script that arrives
+// in the snapshot connects after the messages behind it. It holds at most this
+// many bytes in all, each message's decoded size estimated from its values,
 constexpr std::size_t kMaxUnheardRemoteBytes = 4u << 20;
+// at most this many messages for one remote,
+constexpr std::size_t kMaxUnheardPerRemote = 256;
+// and each for this many seconds after it arrived. Past any of them a message
+// is dropped and counted.
+constexpr double kUnheardSeconds = 10.0;
 
 // A client holds FireServer messages the server has not taken yet up to this
 // many bytes; past it, FireServer raises rather than grow without end while
@@ -230,6 +236,10 @@ public:
     std::function<void(const std::string&)> on_warning;
     // Unreliable FireServer messages that never went: past the payload's budget in their tick.
     std::size_t dropped_unreliable() const;
+    // Server messages held for a remote nobody listens to yet, and those dropped
+    // from that hold: past a cap, or held past kUnheardSeconds.
+    std::size_t held_unheard() const;
+    std::size_t dropped_unheard() const;
     bool fire_server(engine_core::InstanceId remote, std::shared_ptr<const engine_core::RemoteValues> values,
                      bool unreliable, std::string& error) override;
     bool fire_clients(engine_core::InstanceId remote, const std::vector<engine_core::InstanceId>& connections,
@@ -272,16 +282,26 @@ private:
     std::size_t unreliable_bytes_ = 0;
     std::size_t dropped_unreliable_ = 0;
     std::vector<std::uint8_t> payload_;   // the packed payload, kept to spare a tick the allocation
-    // Server messages for a remote nobody listens to yet, oldest first (kMaxUnheardRemoteBytes).
+    // Server messages for remotes nobody listens to yet, by remote, each
+    // remote's oldest first. Bounded three ways: kMaxUnheardPerRemote a remote,
+    // kUnheardSeconds each, and kMaxUnheardRemoteBytes of estimated decoded
+    // size in all.
     struct Unheard {
-        engine_core::InstanceId remote = 0;
         std::shared_ptr<const engine_core::RemoteValues> values;
-        std::size_t bytes = 0;
+        std::size_t bytes = 0;     // estimated decoded size
+        double arrived = 0.0;      // now_ when it arrived
+        std::uint64_t order = 0;   // arrival order across every remote
     };
-    std::deque<Unheard> unheard_;
+    std::unordered_map<engine_core::InstanceId, std::deque<Unheard>> unheard_;
     std::size_t unheard_bytes_ = 0;
-    // Fires each held message whose remote now has a listener; drops those whose remote is gone.
+    std::size_t unheard_count_ = 0;
+    std::uint64_t unheard_order_ = 0;
+    std::size_t dropped_unheard_ = 0;
+    // Each receive: drops held messages past kUnheardSeconds, and those whose
+    // remote is gone, then fires every message of each remote that now has a
+    // listener, in arrival order. Work is per held remote, not per message.
     void fire_unheard();
+    void clear_unheard();
     engine_core::WorldRole previous_role_ = engine_core::WorldRole::Standalone;
     std::unique_ptr<network::Endpoint> endpoint_;
 };

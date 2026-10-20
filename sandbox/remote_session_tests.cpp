@@ -16,6 +16,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <cstdint>
 #include <deque>
 #include <memory>
@@ -911,4 +912,56 @@ TEST_CASE("RE56 refused messages are charged, so a stream of almost-valid ones s
     pump(net, raw, 30);
     REQUIRE(number(net.server, "count") == 1);
     REQUIRE(net.session->decoded_remote_values() == 1011);
+}
+
+TEST_CASE("RE57 a client's hold for unheard messages stays bounded, expires, and delivers a late listener's once",
+          "[remote][session]") {
+    Net net;
+    add_remote(net.server.game, net.workspace(), "Quiet");
+    add_remote(net.server.game, net.workspace(), "Late");
+    server_script(net, "Flood",
+        "local ticks = 0\n"
+        "game:GetService('RunService').Heartbeat:Connect(function()\n"
+        "    if ticks >= 100 or not workspace:FindFirstChild('Start') then return end\n"
+        "    if ticks == 0 then for i = 1, 5 do workspace.Late:FireClientAll(i) end end\n"
+        "    ticks += 1\n"
+        "    for i = 1, 100 do workspace.Quiet:FireClientAll(i) end\n"
+        "end)\n");
+    // Nobody ever listens to Quiet; Late gets a listener once the client's workspace holds Go.
+    client_script(net, "Listen",
+        "local seen = {}\n"
+        "game:GetService('RunService').Heartbeat:Connect(function()\n"
+        "    if _G.listening or not workspace:FindFirstChild('Go') then return end\n"
+        "    _G.listening = true\n"
+        "    workspace.Late.OnClientEvent:Connect(function(n)\n"
+        "        table.insert(seen, n)\n"
+        "        _G.late = table.concat(seen, ',')\n"
+        "    end)\n"
+        "end)\n");
+    Client& client = net.add_client();
+    net.run(1.0);
+    REQUIRE(client.session->state() == engine_network::ClientState::Joined);
+
+    add_folder(net.server.game, net.workspace(), "Start");
+    // 10 000 messages for Quiet: at most 256 of them held, with Late's 5.
+    std::size_t most_held = 0;
+    for (int i = 0; i < 5 * 60; ++i) {
+        net.tick();
+        most_held = std::max(most_held, client.session->held_unheard());
+    }
+    REQUIRE(most_held <= engine_network::kMaxUnheardPerRemote + 5);
+    REQUIRE(client.session->held_unheard() == engine_network::kMaxUnheardPerRemote + 5);
+    REQUIRE(client.session->dropped_unheard() == 10000 - engine_network::kMaxUnheardPerRemote);
+
+    // Within Late's 10 seconds a listener connects: each message once, in order.
+    go(client);
+    net.run(1.0);
+    REQUIRE(text(client.rig, "late") == "1,2,3,4,5");
+    REQUIRE(client.session->held_unheard() == engine_network::kMaxUnheardPerRemote);
+
+    // Quiet's are dropped once 10 seconds have passed on the clock.
+    net.run(5.0);
+    REQUIRE(client.session->held_unheard() == 0);
+    REQUIRE(client.session->dropped_unheard() == 10000);
+    REQUIRE(text(client.rig, "late") == "1,2,3,4,5");
 }

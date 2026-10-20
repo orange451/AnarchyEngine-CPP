@@ -63,10 +63,14 @@ bool SurfacePrograms::link(const engine_core::SurfaceBinding& binding, const std
         }
         return false;
     }
+    // Built in the middle of a pass: the program the pass had in use stays in use.
+    GLint previous = 0;
+    glGetIntegerv(RT_GL_CURRENT_PROGRAM, &previous);
     if (finish_) {
         finish_(variant.program);
     }
     FindParams(*binding.parse, variant);
+    glUseProgram(static_cast<GLuint>(previous));
     return true;
 }
 

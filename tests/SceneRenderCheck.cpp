@@ -2572,6 +2572,23 @@ void CheckSurfaceRenderModes(const GpuMesh* cube, int size, int fbWidth, int fbH
     glass.surface = SurfaceFor(9105, 1, "shader surface;\nvoid surface() {\n    ALBEDO = vec3(1.0, 0.0, 0.0);\n}\n");
     const Pixel tinted = middle(&glass, 1);
     Expect(tinted.r > tinted.b + 20, "render modes: a see-through Material's shader colors it (" + Text(tinted) + ")");
+
+    // A user function the see-through pass's lighting library also defines:
+    // the G-buffer program builds, the see-through one does not, and the draw
+    // after a plain see-through one still has a program.
+    while (runner::rt_glGetError() != runner::GL_NO_ERROR) {
+    }
+    renderer.surfacePrograms().take_errors();
+    runner::MeshDraw seeThrough[2] = {runner::MeshDraw{cube, engine_core::matrix4_translation(0.f, 0.f, -2.f)},
+                                      runner::MeshDraw{cube, engine_core::matrix4_identity()}};
+    seeThrough[0].transparency = 0.5f;
+    seeThrough[1].transparency = 0.5f;
+    seeThrough[1].surface = SurfaceFor(
+        9106, 1, "shader surface;\nvec3 fresnelSchlick(float cosTheta, vec3 F0) {\n    return F0;\n}\nvoid surface() {}\n");
+    renderer.draw(0, 0, size, size, size, size, seeThrough, 2);
+    Expect(runner::rt_glGetError() == runner::GL_NO_ERROR,
+           "render modes: a see-through program that fails draws plain with no GL error");
+    Expect(renderer.surfacePrograms().take_errors().size() == 1, "render modes: and its error is reported");
     renderer.shutdown();
 }
 

@@ -3,6 +3,7 @@
 #include "ShaderSource.hpp"
 #include "SourceText.hpp"
 
+#include <cstdint>
 #include <memory>
 #include <string>
 
@@ -33,8 +34,12 @@ public:
     const char* source_extension() const override { return "glsl"; }
 
     ShaderKind kind() const { return parse_->kind; }
-    // Empty, or "<line>: <message>".
-    const std::string& error() const { return error_; }
+    // "<line>: <message>": the parse's error, else the driver's (set_compile_error), else "".
+    const std::string& error() const { return error_.empty() ? compile_error_ : error_; }
+    // The driver's error building source_version version, as the Renderer
+    // found it: kept while that version is current, and cleared by the next
+    // Source. Not undoable and not saved. Simulation thread.
+    void set_compile_error(std::uint64_t version, std::string error);
     // The latest parse of source(), shared and immutable; never null.
     std::shared_ptr<const ShaderParse> parse() const { return parse_; }
 
@@ -48,6 +53,8 @@ private:
 
     std::shared_ptr<const ShaderParse> parse_;
     std::string error_;
+    // The driver's, for source_version (set_compile_error).
+    std::string compile_error_;
 };
 
 }  // namespace engine_core

@@ -19,20 +19,33 @@ void Shader::reparse() {
     error_ = parse_->error ? shader_error_text(*parse_->error) : std::string();
 }
 
+void Shader::set_compile_error(std::uint64_t version, std::string error) {
+    if (version != source_version() || error == compile_error_) {
+        return;
+    }
+    const std::string was = this->error();
+    compile_error_ = std::move(error);
+    if (this->error() != was) {
+        emit_property("Error");
+    }
+}
+
 void Shader::on_source_changed() {
     const ShaderKind kind = parse_->kind;
-    const std::string error = error_;
+    const std::string error = this->error();
+    compile_error_.clear();
     reparse();
     if (parse_->kind != kind) {
         emit_property("Kind");
     }
-    if (error_ != error) {
+    if (this->error() != error) {
         emit_property("Error");
     }
 }
 
 void Shader::on_reuse() {
     source_ = kShaderStarterSource;
+    compile_error_.clear();
     reparse();
 }
 

@@ -567,3 +567,44 @@ TEST_CASE("SHA18 the snapshot shares one binding per Material across its Models"
     frame();
     REQUIRE(meshes()[0].surface->version == dissolve.source_version());
 }
+
+TEST_CASE("SHA19 a compile error shows on Error for its version only", "[shader]") {
+    SimRole role;
+    engine_core::Game game;
+    Shader& shader = add_shader(game, "Look");
+    std::vector<std::string> changed;
+    game.changed(shader.id()).connect([&](InstanceId, engine_core::Field field) {
+        if (field == engine_core::Field::Source) {
+            changed.push_back("Source");
+            return;
+        }
+        const char* name = engine_core::lua_property_name(static_cast<std::uint32_t>(game.events().payload()));
+        changed.push_back(name != nullptr ? name : "");
+    });
+    const std::uint64_t version = shader.source_version();
+    shader.set_compile_error(version, "3: 'wobble' : no matching overloaded function found");
+    game.events().drain();
+    REQUIRE(shader.error() == "3: 'wobble' : no matching overloaded function found");
+    REQUIRE(changed == std::vector<std::string>{"Error"});
+    // The same again changes nothing.
+    changed.clear();
+    shader.set_compile_error(version, "3: 'wobble' : no matching overloaded function found");
+    game.events().drain();
+    REQUIRE(changed.empty());
+
+    // A new Source clears it; a late error for the old version is dropped.
+    shader.set_source(std::string(engine_core::kShaderStarterSource) + "\n");
+    game.events().drain();
+    REQUIRE(shader.error().empty());
+    changed.clear();
+    shader.set_compile_error(version, "3: stale");
+    game.events().drain();
+    REQUIRE(shader.error().empty());
+    REQUIRE(changed.empty());
+
+    // A parse error wins over a compile error.
+    shader.set_compile_error(shader.source_version(), "5: late");
+    shader.set_source(kBadHint);
+    shader.set_compile_error(shader.source_version(), "2: driver");
+    REQUIRE(shader.error() == "4: unknown hint glow");
+}

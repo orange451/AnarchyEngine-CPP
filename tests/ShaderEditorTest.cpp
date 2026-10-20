@@ -11,6 +11,7 @@
 #include "Engine.hpp"
 #include "SelectionService.hpp"
 #include "Shader.hpp"
+#include "runner/GameView.hpp"
 
 #include "jadefx/jadefx.hpp"
 
@@ -404,6 +405,94 @@ void TestFindReplace(ide::IdeLayout& layout, jadefx::Scene& scene) {
     frame();
 }
 
+// A surface Shader the driver refuses: the Scene View posts the error it got
+// to the Shader, whose Error then marks the editor's line.
+void TestCompileErrorReachesShader(ide::IdeLayout& layout, jadefx::Scene& scene) {
+    engine_core::Engine& engine = layout.simulation();
+    double time = 80.0;
+    auto frame = [&] {
+        scene.layout(1280, 800, time);
+        time += 0.05;
+    };
+    runner::GameView* view = nullptr;
+    for (jadefx::Node* node : scene.getElementsByClassName("ide-pane")) {
+        auto* pane = dynamic_cast<ide::IdePane*>(node);
+        if (view == nullptr && pane != nullptr && pane->name() == "Scene View") {
+            view = dynamic_cast<runner::GameView*>(pane);
+        }
+    }
+    Expect(view != nullptr, "the Scene View is in the layout");
+    if (view == nullptr) {
+        return;
+    }
+    engine_core::InstanceId id = 0;
+    std::uint64_t version = 0;
+    engine.on_simulation([&](engine_core::DataModel& game) {
+        engine_core::Shader& shader = game.create<engine_core::Shader>();
+        game.set_name(shader.id(), "Wobbly");
+        game.set_parent(shader.id(), game.service("Shaders"));
+        shader.set_source("shader surface;\n\nvoid surface() {\n    ALBEDO = wobble(ALBEDO);\n}\n");
+        id = shader.id();
+        version = shader.source_version();
+    });
+    view->postSurfaceErrors({{id, version, "4: 'wobble' : no matching overloaded function found"}});
+    std::string error;
+    engine.on_simulation([&](engine_core::DataModel& game) {
+        if (auto* shader = dynamic_cast<engine_core::Shader*>(game.instance(id))) {
+            error = shader->error();
+        }
+    });
+    Expect(error == "4: 'wobble' : no matching overloaded function found", "the Scene View's error reaches Shader.Error");
+    // Listed in Problems, whose row opens the editor at it.
+    layout.show_problems();
+    for (int i = 0; i < 8; ++i) {
+        frame();
+    }
+    ide::IdeProblems* problems = nullptr;
+    for (jadefx::Node* node : scene.getElementsByClassName("problems-pane")) {
+        problems = problems != nullptr ? problems : dynamic_cast<ide::IdeProblems*>(node);
+    }
+    std::size_t index = 0;
+    bool listed = false;
+    if (problems != nullptr) {
+        for (const ide::ScriptProblems& source : problems->list().scripts) {
+            if (source.id == id) {
+                listed = true;
+                break;
+            }
+            ++index;
+        }
+    }
+    Expect(listed, "the compile error is listed in Problems");
+    if (listed) {
+        const auto& rows = problems->tree().getRoot()->getChildren();
+        if (index < rows.size() && !rows.items()[index]->getChildren().empty()) {
+            problems->openRow(rows.items()[index]->getChildren().items()[0].get());
+        }
+    }
+    frame();
+    frame();
+    ide::IdeShaderEditor* editor = EditorFor(scene, id);
+    Expect(editor != nullptr && editor->errorLine() == 4, "the shader editor marks the compile error's line");
+    // Close it, so the Scene View's tab is in front for the tests after this one.
+    for (jadefx::Node* node = editor; node != nullptr; node = node->getParent()) {
+        if (auto* dock = dynamic_cast<ide::IdeDock*>(node)) {
+            std::shared_ptr<jadefx::Tab> found;
+            for (const std::shared_ptr<jadefx::Tab>& tab : dock->tabs()->getTabs().items()) {
+                if (tab && tab->getContent() == editor) {
+                    found = tab;
+                }
+            }
+            if (found) {
+                dock->tabs()->close(found);
+            }
+            break;
+        }
+    }
+    engine.on_simulation([&](engine_core::DataModel& game) { game.destroy_tree(id); });
+    frame();
+}
+
 }  // namespace
 
 int RunShaderEditorTests(ide::IdeLayout& layout, jadefx::Scene& scene) {
@@ -411,6 +500,7 @@ int RunShaderEditorTests(ide::IdeLayout& layout, jadefx::Scene& scene) {
     TestShaderTab(layout, scene);
     TestProblemOpensShader(layout, scene);
     TestFindReplace(layout, scene);
+    TestCompileErrorReachesShader(layout, scene);
     if (gFailures == 0) {
         std::printf("shader editor tests passed\n");
     }

@@ -21,6 +21,7 @@
 #include "ParticleWorld.hpp"
 #include "particles/ParticleShapeLines.hpp"
 #include "SelectionService.hpp"
+#include "Shader.hpp"
 #include "ScriptAnalysis.hpp"
 #include "Runner.hpp"
 #include "SceneDraws.hpp"
@@ -213,6 +214,20 @@ void GameView::linkCamera(std::string guid) {
             break;
         }
     }
+}
+
+void GameView::postSurfaceErrors(
+    std::vector<std::tuple<engine_core::InstanceId, std::uint64_t, std::string>> errors) {
+    if (engine_ == nullptr || errors.empty()) {
+        return;
+    }
+    engine_->on_simulation([errors = std::move(errors)](engine_core::DataModel& game) {
+        for (const auto& [id, version, text] : errors) {
+            if (auto* shader = dynamic_cast<engine_core::Shader*>(game.instance(id))) {
+                shader->set_compile_error(version, text);
+            }
+        }
+    });
 }
 
 void GameView::reportViewportSize() {
@@ -1080,6 +1095,8 @@ void GameView::renderContent(jadefx::UiRenderer& renderer, float opacity) {
         const bool drawn = renderer_.draw(getAbsoluteX(), getAbsoluteY(), getWidth(), getHeight(), scene->getWidth(),
                                           scene->getHeight(), meshDraws_.data(), static_cast<int>(meshDraws_.size()),
                                           lightDraws_.data(), static_cast<int>(lightDraws_.size()));
+        // A Material's Shader the driver refused shows why on the Shader.
+        postSurfaceErrors(renderer_.takeSurfaceErrors());
         // ANARCHY_RENDER_STATS set prints the draw's counts once a second, for measuring culling and instancing.
         static const bool printStats = std::getenv("ANARCHY_RENDER_STATS") != nullptr;
         if (printStats && drawn) {

@@ -117,6 +117,10 @@ public:
     }
     // The camera and field of view rays leave from, as a painted frame sets them. For
     // headless tests, which never paint.
+    // Each (Shader id, source version, "<line>: <message>") the renderer could
+    // not build, onto its Shader's Error, on the simulation thread. A draw
+    // posts its renderer's own; tests post theirs.
+    void postSurfaceErrors(std::vector<std::tuple<engine_core::InstanceId, std::uint64_t, std::string>> errors);
     void setViewForTests(const engine_core::Matrix4& camera, float fovDegrees) {
         viewCamera_ = camera;
         viewFov_ = fovDegrees;

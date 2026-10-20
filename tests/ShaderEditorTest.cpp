@@ -162,6 +162,15 @@ void TestShaderTab(ide::IdeLayout& layout, jadefx::Scene& scene) {
     frame();
     Expect(SourceOf(engine, id) == kBadHint, "a flush writes Source");
     Expect(editor->errorLine() == 4, "the error's line is marked");
+    // Text added above the error leaves Error's text the same; the mark still follows its line.
+    const std::string padded =
+        "shader surface;\n// padding added above the error\n// glow is not a hint\nuniform float Shine : glow;\n\nvoid surface() {}\n";
+    code->setText(padded);
+    editor->flush();
+    frame();
+    frame();
+    const int line_four = static_cast<int>(padded.find("uniform"));
+    Expect(editor->errorMarkStart() == line_four, "the mark moves with its line when Error's text stays");
     code->setText(engine_core::kShaderStarterSource);
     editor->flush();
     frame();

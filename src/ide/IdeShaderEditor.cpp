@@ -597,16 +597,18 @@ int IdeShaderEditor::apply_replacements(const TextSearch& search, const std::vec
 }
 
 void IdeShaderEditor::markError(const std::string& error) {
-    if (error == shownError_ && loaded_) {
+    // The same Error over different text, as when lines above it grew, moves the mark.
+    const std::string text = area_->getText();
+    if (error == shownError_ && text == markedText_ && loaded_) {
         return;
     }
     shownError_ = error;
+    markedText_ = text;
     const int line = ErrorLine(error);
     errorLine_ = line;
     std::vector<jadefx::TextMark> marks;
     errorStart_ = 0;
     errorEnd_ = 0;
-    const std::string text = area_->getText();
     if (line > 0) {
         // The line's code points, start to end, found by its newlines.
         std::size_t begin = 0;

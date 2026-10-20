@@ -223,3 +223,19 @@ TEST_CASE("SH10 an error reads as its line and message", "[shader]") {
     REQUIRE(engine_core::shader_reserved_name("TIME"));
     REQUIRE(!engine_core::shader_reserved_name("Time"));
 }
+
+TEST_CASE("SH11 a continued directive and one after a comment are skipped whole", "[shader]") {
+    const ShaderParse continued =
+        parse_shader(surface("#define SAT(x) \\\n    clamp(x, 0.0, 1.0)\nuniform float A : range(0, 1);"));
+    INFO((continued.error ? continued.error->message : std::string()));
+    REQUIRE(!continued.error);
+    REQUIRE(continued.params.size() == 1);
+    REQUIRE(continued.params[0].name == "A");
+    REQUIRE(continued.params[0].line == 4);
+    REQUIRE(continued.glsl.find("range(") == std::string::npos);
+    const ShaderParse commented = parse_shader(surface("/* c */ #define X 1\nuniform float B;"));
+    INFO((commented.error ? commented.error->message : std::string()));
+    REQUIRE(!commented.error);
+    REQUIRE(commented.params.size() == 1);
+    REQUIRE(commented.params[0].name == "B");
+}

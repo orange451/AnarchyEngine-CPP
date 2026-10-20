@@ -48,6 +48,8 @@ public:
     void showLine(int line);
     // The 1-based line the error mark covers, or 0 for none.
     int errorLine() const { return errorLine_; }
+    // The first code point the error mark covers; 0 with no mark. For tests.
+    int errorMarkStart() const { return errorStart_; }
 
     // The find bar. replace shows its replace row. One line of selection, or
     // the name under the caret, becomes the find text.
@@ -119,6 +121,8 @@ private:
     std::chrono::steady_clock::time_point dirtyAt_{};
     std::string shownName_;
     std::string shownError_;
+    // The text the error mark was placed in.
+    std::string markedText_;
     int errorLine_ = 0;
     std::uint32_t world_ = 0;
     std::uint64_t seenAuthored_ = 0;

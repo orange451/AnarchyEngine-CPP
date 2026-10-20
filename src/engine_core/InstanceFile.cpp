@@ -246,6 +246,24 @@ void remap_references(DataModel& world, const CopyMap& map) {
             next.id = found->second;
             field.write(world, *object, next);
         }
+        // An Instance attribute naming a source in the copied set names its
+        // copy, as a reference property does; one naming anything else stays.
+        std::vector<std::pair<std::string, InstanceId>> moved;
+        for (const auto& [name, slot] : object->attributes()) {
+            if (slot.kind != LuaSlot::Kind::Instance) {
+                continue;
+            }
+            const auto found = map.find(slot.text);
+            if (found != map.end()) {
+                moved.emplace_back(name, found->second);
+            }
+        }
+        for (const auto& [name, target] : moved) {
+            LuaSlot next;
+            next.kind = LuaSlot::Kind::Instance;
+            next.id = target;
+            object->set_attribute(name, next);
+        }
         // Copied with one end and not the other: the end left outside is
         // cleared, or the copy would snap the original (or be snapped onto it).
         if (inside1 && named2 && !inside2) {

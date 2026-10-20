@@ -4,11 +4,18 @@
 #include "support.hpp"
 
 #include "Attributes.hpp"
+#include "Folder.hpp"
 #include "GameObject.hpp"
+#include "InstanceFile.hpp"
+#include "Project.hpp"
+#include "PropertyBag.hpp"
 #include "LuaApi.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <filesystem>
+#include <fstream>
+#include <sstream>
 #include <string>
 
 namespace {
@@ -272,4 +279,160 @@ TEST_CASE("ATR9 AttributeChanged carries the name and Changed says Attributes", 
     game.events().drain();
     REQUIRE(named == "Open");
     REQUIRE(changed == "Attributes");
+}
+
+namespace {
+
+LuaSlot color_slot(float r, float g, float b) {
+    LuaSlot slot;
+    slot.kind = LuaSlot::Kind::Color;
+    slot.color = {r, g, b, 1.f};
+    return slot;
+}
+
+LuaSlot instance_slot(engine_core::InstanceId id) {
+    LuaSlot slot;
+    slot.kind = LuaSlot::Kind::Instance;
+    slot.id = id;
+    return slot;
+}
+
+engine_core::InstanceId named_part(engine_core::DataModel& game, engine_core::InstanceId parent, const char* name) {
+    engine_core::GameObject& part = game.create_game_object();
+    game.set_parent(part.id(), parent);
+    game.set_name(part.id(), name);
+    return part.id();
+}
+
+// The file a project saved the instance with this GUID in.
+std::filesystem::path saved_file(const std::filesystem::path& root, const std::string& guid) {
+    for (const auto& entry : std::filesystem::recursive_directory_iterator(root)) {
+        const std::string name = entry.path().filename().string();
+        if (entry.is_regular_file() && name.find(guid) != std::string::npos && name.size() > 5 &&
+            name.substr(name.size() - 5) == ".json") {
+            return entry.path();
+        }
+    }
+    return {};
+}
+
+}  // namespace
+
+TEST_CASE("ATR10 attributes save with the place and load back, a dead target as its GUID", "[attributes][project]") {
+    SimRole role;
+    TempDir dir;
+    engine_core::Game game;
+    engine_core::Project project = engine_core::Project::create(dir.path, game);
+    const engine_core::InstanceId workspace = game.scene_service("Workspace");
+    const engine_core::InstanceId holder = named_part(game, workspace, "Holder");
+    const engine_core::InstanceId target = named_part(game, workspace, "Target");
+    const std::string target_guid = game.guid(target);
+    REQUIRE(!game.instance(holder)->set_attribute("Health", number_slot(5)));
+    REQUIRE(!game.instance(holder)->set_attribute("Tint", color_slot(0.25f, 0.5f, 1.f)));
+    REQUIRE(!game.instance(holder)->set_attribute("Aim", instance_slot(target)));
+    game.destroy(target);
+    project.save();
+
+    engine_core::Game other;
+    engine_core::Project read = engine_core::Project::load(dir.path, other);
+    const engine_core::InstanceId loaded = other.find_first_child(other.scene_service("Workspace"), "Holder");
+    REQUIRE(loaded != 0);
+    const engine_core::DataModel& back = *other.instance(loaded);
+    REQUIRE(back.attributes().size() == 3);
+    REQUIRE(back.attribute("Health").number == 5);
+    REQUIRE(back.attribute("Tint").kind == LuaSlot::Kind::Color);
+    REQUIRE(back.attribute("Tint").color.g == 0.5f);
+    REQUIRE(back.attributes().at("Aim").text == target_guid);
+    REQUIRE(back.attribute("Aim").kind == LuaSlot::Kind::Nil);
+}
+
+TEST_CASE("ATR11 a hand-edited bad entry loads the rest", "[attributes][project]") {
+    SimRole role;
+    TempDir dir;
+    engine_core::Game game;
+    engine_core::Project project = engine_core::Project::create(dir.path, game);
+    const engine_core::InstanceId holder = named_part(game, game.scene_service("Workspace"), "Holder");
+    REQUIRE(!game.instance(holder)->set_attribute("Y", number_slot(1)));
+    project.save();
+
+    const std::filesystem::path file = saved_file(dir.path, game.guid(holder));
+    REQUIRE(!file.empty());
+    std::stringstream text;
+    text << std::ifstream(file).rdbuf();
+    engine_core::JsonValue json;
+    std::string error;
+    REQUIRE(engine_core::parse_json(text.str(), json, error));
+    engine_core::JsonValue* properties = nullptr;
+    for (auto& member : const_cast<std::vector<engine_core::JsonValue::Member>&>(json.members())) {
+        if (member.first == "properties") {
+            properties = &member.second;
+        }
+    }
+    engine_core::JsonValue edited;
+    REQUIRE(engine_core::parse_json(R"({"X":{"type":"Color3","value":"red"},"Y":{"type":"number","value":2}})",
+                                    edited, error));
+    (properties != nullptr ? *properties : json).set("Attributes", edited);
+    std::ofstream(file, std::ios::binary | std::ios::trunc) << engine_core::write_json(json);
+
+    engine_core::Game other;
+    engine_core::Project read = engine_core::Project::load(dir.path, other);
+    const engine_core::InstanceId loaded = other.find_first_child(other.scene_service("Workspace"), "Holder");
+    REQUIRE(loaded != 0);
+    REQUIRE(other.instance(loaded)->attributes().size() == 1);
+    REQUIRE(other.instance(loaded)->attribute("Y").number == 2);
+}
+
+TEST_CASE("ATR12 Stop puts attributes back", "[attributes]") {
+    SimRole role;
+    engine_core::Game game;
+    const engine_core::InstanceId holder = named_part(game, game.scene_service("Workspace"), "Holder");
+    REQUIRE(!game.instance(holder)->set_attribute("Health", number_slot(5)));
+    game.capture_place();
+    game.start_simulation();
+    REQUIRE(!game.instance(holder)->set_attribute("Health", number_slot(9)));
+    REQUIRE(!game.instance(holder)->set_attribute("Extra", number_slot(1)));
+    game.stop_simulation();
+    REQUIRE(game.instance(holder)->attributes().size() == 1);
+    REQUIRE(game.instance(holder)->attribute("Health").number == 5);
+}
+
+TEST_CASE("ATR13 Clone and paste copy attributes and remap an Instance inside the set", "[attributes][copy]") {
+    ScriptRig rig;
+    engine_core::DataModel& game = rig.game;
+    const engine_core::InstanceId workspace = workspace_of(game);
+    engine_core::Folder& folder = game.create<engine_core::Folder>();
+    game.set_parent(folder.id(), workspace);
+    const engine_core::InstanceId a = named_part(game, folder.id(), "A");
+    const engine_core::InstanceId b = named_part(game, folder.id(), "B");
+    const engine_core::InstanceId outside = named_part(game, workspace, "Outside");
+    REQUIRE(!game.instance(a)->set_attribute("Target", instance_slot(b)));
+    REQUIRE(!game.instance(a)->set_attribute("Away", instance_slot(outside)));
+    REQUIRE(!game.instance(a)->set_attribute("Health", number_slot(3)));
+
+    auto check = [&](engine_core::InstanceId copy) {
+        REQUIRE(copy != 0);
+        const engine_core::InstanceId a2 = game.find_first_child(copy, "A");
+        const engine_core::InstanceId b2 = game.find_first_child(copy, "B");
+        REQUIRE(a2 != 0);
+        REQUIRE(b2 != 0);
+        REQUIRE(a2 != a);
+        REQUIRE(game.instance(a2)->attribute("Target").id == b2);
+        REQUIRE(game.instance(a2)->attribute("Away").id == outside);
+        REQUIRE(game.instance(a2)->attribute("Health").number == 3);
+        // The source keeps its own.
+        REQUIRE(game.instance(a)->attribute("Target").id == b);
+    };
+
+    check(engine_core::clone_tree(game, folder.id()));
+
+    const engine_core::JsonValue file = engine_core::write_instance_file({engine_core::copy_tree(game, folder.id())});
+    std::vector<engine_core::CopiedNode> roots;
+    std::string error;
+    REQUIRE(engine_core::read_instance_file(file, roots, error));
+    std::vector<engine_core::InstanceId> made;
+    engine_core::CopyMap map;
+    REQUIRE(engine_core::paste_copies(game, roots, workspace, &made, nullptr, &map));
+    engine_core::remap_references(game, map);
+    REQUIRE(made.size() == 1);
+    check(made[0]);
 }

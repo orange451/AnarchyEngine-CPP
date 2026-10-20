@@ -25,6 +25,8 @@ struct Data;
 
 namespace engine_core {
 
+class Shader;
+
 struct Skeleton;
 
 // Assets, kept under game.Assets. Each lives only under its own category, as
@@ -271,7 +273,7 @@ struct ReferenceSpec {
 // GUID (InstanceRef). Its subclass lists them once, in reference_specs.
 class ReferenceAsset : public DataModel {
 public:
-    static constexpr std::size_t kMaxReferences = 6;
+    static constexpr std::size_t kMaxReferences = 8;
 
     ReferenceAsset(DataModel::ChildTag tag, DataModel::State& state, InstanceId id) : DataModel(tag, state, id) {}
 
@@ -284,6 +286,13 @@ public:
 
 protected:
     virtual const ReferenceSpec* reference_specs(std::size_t& count) const = 0;
+    // Why the live target cannot be reference index's, beyond its class, or
+    // nothing. A slot naming only a GUID (a load, Stop, or undo) is not checked.
+    virtual std::optional<std::string> refuse_target(std::size_t index, const DataModel& target) const {
+        (void)index;
+        (void)target;
+        return std::nullopt;
+    }
     void on_reuse() override;
 
 private:
@@ -310,6 +319,8 @@ public:
     static constexpr std::size_t kMetalnessTextureReference = 3;
     static constexpr std::size_t kEmissiveTextureReference = 4;
     static constexpr std::size_t kHeightTextureReference = 5;
+    // Shader: a surface Shader the Material draws through.
+    static constexpr std::size_t kShaderReference = 6;
 
     static constexpr double kDefaultReflectivity = 0.5;
     static constexpr double kDefaultTransparency = 0.0;
@@ -350,8 +361,14 @@ public:
     std::optional<std::string> set_blend_sharpness(double value);
     std::optional<std::string> set_height_strength(double value);
 
+    // The live surface Shader Shader names, or null: none, gone, or a post shader
+    // a file named. Callers hold the world's lock.
+    const Shader* shader(const DataModel& world) const;
+
 protected:
     const ReferenceSpec* reference_specs(std::size_t& count) const override;
+    // A post shader is refused.
+    std::optional<std::string> refuse_target(std::size_t index, const DataModel& target) const override;
     void on_reuse() override;
 
 private:

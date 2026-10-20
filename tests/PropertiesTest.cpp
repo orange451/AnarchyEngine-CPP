@@ -2180,6 +2180,7 @@ void TestClassGroups() {
     Rig rig;
     const std::vector<std::string> material = {
         "Surface:DiffuseTexture", "Surface:NormalTexture", "Surface:RoughnessTexture", "Surface:MetalnessTexture",
+        "Surface:Shader",
         "Modifier:Color", "Modifier:Transparency", "Modifier:Roughness", "Modifier:Metalness",
         "Modifier:Reflectivity", "Modifier:EmissiveTexture", "Modifier:Emissive",
         "Terrain:TextureScale", "Terrain:BlendSharpness", "Terrain:HeightTexture", "Terrain:HeightStrength",

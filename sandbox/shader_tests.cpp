@@ -3,6 +3,7 @@
 
 #include "support.hpp"
 
+#include "AssetInstances.hpp"
 #include "Containment.hpp"
 #include "InstanceFile.hpp"
 #include "Project.hpp"
@@ -317,4 +318,83 @@ TEST_CASE("SHA12 copy, paste, clone, and instance files keep a Shader's source",
     REQUIRE(engine_core::paste_copies(game, roots, game.service("Shaders"), &made));
     REQUIRE(made.size() == 1);
     REQUIRE(dynamic_cast<const Shader*>(game.instance(made[0]))->source() == kVignette);
+}
+
+TEST_CASE("SHA13 a Material takes a surface Shader and refuses a post one", "[shader][lua]") {
+    ScriptRig rig;
+    rig.runtime.run_chunk(R"(
+        local look = Instance.new("Shader")
+        look.Name = "Look"
+        look.Parent = game.Assets.Shaders
+        local fx = Instance.new("Shader")
+        fx.Name = "Fx"
+        fx.Source = "shader post;\nvoid post() {}\n"
+        fx.Parent = game.Assets.Shaders
+        local m = Instance.new("Material")
+        m.Name = "Brick"
+        m.Parent = game.Assets.Materials
+        m.Shader = look
+        print("set", m.Shader == look)
+        print("post", pcall(function() m.Shader = fx end))
+        print("kept", m.Shader == look)
+        m.Shader = nil
+        print("cleared", m.Shader == nil)
+    )");
+    const std::vector<std::string> out = printed(rig.runtime.drain_output());
+    INFO(rig.runtime.last_error());
+    REQUIRE(out.size() == 4);
+    REQUIRE(out[0] == "set\ttrue\n");
+    REQUIRE(out[1].rfind("post\tfalse\t", 0) == 0);
+    REQUIRE(out[1].find("Fx is a post shader; a Material takes a surface shader") != std::string::npos);
+    REQUIRE(out[2] == "kept\ttrue\n");
+    REQUIRE(out[3] == "cleared\ttrue\n");
+}
+
+TEST_CASE("SHA14 Material::shader is the live surface Shader, or null", "[shader]") {
+    SimRole role;
+    engine_core::Game game;
+    Shader& look = add_shader(game, "Look");
+    engine_core::Material& brick = game.create<engine_core::Material>();
+    game.set_parent(brick.id(), game.service("Materials"));
+    REQUIRE(brick.shader(game) == nullptr);
+    engine_core::LuaSlot ref;
+    ref.kind = engine_core::LuaSlot::Kind::Instance;
+    ref.id = look.id();
+    REQUIRE(!brick.set_reference(engine_core::Material::kShaderReference, ref));
+    REQUIRE(brick.shader(game) == &look);
+    // A post shader named by a file (a GUID, unchecked) is not a surface shader.
+    look.set_source(kVignette);
+    REQUIRE(brick.shader(game) == nullptr);
+    look.set_source(engine_core::kShaderStarterSource);
+    REQUIRE(brick.shader(game) == &look);
+    game.destroy(look.id());
+    REQUIRE(brick.shader(game) == nullptr);
+}
+
+TEST_CASE("SHA15 a Material's Shader saves and loads by GUID", "[shader][project]") {
+    SimRole role;
+    TempDir dir;
+    std::string material_guid;
+    std::string shader_guid;
+    {
+        engine_core::Game game;
+        Project project = Project::create(dir.path, game);
+        Shader& look = add_shader(game, "Look");
+        engine_core::Material& brick = game.create<engine_core::Material>();
+        game.set_name(brick.id(), "Brick");
+        game.set_parent(brick.id(), game.service("Materials"));
+        engine_core::LuaSlot ref;
+        ref.kind = engine_core::LuaSlot::Kind::Instance;
+        ref.id = look.id();
+        REQUIRE(!brick.set_reference(engine_core::Material::kShaderReference, ref));
+        material_guid = game.guid(brick.id());
+        shader_guid = game.guid(look.id());
+        project.save();
+    }
+    engine_core::Game game;
+    Project read = Project::load(dir.path, game);
+    const auto* brick = dynamic_cast<const engine_core::Material*>(game.instance(*game.find_guid(material_guid)));
+    REQUIRE(brick != nullptr);
+    REQUIRE(brick->shader(game) != nullptr);
+    REQUIRE(game.guid(brick->shader(game)->id()) == shader_guid);
 }

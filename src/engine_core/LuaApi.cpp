@@ -1559,6 +1559,10 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
     add("Shader", "Kind", "What the shader draws: Surface, a Material's surface, or Post, the finished frame. "
         "Read from the source's first line.", "EnumItem", false, {});
     add("Shader", "Error", "The first problem in the source, as \"<line>: <message>\", or empty.", "string", false, {});
+    add("Material", "Shader",
+        "A surface Shader the material draws through, or nil. Its uniforms are the material's attributes; a post shader "
+        "is refused.",
+        "Shader?", false, {});
     add("Material", "Color", "The color that tints this material's surface. White leaves it as it is.", "Color3",
         false, {});
     add("Material", "Metalness", "How metallic this material is, from 0 to 1. Scales its MetalnessTexture.", "number",

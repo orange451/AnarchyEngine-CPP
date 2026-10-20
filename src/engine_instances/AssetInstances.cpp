@@ -1,4 +1,5 @@
 #include "AssetInstances.hpp"
+#include "Shader.hpp"
 #include "AssetLoads.hpp"
 
 #include "AudioWorld.hpp"
@@ -631,6 +632,7 @@ constexpr ReferenceSpec kMaterialRefs[] = {
     {"MetalnessTexture", "Texture"},
     {"EmissiveTexture", "Texture"},
     {"HeightTexture", "Texture"},
+    {"Shader", "Shader"},
 };
 
 constexpr ReferenceSpec kModelRefs[] = {
@@ -650,6 +652,21 @@ static_assert(std::size(kModelRefs) <= ReferenceAsset::kMaxReferences);
 const ReferenceSpec* Material::reference_specs(std::size_t& count) const {
     count = std::size(kMaterialRefs);
     return kMaterialRefs;
+}
+
+std::optional<std::string> Material::refuse_target(std::size_t index, const DataModel& target) const {
+    const auto* shader = dynamic_cast<const Shader*>(&target);
+    if (index == kShaderReference && shader != nullptr && shader->kind() != ShaderKind::Surface) {
+        return name(target.id()) + " is a post shader; a Material takes a surface shader";
+    }
+    return std::nullopt;
+}
+
+const Shader* Material::shader(const DataModel& world) const {
+    const LuaSlot slot = reference(kShaderReference);
+    const auto* shader = slot.kind == LuaSlot::Kind::Instance ? dynamic_cast<const Shader*>(world.instance(slot.id))
+                                                              : nullptr;
+    return shader != nullptr && shader->kind() == ShaderKind::Surface ? shader : nullptr;
 }
 
 const ReferenceSpec* Model::reference_specs(std::size_t& count) const {
@@ -681,6 +698,13 @@ std::optional<std::string> ReferenceAsset::set_reference(std::size_t index, cons
         contract_fail("no such reference");
     }
     const ReferenceSpec& spec = specs[index];
+    if (value.kind == LuaSlot::Kind::Instance) {
+        if (const DataModel* target = instance(value.id)) {
+            if (auto refused = refuse_target(index, *target)) {
+                return refused;
+            }
+        }
+    }
     return set_instance_reference(spec.property, spec.klass, refs_[index], value);
 }
 
@@ -1215,6 +1239,7 @@ ANARCHY_LUA_REGISTER(register_asset_instances_lua) {
         lua_saved_property("NormalTexture", "Texture?", read_reference<1>, write_reference<1>, "null"),
         lua_saved_property("RoughnessTexture", "Texture?", read_reference<2>, write_reference<2>, "null"),
         lua_saved_property("MetalnessTexture", "Texture?", read_reference<3>, write_reference<3>, "null"),
+        lua_saved_property("Shader", "Shader?", read_reference<6>, write_reference<6>, "null"),
         lua_group("Modifier"),
         lua_saved_property("Color", "Color3", read_material_color<&Material::color>,
                            write_material_color<&Material::set_color>, color.c_str()),

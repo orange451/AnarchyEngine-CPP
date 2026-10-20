@@ -82,6 +82,30 @@ SurfaceModes surface_modes(const ShaderParse& parse) {
     return modes;
 }
 
+void describe_surface(SurfaceBinding& binding) {
+    if (binding.parse == nullptr) {
+        return;
+    }
+    binding.modes = surface_modes(*binding.parse);
+    static const std::regex time_word(R"(\bTIME\b)");
+    static const std::regex cut_word(R"(\b(discard|ALPHA)\b)");
+    binding.reads_time = std::regex_search(binding.parse->glsl, time_word);
+    binding.cuts = std::regex_search(binding.parse->glsl, cut_word);
+    Hash hash;
+    for (const LuaSlot& value : binding.values) {
+        hash.add(value.kind);
+        hash.add(value.number);
+        hash.add(value.flag);
+        hash.add(value.vec);
+        hash.add(value.color);
+    }
+    for (const SurfaceBinding::Sampler& sampler : binding.samplers) {
+        hash.bytes(sampler.path.data(), sampler.path.size());
+        hash.add(sampler.flip_y);
+    }
+    binding.values_hash = hash.value;
+}
+
 std::shared_ptr<const SurfaceBinding> make_surface_binding(const DataModel& world, const Material& material) {
     const Shader* shader = material.shader(world);
     if (shader == nullptr) {
@@ -91,10 +115,6 @@ std::shared_ptr<const SurfaceBinding> make_surface_binding(const DataModel& worl
     binding->shader = shader->id();
     binding->version = shader->source_version();
     binding->parse = shader->parse();
-    binding->modes = surface_modes(*binding->parse);
-    static const std::regex time_word(R"(\bTIME\b)");
-    binding->reads_time = std::regex_search(binding->parse->glsl, time_word);
-    Hash hash;
     for (const ShaderParam& param : binding->parse->params) {
         const LuaSlot held = material.attribute(param.name);
         if (param.type == ShaderParamType::Sampler) {
@@ -107,8 +127,6 @@ std::shared_ptr<const SurfaceBinding> make_surface_binding(const DataModel& worl
                 sampler.always_loaded = texture->streaming() == TextureStreaming::AlwaysLoaded;
             }
             binding->values.emplace_back();
-            hash.bytes(sampler.path.data(), sampler.path.size());
-            hash.add(sampler.flip_y);
             continue;
         }
         const LuaSlot& value = held.kind == slot_kind(param.type) ? held : param.fallback;
@@ -127,14 +145,9 @@ std::shared_ptr<const SurfaceBinding> make_surface_binding(const DataModel& worl
                 kept.number = std::clamp(kept.number, param.min, param.max);
             }
         }
-        hash.add(kept.kind);
-        hash.add(kept.number);
-        hash.add(kept.flag);
-        hash.add(kept.vec);
-        hash.add(kept.color);
         binding->values.push_back(std::move(kept));
     }
-    binding->values_hash = hash.value;
+    describe_surface(*binding);
     return binding;
 }
 

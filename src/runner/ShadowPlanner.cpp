@@ -61,6 +61,9 @@ std::uint64_t CasterHash(const ShadowCaster& caster) {
     if (caster.cutout != 0) {
         hash.add(caster.cutout);
     }
+    if (caster.surface != 0) {
+        hash.add(caster.surface);
+    }
     return hash.value();
 }
 

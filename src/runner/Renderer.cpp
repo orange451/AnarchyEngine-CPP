@@ -550,6 +550,22 @@ bool Renderer::initialize() {
         glSamplerParameteri(sampler, GL_TEXTURE_MAG_FILTER, static_cast<GLint>(nearest ? RT_GL_NEAREST : GL_LINEAR));
     }
     surfacePrograms_.setFinish([this](Program& program) { finishProgram(program); });
+    ShadowRenderer::SurfaceShadows shadowHooks;
+    shadowHooks.variant = [this](const MeshDraw& draw) -> const SurfacePrograms::Variant* {
+        if (draw.surface == nullptr) {
+            return nullptr;
+        }
+        const SurfacePrograms::Built& built = surfacePrograms_.get(*draw.surface, shaderTime());
+        return built.shadow.program.id != 0 ? &built.shadow : nullptr;
+    };
+    shadowHooks.bind = [this](const SurfacePrograms::Variant& variant, const MeshDraw& draw) {
+        // Its holes may come from the diffuse texture's alpha too, as the G-buffer's do.
+        BindTexture(kUnitDiffuse, draw.texture != 0 ? draw.texture : whiteTexture_);
+        glUniform1f(variant.program.time, shaderTime());
+        bindSurface(variant, draw);
+    };
+    shadowHooks.done = [this] { unbindSurfaceSamplers(); };
+    shadows_.setSurfaceShadows(std::move(shadowHooks));
 
     glGenTextures(1, &blackCube_);
     glBindTexture(RT_GL_TEXTURE_CUBE_MAP, blackCube_);

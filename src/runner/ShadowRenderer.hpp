@@ -2,9 +2,11 @@
 
 #include "InstanceBuffer.hpp"
 #include "ShadowPlanner.hpp"
+#include "SurfacePrograms.hpp"
 #include "Visibility.hpp"
 
 #include <cstdint>
+#include <functional>
 #include <utility>
 #include <vector>
 
@@ -89,6 +91,16 @@ public:
     // Instanced calls this frame's draw and drawSun made; draw starts the count over.
     int calls() const { return calls_; }
 
+    // How a caster whose surface Shader cuts holes casts (the Renderer's):
+    // its shadow program, or null to cast plain; binding that program's
+    // values and textures for a draw; and putting the units back after.
+    struct SurfaceShadows {
+        std::function<const SurfacePrograms::Variant*(const MeshDraw&)> variant;
+        std::function<void(const SurfacePrograms::Variant&, const MeshDraw&)> bind;
+        std::function<void()> done;
+    };
+    void setSurfaceShadows(SurfaceShadows hooks) { surfaces_ = std::move(hooks); }
+
 private:
     struct DepthProgram {
         unsigned id = 0;
@@ -150,7 +162,15 @@ private:
         unsigned cutout = 0;
         int first = 0;
         int count = 0;
+        // Its surface Shader's shadow program and the draw whose values it
+        // binds, or null: every caster of the run shares that draw's binding.
+        const SurfacePrograms::Variant* variant = nullptr;
+        const MeshDraw* draw = nullptr;
     };
+    SurfaceShadows surfaces_;
+    // Per caster, nonzero while its surface Shader reads TIME and cuts holes:
+    // its fingerprint moves every frame.
+    std::vector<std::uint8_t> casterTimed_;
     std::vector<CasterRun> casterRuns_;
     std::vector<InstanceData> casterRows_;
     std::vector<int> casterOrder_;

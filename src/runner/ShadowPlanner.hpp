@@ -68,6 +68,9 @@ struct ShadowCaster {
     std::uint64_t cutout = 0;
     // The instance that draws it: a light never shadows itself.
     std::uint64_t owner = 0;
+    // Its surface Shader's holes: the Shader's id, version, and values hashed
+    // (and the frame, for one that reads TIME); 0 for one cast plain.
+    std::uint64_t surface = 0;
     engine_core::Matrix4 model = engine_core::matrix4_identity();
     // Its bounds, in world space.
     Sphere bounds;

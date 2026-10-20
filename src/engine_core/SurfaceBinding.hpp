@@ -48,9 +48,16 @@ struct SurfaceBinding {
     std::vector<Sampler> samplers;
     // The glsl names TIME, so its shadows redraw each frame.
     bool reads_time = false;
+    // The glsl names discard or ALPHA, so it can cut holes, and its shadows
+    // draw through it; without, it casts as the plain Material does.
+    bool cuts = false;
     // Of values and sampler paths, for shadow fingerprints.
     std::uint64_t values_hash = 0;
 };
+
+// Sets binding's modes, reads_time, and cuts from its parse, and values_hash
+// from its values and samplers.
+void describe_surface(SurfaceBinding& binding);
 
 // The binding for material, or null when it has no live surface Shader.
 // Callers hold the world's lock.

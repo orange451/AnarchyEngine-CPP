@@ -2416,7 +2416,6 @@ std::shared_ptr<engine_core::SurfaceBinding> SurfaceFor(engine_core::InstanceId 
     binding->shader = id;
     binding->version = version;
     binding->parse = std::make_shared<engine_core::ShaderParse>(engine_core::parse_shader(source));
-    binding->modes = engine_core::surface_modes(*binding->parse);
     for (std::size_t i = 0; i < binding->parse->params.size(); ++i) {
         const engine_core::ShaderParam& param = binding->parse->params[i];
         binding->values.push_back(i < values.size() ? values[i] : param.fallback);
@@ -2424,6 +2423,7 @@ std::shared_ptr<engine_core::SurfaceBinding> SurfaceFor(engine_core::InstanceId 
             binding->samplers.emplace_back();
         }
     }
+    engine_core::describe_surface(*binding);
     return binding;
 }
 
@@ -2575,6 +2575,94 @@ void CheckSurfaceRenderModes(const GpuMesh* cube, int size, int fbWidth, int fbH
     renderer.shutdown();
 }
 
+// A surface shader's holes let light through its shadow; no_shadow casts none;
+// new values draw a cached map again; a shader that cuts nothing casts plain.
+void CheckSurfaceShadows(const GpuMesh* cube, int size, int fbWidth, int fbHeight) {
+    runner::Renderer renderer;
+    Expect(renderer.initialize(), "surface shadows: the renderer builds");
+    runner::SurfacePrograms& programs = renderer.surfacePrograms();
+    // The floor and light of the spot light check: the cube's shadow falls at +X.
+    engine_core::Matrix4 floorModel = engine_core::matrix4_identity();
+    floorModel.m[0] = 8.f;
+    floorModel.m[5] = 0.2f;
+    floorModel.m[10] = 8.f;
+    floorModel.m[13] = -0.6f;
+    const auto pixelOf = [&](engine_core::Vec3 world) {
+        const engine_core::Matrix4 view = runner::LookAtView({0.f, 3.f, 7.f}, {0.f, 0.f, 0.f}, {0.f, 1.f, 0.f});
+        const engine_core::Matrix4 projection =
+            runner::Perspective(runner::Renderer::kCameraFovYDegrees,
+                                static_cast<float>(fbWidth) / static_cast<float>(fbHeight), 0.1f, 1000.f);
+        const engine_core::Vec3 ndc = engine_core::matrix4_point(engine_core::matrix4_multiply(projection, view), world);
+        return std::array<int, 2>{static_cast<int>((ndc.x * 0.5f + 0.5f) * fbWidth),
+                                  static_cast<int>((ndc.y * 0.5f + 0.5f) * fbHeight)};
+    };
+    // Behind the cube's -Z half and its +Z half.
+    const std::array<int, 2> back = pixelOf({1.f, -0.5f, -0.3f});
+    const std::array<int, 2> front = pixelOf({1.f, -0.5f, 0.3f});
+    runner::LightDraw spot;
+    spot.kind = runner::LightDraw::Kind::Spot;
+    spot.position[0] = -4.f;
+    spot.position[1] = 2.f;
+    spot.direction[0] = 0.894f;
+    spot.direction[1] = -0.447f;
+    spot.direction[2] = 0.f;
+    spot.outerFovDegrees = 90.f;
+    spot.radius = 12.f;
+    spot.intensity = 4.f;
+    spot.id = 40;
+    runner::MeshDraw scene[2] = {runner::MeshDraw{cube, engine_core::matrix4_identity()},
+                                 runner::MeshDraw{cube, floorModel}};
+    const auto lit = [&](const runner::LightDraw& light) {
+        renderer.draw(0, 0, size, size, size, size, scene, 2, &light, 1);
+        return std::array<int, 2>{Sum(ReadPixel(back[0], back[1])), Sum(ReadPixel(front[0], front[1]))};
+    };
+    renderer.draw(0, 0, size, size, size, size, scene, 2);
+    const int ambient = Sum(ReadPixel(back[0], back[1]));
+    const std::array<int, 2> open = lit(spot);
+    spot.shadows = true;
+    // Halfway between the ambient and the open floor.
+    const int middleBack = (ambient + open[0]) / 2;
+    const int middleFront = (ambient + open[1]) / 2;
+
+    // The cube's +Z half cut away: light reaches the floor behind it.
+    const char* cut = "shader surface;\nuniform float Cut = 2.0;\nvoid surface() {\n    if (WORLD_POSITION.z > Cut) {\n"
+                      "        discard;\n    }\n}\n";
+    engine_core::LuaSlot zero;
+    zero.kind = engine_core::LuaSlot::Kind::Number;
+    zero.number = 0.0;
+    scene[0].surface = SurfaceFor(9201, 1, cut, {zero});
+    std::array<int, 2> seen = lit(spot);
+    Expect(seen[0] < middleBack && seen[1] > middleFront,
+           "surface shadows: the half a shader cuts away casts no shadow (" + std::to_string(seen[0]) + ", " +
+               std::to_string(seen[1]) + " of " + std::to_string(ambient) + " to " + std::to_string(open[1]) + ")");
+
+    // A cached map: the whole cube, then new values with the same Shader draw it again.
+    spot.id = 41;
+    scene[0].surface = SurfaceFor(9202, 1, cut);
+    seen = lit(spot);
+    Expect(seen[1] < middleFront, "surface shadows: Cut 2 keeps the whole cube's shadow (" + std::to_string(seen[1]) + ")");
+    lit(spot);
+    scene[0].surface = SurfaceFor(9202, 1, cut, {zero});
+    seen = lit(spot);
+    Expect(seen[1] > middleFront,
+           "surface shadows: new values draw the cached map again (" + std::to_string(seen[1]) + ")");
+
+    // no_shadow casts nothing.
+    spot.id = 42;
+    scene[0].surface = SurfaceFor(9203, 1, "shader surface;\nrender_mode no_shadow;\nvoid surface() {}\n");
+    seen = lit(spot);
+    Expect(seen[0] > middleBack, "surface shadows: no_shadow casts none (" + std::to_string(seen[0]) + ")");
+
+    // A shader that cuts nothing casts with the plain depth program.
+    spot.id = 43;
+    const std::uint64_t shadowsBefore = programs.shadowBuilds();
+    scene[0].surface = SurfaceFor(9204, 1, "shader surface;\nvoid surface() {\n    ALBEDO *= 0.5;\n}\n");
+    seen = lit(spot);
+    Expect(seen[0] < middleBack && programs.shadowBuilds() == shadowsBefore,
+           "surface shadows: a shader with no holes casts whole, with no shadow program of its own");
+    renderer.shutdown();
+}
+
 int main(int argc, char** argv) {
     // --save dir or --compare dir (the regression frames), --terrain-shots dir (the terrain PNGs).
     std::string regressionMode;
@@ -2671,6 +2759,7 @@ int main(int argc, char** argv) {
         CheckBillboardBake();
         CheckSurfaceShaders(cube, kSize, fbWidth, fbHeight);
         CheckSurfaceRenderModes(cube, kSize, fbWidth, fbHeight);
+        CheckSurfaceShadows(cube, kSize, fbWidth, fbHeight);
 
         // The cube at the origin, under the camera a Renderer starts with, fills the middle of the pane.
         runner::MeshDraw draw{cube, engine_core::matrix4_identity()};

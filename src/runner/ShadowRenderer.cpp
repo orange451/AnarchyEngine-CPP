@@ -67,6 +67,17 @@ constexpr float kCutoutTexel = 0.1f;
 // Frames a caster counts as moving after it last changed (CasterView::moving).
 constexpr std::uint32_t kMovingFrames = 30;
 
+// A surface Shader's part of a caster's fingerprint: which Shader, which
+// version, which values, and frame (0 unless its holes follow TIME).
+std::uint64_t SurfaceFingerprint(const engine_core::SurfaceBinding& surface, std::uint32_t frame) {
+    std::uint64_t hash = 1469598103934665603ull;
+    for (const std::uint64_t part : {static_cast<std::uint64_t>(surface.shader), surface.version, surface.values_hash,
+                                     static_cast<std::uint64_t>(frame)}) {
+        hash = (hash ^ part) * 1099511628211ull;
+    }
+    return hash | 1u;
+}
+
 }  // namespace
 
 bool ShadowRenderer::initialize() {
@@ -197,7 +208,19 @@ int ShadowRenderer::addCasterRuns(const std::vector<int>& casters, const MeshDra
     // Caster i is mesh i. Those cast whole first, then the cut-outs by
     // texture, so each program and texture is set once.
     const auto cutoutOf = [&](int caster) { return cutouts && meshes[caster].cutout ? meshes[caster].texture : 0u; };
+    // A caster whose surface Shader cuts holes casts through its shadow program
+    // where cut-outs are tested; the binding names it, and so its values.
+    const auto surfaceOf = [&](int caster) -> const engine_core::SurfaceBinding* {
+        const MeshDraw& draw = meshes[caster];
+        return cutouts && draw.surface != nullptr && draw.surface->cuts && surfaces_.variant ? draw.surface.get()
+                                                                                             : nullptr;
+    };
     std::stable_sort(casterOrder_.begin(), casterOrder_.end(), [&](int a, int b) {
+        const engine_core::SurfaceBinding* surfaceA = surfaceOf(a);
+        const engine_core::SurfaceBinding* surfaceB = surfaceOf(b);
+        if (surfaceA != surfaceB) {
+            return std::less<const void*>()(surfaceA, surfaceB);
+        }
         const unsigned cutoutA = cutoutOf(a);
         const unsigned cutoutB = cutoutOf(b);
         if (cutoutA != cutoutB) {
@@ -205,12 +228,22 @@ int ShadowRenderer::addCasterRuns(const std::vector<int>& casters, const MeshDra
         }
         return std::less<const void*>()(meshes[a].mesh, meshes[b].mesh);
     });
+    const engine_core::SurfaceBinding* lastSurface = nullptr;
+    const SurfacePrograms::Variant* lastVariant = nullptr;
     for (const int caster : casterOrder_) {
         const MeshDraw& draw = meshes[caster];
         const unsigned cutout = cutoutOf(caster);
+        const engine_core::SurfaceBinding* surface = surfaceOf(caster);
+        if (surface != lastSurface) {
+            lastSurface = surface;
+            lastVariant = surface != nullptr ? surfaces_.variant(draw) : nullptr;
+        }
+        const SurfacePrograms::Variant* variant = surface != nullptr ? lastVariant : nullptr;
         if (static_cast<int>(casterRuns_.size()) == begin || casterRuns_.back().mesh != draw.mesh ||
-            casterRuns_.back().cutout != cutout) {
-            casterRuns_.push_back(CasterRun{draw.mesh, cutout, static_cast<int>(casterRows_.size()), 0});
+            casterRuns_.back().cutout != cutout || casterRuns_.back().variant != variant ||
+            (variant != nullptr && casterRuns_.back().draw->surface.get() != surface)) {
+            casterRuns_.push_back(
+                CasterRun{draw.mesh, cutout, static_cast<int>(casterRows_.size()), 0, variant, &draw});
         }
         ++casterRuns_.back().count;
         // Depth reads the world matrix, and a skinned caster its bones.
@@ -229,12 +262,44 @@ bool ShadowRenderer::drawCasters(const Matrix4& viewProjection, int first, int e
     glActiveTexture(GL_TEXTURE0 + kCutoutUnit);
     unsigned bound = 0;
     bool askedCutout = false;
+    // The surface programs asked about, and the one in use.
+    std::vector<unsigned> askedSurface;
+    unsigned surfaceProgram = 0;
+    bool surfaceBound = false;
     for (int index = first; index < end; ++index) {
         const CasterRun& run = casterRuns_[static_cast<std::size_t>(index)];
-        if (run.cutout != 0 && program != &cutout_) {
-            program = &cutout_;
-            glUseProgram(cutout_.id);
-            glUniformMatrix4fv(cutout_.viewProjection, 1, GL_FALSE, viewProjection.m);
+        if (run.variant != nullptr) {
+            const RenderProgram& custom = run.variant->program;
+            if (custom.id != surfaceProgram) {
+                glUseProgram(custom.id);
+                glUniformMatrix4fv(custom.viewProjection, 1, GL_FALSE, viewProjection.m);
+                surfaceProgram = custom.id;
+                program = nullptr;
+            }
+            surfaces_.bind(*run.variant, *run.draw);
+            surfaceBound = true;
+            // bind moved the active unit; the cut-outs' texture is set again.
+            glActiveTexture(GL_TEXTURE0 + kCutoutUnit);
+            bound = ~0u;
+            run.mesh->bind();
+            instances_.attach(run.first);
+            if (std::find(askedSurface.begin(), askedSurface.end(), custom.id) == askedSurface.end()) {
+                if (!CanDraw(custom.id)) {
+                    surfaces_.done();
+                    return false;
+                }
+                askedSurface.push_back(custom.id);
+            }
+            run.mesh->draw_instanced(0, run.count);
+            ++calls_;
+            continue;
+        }
+        const DepthProgram* wanted = run.cutout != 0 ? &cutout_ : &depth_;
+        if (wanted != program) {
+            program = wanted;
+            surfaceProgram = 0;
+            glUseProgram(program->id);
+            glUniformMatrix4fv(program->viewProjection, 1, GL_FALSE, viewProjection.m);
         }
         if (run.cutout != bound) {
             glBindTexture(GL_TEXTURE_2D, run.cutout);
@@ -244,11 +309,17 @@ bool ShadowRenderer::drawCasters(const Matrix4& viewProjection, int first, int e
         instances_.attach(run.first);
         bool& programAsked = program == &cutout_ ? askedCutout : asked;
         if (!programAsked && !CanDraw(program->id)) {
+            if (surfaceBound) {
+                surfaces_.done();
+            }
             return false;
         }
         programAsked = true;
         run.mesh->draw_instanced(0, run.count);
         ++calls_;
+    }
+    if (surfaceBound) {
+        surfaces_.done();
     }
     return true;
 }
@@ -294,6 +365,7 @@ bool ShadowRenderer::draw(const std::vector<ShadowRequest>& requests, const Mesh
         }
         casterOwners_.resize(total);
         casterFingerprints_.resize(total);
+        casterTimed_.resize(total, 0);
         casterMoving_.resize(total, 0);
         casterMovedAt_.resize(total, 0);
         std::atomic<bool> changed{false};
@@ -315,9 +387,14 @@ bool ShadowRenderer::draw(const std::vector<ShadowRequest>& requests, const Mesh
                 // See-through surfaces cast nothing, as in the legacy engine.
                 // A terrain node (terrainLook) is always opaque, so it always casts,
                 // but of two levels cross-fading only the one fading in, whole.
+                // A surface Shader's no_shadow casts nothing; render_mode
+                // transparent is see-through, so it casts nothing either.
+                const engine_core::SurfaceBinding* surface = mesh.surface.get();
                 if (mesh.mesh == nullptr || !mesh.mesh->valid() || !mesh.castsShadow ||
                     (mesh.transparency > 0.f && mesh.terrainLook == 0) ||
-                    (mesh.terrainLook != 0 && !mesh.terrainFadeIn)) {
+                    (mesh.terrainLook != 0 && !mesh.terrainFadeIn) ||
+                    (surface != nullptr && (surface->modes.no_shadow || surface->modes.transparent))) {
+                    casterTimed_[index] = 0;
                     casterOwners_[index] = 0;
                     casterFingerprints_[index] = 0;
                     if (ownerWas != 0 || fingerprintWas != 0) {
@@ -331,6 +408,12 @@ bool ShadowRenderer::draw(const std::vector<ShadowRequest>& requests, const Mesh
                 caster.pose = mesh.bones != nullptr ? mesh.poseRevision : 0;
                 caster.cutout = mesh.cutout ? mesh.texture : 0;
                 caster.owner = mesh.owner;
+                // Only a shader that cuts holes changes the shadow.
+                const bool timed = surface != nullptr && surface->cuts && surface->reads_time;
+                casterTimed_[index] = timed ? 1 : 0;
+                if (surface != nullptr && surface->cuts) {
+                    caster.surface = SurfaceFingerprint(*surface, timed ? casterFrame_ : 0);
+                }
                 caster.model = mesh.model;
                 caster.bounds = spheres[index];
                 casterOwners_[index] = mesh.owner;
@@ -340,6 +423,34 @@ bool ShadowRenderer::draw(const std::vector<ShadowRequest>& requests, const Mesh
                 }
             }
         });
+        // A caster whose shader's holes follow TIME moves every frame, changed or not.
+        for (std::size_t index = 0; index < total; ++index) {
+            if (casterTimed_[index] == 0 || casterFingerprints_[index] == 0) {
+                continue;
+            }
+            const MeshDraw& mesh = meshes[index];
+            if (mesh.surface == nullptr) {
+                continue;
+            }
+            ShadowCaster caster;
+            caster.mesh = reinterpret_cast<std::uintptr_t>(mesh.mesh);
+            caster.revision = mesh.mesh->generation();
+            caster.pose = mesh.bones != nullptr ? mesh.poseRevision : 0;
+            caster.cutout = mesh.cutout ? mesh.texture : 0;
+            caster.owner = mesh.owner;
+            caster.surface = SurfaceFingerprint(*mesh.surface, casterFrame_);
+            caster.model = mesh.model;
+            caster.bounds = spheres[index];
+            const std::uint64_t fingerprint = ShadowCasterFingerprint(caster);
+            if (fingerprint != casterFingerprints_[index]) {
+                casterFingerprints_[index] = fingerprint;
+                moved(index);
+                if (!fresh && casterMoving_[index] == 2) {
+                    casterMoving_[index] = 1;
+                    movingCasters_.push_back(static_cast<int>(index));
+                }
+            }
+        }
         // The newly moving listed; those still a while settle, and the
         // cascades draw them with the rest again.
         if (!fresh) {

@@ -34,6 +34,8 @@ public:
         // or it failed.
         Variant gbuffer;
         Variant forward;
+        // The shadow maps', only for a shader that cuts holes (SurfaceBinding::cuts).
+        Variant shadow;
         // "" or "<line>: <message>", at the user's line.
         std::string error;
         // When get last asked for it, in the seconds reclaim is given.
@@ -54,20 +56,22 @@ public:
     void reclaim(double now);
     // Deletes every GL object.
     void release();
-    // How many programs have been built, for tests.
+    // How many Shader versions have been built, and how many shadow programs, for tests.
     std::uint64_t builds() const { return builds_; }
+    std::uint64_t shadowBuilds() const { return shadowBuilds_; }
 
 private:
     void build(const engine_core::SurfaceBinding& binding, Built& built);
     // Links fragment into variant; false, with built's error set once, when it fails.
-    bool link(const engine_core::SurfaceBinding& binding, const AssembledSource& fragment, Variant& variant,
-              Built& built);
+    bool link(const engine_core::SurfaceBinding& binding, const std::string& vertex, const AssembledSource& fragment,
+              Variant& variant, Built& built);
     static void destroy(Built& built);
 
     Finish finish_;
     std::unordered_map<engine_core::InstanceId, Built> built_;
     std::vector<std::tuple<engine_core::InstanceId, std::uint64_t, std::string>> errors_;
     std::uint64_t builds_ = 0;
+    std::uint64_t shadowBuilds_ = 0;
 };
 
 }  // namespace runner

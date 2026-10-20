@@ -48,10 +48,10 @@ const SurfacePrograms::Built& SurfacePrograms::get(const engine_core::SurfaceBin
     return found->second;
 }
 
-bool SurfacePrograms::link(const engine_core::SurfaceBinding& binding, const AssembledSource& fragment,
-                           Variant& variant, Built& built) {
+bool SurfacePrograms::link(const engine_core::SurfaceBinding& binding, const std::string& vertex,
+                           const AssembledSource& fragment, Variant& variant, Built& built) {
     std::string log;
-    variant.program.id = LinkProgramLog(LoadShader("pipeline/geometry.vert"), fragment.text, log);
+    variant.program.id = LinkProgramLog(vertex, fragment.text, log);
     if (variant.program.id == 0) {
         // One error a version: the first pass's that fails.
         if (built.error.empty()) {
@@ -77,7 +77,8 @@ void SurfacePrograms::build(const engine_core::SurfaceBinding& binding, Built& b
     const std::string& glsl = binding.parse->glsl;
     const AssembledSource gbuffer =
         AssembleSurface("pipeline/deferred.frag", {"pipeline/gbuffer.glsl", "pipeline/surface.glsl"}, glsl, true);
-    if (!link(binding, gbuffer, built.gbuffer, built)) {
+    const std::string geometry = LoadShader("pipeline/geometry.vert");
+    if (!link(binding, geometry, gbuffer, built.gbuffer, built)) {
         return;
     }
     AssembledSource forward = AssembleSurface("pipeline/forward.frag",
@@ -94,11 +95,17 @@ void SurfacePrograms::build(const engine_core::SurfaceBinding& binding, Built& b
             ++forward.user_first_line;
         }
     }
-    link(binding, forward, built.forward, built);
+    link(binding, geometry, forward, built.forward, built);
+    if (binding.cuts) {
+        ++shadowBuilds_;
+        const AssembledSource vertex = AssembleSurface("pipeline/shadow.vert", {}, std::string(), false);
+        const AssembledSource shadow = AssembleSurface("pipeline/shadow.frag", {"pipeline/surface.glsl"}, glsl, true);
+        link(binding, vertex.text, shadow, built.shadow, built);
+    }
 }
 
 void SurfacePrograms::destroy(Built& built) {
-    for (Variant* variant : {&built.gbuffer, &built.forward}) {
+    for (Variant* variant : {&built.gbuffer, &built.forward, &built.shadow}) {
         if (variant->program.id != 0) {
             glDeleteProgram(variant->program.id);
         }

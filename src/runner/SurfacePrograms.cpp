@@ -48,31 +48,57 @@ const SurfacePrograms::Built& SurfacePrograms::get(const engine_core::SurfaceBin
     return found->second;
 }
 
+bool SurfacePrograms::link(const engine_core::SurfaceBinding& binding, const AssembledSource& fragment,
+                           Variant& variant, Built& built) {
+    std::string log;
+    variant.program.id = LinkProgramLog(LoadShader("pipeline/geometry.vert"), fragment.text, log);
+    if (variant.program.id == 0) {
+        // One error a version: the first pass's that fails.
+        if (built.error.empty()) {
+            built.error = MapShaderError(log, fragment);
+            if (built.error.empty()) {
+                built.error = "1: the shader did not build";
+            }
+            errors_.emplace_back(binding.shader, binding.version, built.error);
+        }
+        return false;
+    }
+    if (finish_) {
+        finish_(variant.program);
+    }
+    FindParams(*binding.parse, variant);
+    return true;
+}
+
 void SurfacePrograms::build(const engine_core::SurfaceBinding& binding, Built& built) {
     built = Built{};
     built.version = binding.version;
     ++builds_;
-    const AssembledSource fragment = AssembleSurface("pipeline/deferred.frag",
-                                                     {"pipeline/gbuffer.glsl", "pipeline/surface.glsl"},
-                                                     binding.parse->glsl, true);
-    std::string log;
-    built.gbuffer.program.id = LinkProgramLog(LoadShader("pipeline/geometry.vert"), fragment.text, log);
-    if (built.gbuffer.program.id == 0) {
-        built.error = MapShaderError(log, fragment);
-        if (built.error.empty()) {
-            built.error = "1: the shader did not build";
-        }
-        errors_.emplace_back(binding.shader, binding.version, built.error);
+    const std::string& glsl = binding.parse->glsl;
+    const AssembledSource gbuffer =
+        AssembleSurface("pipeline/deferred.frag", {"pipeline/gbuffer.glsl", "pipeline/surface.glsl"}, glsl, true);
+    if (!link(binding, gbuffer, built.gbuffer, built)) {
         return;
     }
-    if (finish_) {
-        finish_(built.gbuffer.program);
+    AssembledSource forward = AssembleSurface("pipeline/forward.frag",
+                                              {"pipeline/surface.glsl", "pipeline/lighting.glsl",
+                                               "pipeline/environment.glsl", "pipeline/image_lighting.glsl",
+                                               "pipeline/atmosphere.glsl"},
+                                              glsl, true);
+    if (binding.modes.transparent) {
+        // forward.frag cuts only where ALPHA is none; the user's lines move down one.
+        const std::string mark = "#define SURFACE_SHADER\n";
+        const std::size_t at = forward.text.find(mark);
+        if (at != std::string::npos) {
+            forward.text.insert(at + mark.size(), "#define SURFACE_TRANSPARENT\n");
+            ++forward.user_first_line;
+        }
     }
-    FindParams(*binding.parse, built.gbuffer);
+    link(binding, forward, built.forward, built);
 }
 
 void SurfacePrograms::destroy(Built& built) {
-    for (Variant* variant : {&built.gbuffer}) {
+    for (Variant* variant : {&built.gbuffer, &built.forward}) {
         if (variant->program.id != 0) {
             glDeleteProgram(variant->program.id);
         }

@@ -63,6 +63,9 @@ struct DrawItem {
     // opaque draws sort by it, so a pass changes program once per Shader, and
     // never join a run across it.
     std::uint64_t program = 0;
+    // Its surface Shader says render_mode transparent: see-through whatever
+    // its transparency.
+    bool seeThrough = false;
 };
 
 // A drawable mesh the camera may see.

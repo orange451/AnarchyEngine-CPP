@@ -2168,12 +2168,22 @@ float Renderer::shaderTime() const {
     return static_cast<float>(std::fmod(seconds, 3600.0));
 }
 
-const SurfacePrograms::Variant* Renderer::surfaceVariant(const MeshDraw& draw) {
+const SurfacePrograms::Variant* Renderer::surfaceVariant(const MeshDraw& draw, bool forward) {
     if (draw.surface == nullptr) {
         return nullptr;
     }
     const SurfacePrograms::Built& built = surfacePrograms_.get(*draw.surface, shaderTime());
-    return built.gbuffer.program.id != 0 ? &built.gbuffer : nullptr;
+    const SurfacePrograms::Variant& variant = forward ? built.forward : built.gbuffer;
+    return variant.program.id != 0 ? &variant : nullptr;
+}
+
+void Renderer::cullFor(const MeshDraw& draw, bool mirrored) {
+    if (draw.surface != nullptr && draw.surface->modes.two_sided) {
+        glDisable(RT_GL_CULL_FACE);
+        return;
+    }
+    glEnable(RT_GL_CULL_FACE);
+    glCullFace(mirrored ? RT_GL_FRONT : RT_GL_BACK);
 }
 
 void Renderer::useGeometryProgram(const Program& program, const float* projection) {
@@ -2514,6 +2524,7 @@ void Renderer::findVisible(const MeshDraw* meshes, int count, const CameraView& 
                 item.terrain = draw.terrainLook != 0;
                 item.shadowOnly = draw.shadowOnly;
                 item.program = draw.surface != nullptr ? draw.surface->shader : 0;
+                item.seeThrough = draw.surface != nullptr && draw.surface->modes.transparent;
                 if (item.terrain) {
                     item.transparency = 0.f;
                     item.slot = 0;
@@ -2683,7 +2694,7 @@ bool Renderer::geometryPass(const MeshDraw* meshes, const float* projection) {
             if (variant != nullptr) {
                 bindSurface(*variant, draw);
             }
-            glCullFace(run.mirrored ? RT_GL_FRONT : RT_GL_BACK);
+            cullFor(draw, run.mirrored);
             draw.mesh->bind();
             instances_.attach(run.first);
             if (std::find(asked.begin(), asked.end(), program.id) == asked.end()) {
@@ -2698,6 +2709,7 @@ bool Renderer::geometryPass(const MeshDraw* meshes, const float* projection) {
             ++stats_.instancedCalls;
         }
     }
+    glEnable(RT_GL_CULL_FACE);
     if (ok && terrainBegin < batches_.opaqueRuns) {
         RENDER_PASS("Terrain");
         glUseProgram(terrain_.id);
@@ -2801,6 +2813,7 @@ bool Renderer::geometryPass(const MeshDraw* meshes, const float* projection) {
                 bindSurface(*variant, draw);
             }
             glUniform2f(program.cardBand, slot.nearSquared, slot.farSquared);
+            cullFor(draw, false);
             draw.mesh->bind();
             slot.buffer.attach(0);
             if (std::find(asked.begin(), asked.end(), program.id) == asked.end()) {
@@ -3165,16 +3178,6 @@ bool Renderer::transparencyPass(const MeshDraw* meshes, const float* projection,
     // Color blends over; alpha gathers coverage, so the result is premultiplied.
     glBlendFuncSeparate(RT_GL_SRC_ALPHA, RT_GL_ONE_MINUS_SRC_ALPHA, RT_GL_ONE, RT_GL_ONE_MINUS_SRC_ALPHA);
 
-    glUseProgram(forward_.id);
-    glUniformMatrix4fv(forward_.view, 1, GL_FALSE, view_.m);
-    glUniformMatrix4fv(forward_.projection, 1, GL_FALSE, projection);
-    glUniformMatrix4fv(forward_.inverseProjection, 1, GL_FALSE, inverseProjection);
-    glUniform1i(forward_.fastShading, lighting_.fastShading ? 1 : 0);
-    glUniform3f(forward_.ambient, lighting_.ambient[0], lighting_.ambient[1], lighting_.ambient[2]);
-    glUniform3f(forward_.skyRadiance, kSkyRadiance, kSkyRadiance, kSkyRadiance);
-    bindSky(forward_);
-    // The same cube bindSky bound, so the air adds no texture unit.
-    UploadAtmosphere(forward_.atmosphere, atmosphere_, kUnitPrefiltered);
     const int lightCount = std::min(static_cast<int>(viewLights_.size()), kMaxForwardLights);
     float positionRadius[kMaxForwardLights * 4] = {};
     float colorIntensity[kMaxForwardLights * 4] = {};
@@ -3194,15 +3197,36 @@ bool Renderer::transparencyPass(const MeshDraw* meshes, const float* projection,
         co[0] = light.cone[0];
         co[1] = light.cone[1];
     }
-    glUniform1i(forward_.lightCount, lightCount);
-    if (lightCount > 0) {
-        glUniform4fv(forward_.lightPositionRadius, lightCount, positionRadius);
-        glUniform4fv(forward_.lightColorIntensity, lightCount, colorIntensity);
-        glUniform4fv(forward_.lightDirections, lightCount, directions);
-        glUniform4fv(forward_.lightCones, lightCount, cones);
-    }
-    glEnable(RT_GL_CULL_FACE);
-    bool asked = !seeThroughMeshes;
+    // A program's uniforms for the pass, set the first time the pass uses it.
+    std::vector<unsigned>& setUp = askedPrograms_;
+    setUp.clear();
+    const auto useForward = [&](const Program& program) {
+        if (std::find(setUp.begin(), setUp.end(), program.id) != setUp.end()) {
+            glUseProgram(program.id);
+            return true;
+        }
+        useGeometryProgram(program, projection);
+        glUniformMatrix4fv(program.inverseProjection, 1, GL_FALSE, inverseProjection);
+        glUniform1i(program.fastShading, lighting_.fastShading ? 1 : 0);
+        glUniform3f(program.ambient, lighting_.ambient[0], lighting_.ambient[1], lighting_.ambient[2]);
+        glUniform3f(program.skyRadiance, kSkyRadiance, kSkyRadiance, kSkyRadiance);
+        bindSky(program);
+        // The same cube bindSky bound, so the air adds no texture unit.
+        UploadAtmosphere(program.atmosphere, atmosphere_, kUnitPrefiltered);
+        glUniform1i(program.lightCount, lightCount);
+        if (lightCount > 0) {
+            glUniform4fv(program.lightPositionRadius, lightCount, positionRadius);
+            glUniform4fv(program.lightColorIntensity, lightCount, colorIntensity);
+            glUniform4fv(program.lightDirections, lightCount, directions);
+            glUniform4fv(program.lightCones, lightCount, cones);
+        }
+        setUp.push_back(program.id);
+        return false;
+    };
+    // Asked once, before the first draw: the stock program's, as it always was.
+    useForward(forward_);
+    const Program* current = &forward_;
+    std::vector<unsigned> asked;
     for (std::size_t index = static_cast<std::size_t>(batches_.opaqueRuns); index < batches_.runs.size(); ++index) {
         const DrawRun& run = batches_.runs[index];
         const MeshDraw& draw = meshes[run.draw];
@@ -3210,17 +3234,30 @@ bool Renderer::transparencyPass(const MeshDraw* meshes, const float* projection,
         if (draw.terrainLook != 0) {
             continue;
         }
-        bindMaterial(forward_, draw);
-        glCullFace(run.mirrored ? RT_GL_FRONT : RT_GL_BACK);
+        const SurfacePrograms::Variant* variant = surfaceVariant(draw, true);
+        const Program& program = variant != nullptr ? variant->program : forward_;
+        if (&program != current) {
+            useForward(program);
+            current = &program;
+        }
+        bindMaterial(program, draw);
+        if (variant != nullptr) {
+            bindSurface(*variant, draw);
+        }
+        cullFor(draw, run.mirrored);
         draw.mesh->bind();
         instances_.attach(run.first);
-        if (!asked && !CanDraw(forward_.id)) {
-            return false;
+        if (std::find(asked.begin(), asked.end(), program.id) == asked.end()) {
+            if (!CanDraw(program.id)) {
+                unbindSurfaceSamplers();
+                return false;
+            }
+            asked.push_back(program.id);
         }
-        asked = true;
         draw.mesh->draw_instanced(run.lod, run.count);
         ++stats_.instancedCalls;
     }
+    unbindSurfaceSamplers();
     glDisable(RT_GL_CULL_FACE);
     glCullFace(RT_GL_BACK);
     // Particles after the see-through meshes, over them all.

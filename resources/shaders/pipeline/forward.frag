@@ -54,9 +54,16 @@ void main() {
     // The Material's Shader (surface_shader.glsl) changes the surface first.
     runSurfaceShader(s, vViewPosition, vViewNormal, vUv, vColor, gl_FrontFacing);
 #endif
+#if defined(SURFACE_SHADER) && defined(SURFACE_TRANSPARENT)
+    // render_mode transparent: ALPHA is coverage, cut only where it is none.
+    if (s.alpha <= 0.0) {
+        discard;
+    }
+#else
     if (s.alpha < 0.1) {
         discard;
     }
+#endif
     vec3 viewDirection = normalize(vViewPosition);
     vec3 color = skyLight(viewDirection, s.normal, s.albedo, s.metalness, s.roughness, s.reflectivity, uAmbient,
                           uSkyRadiance, 1.0);

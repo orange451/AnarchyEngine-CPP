@@ -14,6 +14,17 @@ namespace engine_core {
 
 class Material;
 
+// A surface shader's render_mode words, as the passes read them.
+struct SurfaceModes {
+    // Drawn in the see-through pass whatever the Transparency.
+    bool transparent = false;
+    // No face culling.
+    bool two_sided = false;
+    // Casts no shadow.
+    bool no_shadow = false;
+};
+SurfaceModes surface_modes(const ShaderParse& parse);
+
 // What a Material's surface Shader needs to draw, resolved once per Prepare and
 // shared by every mesh that draws the Material. Immutable once built.
 struct SurfaceBinding {
@@ -21,6 +32,8 @@ struct SurfaceBinding {
     // The Shader's source_version.
     std::uint64_t version = 0;
     std::shared_ptr<const ShaderParse> parse;
+    // From parse's render_mode words.
+    SurfaceModes modes;
     // One per parse->params, in order: the Material's attribute when its kind
     // fits the uniform's type, else the uniform's default; a ranged number held
     // to its range, an int whole, a color a Color. A sampler's is Nil.

@@ -2416,6 +2416,7 @@ std::shared_ptr<engine_core::SurfaceBinding> SurfaceFor(engine_core::InstanceId 
     binding->shader = id;
     binding->version = version;
     binding->parse = std::make_shared<engine_core::ShaderParse>(engine_core::parse_shader(source));
+    binding->modes = engine_core::surface_modes(*binding->parse);
     for (std::size_t i = 0; i < binding->parse->params.size(); ++i) {
         const engine_core::ShaderParam& param = binding->parse->params[i];
         binding->values.push_back(i < values.size() ? values[i] : param.fallback);
@@ -2527,6 +2528,53 @@ void CheckSurfaceShaders(const GpuMesh* cube, int size, int fbWidth, int fbHeigh
     renderer.shutdown();
 }
 
+// render_mode transparent and two_sided, and a see-through Material's shader.
+void CheckSurfaceRenderModes(const GpuMesh* cube, int size, int fbWidth, int fbHeight) {
+    runner::Renderer renderer;
+    Expect(renderer.initialize(), "render modes: the renderer builds");
+    renderer.setCamera(engine_core::matrix4_translation(0.f, 0.f, 5.f), 50.f);
+    const auto middle = [&](runner::MeshDraw* draws, int count) {
+        renderer.draw(0, 0, size, size, size, size, draws, count);
+        return ReadPixel(fbWidth / 2, fbHeight / 2);
+    };
+    engine_core::Matrix4 behind = engine_core::matrix4_translation(0.f, 0.f, -4.f);
+    behind.m[0] = behind.m[5] = behind.m[10] = 3.f;
+    runner::MeshDraw wall{cube, behind};
+    wall.color[1] = wall.color[2] = 0.f;
+    const Pixel red = middle(&wall, 1);
+    const char* blue = "shader surface;\nvoid surface() {\n    ALBEDO = vec3(0.0, 0.0, 1.0);\n}\n";
+    runner::MeshDraw solid{cube, engine_core::matrix4_identity()};
+    solid.surface = SurfaceFor(9101, 1, blue);
+    runner::MeshDraw both[2] = {wall, solid};
+    const Pixel opaqueBlue = middle(both, 2);
+
+    // Half see-through blue over red: some of each.
+    both[1].surface = SurfaceFor(
+        9102, 1, "shader surface;\nrender_mode transparent;\nvoid surface() {\n    ALBEDO = vec3(0.0, 0.0, 1.0);\n    ALPHA = 0.5;\n}\n");
+    const Pixel blended = middle(both, 2);
+    Expect(blended.r > opaqueBlue.r + 20 && blended.b > red.b + 20,
+           "render modes: transparent with ALPHA 0.5 blends over red (" + Text(blended) + ", red " + Text(red) +
+               ", blue " + Text(opaqueBlue) + ")");
+
+    // From inside a cube every face is a back face: culled, unless two_sided.
+    engine_core::Matrix4 around = engine_core::matrix4_translation(0.f, 0.f, 5.f);
+    around.m[0] = around.m[5] = around.m[10] = 4.f;
+    runner::MeshDraw room{cube, around};
+    room.surface = SurfaceFor(9103, 1, "shader surface;\nvoid surface() {}\n");
+    Expect(IsClear(middle(&room, 1)), "render modes: a one-sided cube seen from inside draws nothing");
+    room.surface = SurfaceFor(9104, 1, "shader surface;\nrender_mode two_sided;\nvoid surface() {}\n");
+    const Pixel inside = middle(&room, 1);
+    Expect(!IsClear(inside), "render modes: a two_sided cube seen from inside draws (" + Text(inside) + ")");
+
+    // A see-through Material (Transparency 0.5) draws through its shader too.
+    runner::MeshDraw glass{cube, engine_core::matrix4_identity()};
+    glass.transparency = 0.5f;
+    glass.surface = SurfaceFor(9105, 1, "shader surface;\nvoid surface() {\n    ALBEDO = vec3(1.0, 0.0, 0.0);\n}\n");
+    const Pixel tinted = middle(&glass, 1);
+    Expect(tinted.r > tinted.b + 20, "render modes: a see-through Material's shader colors it (" + Text(tinted) + ")");
+    renderer.shutdown();
+}
+
 int main(int argc, char** argv) {
     // --save dir or --compare dir (the regression frames), --terrain-shots dir (the terrain PNGs).
     std::string regressionMode;
@@ -2622,6 +2670,7 @@ int main(int argc, char** argv) {
         CheckBillboardUpright();
         CheckBillboardBake();
         CheckSurfaceShaders(cube, kSize, fbWidth, fbHeight);
+        CheckSurfaceRenderModes(cube, kSize, fbWidth, fbHeight);
 
         // The cube at the origin, under the camera a Renderer starts with, fills the middle of the pane.
         runner::MeshDraw draw{cube, engine_core::matrix4_identity()};

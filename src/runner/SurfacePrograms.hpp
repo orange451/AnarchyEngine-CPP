@@ -1,6 +1,7 @@
 #pragma once
 
 #include "RenderProgram.hpp"
+#include "ShaderAssembly.hpp"
 #include "SurfaceBinding.hpp"
 
 #include <cstdint>
@@ -29,8 +30,10 @@ public:
     };
     struct Built {
         std::uint64_t version = 0;
-        // The G-buffer pass's; id 0 when not built or it failed.
+        // The G-buffer pass's and the see-through pass's; id 0 when not built
+        // or it failed.
         Variant gbuffer;
+        Variant forward;
         // "" or "<line>: <message>", at the user's line.
         std::string error;
         // When get last asked for it, in the seconds reclaim is given.
@@ -56,6 +59,9 @@ public:
 
 private:
     void build(const engine_core::SurfaceBinding& binding, Built& built);
+    // Links fragment into variant; false, with built's error set once, when it fails.
+    bool link(const engine_core::SurfaceBinding& binding, const AssembledSource& fragment, Variant& variant,
+              Built& built);
     static void destroy(Built& built);
 
     Finish finish_;

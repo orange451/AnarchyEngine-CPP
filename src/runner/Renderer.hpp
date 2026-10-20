@@ -664,9 +664,12 @@ private:
     // Fills a linked program's uniform locations and points its samplers at
     // their units; program.id is set.
     void finishProgram(Program& program);
-    // The G-buffer variant a run of draw draws with: its Material's surface
-    // Shader's when that built, else null for the stock program.
-    const SurfacePrograms::Variant* surfaceVariant(const MeshDraw& draw);
+    // The variant a run of draw draws with, the G-buffer's or the see-through
+    // pass's: its Material's surface Shader's when that built, else null for
+    // the stock program.
+    const SurfacePrograms::Variant* surfaceVariant(const MeshDraw& draw, bool forward = false);
+    // Culls back faces for draw unless its surface Shader is two_sided.
+    void cullFor(const MeshDraw& draw, bool mirrored);
     // Uses program for a geometry pass's meshes, with the view and the
     // uniforms a surface shader reads.
     void useGeometryProgram(const Program& program, const float* projection);

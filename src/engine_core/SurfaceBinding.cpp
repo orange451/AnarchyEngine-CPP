@@ -72,6 +72,16 @@ bool same_binding(const SurfaceBinding& a, const SurfaceBinding& b) {
 
 }  // namespace
 
+SurfaceModes surface_modes(const ShaderParse& parse) {
+    SurfaceModes modes;
+    for (const std::string& mode : parse.modes) {
+        modes.transparent = modes.transparent || mode == "transparent";
+        modes.two_sided = modes.two_sided || mode == "two_sided";
+        modes.no_shadow = modes.no_shadow || mode == "no_shadow";
+    }
+    return modes;
+}
+
 std::shared_ptr<const SurfaceBinding> make_surface_binding(const DataModel& world, const Material& material) {
     const Shader* shader = material.shader(world);
     if (shader == nullptr) {
@@ -81,6 +91,7 @@ std::shared_ptr<const SurfaceBinding> make_surface_binding(const DataModel& worl
     binding->shader = shader->id();
     binding->version = shader->source_version();
     binding->parse = shader->parse();
+    binding->modes = surface_modes(*binding->parse);
     static const std::regex time_word(R"(\bTIME\b)");
     binding->reads_time = std::regex_search(binding->parse->glsl, time_word);
     Hash hash;

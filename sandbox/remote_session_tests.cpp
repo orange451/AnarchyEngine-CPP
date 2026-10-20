@@ -535,6 +535,173 @@ TEST_CASE("RE39 a flood past the per-receive cap is cut off", "[remote][session]
 
 namespace {
 
+// A Client script that fires once a frame, up to times, while the client's own
+// workspace holds a Folder named Go: a test starts it when the link is set up.
+std::string fire_each_frame(const char* call, int times) {
+    return std::string(
+               "local r = workspace.Talk\n"
+               "local n = 0\n"
+               "game:GetService('RunService').Heartbeat:Connect(function()\n"
+               "    if n >= ") + std::to_string(times) + " or not workspace:FindFirstChild('Go') then return end\n"
+               "    n += 1\n"
+               "    " + call + "\n"
+               "end)\n";
+}
+
+void go(Client& client) { add_folder(client.rig.game, client.rig.game.scene_service("Workspace"), "Go"); }
+
+}  // namespace
+
+TEST_CASE("RE40 an unreliable FireServer arrives through the payload", "[remote][session]") {
+    Net net;
+    add_remote(net.server.game, net.workspace(), "Talk").set_unreliable(true);
+    server_script(net, "Hear",
+        "_G.count = 0\n"
+        "_G.sum = 0\n"
+        "workspace.Talk.OnServerEvent:Connect(function(connection, n) _G.count += 1 _G.sum += n end)\n");
+    client_script(net, "Send", fire_each_frame("r:FireServer(n)", 10).c_str());
+    Client& client = net.add_client();
+    net.run(1.0);
+    REQUIRE(client.session->state() == engine_network::ClientState::Joined);
+    const std::uint64_t acked = client.session->endpoint().stats(0, net.now).reliable_acked;
+    go(client);
+    net.run(0.5);
+    REQUIRE(number(net.server, "count") == 10);
+    REQUIRE(number(net.server, "sum") == 55);
+    REQUIRE(client.session->dropped_unreliable() == 0);
+    REQUIRE(net.session->dropped_remotes() == 0);
+    // None went through the reliable channel.
+    REQUIRE(client.session->endpoint().stats(0, net.now).reliable_acked == acked);
+}
+
+TEST_CASE("RE41 unreliable keeps the argument count and values", "[remote][session]") {
+    Net net;
+    add_remote(net.server.game, net.workspace(), "Talk").set_unreliable(true);
+    add_folder(net.server.game, net.workspace(), "Shared");
+    // Each side checks the three in firing order, and the server sends each back.
+    const char* check =
+        "local got = 0\n"
+        "local function check(...)\n"
+        "    got += 1\n"
+        "    local n, a, b = select('#', ...), ...\n"
+        "    if got == 1 then _G.args = n == 2 and a == 1 and b == nil\n"
+        "    elseif got == 2 then\n"
+        "        _G.tab = n == 1 and #a == 3 and a[1] == 1 and a[2] == 2 and a[3][1] == 3 and a.x == 'y'\n"
+        "    elseif got == 3 then _G.inst = n == 1 and a == workspace.Shared end\n"
+        "    return got\n"
+        "end\n";
+    server_script(net, "Hear",
+        (std::string(check) +
+         "local r = workspace.Talk\n"
+         "r.OnServerEvent:Connect(function(connection, ...)\n"
+         "    local which = check(...)\n"
+         "    if which == 1 then r:FireClient(connection, 1, nil)\n"
+         "    elseif which == 2 then r:FireClient(connection, {1, 2, {3}, x = 'y'})\n"
+         "    else r:FireClient(connection, workspace.Shared) end\n"
+         "end)\n").c_str());
+    client_script(net, "Send",
+        (std::string(check) +
+         "local r = workspace.Talk\n"
+         "r.OnClientEvent:Connect(check)\n"
+         "r:FireServer(1, nil)\n"
+         "r:FireServer({1, 2, {3}, x = 'y'})\n"
+         "r:FireServer(workspace.Shared)\n").c_str());
+    Client& client = net.add_client();
+    net.run(1.0);
+    for (ScriptRig* rig : {&net.server, &client.rig}) {
+        REQUIRE(boolean(*rig, "args"));
+        REQUIRE(boolean(*rig, "tab"));
+        REQUIRE(boolean(*rig, "inst"));
+    }
+    REQUIRE(client.session->dropped_unreliable() == 0);
+    REQUIRE(net.session->dropped_unreliable() == 0);
+}
+
+TEST_CASE("RE42 under 50% loss unreliable messages are lost, never resent, and never crash", "[remote][session]") {
+    Net net;
+    add_remote(net.server.game, net.workspace(), "Talk").set_unreliable(true);
+    server_script(net, "Hear",
+        "_G.count = 0\n"
+        "workspace.Talk.OnServerEvent:Connect(function() _G.count += 1 end)\n");
+    client_script(net, "Send", fire_each_frame("r:FireServer(n, string.rep('x', 50))", 100).c_str());
+    Client& client = net.add_client();
+    net.run(1.0);
+    REQUIRE(client.session->state() == engine_network::ClientState::Joined);
+    net.session->endpoint().conditioner().loss = 0.5f;
+    client.session->endpoint().conditioner().loss = 0.5f;
+    const std::uint64_t resent = client.session->endpoint().stats(0, net.now).reliable_resent;
+    go(client);
+    net.run(3.0);
+    const double count = number(net.server, "count");
+    REQUIRE(count >= 20);
+    REQUIRE(count <= 80);
+    REQUIRE(client.session->endpoint().stats(0, net.now).reliable_resent == resent);
+    REQUIRE(client.session->dropped_unreliable() == 0);
+    REQUIRE(net.session->dropped_remotes() == 0);
+    REQUIRE(client.session->state() == engine_network::ClientState::Joined);
+    REQUIRE(net.session->connection_of(0) != 0);
+}
+
+TEST_CASE("RE43 an unreliable message too big for a payload raises", "[remote][session]") {
+    Net net;
+    add_remote(net.server.game, net.workspace(), "Talk").set_unreliable(true);
+    const std::string over = "message is over " + std::to_string(engine_network::kMaxUnreliableRemoteBytes);
+    const std::string says =
+        "local function says(expected, f)\n"
+        "    local ok, err = pcall(f)\n"
+        "    return not ok and string.find(tostring(err), expected, 1, true) ~= nil\n"
+        "end\n";
+    server_script(net, "Big",
+        (says + "_G.server = says('FireClientAll " + over +
+         "', function() workspace.Talk:FireClientAll(string.rep('x', 2000)) end)\n"
+         "_G.small = pcall(function() workspace.Talk:FireClientAll(string.rep('x', 1000)) end)\n").c_str());
+    client_script(net, "Big",
+        (says + "_G.client = says('FireServer " + over +
+         "', function() workspace.Talk:FireServer(string.rep('x', 2000)) end)\n").c_str());
+    Client& client = net.add_client();
+    net.run(1.0);
+    REQUIRE(boolean(net.server, "server"));
+    REQUIRE(boolean(net.server, "small"));
+    REQUIRE(boolean(client.rig, "client"));
+}
+
+TEST_CASE("RE44 many unreliable messages in one tick pack until the budget, the rest dropped and counted",
+          "[remote][session]") {
+    Net net;
+    add_remote(net.server.game, net.workspace(), "Talk").set_unreliable(true);
+    server_script(net, "Hear",
+        "_G.count = 0\n"
+        "workspace.Talk.OnServerEvent:Connect(function(connection, n) _G.count += 1 _G.last = n end)\n");
+    client_script(net, "Send",
+        "_G.count = 0\n"
+        "workspace.Talk.OnClientEvent:Connect(function(n) _G.count += 1 _G.last = n end)\n");
+    client_script(net, "Burst", fire_each_frame("for i = 1, 50 do r:FireServer(i, string.rep('x', 100)) end", 1).c_str());
+    Client& client = net.add_client();
+    net.run(1.0);
+    REQUIRE(client.session->state() == engine_network::ClientState::Joined);
+    go(client);
+    net.run(0.5);
+    // About ten 107-byte messages fit a payload of 1174.
+    const double heard = number(net.server, "count");
+    REQUIRE(heard >= 5);
+    REQUIRE(heard < 50);
+    REQUIRE(heard + static_cast<double>(client.session->dropped_unreliable()) == 50);
+    // The first ones went, in order.
+    REQUIRE(number(net.server, "last") == heard);
+    REQUIRE(net.session->dropped_remotes() == 0);
+
+    // And the server's way.
+    add_script(net.server.game, "Burst", "for i = 1, 50 do workspace.Talk:FireClientAll(i, string.rep('x', 100)) end");
+    net.run(0.5);
+    const double got = number(client.rig, "count");
+    REQUIRE(got >= 5);
+    REQUIRE(got < 50);
+    REQUIRE(got + static_cast<double>(net.session->dropped_unreliable()) == 50);
+    REQUIRE(number(client.rig, "last") == got);
+}
+
+namespace {
+
 engine_core::RemoteValue table_of_falses(std::size_t count) {
     auto table = std::make_shared<engine_core::RemoteTable>();
     table->array.resize(count);

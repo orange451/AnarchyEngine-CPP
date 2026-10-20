@@ -308,4 +308,67 @@ bool decode_remote(ByteReader& in, std::uint32_t& remote_netid, engine_core::Rem
     return true;
 }
 
+std::size_t pack_remote_payload(const std::vector<RemoteMessage>& messages, std::size_t budget,
+                                std::vector<std::uint8_t>& out) {
+    out.clear();
+    std::size_t count = 0;
+    std::size_t body = 0;
+    for (const RemoteMessage& message : messages) {
+        const std::size_t room = varuint_size(message->size()) + message->size();
+        if (varuint_size(count + 1) + body + room > budget) {
+            break;
+        }
+        body += room;
+        ++count;
+    }
+    if (count == 0) {
+        return 0;
+    }
+    ByteWriter writer;
+    writer.data().swap(out);
+    writer.varuint(count);
+    for (std::size_t index = 0; index < count; ++index) {
+        writer.varuint(messages[index]->size());
+        writer.bytes(messages[index]->data(), messages[index]->size());
+    }
+    out.swap(writer.data());
+    return count;
+}
+
+bool read_remote_payload(const std::uint8_t* data, std::size_t size,
+                         const std::function<void(const std::uint8_t*, std::size_t)>& visit) {
+    // A varuint at *at, which moves past it; false past the end.
+    const auto varuint_at = [data, size](std::size_t& at, std::uint64_t& value) {
+        ByteReader in(data + at, size - at);
+        value = in.varuint();
+        at = size - in.left();
+        return !in.failed();
+    };
+    // The framing is checked whole first, so a bad payload delivers nothing.
+    std::size_t at = 0;
+    std::uint64_t count = 0;
+    if (!varuint_at(at, count) || count > size - at) {
+        return false;
+    }
+    const std::size_t first = at;
+    for (std::uint64_t index = 0; index < count; ++index) {
+        std::uint64_t length = 0;
+        if (!varuint_at(at, length) || length > size - at) {
+            return false;
+        }
+        at += static_cast<std::size_t>(length);
+    }
+    if (at != size) {
+        return false;
+    }
+    at = first;
+    for (std::uint64_t index = 0; index < count; ++index) {
+        std::uint64_t length = 0;
+        varuint_at(at, length);
+        visit(data + at, static_cast<std::size_t>(length));
+        at += static_cast<std::size_t>(length);
+    }
+    return true;
+}
+
 }  // namespace engine_network

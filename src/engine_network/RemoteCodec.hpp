@@ -17,12 +17,16 @@
 
 #include "ByteBuffer.hpp"
 
+#include "Packet.hpp"
+
 #include "RemoteValues.hpp"
 #include "types.hpp"
 
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <memory>
+#include <vector>
 
 namespace engine_network {
 
@@ -45,5 +49,45 @@ void encode_remote(std::uint32_t remote_netid, const engine_core::RemoteValues& 
 bool decode_remote(ByteReader& in, std::uint32_t& remote_netid, engine_core::RemoteValues& out, const NetToId& to_id,
                    std::size_t max_bytes, std::size_t max_values = engine_core::kRemoteMaxValues,
                    std::size_t* values_read = nullptr);
+
+// A tick's unreliable messages for one peer ride its packet's payload:
+//   varuint count, count x (varuint length, message bytes)
+// Bytes a varuint takes.
+constexpr std::size_t varuint_size(std::uint64_t value) {
+    std::size_t size = 1;
+    while (value >= 0x80) {
+        value >>= 7;
+        ++size;
+    }
+    return size;
+}
+
+// The largest message that fits an empty payload on its own: one byte less
+// than the payload holds stays for the packet's own end, and the count and
+// the length come first.
+constexpr std::size_t unreliable_room(std::size_t message) {
+    return varuint_size(1) + varuint_size(message) + message;
+}
+constexpr std::size_t largest_unreliable_message() {
+    std::size_t message = network::kMaxPayloadBytes - 1;
+    while (message > 0 && unreliable_room(message) > network::kMaxPayloadBytes - 1) {
+        --message;
+    }
+    return message;
+}
+constexpr std::size_t kMaxUnreliableRemoteBytes = largest_unreliable_message();
+
+using RemoteMessage = std::shared_ptr<const std::vector<std::uint8_t>>;
+
+// Packs messages, in order, into out until the next would take it past
+// budget bytes; returns how many went in (0 leaves out empty).
+std::size_t pack_remote_payload(const std::vector<RemoteMessage>& messages, std::size_t budget,
+                                std::vector<std::uint8_t>& out);
+
+// Calls visit(data, size) for each message in a payload, in order. False,
+// having visited nothing, when the framing is bad: a count or a length past
+// the bytes there, or bytes left over.
+bool read_remote_payload(const std::uint8_t* data, std::size_t size,
+                         const std::function<void(const std::uint8_t*, std::size_t)>& visit);
 
 }  // namespace engine_network

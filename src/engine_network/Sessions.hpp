@@ -106,6 +106,9 @@ public:
     // clients do not have, a client not yet joined, too many values, or past
     // a per-receive cap (bytes or values).
     std::size_t dropped_remotes() const;
+    // Unreliable messages fired to clients that never went: past a payload's
+    // budget in their tick, or to a client whose snapshot was not yet queued.
+    std::size_t dropped_unreliable() const;
     bool fire_server(engine_core::InstanceId remote, std::shared_ptr<const engine_core::RemoteValues> values,
                      bool unreliable, std::string& error) override;
     bool fire_clients(engine_core::InstanceId remote, const std::vector<engine_core::InstanceId>& connections,
@@ -129,19 +132,27 @@ private:
         std::vector<Message> held;   // RemoteEvent messages fired before its snapshot was queued: they go after it
         std::size_t remote_bytes = 0;   // RemoteEvent bytes accepted from it in this receive
         std::size_t remote_values = 0;  // and the values they decoded to
+        std::vector<Message> unreliable;   // unreliable messages for this tick's payload, in firing order
+        std::size_t unreliable_bytes = 0;
     };
     void on_connected(network::PeerId peer);
     void on_disconnected(network::PeerId peer);
     void push(Peer& entry, Message message);
     void flush(network::PeerId peer, double now);
     void on_message(network::PeerId peer, const std::uint8_t* data, std::size_t size);
-    // A fired message and whom it goes to, until send() queues it behind the tick's changes.
+    void on_payload(network::PeerId peer, const std::uint8_t* data, std::size_t size);
+    // A client's RemoteEvent message by either path: fires OnServerEvent, or is dropped and counted.
+    void accept_remote(network::PeerId peer, const std::uint8_t* data, std::size_t size);
+    // A fired message and whom it goes to, until send() queues it behind the
+    // tick's changes, or packs an unreliable one into each peer's payload.
     struct Outgoing {
         std::vector<engine_core::InstanceId> connections;
         bool all = false;
+        bool unreliable = false;
         Message message;
     };
     void route(const Outgoing& outgoing);
+    void send_unreliable(network::PeerId peer, Peer& entry, double now);
 
     engine_core::DataModel& game_;
     SessionConfig config_;
@@ -150,6 +161,9 @@ private:
     std::size_t dropped_messages_ = 0;
     std::size_t dropped_remotes_ = 0;
     std::vector<Outgoing> outbox_;
+    std::size_t unreliable_outbox_bytes_ = 0;   // the unreliable messages in outbox_
+    std::size_t dropped_unreliable_ = 0;
+    std::vector<std::uint8_t> payload_;   // a peer's packed payload, kept to spare a tick the allocation
     bool remote_bytes_counted_ = false;   // some peer's remote_bytes is not 0
     std::size_t fell_behind_ = 0;
     double now_ = 0.0;   // the last time the engine gave
@@ -208,6 +222,8 @@ public:
     std::function<void(ClientState, const std::string& reason)> on_state;
     // Swap mode: told of each Persistent instance the swap had to destroy, and why.
     std::function<void(const std::string&)> on_warning;
+    // Unreliable FireServer messages that never went: past the payload's budget in their tick.
+    std::size_t dropped_unreliable() const;
     bool fire_server(engine_core::InstanceId remote, std::shared_ptr<const engine_core::RemoteValues> values,
                      bool unreliable, std::string& error) override;
     bool fire_clients(engine_core::InstanceId remote, const std::vector<engine_core::InstanceId>& connections,
@@ -217,6 +233,8 @@ public:
 private:
     void on_connected();
     void on_message(const std::uint8_t* data, std::size_t size);
+    // A tick's unreliable messages from the server; bad framing is bad data.
+    void on_payload(const std::uint8_t* data, std::size_t size);
     // A server's RemoteEvent message: false for bad bytes.
     bool on_remote(const std::uint8_t* data, std::size_t size);
     void on_disconnected(network::DisconnectReason why, network::DenyReason deny);
@@ -243,6 +261,11 @@ private:
     // FireServer messages the reliable window had no room for yet, oldest first.
     std::deque<std::shared_ptr<const std::vector<std::uint8_t>>> outbox_;
     std::size_t outbox_bytes_ = 0;   // kMaxServerOutboxBytes
+    // Unreliable FireServer messages for this tick's payload, oldest first.
+    std::vector<std::shared_ptr<const std::vector<std::uint8_t>>> unreliable_;
+    std::size_t unreliable_bytes_ = 0;
+    std::size_t dropped_unreliable_ = 0;
+    std::vector<std::uint8_t> payload_;   // the packed payload, kept to spare a tick the allocation
     // Server messages for a remote nobody listens to yet, oldest first (kMaxUnheardRemoteBytes).
     struct Unheard {
         engine_core::InstanceId remote = 0;

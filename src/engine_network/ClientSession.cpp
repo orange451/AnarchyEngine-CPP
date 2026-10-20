@@ -17,6 +17,9 @@ ClientSession::ClientSession(engine_core::DataModel& game, std::unique_ptr<netwo
     network::EndpointCallbacks callbacks;
     callbacks.on_connected = [this](network::PeerId) { on_connected(); };
     callbacks.on_message = [this](network::PeerId, const std::uint8_t* data, std::size_t size) { on_message(data, size); };
+    callbacks.on_payload = [this](network::PeerId, std::uint16_t, const std::uint8_t* data, std::size_t size) {
+        on_payload(data, size);
+    };
     callbacks.on_disconnected = [this](network::PeerId, network::DisconnectReason why, network::DenyReason deny) {
         on_disconnected(why, deny);
     };
@@ -85,10 +88,32 @@ void ClientSession::on_message(const std::uint8_t* data, std::size_t size) {
     }
 }
 
+void ClientSession::on_payload(const std::uint8_t* data, std::size_t size) {
+    // Until the snapshot is in, a message could name nothing here.
+    if (state_ != ClientState::Joined) {
+        return;
+    }
+    bool bad = false;
+    const bool framed = read_remote_payload(data, size, [this, &bad](const std::uint8_t* message, std::size_t length) {
+        if (bad || state_ != ClientState::Joined) {
+            return;
+        }
+        bad = length == 0 || message[0] != static_cast<std::uint8_t>(MessageType::Remote) || !on_remote(message, length);
+    });
+    if (!framed || bad) {
+        if (reason_.empty()) {
+            set_reason("Bad data from the server");
+        }
+        endpoint_->disconnect(0, now_);
+    }
+}
+
 void ClientSession::on_disconnected(network::DisconnectReason why, network::DenyReason deny) {
     // Nothing fired for this connection goes to the next one, either way.
     outbox_.clear();
     outbox_bytes_ = 0;
+    unreliable_.clear();
+    unreliable_bytes_ = 0;
     unheard_.clear();
     unheard_bytes_ = 0;
     if (reason_.empty()) {
@@ -156,6 +181,8 @@ bool ClientSession::connect(const network::Address& server, double now) {
     leave_requested_ = false;
     outbox_.clear();
     outbox_bytes_ = 0;
+    unreliable_.clear();
+    unreliable_bytes_ = 0;
     unheard_.clear();
     unheard_bytes_ = 0;
     // Each connection builds its world from nothing.
@@ -206,6 +233,19 @@ void ClientSession::send(double now) {
            endpoint_->send_message(0, outbox_.front())) {
         outbox_bytes_ -= outbox_.front()->size();
         outbox_.pop_front();
+    }
+    // Unreliable ones ride this tick's payload, as many as fit; the rest are dropped, never resent.
+    if (!unreliable_.empty()) {
+        std::size_t packed = 0;
+        if (endpoint_->state(0) == network::ConnectionState::Connected) {
+            packed = pack_remote_payload(unreliable_, endpoint_->payload_budget(0, now), payload_);
+            if (packed != 0 && !endpoint_->send_payload(0, payload_.data(), payload_.size(), 0)) {
+                packed = 0;
+            }
+        }
+        dropped_unreliable_ += unreliable_.size() - packed;
+        unreliable_.clear();
+        unreliable_bytes_ = 0;
     }
     endpoint_->send(now);
 }
@@ -319,7 +359,7 @@ void ClientSession::fire_unheard() {
 }
 
 bool ClientSession::fire_server(engine_core::InstanceId remote, std::shared_ptr<const engine_core::RemoteValues> values,
-                                bool, std::string& error) {
+                                bool unreliable, std::string& error) {
     if (values == nullptr) {
         return true;
     }
@@ -327,12 +367,23 @@ bool ClientSession::fire_server(engine_core::InstanceId remote, std::shared_ptr<
     const std::uint32_t remote_netid = applier_->netid_of(remote);
     ByteWriter out;
     encode_remote(remote_netid, *values, [this](engine_core::InstanceId id) { return applier_->netid_of(id); }, out);
-    if (out.data().size() > engine_core::kRemoteMaxReliableBytes) {
-        error = "message is over " + std::to_string(engine_core::kRemoteMaxReliableBytes);
+    const std::size_t cap = unreliable ? kMaxUnreliableRemoteBytes : engine_core::kRemoteMaxReliableBytes;
+    if (out.data().size() > cap) {
+        error = "message is over " + std::to_string(cap);
         return false;
     }
     // A remote of this client's own is one the server has never heard of.
     if (remote_netid == 0 || (state_ != ClientState::Joining && state_ != ClientState::Joined)) {
+        return true;
+    }
+    if (unreliable) {
+        // More than a payload holds never goes this tick.
+        if (unreliable_bytes_ + out.data().size() > network::kMaxPayloadBytes) {
+            ++dropped_unreliable_;
+            return true;
+        }
+        unreliable_bytes_ += out.data().size();
+        unreliable_.push_back(std::make_shared<const std::vector<std::uint8_t>>(std::move(out.data())));
         return true;
     }
     // A server that stops acking leaves these waiting; a script cannot pile up more than the cap.
@@ -353,6 +404,7 @@ bool ClientSession::fire_clients(engine_core::InstanceId, const std::vector<engi
 }
 
 network::Endpoint& ClientSession::endpoint() { return *endpoint_; }
+std::size_t ClientSession::dropped_unreliable() const { return dropped_unreliable_; }
 ReplicaApplier& ClientSession::applier() { return *applier_; }
 
 }  // namespace engine_network

@@ -25,6 +25,9 @@ ServerSession::ServerSession(engine_core::DataModel& game, std::unique_ptr<netwo
     callbacks.on_message = [this](network::PeerId peer, const std::uint8_t* data, std::size_t size) {
         on_message(peer, data, size);
     };
+    callbacks.on_payload = [this](network::PeerId peer, std::uint16_t, const std::uint8_t* data, std::size_t size) {
+        on_payload(peer, data, size);
+    };
     endpoint_ = std::make_unique<network::Endpoint>(std::move(socket), config_.endpoint, std::move(callbacks));
     game_.set_remote_sink(this);
 }
@@ -40,6 +43,7 @@ network::Endpoint& ServerSession::endpoint() { return *endpoint_; }
 const Replicator& ServerSession::replicator() const { return replicator_; }
 std::size_t ServerSession::dropped_messages() const { return dropped_messages_; }
 std::size_t ServerSession::dropped_remotes() const { return dropped_remotes_; }
+std::size_t ServerSession::dropped_unreliable() const { return dropped_unreliable_; }
 std::size_t ServerSession::fell_behind() const { return fell_behind_; }
 
 InstanceId ServerSession::connection_of(network::PeerId peer) const {
@@ -94,8 +98,27 @@ void ServerSession::on_message(network::PeerId peer, const std::uint8_t* data, s
         ++dropped_messages_;
         return;
     }
-    // A RemoteEvent message. Anything wrong with it drops it and counts it; the
-    // client is never kicked for what it sent.
+    accept_remote(peer, data, size);
+}
+
+void ServerSession::on_payload(network::PeerId peer, const std::uint8_t* data, std::size_t size) {
+    // A tick's unreliable messages, each checked as a reliable one is and
+    // counted against the same per-receive caps.
+    const bool framed = read_remote_payload(data, size, [this, peer](const std::uint8_t* message, std::size_t length) {
+        if (length == 0 || message[0] != static_cast<std::uint8_t>(MessageType::Remote)) {
+            ++dropped_remotes_;
+            return;
+        }
+        accept_remote(peer, message, length);
+    });
+    if (!framed) {
+        ++dropped_remotes_;
+    }
+}
+
+void ServerSession::accept_remote(network::PeerId peer, const std::uint8_t* data, std::size_t size) {
+    // A RemoteEvent message, by either path. Anything wrong with it drops it and
+    // counts it; the client is never kicked for what it sent.
     const auto found = peers_.find(peer);
     if (found == peers_.end() || !found->second.joined || !game_.alive(found->second.connection) ||
         found->second.remote_bytes + size > config_.max_remote_bytes_per_pass) {
@@ -141,7 +164,8 @@ bool ServerSession::fire_server(InstanceId, std::shared_ptr<const engine_core::R
 }
 
 bool ServerSession::fire_clients(InstanceId remote, const std::vector<InstanceId>& connections, bool all,
-                                 std::shared_ptr<const engine_core::RemoteValues> values, bool, std::string& error) {
+                                 std::shared_ptr<const engine_core::RemoteValues> values, bool unreliable,
+                                 std::string& error) {
     if (values == nullptr) {
         return true;
     }
@@ -154,15 +178,26 @@ bool ServerSession::fire_clients(InstanceId remote, const std::vector<InstanceId
         }, out);
         bytes = std::move(out.data());
     }
-    if (bytes.size() > engine_core::kRemoteMaxReliableBytes) {
-        error = "message is over " + std::to_string(engine_core::kRemoteMaxReliableBytes);
+    const std::size_t cap = unreliable ? kMaxUnreliableRemoteBytes : engine_core::kRemoteMaxReliableBytes;
+    if (bytes.size() > cap) {
+        error = "message is over " + std::to_string(cap);
         return false;
     }
     // A remote clients do not hold (one in ServerStorage) reaches no one.
     if ((!all && connections.empty()) || !replicator_.replicated(remote)) {
         return true;
     }
-    outbox_.push_back(Outgoing{connections, all, std::make_shared<const std::vector<std::uint8_t>>(std::move(bytes))});
+    if (unreliable) {
+        // More than every client's payload could carry this tick never goes.
+        const std::size_t most = network::kMaxPayloadBytes * config_.endpoint.max_peers;
+        if (unreliable_outbox_bytes_ + bytes.size() > most) {
+            ++dropped_unreliable_;
+            return true;
+        }
+        unreliable_outbox_bytes_ += bytes.size();
+    }
+    outbox_.push_back(Outgoing{connections, all, unreliable,
+                               std::make_shared<const std::vector<std::uint8_t>>(std::move(bytes))});
     return true;
 }
 
@@ -170,6 +205,18 @@ void ServerSession::route(const Outgoing& outgoing) {
     for (auto& [peer, entry] : peers_) {
         if (!outgoing.all && std::find(outgoing.connections.begin(), outgoing.connections.end(), entry.connection) ==
                                  outgoing.connections.end()) {
+            continue;
+        }
+        // Unreliable: this tick's payload, for a client whose snapshot is
+        // queued; before that it could name nothing. More than a payload holds
+        // never goes.
+        if (outgoing.unreliable) {
+            if (!entry.joined || entry.unreliable_bytes + outgoing.message->size() > network::kMaxPayloadBytes) {
+                ++dropped_unreliable_;
+            } else {
+                entry.unreliable_bytes += outgoing.message->size();
+                entry.unreliable.push_back(outgoing.message);
+            }
             continue;
         }
         // Through the same queue as the tree, behind this tick's changes; a client
@@ -253,6 +300,7 @@ void ServerSession::send(double now) {
             route(outgoing);
         }
         outbox_.clear();
+        unreliable_outbox_bytes_ = 0;
     }
     // After this tick's changes: a snapshot taken now already holds them, and
     // every later tick's changes queue behind it, so a client gets each change
@@ -277,8 +325,24 @@ void ServerSession::send(double now) {
         if (peers_.count(peer) != 0) {
             flush(peer, now);
         }
+        // flush may have dropped it.
+        const auto found = peers_.find(peer);
+        if (found != peers_.end() && !found->second.unreliable.empty()) {
+            send_unreliable(peer, found->second, now);
+        }
     });
     endpoint_->send(now);
+}
+
+void ServerSession::send_unreliable(network::PeerId peer, Peer& entry, double now) {
+    // As many as fit the payload, in firing order; the rest are dropped, never resent.
+    const std::size_t packed = pack_remote_payload(entry.unreliable, endpoint_->payload_budget(peer, now), payload_);
+    if (packed != 0 && !endpoint_->send_payload(peer, payload_.data(), payload_.size(), 0)) {
+        dropped_unreliable_ += packed;
+    }
+    dropped_unreliable_ += entry.unreliable.size() - packed;
+    entry.unreliable.clear();
+    entry.unreliable_bytes = 0;
 }
 
 void ServerSession::close(double now) {

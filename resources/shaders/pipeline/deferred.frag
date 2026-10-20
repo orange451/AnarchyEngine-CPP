@@ -35,6 +35,10 @@ void main() {
         discard;
     }
     Surface s = readSurface(vViewPosition, vViewNormal, vUv, vColor, gl_FrontFacing);
+#ifdef SURFACE_SHADER
+    // The Material's Shader (surface_shader.glsl) changes the surface first.
+    runSurfaceShader(s, vViewPosition, vViewNormal, vUv, vColor, gl_FrontFacing);
+#endif
     // Alpha test: a cut-out texture's holes leave the G-buffer alone.
     if (s.alpha < 0.25) {
         discard;

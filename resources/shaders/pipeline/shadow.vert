@@ -5,9 +5,15 @@
 // and 15; a skinned caster is posed as geometry.vert poses it. Built with
 // CUTOUT, it passes on the UVs shadow.frag tests alpha at.
 layout (location = 0) in vec3 aPosition;
-#ifdef CUTOUT
+#if defined(CUTOUT) || defined(SURFACE_SHADER)
 layout (location = 2) in vec2 aUv;
 out vec2 vUv;
+#endif
+#ifdef SURFACE_SHADER
+// A Material's Shader in shadow.frag reads the vertex color and where it is.
+layout (location = 4) in vec4 aColor;
+out vec4 vColor;
+out vec3 vWorldPosition;
 #endif
 layout (location = 5) in uvec4 aBones;
 layout (location = 6) in vec4 aWeights;
@@ -42,8 +48,13 @@ mat4 skin() {
 }
 
 void main() {
-#ifdef CUTOUT
+#if defined(CUTOUT) || defined(SURFACE_SHADER)
     vUv = aUv;
 #endif
-    gl_Position = uViewProjection * (aModel * (skin() * vec4(aPosition, 1.0)));
+    vec4 world = aModel * (skin() * vec4(aPosition, 1.0));
+#ifdef SURFACE_SHADER
+    vColor = aColor;
+    vWorldPosition = world.xyz;
+#endif
+    gl_Position = uViewProjection * world;
 }

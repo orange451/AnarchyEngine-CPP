@@ -58,6 +58,7 @@ set(STUDIO_CORE_SOURCES
     src/runner/Visibility.cpp
     src/runner/TerrainSelection.cpp
     src/runner/DrawBatches.cpp
+    src/runner/ShaderAssembly.cpp
     src/runner/CardField.cpp
     src/runner/FileWatch.cpp
     src/runner/ParallelBlocks.cpp
@@ -1256,6 +1257,7 @@ add_executable(sandbox
     sandbox/attribute_tests.cpp
     sandbox/shader_source_tests.cpp
     sandbox/shader_tests.cpp
+    sandbox/shader_assembly_tests.cpp
     sandbox/cylinder_shape_tests.cpp
     sandbox/cylinder_world_tests.cpp
     sandbox/cylinder_car_tests.cpp

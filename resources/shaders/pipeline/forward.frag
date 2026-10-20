@@ -50,6 +50,10 @@ void main() {
         discard;
     }
     Surface s = readSurface(vViewPosition, vViewNormal, vUv, vColor, gl_FrontFacing);
+#ifdef SURFACE_SHADER
+    // The Material's Shader (surface_shader.glsl) changes the surface first.
+    runSurfaceShader(s, vViewPosition, vViewNormal, vUv, vColor, gl_FrontFacing);
+#endif
     if (s.alpha < 0.1) {
         discard;
     }

@@ -7,10 +7,13 @@
 #include "IdeIcons.hpp"
 #include "LuaSource.hpp"
 #include "ScriptAnalysis.hpp"
+#include "Shader.hpp"
 #include "Strings.hpp"
+#include "Utf8.hpp"
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <optional>
 #include <utility>
 
@@ -207,6 +210,64 @@ void gather(const engine_core::DataModel& game, engine_core::InstanceId parent, 
     }
 }
 
+// A Shader under parent, with its Error and where it is.
+struct ShaderEntry {
+    std::uint32_t id = 0;
+    std::string name;
+    std::string path;
+    std::string error;
+    std::string source;
+};
+
+// Every Shader under Assets.Shaders, the only place one can be, in tree order.
+// source is kept only for those with an error.
+void gather_shaders(const engine_core::DataModel& game, engine_core::InstanceId parent, const std::string& path,
+                    std::vector<ShaderEntry>& out, int depth) {
+    for (engine_core::InstanceId child = game.first_child(parent); child != 0; child = game.next_sibling(child)) {
+        const std::string name = game.name(child);
+        if (const auto* shader = dynamic_cast<const engine_core::Shader*>(game.instance(child))) {
+            ShaderEntry entry{child, name, path, shader->error(), std::string()};
+            if (!entry.error.empty()) {
+                entry.source = shader->source();
+            }
+            out.push_back(std::move(entry));
+        }
+        if (depth < 64) {
+            gather_shaders(game, child, path + "." + name, out, depth + 1);
+        }
+    }
+}
+
+std::vector<ShaderEntry> shaders_of(const engine_core::DataModel& game) {
+    std::vector<ShaderEntry> out;
+    const engine_core::InstanceId shaders = game.service("Shaders");
+    if (shaders != 0) {
+        gather_shaders(game, shaders, "Assets.Shaders", out, 0);
+    }
+    return out;
+}
+
+// A Shader's Error, "<line>: <message>", as one problem across that line of source.
+Problem shader_problem(const std::string& error, const std::string& source) {
+    Problem problem;
+    problem.severity = engine_core::Severity::Error;
+    problem.code = "Shader";
+    const std::size_t colon = error.find(": ");
+    problem.line = colon == std::string::npos ? 1 : std::max(1, std::atoi(error.substr(0, colon).c_str()));
+    problem.message = colon == std::string::npos ? error : error.substr(colon + 2);
+    std::size_t begin = 0;
+    for (int line = 1; line < problem.line && begin != std::string::npos; ++line) {
+        begin = source.find('\n', begin);
+        begin = begin == std::string::npos ? begin : begin + 1;
+    }
+    if (begin != std::string::npos) {
+        std::size_t end = source.find('\n', begin);
+        end = end == std::string::npos ? source.size() : end;
+        problem.column_end = CodePoints(std::string_view(source).substr(begin, end - begin));
+    }
+    return problem;
+}
+
 // The chain of names from game's child down to id's parent, as gather builds
 // it. False when id is not in the place, or is under Core.
 bool path_of(const engine_core::DataModel& game, engine_core::InstanceId id, std::string& path) {
@@ -346,7 +407,9 @@ bool IdeProblems::headerShown() const {
 void IdeProblems::refresh() {
     engine_core::DataModel& game = engine_.datamodel();
     std::vector<ScriptEntry> scripts;
+    std::vector<ShaderEntry> shaders;
     std::uint64_t tree = 0;
+    std::uint64_t authored = 0;
     {
         engine_core::DataModelLock lock(game, engine_core::DataModelLock::Read, kFrameLockWait);
         if (!lock.owns()) {
@@ -356,6 +419,8 @@ void IdeProblems::refresh() {
         }
         tree = game.tree_revision();
         gather(game, game.id(), "", scripts, 0);
+        shaders = shaders_of(game);
+        authored = game.authored_revision();
     }
     // Analysis keeps its own lock: what it published is read without holding the place's.
     const engine_core::ScriptAnalysis& analysis = engine_.analysis();
@@ -384,8 +449,23 @@ void IdeProblems::refresh() {
             gathered.push_back(std::move(source));
         }
     }
+    shader_errors_.clear();
+    for (ShaderEntry& shader : shaders) {
+        shader_errors_.emplace_back(shader.id, shader.error);
+        if (shader.error.empty()) {
+            continue;
+        }
+        ProblemSource source;
+        source.id = shader.id;
+        source.name = std::move(shader.name);
+        source.class_name = "Shader";
+        source.path = std::move(shader.path);
+        source.problems.push_back(shader_problem(shader.error, shader.source));
+        gathered.push_back(std::move(source));
+    }
     sources_ = std::move(gathered);
     seen_tree_ = tree;
+    seen_authored_ = authored;
     update_model();
     flush_view();
 }
@@ -603,6 +683,22 @@ void IdeProblems::tick(double now) {
         shown_enabled_ = enabled;
         changed_.set();
         notices_stale_ = true;
+    }
+    // A Shader's Error moves with its Source, an authored edit: when one did,
+    // the Shaders, which live only under Assets.Shaders, are read again.
+    if (!playing && built_once_ && engine_.datamodel().authored_revision() != seen_authored_) {
+        engine_core::DataModel& game = engine_.datamodel();
+        engine_core::DataModelLock lock(game, engine_core::DataModelLock::Read, kFrameLockWait);
+        if (lock.owns()) {
+            seen_authored_ = game.authored_revision();
+            std::vector<std::pair<std::uint32_t, std::string>> now;
+            for (const ShaderEntry& shader : shaders_of(game)) {
+                now.emplace_back(shader.id, shader.error);
+            }
+            if (now != shader_errors_) {
+                changed_.set();
+            }
+        }
     }
     bool changed = changed_.take() || !built_once_;
     // A playtest churns the tree every frame as it spawns and destroys things,

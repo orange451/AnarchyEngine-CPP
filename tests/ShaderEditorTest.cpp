@@ -4,6 +4,7 @@
 #include "ide/IdeDock.hpp"
 #include "ide/IdeAssets.hpp"
 #include "ide/IdeLayout.hpp"
+#include "ide/IdeProblems.hpp"
 #include "ide/IdeShaderEditor.hpp"
 
 #include "DataModel.hpp"
@@ -194,11 +195,87 @@ void TestShaderTab(ide::IdeLayout& layout, jadefx::Scene& scene) {
     frame();
 }
 
+// Opening a Shader's problem in the Problems pane opens the shader editor at its line.
+void TestProblemOpensShader(ide::IdeLayout& layout, jadefx::Scene& scene) {
+    engine_core::Engine& engine = layout.simulation();
+    double time = 60.0;
+    auto frame = [&] {
+        scene.layout(1280, 800, time);
+        time += 0.1;
+    };
+    engine_core::InstanceId id = 0;
+    engine.on_simulation([&](engine_core::DataModel& game) {
+        engine_core::Shader& shader = game.create<engine_core::Shader>();
+        game.set_name(shader.id(), "Broken");
+        game.set_parent(shader.id(), game.service("Shaders"));
+        shader.set_source(kBadHint);
+        id = shader.id();
+    });
+    layout.show_problems();
+    for (int i = 0; i < 8; ++i) {
+        frame();
+    }
+    ide::IdeProblems* problems = nullptr;
+    for (jadefx::Node* node : scene.getElementsByClassName("problems-pane")) {
+        problems = problems != nullptr ? problems : dynamic_cast<ide::IdeProblems*>(node);
+    }
+    Expect(problems != nullptr, "Problems is open");
+    if (problems == nullptr) {
+        return;
+    }
+    std::size_t index = 0;
+    bool listed = false;
+    for (const ide::ScriptProblems& source : problems->list().scripts) {
+        if (source.id == id) {
+            listed = true;
+            break;
+        }
+        ++index;
+    }
+    Expect(listed, "the Shader's error is listed");
+    const auto& rows = problems->tree().getRoot()->getChildren();
+    if (listed && index < rows.size() && !rows.items()[index]->getChildren().empty()) {
+        problems->openRow(rows.items()[index]->getChildren().items()[0].get());
+    }
+    frame();
+    frame();
+    ide::IdeShaderEditor* editor = EditorFor(scene, id);
+    Expect(editor != nullptr, "opening the problem opens the shader editor");
+    if (editor == nullptr) {
+        return;
+    }
+    jadefx::CodeArea* code = nullptr;
+    for (jadefx::Node* node : scene.getElementsByClassName("ide-script")) {
+        if (node->getParent() == editor) {
+            code = dynamic_cast<jadefx::CodeArea*>(node);
+        }
+    }
+    Expect(code != nullptr && code->currentParagraph() == 3, "with the caret on line 4");
+    // Close it, so the Scene View's tab is in front for the tests after this one.
+    for (jadefx::Node* node = editor; node != nullptr; node = node->getParent()) {
+        if (auto* dock = dynamic_cast<ide::IdeDock*>(node)) {
+            std::shared_ptr<jadefx::Tab> found;
+            for (const std::shared_ptr<jadefx::Tab>& tab : dock->tabs()->getTabs().items()) {
+                if (tab && tab->getContent() == editor) {
+                    found = tab;
+                }
+            }
+            if (found) {
+                dock->tabs()->close(found);
+            }
+            break;
+        }
+    }
+    engine.on_simulation([&](engine_core::DataModel& game) { game.destroy(id); });
+    frame();
+}
+
 }  // namespace
 
 int RunShaderEditorTests(ide::IdeLayout& layout, jadefx::Scene& scene) {
     gFailures = 0;
     TestShaderTab(layout, scene);
+    TestProblemOpensShader(layout, scene);
     if (gFailures == 0) {
         std::printf("shader editor tests passed\n");
     }

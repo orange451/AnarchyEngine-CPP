@@ -52,6 +52,11 @@ InstanceId ReplicaApplier::local(std::uint32_t netid) const {
     return found != local_.end() ? found->second : DataModel::kNoParent;
 }
 
+std::uint32_t ReplicaApplier::netid_of(InstanceId id) const {
+    const auto found = netid_.find(id);
+    return found != netid_.end() ? found->second : 0;
+}
+
 bool ReplicaApplier::joined() const { return joined_; }
 std::size_t ReplicaApplier::skipped() const { return skipped_; }
 std::uint64_t ReplicaApplier::server_tick() const { return server_tick_; }

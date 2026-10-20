@@ -34,7 +34,8 @@ namespace engine_network {
 // snapshot part names the version in its header.
 constexpr std::uint8_t kCodecVersion = 2;
 
-enum class MessageType : std::uint8_t { SnapshotPart = 1, Changes = 2 };
+// Remote: a RemoteEvent's message (RemoteCodec.hpp).
+enum class MessageType : std::uint8_t { SnapshotPart = 1, Changes = 2, Remote = 3 };
 
 // One decoded operation. Which fields mean something depends on the kind.
 struct Op {

@@ -19,6 +19,7 @@ namespace engine_core {
 
 class DataModel;
 struct EnumType;
+struct RemoteValues;
 
 // A value carried between a class's property and the Luau stack.
 // The set of kinds stays small. Property names do not live here.
@@ -26,7 +27,7 @@ struct LuaSlot {
     // A Vec2 (a Vector2) keeps its x and y in vec, with z 0. An InputObject is
     // only ever an event's value, never a property's.
     enum class Kind { Nil, Bool, Number, String, Instance, Vec3, Color, Matrix4, Signal, Enum, Vec2, InputObject, TouchObject,
-                      NumberCurve, ColorCurve };
+                      NumberCurve, ColorCurve, Values };
     Kind kind = Kind::Nil;
     bool flag = false;
     // A Number's value, or an Enum item's value.
@@ -46,6 +47,10 @@ struct LuaSlot {
     // undo history copies a pointer.
     std::shared_ptr<const engine_core::NumberCurve> number_curve;
     std::shared_ptr<const engine_core::ColorCurve> color_curve;
+    // A Values slot: a remote message's arguments, only ever an event's last
+    // value. A handler gets each of them as its trailing arguments
+    // (RemoteValues.hpp).
+    std::shared_ptr<const RemoteValues> values;
     // Why a write refused the value, for the user. Empty when it did not say.
     std::string error;
 };
@@ -308,7 +313,9 @@ inline LuaField lua_event(const char* name) {
 }
 
 // An event whose callbacks get these values, in order. fire_event must pass
-// exactly these: one LuaSlot per param, of the kind its type_name names.
+// exactly these: one LuaSlot per param, of the kind its type_name names. A
+// last param named "..." takes one slot of any kind, usually a Values slot,
+// whose values the callbacks get as their trailing arguments.
 inline LuaField lua_event(const char* name, const LuaParam* params, int count) {
     LuaField field = lua_event(name);
     field.params = params;

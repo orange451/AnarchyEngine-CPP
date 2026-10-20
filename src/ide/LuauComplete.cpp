@@ -2065,7 +2065,9 @@ void FinishCallback(const CompletionPlanState& state, const engine_core::LuauFac
         }
         std::vector<CompletionItem> extra;
         for (const Param& param : params) {
-            if (std::find(used.begin(), used.end(), param.name) != used.end() ||
+            // A "..." is not a name to complete.
+            if (param.name == "..." ||
+                std::find(used.begin(), used.end(), param.name) != used.end() ||
                 (!list.prefix.empty() && !StartsWith(param.name, list.prefix))) {
                 continue;
             }

@@ -1445,7 +1445,12 @@ bool type_fits(std::string_view type, const LuaSlot& slot);
 // Whether slot is a value an event argument declared as param may carry. A
 // type ending in ? also takes nil, and a union such as "Vector3 | Matrix4"
 // takes what any of its types takes.
+// A "..." param takes any one slot: a Values slot is a remote message's
+// arguments, expanded when pushed.
 bool event_arg_fits(const LuaParam& param, const LuaSlot& slot) {
+    if (param.name != nullptr && std::string_view(param.name) == "...") {
+        return true;
+    }
     std::string_view type = param.type_name != nullptr ? param.type_name : "";
     if (!type.empty() && type.back() == '?') {
         if (slot.kind == LuaSlot::Kind::Nil) {
@@ -1533,9 +1538,18 @@ void check_event_args(const DataModel& object, std::string_view name, const Even
                                     " values, given " + std::to_string(args.size());
         contract_fail(message.c_str());
     }
+    // A message event, one whose last param is "...", such as OnServerEvent,
+    // may name no sender: its instance params take nil too, as a standalone
+    // world's loopback passes for the Connection. Typed without ?, so the
+    // checker types a Server script's connection as a Connection.
+    const char* last = field->param_count > 0 ? field->params[field->param_count - 1].name : nullptr;
+    const bool message = last != nullptr && std::string_view(last) == "...";
     for (int index = 0; index < field->param_count; ++index) {
         const LuaParam& param = field->params[index];
-        if (!event_arg_fits(param, args[static_cast<std::size_t>(index)])) {
+        const LuaSlot& arg = args[static_cast<std::size_t>(index)];
+        const bool unsent = message && arg.kind == LuaSlot::Kind::Nil && param.type_name != nullptr &&
+                            lua_class_inherits(param.type_name, "Instance");
+        if (!unsent && !event_arg_fits(param, arg)) {
             const std::string message = "fire_event: " + label + " argument " + std::to_string(index + 1) + " (" +
                                         (param.name != nullptr ? param.name : "") + ") must be " +
                                         (param.type_name != nullptr ? param.type_name : "?");
@@ -2466,6 +2480,10 @@ ScriptHost* DataModel::script_host() const { return state_->script_host; }
 void DataModel::set_join_host(IJoinHost* host) { state_->join_host = host; }
 
 IJoinHost* DataModel::join_host() const { return state_->join_host; }
+
+void DataModel::set_remote_sink(IRemoteSink* sink) { state_->remote_sink = sink; }
+
+IRemoteSink* DataModel::remote_sink() const { return state_->remote_sink; }
 
 bool DataModel::on_gameplay_thread() const { return mutation_thread(); }
 

@@ -11,5 +11,8 @@ namespace engine_network {
 void write_json(ByteWriter& out, const engine_core::JsonValue& value);
 // False on bad data, or nesting deeper than 32.
 bool read_json(ByteReader& in, engine_core::JsonValue& out);
+// A float holds d exactly, so it travels in four bytes: true for -0 and the
+// infinities, false for NaN.
+bool float_exact(double d);
 
 }  // namespace engine_network

@@ -690,6 +690,7 @@ add_library(engine_instances STATIC
     src/engine_instances/Terrain.cpp
     src/engine_instances/TerrainMaterial.cpp
     src/engine_instances/ValueBase.cpp
+    src/engine_instances/RemoteEvent.cpp
     src/engine_instances/Script.cpp
 )
 add_library(engine_services STATIC
@@ -762,6 +763,8 @@ add_library(engine_core STATIC
     src/engine_core/BrushBindings.cpp
     src/engine_core/CameraBindings.cpp
     src/engine_core/PhysicsServiceBindings.cpp
+    src/engine_core/RemoteValues.cpp
+    src/engine_core/RemoteEventBindings.cpp
     src/engine_core/WireframeBindings.cpp
     src/engine_core/Assemblies.cpp
     src/engine_core/AssemblyFollow.cpp
@@ -832,6 +835,7 @@ add_library(engine_network STATIC
     src/engine_network/ClientWorld.cpp
     src/engine_network/JsonWire.cpp
     src/engine_network/ProjectIdentity.cpp
+    src/engine_network/RemoteCodec.cpp
     src/engine_network/ReplicaApplier.cpp
     src/engine_network/Replicator.cpp
     src/engine_network/ServerSession.cpp
@@ -1163,6 +1167,9 @@ endif()
 
 add_executable(sandbox
     sandbox/tests.cpp
+    sandbox/remote_loopback_tests.cpp
+    sandbox/remote_codec_tests.cpp
+    sandbox/remote_session_tests.cpp
     sandbox/wireframe_tests.cpp
     sandbox/project_identity_tests.cpp
     sandbox/constraint_tests.cpp

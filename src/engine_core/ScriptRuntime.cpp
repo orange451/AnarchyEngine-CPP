@@ -17,6 +17,7 @@
 #include "LuauSandbox.hpp"
 #include "Matrix4.hpp"
 #include "ModuleScript.hpp"
+#include "RemoteValues.hpp"
 #include "Script.hpp"
 #include "SelectionService.hpp"
 #include "UserInputService.hpp"
@@ -49,15 +50,31 @@ void push_registered(lua_State* state, ScriptRuntime* runtime, const LuaSlot& sl
 namespace {
 
 // Pushes an event's values in order and says how many. The values are copied
-// onto the stack, so the event may go once this returns.
-int push_event_args(lua_State* state, ScriptRuntime* runtime, const EventArgs* args) {
+// onto the stack, so the event may go once this returns. A Values slot, a
+// remote message's arguments, pushes each of them, nils included. -1, with
+// nothing pushed, when the stack has no room for them all: the caller drops
+// that delivery, and nothing raises.
+int push_event_args(lua_State* state, ScriptRuntime* runtime, const DataModel* world, const EventArgs* args) {
     if (args == nullptr || args->empty()) {
         return 0;
     }
-    const int count = static_cast<int>(args->size());
-    lua_checkstack(state, count);
+    int slots = 0;
     for (const LuaSlot& slot : *args) {
+        slots += slot.kind == LuaSlot::Kind::Values && slot.values != nullptr ? remote_stack_slots(*slot.values) : 1;
+    }
+    if (!lua_checkstack(state, slots)) {
+        return -1;
+    }
+    int count = 0;
+    for (const LuaSlot& slot : *args) {
+        if (slot.kind == LuaSlot::Kind::Values) {
+            if (slot.values != nullptr && world != nullptr) {
+                count += push_remote_values(state, *world, *slot.values);
+            }
+            continue;
+        }
         push_registered(state, runtime, slot, 0, 0);
+        ++count;
     }
     return count;
 }
@@ -1537,7 +1554,12 @@ void ScriptRuntime::make_ready_args(Thread& thread, const EventArgs* args) {
         return;
     }
     thread.cause = "Wait";
-    thread.nargs = push_event_args(thread.co, this, args);
+    // Values past the stack's room are dropped: the waiter wakes with none.
+    const int nargs = push_event_args(thread.co, this, game_, args);
+    if (nargs < 0) {
+        ++dropped_deliveries_;
+    }
+    thread.nargs = std::max(nargs, 0);
     ready(thread);
 }
 
@@ -2220,7 +2242,14 @@ void ScriptRuntime::invoke_listener_args(Vm& vm, int ref, InstanceId script, std
         if (thread == nullptr) {
             return;
         }
-        thread->nargs = push_event_args(thread->co, this, args);
+        const int nargs = push_event_args(thread->co, this, game_, args);
+        if (nargs < 0) {
+            // No room for the values: this listener misses this one, and never runs for it.
+            thread->dead = true;
+            ++dropped_deliveries_;
+            return;
+        }
+        thread->nargs = nargs;
         run_listener(*thread);
     });
 }

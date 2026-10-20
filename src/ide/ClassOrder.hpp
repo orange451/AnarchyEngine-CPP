@@ -28,6 +28,7 @@ inline int class_rank(std::string_view class_name) {
         {"StringValue", 3},
         {"BoolValue", 3},
         {"ObjectValue", 3},
+        {"RemoteEvent", 3},
         {"PhysicsObject", 4},
         {"Brush", 4},
         {"PlayerController", 4},

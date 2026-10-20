@@ -17,6 +17,7 @@
 #include "DataModel.hpp"
 #include "Endpoint.hpp"
 #include "INetworkPump.hpp"
+#include "RemoteSink.hpp"
 #include "ReplicaApplier.hpp"
 #include "Replicator.hpp"
 
@@ -31,6 +32,22 @@
 #include <vector>
 
 namespace engine_network {
+
+// A client holds a server's RemoteEvent messages that no script listens to
+// yet, and fires each once OnClientEvent has a listener: a script that arrives
+// in the snapshot connects after the messages behind it. It holds at most this
+// many bytes in all, each message's decoded size estimated from its values,
+constexpr std::size_t kMaxUnheardRemoteBytes = 4u << 20;
+// at most this many messages for one remote,
+constexpr std::size_t kMaxUnheardPerRemote = 256;
+// and each for this many seconds after it arrived. Past any of them a message
+// is dropped and counted.
+constexpr double kUnheardSeconds = 10.0;
+
+// A client holds FireServer messages the server has not taken yet up to this
+// many bytes; past it, FireServer raises rather than grow without end while
+// the server is not acking.
+constexpr std::size_t kMaxServerOutboxBytes = 4u << 20;
 
 // Bytes a second a session may send each peer: a join's snapshot drains in seconds, and flow
 // control still halves it on a bad link. A bare Endpoint keeps its own, smaller default.
@@ -59,12 +76,22 @@ struct SessionConfig {
     double max_stall_seconds = 30.0;
     std::size_t max_queued_bytes = 256u << 20;   // or when its queue holds more than this
     ClientMode client_mode = ClientMode::FromEmpty;   // a client's; FromEmpty is --connect, as in 2c
+    // RemoteEvent bytes the server reads from one client in one receive, each
+    // message charged whether it is accepted or refused; the rest of that
+    // receive's are dropped unread and counted. Protection, not rate limiting.
+    std::size_t max_remote_bytes_per_pass = 4u << 20;
+    // And the values those messages decode to, counted as kRemoteMaxValues
+    // counts them, a refused message's up to where it failed: a decoded value
+    // is a few hundred bytes, whatever its size on the wire.
+    std::size_t max_remote_values_per_pass = 262144;
 };
 
 // The server's side: each client that connects gets a Connection under
 // Connections and, at the end of that tick, a snapshot of the world; after
-// that, every tick's changes. A client that cannot keep up is dropped.
-class ServerSession : public engine_core::INetworkPump {
+// that, every tick's changes. A client that cannot keep up is dropped. It is
+// the world's IRemoteSink: a RemoteEvent fired to clients goes after the tick's
+// changes, and one a client sends fires OnServerEvent when it checks out.
+class ServerSession : public engine_core::INetworkPump, public engine_core::IRemoteSink {
 public:
     ServerSession(engine_core::DataModel& game, std::unique_ptr<network::ISocket> socket, SessionConfig config);
     // Closes: every client is told and its Connection destroyed.
@@ -81,8 +108,23 @@ public:
     const Replicator& replicator() const;
     // The peer's Connection; 0 when it has none.
     engine_core::InstanceId connection_of(network::PeerId peer) const;
-    // Messages clients sent: nothing a client says has meaning yet, so each is counted and dropped.
+    // Messages clients sent that are not RemoteEvent messages: each is counted and dropped.
     std::size_t dropped_messages() const;
+    // RemoteEvent messages clients sent that were refused: bad bytes, a remote
+    // clients do not have, a client not yet joined, too many values, or past
+    // a per-receive cap (bytes or values).
+    std::size_t dropped_remotes() const;
+    // Values read from clients' RemoteEvent messages, those refused included:
+    // what the per-receive value allowance has been charged, ever.
+    std::size_t decoded_remote_values() const;
+    // Unreliable messages fired to clients that never went: past a payload's
+    // budget in their tick, or to a client whose snapshot was not yet queued.
+    std::size_t dropped_unreliable() const;
+    bool fire_server(engine_core::InstanceId remote, std::shared_ptr<const engine_core::RemoteValues> values,
+                     bool unreliable, std::string& error) override;
+    bool fire_clients(engine_core::InstanceId remote, const std::vector<engine_core::InstanceId>& connections,
+                      bool all, std::shared_ptr<const engine_core::RemoteValues> values, bool unreliable,
+                      std::string& error) override;
     // Clients dropped because their queue stalled past max_stall_seconds or grew past max_queued_bytes.
     std::size_t fell_behind() const;
     // Bytes waiting for room in the peer's reliable window; 0 for a peer it does not have.
@@ -98,17 +140,43 @@ private:
         std::size_t queued_bytes = 0;
         double last_progress = 0.0;       // when the queue was last empty, handed a message, or saw an ack
         std::uint64_t acked = 0;          // the channel's acked count then
+        std::vector<Message> held;   // RemoteEvent messages fired before its snapshot was queued: they go after it
+        std::size_t remote_bytes = 0;   // RemoteEvent bytes read from it in this receive
+        std::size_t remote_values = 0;  // and the values they decoded to
+        std::vector<Message> unreliable;   // unreliable messages for this tick's payload, in firing order
+        std::size_t unreliable_bytes = 0;
     };
     void on_connected(network::PeerId peer);
     void on_disconnected(network::PeerId peer);
     void push(Peer& entry, Message message);
     void flush(network::PeerId peer, double now);
+    void on_message(network::PeerId peer, const std::uint8_t* data, std::size_t size);
+    void on_payload(network::PeerId peer, const std::uint8_t* data, std::size_t size);
+    // A client's RemoteEvent message by either path: fires OnServerEvent, or is dropped and counted.
+    void accept_remote(network::PeerId peer, const std::uint8_t* data, std::size_t size);
+    // A fired message and whom it goes to, until send() queues it behind the
+    // tick's changes, or packs an unreliable one into each peer's payload.
+    struct Outgoing {
+        std::vector<engine_core::InstanceId> connections;
+        bool all = false;
+        bool unreliable = false;
+        Message message;
+    };
+    void route(const Outgoing& outgoing);
+    void send_unreliable(network::PeerId peer, Peer& entry, double now);
 
     engine_core::DataModel& game_;
     SessionConfig config_;
     Replicator replicator_;
     std::unordered_map<network::PeerId, Peer> peers_;
     std::size_t dropped_messages_ = 0;
+    std::size_t dropped_remotes_ = 0;
+    std::size_t decoded_remote_values_ = 0;
+    std::vector<Outgoing> outbox_;
+    std::size_t unreliable_outbox_bytes_ = 0;   // the unreliable messages in outbox_
+    std::size_t dropped_unreliable_ = 0;
+    std::vector<std::uint8_t> payload_;   // a peer's packed payload, kept to spare a tick the allocation
+    bool remote_bytes_counted_ = false;   // some peer's remote_bytes is not 0
     std::size_t fell_behind_ = 0;
     double now_ = 0.0;   // the last time the engine gave
     // Last, so it goes first: its callbacks reach everything above.
@@ -128,8 +196,10 @@ struct ClientStatus {
 // then applies each tick's changes. FromEmpty starts play while the world is
 // still empty; Swap swaps the playing world at the snapshot (see ClientMode).
 // When the connection ends, play it started stops, the world role it set goes
-// back, and reason() says why.
-class ClientSession : public engine_core::INetworkPump {
+// back, and reason() says why. It is the world's IRemoteSink: FireServer
+// sends at the session's next send, and a server's RemoteEvent message fires
+// OnClientEvent.
+class ClientSession : public engine_core::INetworkPump, public engine_core::IRemoteSink {
 public:
     ClientSession(engine_core::DataModel& game, std::unique_ptr<network::ISocket> socket, SessionConfig config);
     // Leaves, as disconnect does, when still connecting or connected.
@@ -164,10 +234,25 @@ public:
     std::function<void(ClientState, const std::string& reason)> on_state;
     // Swap mode: told of each Persistent instance the swap had to destroy, and why.
     std::function<void(const std::string&)> on_warning;
+    // Unreliable FireServer messages that never went: past the payload's budget in their tick.
+    std::size_t dropped_unreliable() const;
+    // Server messages held for a remote nobody listens to yet, and those dropped
+    // from that hold: past a cap, or held past kUnheardSeconds.
+    std::size_t held_unheard() const;
+    std::size_t dropped_unheard() const;
+    bool fire_server(engine_core::InstanceId remote, std::shared_ptr<const engine_core::RemoteValues> values,
+                     bool unreliable, std::string& error) override;
+    bool fire_clients(engine_core::InstanceId remote, const std::vector<engine_core::InstanceId>& connections,
+                      bool all, std::shared_ptr<const engine_core::RemoteValues> values, bool unreliable,
+                      std::string& error) override;
 
 private:
     void on_connected();
     void on_message(const std::uint8_t* data, std::size_t size);
+    // A tick's unreliable messages from the server; bad framing is bad data.
+    void on_payload(const std::uint8_t* data, std::size_t size);
+    // A server's RemoteEvent message: false for bad bytes.
+    bool on_remote(const std::uint8_t* data, std::size_t size);
     void on_disconnected(network::DisconnectReason why, network::DenyReason deny);
     std::string describe(network::DisconnectReason why, network::DenyReason deny) const;
     // Every write of state_ or reason_ goes through these, under status_mutex_.
@@ -189,6 +274,34 @@ private:
     bool leave_requested_ = false;   // request_disconnect: the next receive leaves
     // Swap mode: the applier's hook, run once the whole snapshot is in.
     void swap_world();
+    // FireServer messages the reliable window had no room for yet, oldest first.
+    std::deque<std::shared_ptr<const std::vector<std::uint8_t>>> outbox_;
+    std::size_t outbox_bytes_ = 0;   // kMaxServerOutboxBytes
+    // Unreliable FireServer messages for this tick's payload, oldest first.
+    std::vector<std::shared_ptr<const std::vector<std::uint8_t>>> unreliable_;
+    std::size_t unreliable_bytes_ = 0;
+    std::size_t dropped_unreliable_ = 0;
+    std::vector<std::uint8_t> payload_;   // the packed payload, kept to spare a tick the allocation
+    // Server messages for remotes nobody listens to yet, by remote, each
+    // remote's oldest first. Bounded three ways: kMaxUnheardPerRemote a remote,
+    // kUnheardSeconds each, and kMaxUnheardRemoteBytes of estimated decoded
+    // size in all.
+    struct Unheard {
+        std::shared_ptr<const engine_core::RemoteValues> values;
+        std::size_t bytes = 0;     // estimated decoded size
+        double arrived = 0.0;      // now_ when it arrived
+        std::uint64_t order = 0;   // arrival order across every remote
+    };
+    std::unordered_map<engine_core::InstanceId, std::deque<Unheard>> unheard_;
+    std::size_t unheard_bytes_ = 0;
+    std::size_t unheard_count_ = 0;
+    std::uint64_t unheard_order_ = 0;
+    std::size_t dropped_unheard_ = 0;
+    // Each receive: drops held messages past kUnheardSeconds, and those whose
+    // remote is gone, then fires every message of each remote that now has a
+    // listener, in arrival order. Work is per held remote, not per message.
+    void fire_unheard();
+    void clear_unheard();
     engine_core::WorldRole previous_role_ = engine_core::WorldRole::Standalone;
     std::unique_ptr<network::Endpoint> endpoint_;
 };

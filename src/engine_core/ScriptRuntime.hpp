@@ -83,6 +83,9 @@ public:
 
     double sim_clock() const { return play_.clock; }
     const std::string& last_error() const { return last_error_; }
+    // Event deliveries dropped because a handler's stack had no room for their
+    // values: the listener missed that one, or a waiter woke with none.
+    std::size_t dropped_deliveries() const { return dropped_deliveries_; }
     bool vm_open() const { return open_; }
 
     // One console line. Print is a script print(). Error is a compile failure or an
@@ -499,6 +502,7 @@ private:
     std::atomic<bool> render_paused_{false};
     std::uint64_t steps_ = 0;
     std::string last_error_;
+    std::size_t dropped_deliveries_ = 0;
 
     // Guards output_, output_epoch_, and the history. Never take the DataModel lock while holding this.
     mutable std::mutex output_mu_;

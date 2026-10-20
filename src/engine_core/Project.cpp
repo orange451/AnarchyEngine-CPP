@@ -41,6 +41,7 @@
 #include "Terrain.hpp"
 #include "TerrainMaterial.hpp"
 #include "ValueBase.hpp"
+#include "RemoteEvent.hpp"
 #include "terrain/TerrainStash.hpp"
 
 #include <algorithm>
@@ -267,6 +268,7 @@ std::vector<ClassEntry>& class_registry() {
         out.push_back({"StringValue", [](DataModel& world) -> DataModel& { return world.create<StringValue>(); }});
         out.push_back({"BoolValue", [](DataModel& world) -> DataModel& { return world.create<BoolValue>(); }});
         out.push_back({"ObjectValue", [](DataModel& world) -> DataModel& { return world.create<ObjectValue>(); }});
+        out.push_back({"RemoteEvent", [](DataModel& world) -> DataModel& { return world.create<RemoteEvent>(); }});
         return out;
     }();
     return entries;

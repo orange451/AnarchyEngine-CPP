@@ -532,3 +532,142 @@ TEST_CASE("RE39 a flood past the per-receive cap is cut off", "[remote][session]
     pump(net, raw, 30);
     REQUIRE(number(net.server, "count") == static_cast<double>(accepted_most + 1));
 }
+
+namespace {
+
+engine_core::RemoteValue table_of_falses(std::size_t count) {
+    auto table = std::make_shared<engine_core::RemoteTable>();
+    table->array.resize(count);
+    for (engine_core::RemoteValue& element : table->array) {
+        element.slot.kind = engine_core::LuaSlot::Kind::Bool;
+        element.slot.flag = false;
+    }
+    engine_core::RemoteValue value;
+    value.table = std::move(table);
+    return value;
+}
+
+}  // namespace
+
+TEST_CASE("RE45 a message of more than 65536 values raises on the sender", "[remote][session]") {
+    Net net;
+    add_remote(net.server.game, net.workspace(), "Talk");
+    // A table and 65535 values in it is 65536 values: the most a message holds.
+    const char* checks =
+        "local function says(expected, f)\n"
+        "    local ok, err = pcall(f)\n"
+        "    return not ok and string.find(tostring(err), expected, 1, true) ~= nil\n"
+        "end\n"
+        "local function falses(n) local t = table.create(n, false) return t end\n";
+    server_script(net, "Big",
+        (std::string(checks) +
+         "_G.server = says('FireClientAll message has more than 65536 values', "
+         "function() workspace.Talk:FireClientAll(falses(70000)) end)\n"
+         "_G.server_most = pcall(function() workspace.Talk:FireClientAll(falses(65535)) end)\n"
+         "_G.server_over = says('FireClientAll message has more than 65536 values', "
+         "function() workspace.Talk:FireClientAll(falses(65535), 1) end)\n"
+         "_G.nested = says('FireClientAll message has more than 65536 values', "
+         "function() workspace.Talk:FireClientAll({falses(40000), {falses(30000)}}) end)\n").c_str());
+    client_script(net, "Big",
+        (std::string(checks) +
+         "_G.client = says('FireServer message has more than 65536 values', "
+         "function() workspace.Talk:FireServer(falses(70000)) end)\n").c_str());
+    Client& client = net.add_client();
+    net.run(1.0);
+    REQUIRE(boolean(net.server, "server"));
+    REQUIRE(boolean(net.server, "server_most"));
+    REQUIRE(boolean(net.server, "server_over"));
+    REQUIRE(boolean(net.server, "nested"));
+    REQUIRE(boolean(client.rig, "client"));
+}
+
+TEST_CASE("RE46 a raw client's message of more than 65536 values is dropped and counted", "[remote][session]") {
+    Net net;
+    const engine_core::RemoteEvent& open = add_remote(net.server.game, net.workspace(), "Open");
+    server_script(net, "Hear",
+        "_G.open = 0\n"
+        "workspace.Open.OnServerEvent:Connect(function(connection, t) _G.open += 1 _G.size = #t end)\n");
+    RawClient raw(net.hub, 0);
+    REQUIRE(raw.endpoint.connect(kServer, net.now));
+    pump(net, raw, 30);
+    REQUIRE(raw.connected);
+
+    raw.send(remote_message(open.id(), {table_of_falses(70000)}));
+    pump(net, raw, 120);
+    REQUIRE(net.session->dropped_remotes() == 1);
+    REQUIRE(number(net.server, "open") == 0);
+    REQUIRE(raw.connected);
+
+    // The most a message holds is still heard.
+    raw.send(remote_message(open.id(), {table_of_falses(65535)}));
+    pump(net, raw, 120);
+    REQUIRE(number(net.server, "open") == 1);
+    REQUIRE(number(net.server, "size") == 65535);
+    REQUIRE(net.session->dropped_remotes() == 1);
+}
+
+TEST_CASE("RE47 the per-receive value cap cuts off the rest", "[remote][session]") {
+    REQUIRE(engine_network::SessionConfig{}.max_remote_values_per_pass == 262144u);
+    engine_network::SessionConfig config;
+    config.max_remote_values_per_pass = 100;
+    Net net(config);
+    const engine_core::RemoteEvent& open = add_remote(net.server.game, net.workspace(), "Open");
+    server_script(net, "Hear",
+        "_G.count = 0\n"
+        "workspace.Open.OnServerEvent:Connect(function() _G.count += 1 end)\n");
+    RawClient raw(net.hub, 0);
+    REQUIRE(raw.endpoint.connect(kServer, net.now));
+    pump(net, raw, 30);
+    REQUIRE(raw.connected);
+
+    // Ten values a message, small on the wire: the byte cap is nowhere near.
+    std::vector<engine_core::RemoteValue> ten;
+    for (int i = 0; i < 10; ++i) ten.push_back(number_value(i));
+    const std::vector<std::uint8_t> message = remote_message(open.id(), ten);
+    constexpr int kSent = 24;
+    for (int i = 0; i < kSent; ++i) {
+        raw.send(message);
+    }
+    net.now += 1.0 / 60.0;
+    raw.endpoint.send(net.now);
+    net.session->receive(net.now);
+    REQUIRE(net.session->dropped_remotes() == kSent - 10);
+    pump(net, raw, 30);
+    REQUIRE(number(net.server, "count") == 10);
+    REQUIRE(raw.connected);
+
+    // The next receive starts the allowance again.
+    raw.send(message);
+    pump(net, raw, 30);
+    REQUIRE(number(net.server, "count") == 11);
+    REQUIRE(net.session->dropped_remotes() == kSent - 10);
+}
+
+TEST_CASE("RE48 FireServer raises once too many messages wait for a server that is not acking", "[remote][session]") {
+    Net net;
+    add_remote(net.server.game, net.workspace(), "Talk");
+    client_script(net, "Flood",
+        "local r = workspace.Talk\n"
+        "local big = string.rep('x', 10000)\n"
+        "_G.sent = 0\n"
+        "game:GetService('RunService').Heartbeat:Connect(function()\n"
+        "    if _G.err or not workspace:FindFirstChild('Go') then return end\n"
+        "    for i = 1, 100 do\n"
+        "        local ok, err = pcall(function() r:FireServer(big) end)\n"
+        "        if not ok then _G.err = tostring(err) return end\n"
+        "        _G.sent += 1\n"
+        "    end\n"
+        "end)\n");
+    Client& client = net.add_client();
+    net.run(1.0);
+    REQUIRE(client.session->state() == engine_network::ClientState::Joined);
+    // Nothing the client sends arrives, so nothing it sends is acked.
+    client.session->endpoint().conditioner().loss = 1.0f;
+    add_folder(client.rig.game, client.rig.game.scene_service("Workspace"), "Go");
+    net.run(0.5);
+    REQUIRE(text(client.rig, "err").find("FireServer cannot send: too many messages are waiting for the server") !=
+            std::string::npos);
+    // The reliable window took some first; the outbox then held the cap's worth.
+    REQUIRE(number(client.rig, "sent") * 10000.0 >= static_cast<double>(engine_network::kMaxServerOutboxBytes));
+    REQUIRE(client.session->state() == engine_network::ClientState::Joined);
+}

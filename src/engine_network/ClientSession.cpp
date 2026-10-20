@@ -88,6 +88,7 @@ void ClientSession::on_message(const std::uint8_t* data, std::size_t size) {
 void ClientSession::on_disconnected(network::DisconnectReason why, network::DenyReason deny) {
     // Nothing fired for this connection goes to the next one, either way.
     outbox_.clear();
+    outbox_bytes_ = 0;
     unheard_.clear();
     unheard_bytes_ = 0;
     if (reason_.empty()) {
@@ -154,6 +155,7 @@ bool ClientSession::connect(const network::Address& server, double now) {
     }
     leave_requested_ = false;
     outbox_.clear();
+    outbox_bytes_ = 0;
     unheard_.clear();
     unheard_bytes_ = 0;
     // Each connection builds its world from nothing.
@@ -202,6 +204,7 @@ void ClientSession::send(double now) {
     // FireServer messages go in firing order; what the window has no room for waits.
     while (!outbox_.empty() && endpoint_->state(0) == network::ConnectionState::Connected &&
            endpoint_->send_message(0, outbox_.front())) {
+        outbox_bytes_ -= outbox_.front()->size();
         outbox_.pop_front();
     }
     endpoint_->send(now);
@@ -332,6 +335,12 @@ bool ClientSession::fire_server(engine_core::InstanceId remote, std::shared_ptr<
     if (remote_netid == 0 || (state_ != ClientState::Joining && state_ != ClientState::Joined)) {
         return true;
     }
+    // A server that stops acking leaves these waiting; a script cannot pile up more than the cap.
+    if (outbox_bytes_ + out.data().size() > kMaxServerOutboxBytes) {
+        error = "cannot send: too many messages are waiting for the server";
+        return false;
+    }
+    outbox_bytes_ += out.data().size();
     outbox_.push_back(std::make_shared<const std::vector<std::uint8_t>>(std::move(out.data())));
     return true;
 }

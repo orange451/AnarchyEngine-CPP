@@ -82,6 +82,7 @@ void ServerSession::receive(double now) {
     if (remote_bytes_counted_) {
         for (auto& [peer, entry] : peers_) {
             entry.remote_bytes = 0;
+            entry.remote_values = 0;
         }
         remote_bytes_counted_ = false;
     }
@@ -109,13 +110,21 @@ void ServerSession::on_message(network::PeerId peer, const std::uint8_t* data, s
     ByteReader in(data, size);
     std::uint32_t remote_netid = 0;
     auto values = std::make_shared<engine_core::RemoteValues>();
-    if (!decode_remote(in, remote_netid, *values, to_id, engine_core::kRemoteMaxReliableBytes) ||
+    // What is left of this receive's value allowance caps the message too, so
+    // nothing is made for values past it.
+    const std::size_t values_left = config_.max_remote_values_per_pass > entry.remote_values
+                                        ? config_.max_remote_values_per_pass - entry.remote_values
+                                        : 0;
+    std::size_t values_read = 0;
+    if (!decode_remote(in, remote_netid, *values, to_id, engine_core::kRemoteMaxReliableBytes,
+                       std::min(engine_core::kRemoteMaxValues, values_left), &values_read) ||
         to_id(remote_netid) == 0 || remote_netid == 0 ||
         dynamic_cast<engine_core::RemoteEvent*>(game_.instance(remote_netid)) == nullptr) {
         ++dropped_remotes_;
         return;
     }
     entry.remote_bytes += size;
+    entry.remote_values += values_read;
     remote_bytes_counted_ = true;
     engine_core::EventArgs args(2);
     args[0].kind = engine_core::LuaSlot::Kind::Instance;

@@ -34,13 +34,23 @@ struct Reader {
     const char* method;
     std::string& error;
     std::vector<const void*> path;
+    std::size_t values = 0;   // read so far, at every depth
 
     bool refuse(const std::string& what) {
         error = std::string(method) + " " + what;
         return false;
     }
 
-    // The value at index, which is absolute.
+    // Counts more values against kRemoteMaxValues, before anything is made for them.
+    bool take(std::size_t count) {
+        if (count > kRemoteMaxValues - values) {
+            return refuse("message has more than " + std::to_string(kRemoteMaxValues) + " values");
+        }
+        values += count;
+        return true;
+    }
+
+    // The value at index, which is absolute. Its own count is already taken.
     bool read(int index, RemoteValue& out) {
         LuaSlot& slot = out.slot;
         switch (lua_type(state, index)) {
@@ -136,6 +146,9 @@ struct Reader {
         path.push_back(table);
         auto result = std::make_shared<RemoteTable>();
         const int length = lua_objlen(state, index);
+        if (!take(static_cast<std::size_t>(std::max(length, 0)))) {
+            return false;
+        }
         result->array.resize(static_cast<std::size_t>(std::max(length, 0)));
         for (int element = 1; element <= length; ++element) {
             lua_rawgeti(state, index, element);
@@ -149,6 +162,10 @@ struct Reader {
         lua_pushnil(state);
         while (lua_next(state, index) != 0) {
             if (lua_type(state, -2) == LUA_TSTRING) {
+                if (!take(1)) {
+                    lua_pop(state, 2);
+                    return false;
+                }
                 std::size_t size = 0;
                 const char* key = lua_tolstring(state, -2, &size);
                 result->fields.emplace_back(std::string(key != nullptr ? key : "", size), RemoteValue{});
@@ -215,8 +232,11 @@ bool remote_values_from_lua(lua_State* state, int first, const char* method, Rem
     if (first > top) {
         return true;
     }
-    out.values.resize(static_cast<std::size_t>(top - first + 1));
     Reader reader{state, method, error, {}};
+    if (!reader.take(static_cast<std::size_t>(top - first + 1))) {
+        return false;
+    }
+    out.values.resize(static_cast<std::size_t>(top - first + 1));
     for (int index = first; index <= top; ++index) {
         if (!reader.read(index, out.values[static_cast<std::size_t>(index - first)])) {
             lua_settop(state, top);

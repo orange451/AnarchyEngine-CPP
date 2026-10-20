@@ -38,6 +38,11 @@ namespace engine_network {
 // a script that arrives in the snapshot connects after the messages behind it.
 constexpr std::size_t kMaxUnheardRemoteBytes = 4u << 20;
 
+// A client holds FireServer messages the server has not taken yet up to this
+// many bytes; past it, FireServer raises rather than grow without end while
+// the server is not acking.
+constexpr std::size_t kMaxServerOutboxBytes = 4u << 20;
+
 // Bytes a second a session may send each peer: a join's snapshot drains in seconds, and flow
 // control still halves it on a bad link. A bare Endpoint keeps its own, smaller default.
 constexpr double kDefaultSendBudget = 1048576.0;   // bytes per second per client
@@ -68,6 +73,9 @@ struct SessionConfig {
     // RemoteEvent messages the server accepts from one client in one receive;
     // the rest of that receive's are dropped and counted. Protection, not rate limiting.
     std::size_t max_remote_bytes_per_pass = 4u << 20;
+    // And the values those messages decode to, counted as kRemoteMaxValues
+    // counts them: a decoded value is a few hundred bytes, whatever its size on the wire.
+    std::size_t max_remote_values_per_pass = 262144;
 };
 
 // The server's side: each client that connects gets a Connection under
@@ -95,7 +103,8 @@ public:
     // Messages clients sent that are not RemoteEvent messages: each is counted and dropped.
     std::size_t dropped_messages() const;
     // RemoteEvent messages clients sent that were refused: bad bytes, a remote
-    // clients do not have, a client not yet joined, or past the per-receive cap.
+    // clients do not have, a client not yet joined, too many values, or past
+    // a per-receive cap (bytes or values).
     std::size_t dropped_remotes() const;
     bool fire_server(engine_core::InstanceId remote, std::shared_ptr<const engine_core::RemoteValues> values,
                      bool unreliable, std::string& error) override;
@@ -119,6 +128,7 @@ private:
         std::uint64_t acked = 0;          // the channel's acked count then
         std::vector<Message> held;   // RemoteEvent messages fired before its snapshot was queued: they go after it
         std::size_t remote_bytes = 0;   // RemoteEvent bytes accepted from it in this receive
+        std::size_t remote_values = 0;  // and the values they decoded to
     };
     void on_connected(network::PeerId peer);
     void on_disconnected(network::PeerId peer);
@@ -232,6 +242,7 @@ private:
     void swap_world();
     // FireServer messages the reliable window had no room for yet, oldest first.
     std::deque<std::shared_ptr<const std::vector<std::uint8_t>>> outbox_;
+    std::size_t outbox_bytes_ = 0;   // kMaxServerOutboxBytes
     // Server messages for a remote nobody listens to yet, oldest first (kMaxUnheardRemoteBytes).
     struct Unheard {
         engine_core::InstanceId remote = 0;

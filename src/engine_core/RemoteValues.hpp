@@ -46,12 +46,17 @@ struct RemoteValues {
 constexpr std::size_t kRemoteMaxDepth = 32;
 // A reliable message's largest encoded size, header included.
 constexpr std::size_t kRemoteMaxReliableBytes = 262144;
+// A message's most values, counting every argument, every table, and every
+// value inside one at any depth. A decoded value is a few hundred bytes, so a
+// small message of many tiny values would otherwise unpack into a large one.
+constexpr std::size_t kRemoteMaxValues = 65536;
 
 // Reads stack[first..top] into out, every slot counted, nils included. False
 // with error when a value cannot be sent: "<method> cannot send a <type>" for
 // a function, a thread, a userdata the engine does not know, or a table that
-// contains itself, and "<method> tables nest deeper than 32". An instance that
-// is gone is sent as nil. Runs on the thread that holds the script's VM.
+// contains itself, "<method> tables nest deeper than 32", and "<method>
+// message has more than 65536 values". An instance that is gone is sent as
+// nil. Runs on the thread that holds the script's VM.
 bool remote_values_from_lua(lua_State* state, int first, const char* method, RemoteValues& out, std::string& error);
 
 // Pushes every value and returns how many. An Instance id no longer alive in

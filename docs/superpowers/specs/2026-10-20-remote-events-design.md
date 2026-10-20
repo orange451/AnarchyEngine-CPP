@@ -76,6 +76,9 @@ In a standalone world, remotes loop back inside the world:
 
 - **Size caps:** a reliable message may be at most 256 KB encoded. An unreliable message must fit in one packet's payload, about 1 KB. Firing past either cap raises an error on the sending side.
 - **Table nesting:** at most 32 levels deep.
+- **Values per message:** at most 65536, counting every argument, every table and every value inside one at any depth. A decoded value takes a few hundred bytes however small it is on the wire, so without this a 256 KB message of tiny values would unpack to about 90 MB. Firing past it raises "<Method> message has more than 65536 values"; a received one is dropped and counted.
+- **Values per receive:** the server accepts at most 262144 decoded values from one client in one receive pass (`SessionConfig::max_remote_values_per_pass`). Past that, that receive's messages are dropped and counted, as past the 4 MB byte cap.
+- **A client's waiting messages:** a client holds at most 4 MB of `FireServer` messages the server has not taken yet. When a server stops acking, `FireServer` past that raises "FireServer cannot send: too many messages are waiting for the server".
 - **Received message checks:** the server checks every received message the same way. It drops a message that breaks a cap, names a RemoteEvent that client was never sent, or fails to decode, and counts it. It never kicks the client and never crashes.
 - **Rate limiting:** none. That stays the game's.
 

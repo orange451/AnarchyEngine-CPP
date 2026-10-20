@@ -133,6 +133,17 @@ void write_value(ByteWriter& out, const RemoteValue& value, const IdToNet& to_ne
 struct Decoder {
     ByteReader& in;
     const NetToId& to_id;
+    std::size_t max_values;
+    std::size_t values = 0;   // counted so far, at every depth
+
+    // Counts more values against max_values, before anything is made for them.
+    bool take(std::uint64_t count) {
+        if (count > max_values - values) {
+            return false;
+        }
+        values += static_cast<std::size_t>(count);
+        return true;
+    }
 
     // depth: how many tables hold this value. A table argument is level 1.
     bool read(RemoteValue& out, std::size_t depth) {
@@ -216,7 +227,7 @@ struct Decoder {
         auto table = std::make_shared<RemoteTable>();
         // Each value takes at least a byte, so a count past what is left is a lie.
         const std::uint64_t elements = in.varuint();
-        if (in.failed() || elements > in.left()) {
+        if (in.failed() || elements > in.left() || !take(elements)) {
             return false;
         }
         table->array.resize(static_cast<std::size_t>(elements));
@@ -227,7 +238,7 @@ struct Decoder {
         }
         // A field takes at least two: its key's length and its value's tag.
         const std::uint64_t fields = in.varuint();
-        if (in.failed() || fields > in.left() / 2) {
+        if (in.failed() || fields > in.left() / 2 || !take(fields)) {
             return false;
         }
         table->fields.reserve(static_cast<std::size_t>(fields));
@@ -260,7 +271,10 @@ void encode_remote(std::uint32_t remote_netid, const engine_core::RemoteValues& 
 }
 
 bool decode_remote(ByteReader& in, std::uint32_t& remote_netid, engine_core::RemoteValues& out, const NetToId& to_id,
-                   std::size_t max_bytes) {
+                   std::size_t max_bytes, std::size_t max_values, std::size_t* values_read) {
+    if (values_read != nullptr) {
+        *values_read = 0;
+    }
     out.values.clear();
     if (in.left() > max_bytes) {
         return false;
@@ -274,18 +288,24 @@ bool decode_remote(ByteReader& in, std::uint32_t& remote_netid, engine_core::Rem
     }
     remote_netid = static_cast<std::uint32_t>(netid);
     const std::uint64_t count = in.varuint();
-    if (in.failed() || count > in.left()) {
+    Decoder decoder{in, to_id, max_values};
+    if (in.failed() || count > in.left() || !decoder.take(count)) {
         return false;
     }
     out.values.resize(static_cast<std::size_t>(count));
-    Decoder decoder{in, to_id};
     for (RemoteValue& value : out.values) {
         if (!decoder.read(value, 0)) {
             out.values.clear();
             return false;
         }
     }
-    return in.done();
+    if (!in.done()) {
+        return false;
+    }
+    if (values_read != nullptr) {
+        *values_read = decoder.values;
+    }
+    return true;
 }
 
 }  // namespace engine_network

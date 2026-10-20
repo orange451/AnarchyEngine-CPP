@@ -3,6 +3,7 @@
 #include "LuauWords.hpp"
 #include "Utf8.hpp"
 
+#include "Attributes.hpp"
 #include "Game.hpp"
 #include "ScriptAnalysis.hpp"
 
@@ -666,6 +667,121 @@ void AddNamed(std::string_view prefix, const std::vector<std::string>& names, co
         CompletionItem item;
         item.name = name;
         item.detail = detail;
+        out.push_back(std::move(item));
+    }
+}
+
+// The attribute names written as the first argument of SetAttribute calls in
+// `source`, such as `Spawned` in `part:SetAttribute("Spawned", true)`. A string
+// holding byte `skip` is left out: it is the one being typed.
+void AttributeNamesSet(const std::string& source, std::size_t skip, std::vector<std::string>& out) {
+    static constexpr std::string_view kCall = "SetAttribute";
+    const auto blank = [&](std::size_t at) { return at < source.size() && (source[at] == ' ' || source[at] == '\t'); };
+    std::size_t at = 0;
+    while ((at = source.find(kCall, at)) != std::string::npos) {
+        std::size_t cursor = at + kCall.size();
+        at = cursor;
+        while (blank(cursor)) {
+            ++cursor;
+        }
+        if (cursor >= source.size() || source[cursor] != '(') {
+            continue;
+        }
+        ++cursor;
+        while (blank(cursor)) {
+            ++cursor;
+        }
+        if (cursor >= source.size() || (source[cursor] != '"' && source[cursor] != '\'')) {
+            continue;
+        }
+        const char quote = source[cursor];
+        const std::size_t begin = cursor + 1;
+        std::size_t end = begin;
+        while (end < source.size() && source[end] != quote && source[end] != '\n' && source[end] != '\r' &&
+               source[end] != '\\') {
+            ++end;
+        }
+        if (end >= source.size() || source[end] != quote) {
+            continue;
+        }
+        if (skip >= begin && skip <= end) {
+            continue;
+        }
+        const std::string name = source.substr(begin, end - begin);
+        if (!engine_core::attribute_name_error(name)) {
+            out.push_back(name);
+        }
+    }
+}
+
+// The attributes to offer inside GetAttribute("..."). A receiver the tree
+// resolves, with attributes, offers its own; any other receiver offers every
+// attribute in the place and the names scripts set, since the one meant is
+// among them. The detail is the attribute's type, or `attribute` for a name
+// only a script writes. `source` is the script being edited, whose string at
+// `caret_byte` is the one being typed.
+void AddAttributes(const std::vector<engine_core::LuaNode>& world, bool instance_known, std::uint32_t instance,
+                   std::uint32_t script_id, const std::string& source, std::size_t caret_byte,
+                   std::string_view prefix, std::vector<CompletionItem>& out) {
+    struct Row {
+        std::string name;
+        std::string detail;
+    };
+    std::vector<Row> rows;
+    const engine_core::LuaNode* own = nullptr;
+    if (instance_known) {
+        for (const engine_core::LuaNode& node : world) {
+            if (node.id == instance && !node.attributes.empty()) {
+                own = &node;
+                break;
+            }
+        }
+    }
+    for (const engine_core::LuaNode& node : world) {
+        if (own != nullptr && &node != own) {
+            continue;
+        }
+        for (const engine_core::LuaNodeAttribute& attribute : node.attributes) {
+            rows.push_back({attribute.name, attribute.type.empty() ? "attribute" : attribute.type});
+        }
+    }
+    if (own == nullptr) {
+        std::vector<std::string> written;
+        // The edited script is read from the buffer, where the string being
+        // typed is skipped; the tree's copy of it may be older.
+        bool buffer_held = false;
+        for (const engine_core::LuaNode& node : world) {
+            if (node.source.empty()) {
+                continue;
+            }
+            const bool buffer = node.id == script_id && node.source == source;
+            buffer_held = buffer_held || buffer;
+            AttributeNamesSet(node.source, buffer ? caret_byte : std::string::npos, written);
+        }
+        if (!buffer_held) {
+            AttributeNamesSet(source, caret_byte, written);
+        }
+        for (std::string& name : written) {
+            rows.push_back({std::move(name), "attribute"});
+        }
+    }
+    std::sort(rows.begin(), rows.end(), [](const Row& left, const Row& right) {
+        if (left.name != right.name) {
+            return left.name < right.name;
+        }
+        // A typed row before the script-only one of the same name.
+        return (left.detail == "attribute") < (right.detail == "attribute");
+    });
+    rows.erase(std::unique(rows.begin(), rows.end(),
+                           [](const Row& left, const Row& right) { return left.name == right.name; }),
+               rows.end());
+    for (Row& row : rows) {
+        if (!prefix.empty() && !StartsWith(row.name, prefix)) {
+            continue;
+        }
+        CompletionItem item;
+        item.name = std::move(row.name);
+        item.detail = std::move(row.detail);
         out.push_back(std::move(item));
     }
 }
@@ -2060,6 +2176,7 @@ void FinishString(const CompletionPlanState& state, const engine_core::LuauFacts
         // does not say which instance it is asked of; the names need the tree.
         const bool child = colon && field != nullptr && field->resolves_child;
         const bool service = colon && field != nullptr && field->service_arg;
+        const bool attribute = colon && field != nullptr && field->attribute_arg;
         // Instance.new is a dot call on the Instance global, or an alias of it.
         const std::string owner = !callee->function_owner.empty() ? callee->function_owner : callee->described.owner;
         const std::string name = !callee->function_name.empty() ? callee->function_name : callee->name;
@@ -2068,12 +2185,15 @@ void FinishString(const CompletionPlanState& state, const engine_core::LuauFacts
                              !(field != nullptr && field->service_arg);
         host = field != nullptr || !callee->function_name.empty() ||
                engine_core::lua_symbol_doc(member ? callee->described.owner : std::string(), callee->name).found;
-        if (child || service || created) {
+        if (child || service || created || attribute) {
             BeginStringArgument(list, state.scan, state.text, state.caret);
             if (child) {
                 if (callee->object_instance_known) {
                     AddChildren(state.world, callee->object_instance, list.prefix, list.items);
                 }
+            } else if (attribute) {
+                AddAttributes(state.world, callee->object_instance_known, callee->object_instance, state.script_id,
+                              state.source, ByteOf(state.source, state.caret), list.prefix, list.items);
             } else if (service) {
                 AddServices(list.prefix, list.items);
             } else {

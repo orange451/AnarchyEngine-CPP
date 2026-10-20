@@ -1215,6 +1215,101 @@ void testFunctionParameters() {
     }
 }
 
+void testAttributeArguments() {
+    std::vector<engine_core::LuaNode> world;
+    world.push_back(node(0, 0xffffffffu, "game", "Game"));
+    world.push_back(node(1, 0, "Door", "GameObject"));
+    world.back().attributes = {{"Health", "number"}, {"Locked", "boolean"}};
+    world.push_back(node(2, 0, "Lamp", "GameObject"));
+    world.back().attributes = {{"Brightness", "number"}};
+    world.push_back(node(3, 0, "Main", "Script"));
+    world.push_back(node(4, 0, "Setter", "Script", "script.Parent:SetAttribute(\"Spawned\", true)\n"));
+
+    const std::string door = "local door = game:FindFirstChild(\"Door\")\n";
+    const std::string own_source = door + "door:GetAttribute(\"";
+    const ide::CompletionList own = at_end(own_source, world, 3);
+    expect_argument(own, "GetAttribute");
+    expect_has(own, "Health", "a known instance's attributes");
+    expect_has(own, "Locked", "a known instance's attributes");
+    expect_missing(own, "Brightness", "another instance's attribute");
+    expect_missing(own, "Spawned", "a script's attribute on a known instance");
+    expect_missing(own, "Door", "GetAttribute is not children");
+    expect_detail(own, "Health", "number", "an attribute's type");
+    expect_detail(own, "Locked", "boolean", "an attribute's type");
+    expect_call(own, "Health", false, "an attribute name");
+    if (index_of(own, "Health") > index_of(own, "Locked")) {
+        fail("attributes are alphabetical");
+    }
+    if (!own.prefix.empty() || own.close_quote != '"' || !own.unclosed) {
+        fail("GetAttribute string prefix");
+    }
+    if (own.replace_begin != static_cast<int>(own_source.size()) ||
+        own.replace_end != static_cast<int>(own_source.size())) {
+        fail("GetAttribute replace range");
+    }
+
+    const std::string typed_source = door + "door:GetAttribute(\"Lo";
+    const ide::CompletionList typed = at_end(typed_source, world, 3);
+    expect_has(typed, "Locked", "GetAttribute prefix");
+    expect_missing(typed, "Health", "GetAttribute prefix");
+    if (typed.prefix != "Lo") {
+        fail("GetAttribute typed prefix");
+    }
+    if (typed.replace_begin != static_cast<int>(door.size() + std::string("door:GetAttribute(\"").size()) ||
+        typed.replace_end != static_cast<int>(typed_source.size())) {
+        fail("GetAttribute typed replace range");
+    }
+
+    const std::string closed = door + "door:GetAttribute(\"He\")";
+    const ide::CompletionList inside = at_caret(closed, static_cast<int>(closed.size()) - 2, world, 3);
+    expect_has(inside, "Health", "a closed attribute string");
+    if (inside.unclosed) {
+        fail("a closed attribute string is closed");
+    }
+
+    const ide::CompletionList set = at_end(door + "door:SetAttribute(\"", world, 3);
+    expect_argument(set, "SetAttribute");
+    expect_has(set, "Health", "SetAttribute's name");
+    expect_has(set, "Locked", "SetAttribute's name");
+    const ide::CompletionList value = at_end(door + "door:SetAttribute(\"Health\", \"", world, 3);
+    expect_missing(value, "Health", "SetAttribute's value is not a name");
+    expect_missing(value, "Locked", "SetAttribute's value is not a name");
+
+    const ide::CompletionList signal = at_end(door + "door:GetAttributeChangedSignal(\"", world, 3);
+    expect_argument(signal, "GetAttributeChangedSignal");
+    expect_has(signal, "Locked", "GetAttributeChangedSignal's name");
+    expect_missing(signal, "Brightness", "GetAttributeChangedSignal's name");
+
+    const ide::CompletionList all = at_end(door + "door:GetAttributes(\"", world, 3);
+    expect_missing(all, "Health", "GetAttributes takes no name");
+
+    // A receiver the tree does not resolve offers every attribute in the place,
+    // and the names scripts set.
+    const ide::CompletionList any = at_end("local function reset(part: Instance)\n    part:GetAttribute(\"", world, 3);
+    expect_argument(any, "GetAttribute on a parameter");
+    expect_has(any, "Health", "every attribute");
+    expect_has(any, "Locked", "every attribute");
+    expect_has(any, "Brightness", "every attribute");
+    expect_has(any, "Spawned", "an attribute a script sets");
+    expect_detail(any, "Brightness", "number", "every attribute's type");
+    expect_detail(any, "Spawned", "attribute", "a script's attribute has no type");
+    if (index_of(any, "Brightness") > index_of(any, "Health") || index_of(any, "Health") > index_of(any, "Locked") ||
+        index_of(any, "Locked") > index_of(any, "Spawned")) {
+        fail("every attribute is alphabetical");
+    }
+    // So does a known instance that has none.
+    const ide::CompletionList none =
+        at_end("local main = game:FindFirstChild(\"Main\")\nmain:GetAttribute(\"", world, 3);
+    expect_has(none, "Brightness", "an instance without attributes offers every one");
+    expect_has(none, "Spawned", "an instance without attributes offers every one");
+
+    // The names scripts set complete in the script that sets them too.
+    const ide::CompletionList bare = at_end("script:GetAttribute(\"", world, 4);
+    expect_has(bare, "Spawned", "the script's own SetAttribute");
+    const ide::CompletionList printed = at_end(door + "print(\"", world, 3);
+    expect_missing(printed, "Health", "print does not complete attributes");
+}
+
 void testInsertFilter() {
     std::vector<std::string> names;
     engine_core::lua_creatable_names(names);
@@ -3112,6 +3207,7 @@ int RunLuauCompleteTests() {
         testNames();
         testConsole();
         testStringArguments();
+        testAttributeArguments();
         testInsertFilter();
         testInstanceNew();
         testCallbackArguments();

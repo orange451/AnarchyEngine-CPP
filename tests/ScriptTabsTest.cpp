@@ -339,6 +339,44 @@ void TestCompletionWorldFollowsChanges(engine_core::Engine& engine) {
                "Stop's restored Source shows");
 }
 
+// Completion's copy of the place carries each instance's attributes, with
+// their types, and follows one being set or removed.
+void TestCompletionWorldHoldsAttributes(engine_core::Engine& engine) {
+    const engine_core::InstanceId id = AddScript(engine, "Keeper", "return 1\n");
+    ide::CompletionWorldCache cache;
+    auto attributes_of = [&](const std::vector<engine_core::LuaNode>& nodes) -> std::string {
+        for (const engine_core::LuaNode& node : nodes) {
+            if (node.id != id) {
+                continue;
+            }
+            std::string out;
+            for (const engine_core::LuaNodeAttribute& attribute : node.attributes) {
+                out += attribute.name + ":" + attribute.type + " ";
+            }
+            return out;
+        }
+        return "<missing>";
+    };
+    ExpectText(attributes_of(ide::completion_world(engine, 0, nullptr, cache)), "", "a new script has no attributes");
+    engine.on_simulation([&](engine_core::DataModel& game) {
+        engine_core::LuaSlot health;
+        health.kind = engine_core::LuaSlot::Kind::Number;
+        health.number = 100;
+        engine_core::LuaSlot locked;
+        locked.kind = engine_core::LuaSlot::Kind::Bool;
+        locked.flag = true;
+        game.instance(id)->set_attribute("Locked", locked);
+        game.instance(id)->set_attribute("Health", health);
+    });
+    ExpectText(attributes_of(ide::completion_world(engine, 0, nullptr, cache)), "Health:number Locked:boolean ",
+               "set attributes show, in name order, with their types");
+    engine.on_simulation([&](engine_core::DataModel& game) {
+        game.instance(id)->set_attribute("Locked", engine_core::LuaSlot());
+    });
+    ExpectText(attributes_of(ide::completion_world(engine, 0, nullptr, cache)), "Health:number ",
+               "a removed attribute goes");
+}
+
 int RunScriptTabTests(ide::IdeLayout& layout, jadefx::Scene& scene) {
     gFailures = 0;
     TestClosedTabs(layout, scene);
@@ -346,5 +384,6 @@ int RunScriptTabTests(ide::IdeLayout& layout, jadefx::Scene& scene) {
     TestEditorComesBackWithItsScript(layout.simulation());
     TestProblemsShowAndClear(layout.simulation());
     TestCompletionWorldFollowsChanges(layout.simulation());
+    TestCompletionWorldHoldsAttributes(layout.simulation());
     return gFailures;
 }

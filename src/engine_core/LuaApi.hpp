@@ -74,6 +74,9 @@ struct LuaField {
     bool resolves_child = false;
     // GetService: the string argument is a name from register_lua_service.
     bool service_arg = false;
+    // GetAttribute, SetAttribute, GetAttributeChangedSignal: the first string
+    // argument names an attribute of the receiver.
+    bool attribute_arg = false;
     // GetChildren: the result is a list of `type_name`.
     bool returns_list = false;
     // Connect: the first argument after self is a callback. Its parameters are
@@ -469,12 +472,21 @@ void lua_doc_names(std::string_view owner, std::vector<std::string>& out);
 std::string lua_analysis_definitions();
 
 // One instance the editor can see. parent is kNoParent for the root.
+// One attribute an instance carries, for completion: its name and the type
+// name attribute_type_name gives its value.
+struct LuaNodeAttribute {
+    std::string name;
+    std::string type;
+};
+
 struct LuaNode {
     std::uint32_t id = 0;
     std::uint32_t parent = 0xffffffffu;
     std::string name;
     std::string class_name;
     std::string source;
+    // The instance's attributes, in name order.
+    std::vector<LuaNodeAttribute> attributes;
 };
 
 }  // namespace engine_core

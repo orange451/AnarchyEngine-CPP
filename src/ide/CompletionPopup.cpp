@@ -1,6 +1,7 @@
 #include "CompletionPopup.hpp"
 #include "LockWaits.hpp"
 
+#include "Attributes.hpp"
 #include "DataModelLock.hpp"
 #include "Engine.hpp"
 #include "IdeTheme.hpp"
@@ -1030,6 +1031,10 @@ const std::vector<engine_core::LuaNode>& completion_world(engine_core::Engine& e
                 node.name = game.name(id);
                 const char* class_name = object->class_name();
                 node.class_name = class_name != nullptr ? class_name : "";
+                for (const auto& [attribute, slot] : object->attributes()) {
+                    const char* type = engine_core::attribute_type_name(slot.kind);
+                    node.attributes.push_back({attribute, type != nullptr ? type : ""});
+                }
                 std::uint64_t version = 0;
                 if (auto* source = dynamic_cast<engine_core::LuaSource*>(object)) {
                     node.source = source->source();

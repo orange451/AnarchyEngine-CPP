@@ -207,8 +207,8 @@ struct Writer {
         push_registered(state, runtime, slot, 0, 0);
     }
 
+    // The table, a key and a value a level: remote_stack_slots made room.
     void push_table(const RemoteTable& table) {
-        luaL_checkstack(state, 3, "remote tables");
         lua_createtable(state, static_cast<int>(table.array.size()), static_cast<int>(table.fields.size()));
         int element = 0;
         for (const RemoteValue& value : table.array) {
@@ -233,6 +233,9 @@ bool remote_values_from_lua(lua_State* state, int first, const char* method, Rem
         return true;
     }
     Reader reader{state, method, error, {}};
+    if (static_cast<std::size_t>(top - first + 1) > kRemoteMaxArgs) {
+        return reader.refuse("sends more than " + std::to_string(kRemoteMaxArgs) + " arguments");
+    }
     if (!reader.take(static_cast<std::size_t>(top - first + 1))) {
         return false;
     }
@@ -247,9 +250,12 @@ bool remote_values_from_lua(lua_State* state, int first, const char* method, Rem
     return true;
 }
 
+int remote_stack_slots(const RemoteValues& values) {
+    return static_cast<int>(values.values.size()) + 3 * (static_cast<int>(kRemoteMaxDepth) + 1);
+}
+
 int push_remote_values(lua_State* state, const DataModel& world, const RemoteValues& values) {
     const int count = static_cast<int>(values.values.size());
-    luaL_checkstack(state, count + 3, "remote values");
     Writer writer{state, world, runtime_from(state)};
     for (const RemoteValue& value : values.values) {
         writer.push(value);

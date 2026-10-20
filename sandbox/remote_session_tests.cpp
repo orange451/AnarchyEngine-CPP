@@ -838,3 +838,36 @@ TEST_CASE("RE48 FireServer raises once too many messages wait for a server that 
     REQUIRE(number(client.rig, "sent") * 10000.0 >= static_cast<double>(engine_network::kMaxServerOutboxBytes));
     REQUIRE(client.session->state() == engine_network::ClientState::Joined);
 }
+
+TEST_CASE("RE49 a raw client's message of more than 1024 arguments is dropped, and server scripts keep running",
+          "[remote][session]") {
+    Net net;
+    const engine_core::RemoteEvent& open = add_remote(net.server.game, net.workspace(), "Open");
+    server_script(net, "Hear",
+        "_G.open = 0\n"
+        "_G.beats = 0\n"
+        "game:GetService('RunService').Heartbeat:Connect(function() _G.beats += 1 end)\n"
+        "workspace.Open.OnServerEvent:Connect(function(connection, ...) _G.open += 1 _G.count = select('#', ...) end)\n");
+    RawClient raw(net.hub, 0);
+    REQUIRE(raw.endpoint.connect(kServer, net.now));
+    pump(net, raw, 30);
+    REQUIRE(raw.connected);
+
+    // 8001 nils: about 8 KB, well under the byte and value caps.
+    raw.send(remote_message(open.id(), std::vector<engine_core::RemoteValue>(8001)));
+    pump(net, raw, 60);
+    REQUIRE(net.session->dropped_remotes() == 1);
+    REQUIRE(number(net.server, "open") == 0);
+    REQUIRE(net.server.runtime.dropped_deliveries() == 0);
+    const double beats = number(net.server, "beats");
+    pump(net, raw, 10);
+    REQUIRE(number(net.server, "beats") > beats);
+    REQUIRE(raw.connected);
+
+    // The most arguments a message holds are heard.
+    raw.send(remote_message(open.id(), std::vector<engine_core::RemoteValue>(1024)));
+    pump(net, raw, 60);
+    REQUIRE(number(net.server, "open") == 1);
+    REQUIRE(number(net.server, "count") == 1024);
+    REQUIRE(net.session->dropped_remotes() == 1);
+}

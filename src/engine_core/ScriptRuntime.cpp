@@ -51,13 +51,21 @@ namespace {
 
 // Pushes an event's values in order and says how many. The values are copied
 // onto the stack, so the event may go once this returns. A Values slot, a
-// remote message's arguments, pushes each of them, nils included.
+// remote message's arguments, pushes each of them, nils included. -1, with
+// nothing pushed, when the stack has no room for them all: the caller drops
+// that delivery, and nothing raises.
 int push_event_args(lua_State* state, ScriptRuntime* runtime, const DataModel* world, const EventArgs* args) {
     if (args == nullptr || args->empty()) {
         return 0;
     }
+    int slots = 0;
+    for (const LuaSlot& slot : *args) {
+        slots += slot.kind == LuaSlot::Kind::Values && slot.values != nullptr ? remote_stack_slots(*slot.values) : 1;
+    }
+    if (!lua_checkstack(state, slots)) {
+        return -1;
+    }
     int count = 0;
-    lua_checkstack(state, static_cast<int>(args->size()));
     for (const LuaSlot& slot : *args) {
         if (slot.kind == LuaSlot::Kind::Values) {
             if (slot.values != nullptr && world != nullptr) {
@@ -1546,7 +1554,12 @@ void ScriptRuntime::make_ready_args(Thread& thread, const EventArgs* args) {
         return;
     }
     thread.cause = "Wait";
-    thread.nargs = push_event_args(thread.co, this, game_, args);
+    // Values past the stack's room are dropped: the waiter wakes with none.
+    const int nargs = push_event_args(thread.co, this, game_, args);
+    if (nargs < 0) {
+        ++dropped_deliveries_;
+    }
+    thread.nargs = std::max(nargs, 0);
     ready(thread);
 }
 
@@ -2229,7 +2242,14 @@ void ScriptRuntime::invoke_listener_args(Vm& vm, int ref, InstanceId script, std
         if (thread == nullptr) {
             return;
         }
-        thread->nargs = push_event_args(thread->co, this, game_, args);
+        const int nargs = push_event_args(thread->co, this, game_, args);
+        if (nargs < 0) {
+            // No room for the values: this listener misses this one, and never runs for it.
+            thread->dead = true;
+            ++dropped_deliveries_;
+            return;
+        }
+        thread->nargs = nargs;
         run_listener(*thread);
     });
 }

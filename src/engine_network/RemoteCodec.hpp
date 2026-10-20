@@ -40,10 +40,10 @@ void encode_remote(std::uint32_t remote_netid, const engine_core::RemoteValues& 
                    ByteWriter& out);
 
 // Reads one whole message, header included. False on any malformed input,
-// tables nested deeper than 32, bytes left over, a message larger than
-// max_bytes, or more than max_values values (every argument, table and value
-// inside one, counted as RemoteValues counts them for kRemoteMaxValues); out
-// is then unspecified, and nothing is made for values past the cap. On
+// more than kRemoteMaxArgs arguments, tables nested deeper than 32, bytes
+// left over, a message larger than max_bytes, or more than max_values values
+// (every argument, table and value inside one, counted as RemoteValues counts
+// them for kRemoteMaxValues); out is then unspecified, and nothing is made for values past the cap. On
 // success, values_read (when given) is how many it read. Never throws, never
 // crashes.
 bool decode_remote(ByteReader& in, std::uint32_t& remote_netid, engine_core::RemoteValues& out, const NetToId& to_id,

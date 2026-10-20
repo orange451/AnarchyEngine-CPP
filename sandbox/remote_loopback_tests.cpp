@@ -5,12 +5,14 @@
 
 #include "Project.hpp"
 #include "RemoteEvent.hpp"
+#include "RemoteValues.hpp"
 #include "ScriptAnalysis.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 
 #include <chrono>
 #include <initializer_list>
+#include <memory>
 #include <string>
 #include <thread>
 #include <vector>
@@ -272,4 +274,68 @@ TEST_CASE("RE9 the checker types OnServerEvent's connection and every method", "
     for (const std::string& message : typed) typed_text += message + "\n";
     INFO(typed_text);
     REQUIRE(typed_text.find("Connection") != std::string::npos);
+}
+
+TEST_CASE("RE50 firing more than 1024 arguments raises on the sender", "[remote]") {
+    ScriptRig rig;
+    play(rig,
+         "local r = Instance.new('RemoteEvent')\n"
+         "r.OnServerEvent:Connect(function(c, ...) _G.heard = select('#', ...) end)\n"
+         "local ok, err = pcall(r.FireServer, r, table.unpack(table.create(1025, 1)))\n"
+         "_G.over = not ok and string.find(tostring(err), 'FireServer sends more than 1024 arguments', 1, true) ~= nil\n"
+         "local ok_all, err_all = pcall(r.FireClientAll, r, table.unpack(table.create(1025, false)))\n"
+         "_G.over_all = not ok_all and\n"
+         "    string.find(tostring(err_all), 'FireClientAll sends more than 1024 arguments', 1, true) ~= nil\n"
+         "_G.most = pcall(r.FireServer, r, table.unpack(table.create(1024, 1)))\n",
+         3);
+    require_globals(rig, {"over", "over_all", "most"});
+    double heard = 0;
+    REQUIRE(rig.runtime.global_number("heard", heard));
+    REQUIRE(heard == 1024);
+}
+
+TEST_CASE("RE51 a delivery the handler's stack has no room for is dropped, and scripts keep running", "[remote]") {
+    ScriptRig rig;
+    play(rig,
+         "local r = Instance.new('RemoteEvent')\n"
+         "r.Name = 'Talk'\n"
+         "r.Parent = workspace\n"
+         "_G.beats = 0\n"
+         "game:GetService('RunService').Heartbeat:Connect(function() _G.beats += 1 end)\n"
+         "r.OnServerEvent:Connect(function(c, ...) _G.heard = select('#', ...) end)\n"
+         "task.spawn(function()\n"
+         "    local _, first = r.OnServerEvent:Wait()\n"
+         "    _G.woke = first == nil\n"
+         "end)\n");
+    const engine_core::InstanceId remote =
+        rig.game.find_first_child(rig.game.scene_service("Workspace"), "Talk");
+    REQUIRE(remote != 0);
+
+    // More values than a Luau stack holds: past what any sender or decoder lets
+    // through, so only a message made here reaches the handlers with it.
+    auto values = std::make_shared<engine_core::RemoteValues>();
+    values->values.resize(9000);
+    // The first is a number, so a waiter that got them would not read nil.
+    values->values[0].slot.kind = engine_core::LuaSlot::Kind::Number;
+    values->values[0].slot.number = 1;
+    engine_core::EventArgs args(2);
+    args[1].kind = engine_core::LuaSlot::Kind::Values;
+    args[1].values = values;
+    rig.game.fire_event(remote, "OnServerEvent", std::move(args));
+    rig.frames(2);
+    INFO(rig.runtime.last_error());
+    REQUIRE(rig.runtime.dropped_deliveries() == 2);
+    REQUIRE(rig.runtime.global_is_nil("heard"));
+    require_globals(rig, {"woke"});
+
+    double before = 0;
+    REQUIRE(rig.runtime.global_number("beats", before));
+    add_script(rig.game, "Again", "workspace.Talk:FireServer(1, 2, 3)\n");
+    rig.frames(3);
+    double after = 0;
+    REQUIRE(rig.runtime.global_number("beats", after));
+    REQUIRE(after > before);
+    double heard = 0;
+    REQUIRE(rig.runtime.global_number("heard", heard));
+    REQUIRE(heard == 3);
 }

@@ -289,7 +289,7 @@ bool decode_remote(ByteReader& in, std::uint32_t& remote_netid, engine_core::Rem
     remote_netid = static_cast<std::uint32_t>(netid);
     const std::uint64_t count = in.varuint();
     Decoder decoder{in, to_id, max_values};
-    if (in.failed() || count > in.left() || !decoder.take(count)) {
+    if (in.failed() || count > engine_core::kRemoteMaxArgs || count > in.left() || !decoder.take(count)) {
         return false;
     }
     out.values.resize(static_cast<std::size_t>(count));

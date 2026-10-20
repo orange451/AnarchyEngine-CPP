@@ -2119,7 +2119,7 @@ void TestGroupTitlesAndEmptyGroups() {
     Expect(!rig.panel.editor("Zeta")->isVisible(), "a named group folds");
     rig.select({base, kid});
     rig.frame();
-    const std::vector<std::string> mixed_titles = {"Instance", "Look", "Feel"};
+    const std::vector<std::string> mixed_titles = {"Instance", "Look", "Feel", "Attributes"};
     Expect(rig.panel.group_titles() == mixed_titles, "a group with no rows left has no header");
     Expect(!rig.panel.editor("Zeta")->isVisible(), "Look stays folded across selections");
     rig.select({kid});
@@ -2396,6 +2396,24 @@ void TestAttributeEdit() {
     rig.typeInto("Health", "12");
     rig.enter();
     Expect(rig.game.instance(rig.a)->attribute("Health").number == 12, "typing into the Health row writes it");
+
+    // An Instance attribute's row takes any instance: a pick writes it.
+    engine_core::LuaSlot target;
+    target.kind = engine_core::LuaSlot::Kind::Instance;
+    target.id = rig.b;
+    rig.game.instance(rig.a)->set_attribute("Target", target);
+    ide::PropertyEdit pick;
+    pick.property = "Target";
+    pick.kind = ide::PropertyKind::Ref;
+    pick.value.ref = rig.folder;
+    pick.attribute = true;
+    const ide::EditResult picked = ide::apply_edit(rig.game, {rig.a}, pick);
+    Expect(!picked.rejected && picked.written == 1, "an Instance attribute row takes a Folder");
+    Expect(rig.game.instance(rig.a)->attribute("Target").id == rig.folder, "the pick is written");
+    pick.value.ref = rig.b;
+    const ide::EditResult part = ide::apply_edit(rig.game, {rig.a}, pick);
+    Expect(!part.rejected && rig.game.instance(rig.a)->attribute("Target").id == rig.b,
+           "an Instance attribute row takes a GameObject");
 }
 
 void TestAttributeAddRemove() {

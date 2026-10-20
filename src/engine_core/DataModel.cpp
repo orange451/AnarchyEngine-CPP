@@ -2056,29 +2056,41 @@ std::optional<std::string> DataModel::set_attribute(std::string_view name, LuaSl
     if (auto error = attribute_value_error(value)) {
         return error;
     }
-    AttributeMap next = attributes();
-    if (value.kind == LuaSlot::Kind::Nil) {
-        const auto found = next.find(name);
-        if (found == next.end()) {
-            return std::nullopt;
+    if (value.kind == LuaSlot::Kind::Instance) {
+        if (value.id == 0 || !alive(value.id)) {
+            return std::string(value.id == 0 ? "game cannot be an attribute's value" : "the instance is gone");
         }
-        next.erase(found);
-    } else {
-        if (value.kind == LuaSlot::Kind::Instance) {
-            if (value.id == 0 || !alive(value.id)) {
-                return std::string("the instance is gone");
-            }
-            value.text = guid(value.id);
-            value.id = 0;
-        }
-        value.error.clear();
-        const auto found = next.find(name);
-        if (found != next.end() && same_slot(found->second, value)) {
-            return std::nullopt;
-        }
-        next[std::string(name)] = std::move(value);
+        value.text = guid(value.id);
+        value.id = 0;
     }
-    set_attributes(std::move(next));
+    value.error.clear();
+    const auto found = attributes_ != nullptr ? attributes_->find(name) : AttributeMap::iterator{};
+    const bool held = attributes_ != nullptr && found != attributes_->end();
+    if (value.kind == LuaSlot::Kind::Nil ? !held : held && same_slot(found->second, value)) {
+        return std::nullopt;
+    }
+    // One entry changes in place; the whole map is written out only for history.
+    const bool recording = history_capturing();
+    LuaSlot before;
+    if (recording) {
+        before.kind = LuaSlot::Kind::String;
+        before.text = attributes_to_json(attributes());
+    }
+    const std::string moved(name);
+    if (value.kind == LuaSlot::Kind::Nil) {
+        attributes_->erase(found);
+        if (attributes_->empty()) {
+            attributes_.reset();
+        }
+    } else if (held) {
+        found->second = std::move(value);
+    } else {
+        if (attributes_ == nullptr) {
+            attributes_ = std::make_unique<AttributeMap>();
+        }
+        attributes_->emplace(moved, std::move(value));
+    }
+    attributes_moved(&moved, 1, recording, before);
     return std::nullopt;
 }
 
@@ -2101,9 +2113,12 @@ void DataModel::set_attributes(AttributeMap next) {
         return;
     }
     std::sort(moved.begin(), moved.end());
+    const bool recording = history_capturing();
     LuaSlot before;
-    before.kind = LuaSlot::Kind::String;
-    before.text = attributes_to_json(now);
+    if (recording) {
+        before.kind = LuaSlot::Kind::String;
+        before.text = attributes_to_json(now);
+    }
     if (next.empty()) {
         attributes_.reset();
     } else {
@@ -2112,15 +2127,26 @@ void DataModel::set_attributes(AttributeMap next) {
         }
         *attributes_ = std::move(next);
     }
-    LuaSlot after;
-    after.kind = LuaSlot::Kind::String;
-    after.text = attributes_to_json(attributes());
-    // One undo step holds the whole map, and Changed fires with "Attributes".
-    note_property_change("Attributes", before, after);
+    attributes_moved(moved.data(), moved.size(), recording, before);
+}
+
+void DataModel::attributes_moved(const std::string* moved, std::size_t count, bool recording, const LuaSlot& before) {
+    if (recording) {
+        // One undo step holds the whole map, and Changed fires with "Attributes".
+        LuaSlot after;
+        after.kind = LuaSlot::Kind::String;
+        after.text = attributes_to_json(attributes());
+        note_property_change("Attributes", before, after);
+    } else {
+        // What note_property_change does when nothing records.
+        mark_authored_dirty(id_);
+        emit_property("Attributes");
+    }
     // Per name, AttributeChanged with the name, then GetAttributeChangedSignal's
     // with nothing. A load or Stop writes with nothing connected: nothing queues.
     const bool any = event_listened(id_, "AttributeChanged");
-    for (const std::string& name : moved) {
+    for (std::size_t index = 0; index < count; ++index) {
+        const std::string& name = moved[index];
         if (any) {
             LuaSlot arg;
             arg.kind = LuaSlot::Kind::String;
@@ -2982,6 +3008,11 @@ bool write_lua_attributes(DataModel& world, DataModel& object, LuaSlot& in) {
     }
     if (!error.empty()) {
         std::fprintf(stderr, "%s: %s\n", world.name(object.id()).c_str(), error.c_str());
+    }
+    // As SetAttribute refuses: game holds none, though a load may write it empty.
+    if (object.id() == 0 && !next.empty()) {
+        in.error = "game cannot hold attributes";
+        return false;
     }
     object.set_attributes(std::move(next));
     return true;

@@ -719,6 +719,13 @@ protected:
     // Changed with its name, and tells the panels that show it, but records
     // nothing and leaves the place unchanged.
     void emit_property(std::string_view property);
+    // Whether history is recording a step now, so a setter need build what it
+    // keeps only then.
+    bool history_capturing() const;
+    // After attributes changed: one undo step from before (the map's JSON,
+    // built only while recording) when recording, Changed with "Attributes",
+    // and AttributeChanged plus its per-name event for each name in moved.
+    void attributes_moved(const std::string* moved, std::size_t count, bool recording, const LuaSlot& before);
 
     // The GUID in text; the live target, if any, in id, with kind Instance, else
     // Nil. A target whose class does not inherit klass, as a hand-edited file

@@ -553,3 +553,38 @@ p:GetAttributeChangedSignal("Health"):Connect(function() end)
     INFO(problems);
     REQUIRE(problems.empty());
 }
+
+TEST_CASE("ATR17 the hidden Attributes property cannot put attributes on game", "[attributes][lua]") {
+    ScriptRig rig;
+    rig.runtime.run_chunk(R"(
+        print("root", pcall(function() game.Attributes = '{"X":{"type":"number","value":1}}' end))
+    )");
+    const std::vector<std::string> out = printed(rig.runtime.drain_output());
+    REQUIRE(has_prefix(out, "root\tfalse\t"));
+    REQUIRE(rig.game.attributes().empty());
+    // Empty stays allowed, so a load or Stop writing the default never fails on game.
+    const engine_core::LuaField* field = engine_core::lua_class_find("DataModel", "Attributes");
+    LuaSlot empty;
+    empty.kind = LuaSlot::Kind::String;
+    REQUIRE(field->write(rig.game, rig.game, empty));
+}
+
+TEST_CASE("ATR18 setting an attribute with nothing recording is cheap", "[attributes]") {
+    SimRole role;
+    engine_core::Game game;
+    engine_core::GameObject& part = create_part(game);
+    for (int i = 0; i < 8; ++i) {
+        REQUIRE(!part.set_attribute("Stat" + std::to_string(i), number_slot(i)));
+    }
+    constexpr int kSets = 100000;
+    const auto start = std::chrono::steady_clock::now();
+    for (int i = 0; i < kSets; ++i) {
+        part.set_attribute("Stat3", number_slot(i));
+    }
+    const double ms =
+        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+    WARN("ATR18 " << kSets << " sets: " << ms << " ms");
+    REQUIRE(part.attribute("Stat3").number == kSets - 1);
+    // Copying the map and writing it as JSON twice a call took about 10 us; one entry in place is well under 1.
+    REQUIRE(ms < 150.0);
+}

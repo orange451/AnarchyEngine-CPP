@@ -115,6 +115,8 @@ void DataModel::note_property_change(std::string_view property, const LuaSlot& b
     emit_change(id_, Field::Reflected, current_origin(), id);
 }
 
+bool DataModel::history_capturing() const { return capturing(state_->history.get()); }
+
 void DataModel::emit_property(std::string_view property) {
     emit_change(id_, Field::Reflected, current_origin(), lua_property_id(property));
 }

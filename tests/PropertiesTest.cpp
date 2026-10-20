@@ -2621,6 +2621,19 @@ void TestShaderParamRows() {
     progress = row_named(sheet, "Progress");
     Expect(progress != nullptr && progress->mismatched && progress->value.number == 0, "a string Progress warns");
 
+    // A sampler takes only a Texture.
+    const engine_core::InstanceId mesh = MakeAsset(rig.game, "Mesh", "Rock", rig.game.service("Meshes"));
+    ide::PropertyEdit pick;
+    pick.property = "Noise";
+    pick.kind = ide::PropertyKind::Ref;
+    pick.value.ref = mesh;
+    pick.attribute = true;
+    pick.shader_param = true;
+    const ide::EditResult refused = ide::apply_edit(rig.game, {material->id()}, pick);
+    Expect(refused.rejected && refused.error == "Noise must be a Texture" &&
+               material->attribute("Noise").kind == engine_core::LuaSlot::Kind::Nil,
+           "a sampler refuses a Mesh");
+
     // No Shader, no rows.
     material->set_reference(engine_core::Material::kShaderReference, engine_core::LuaSlot{});
     Expect(row_named(ide::read_sheet(rig.game, {material->id()}), "EdgeColor") == nullptr, "clearing the Shader clears them");
@@ -2651,6 +2664,20 @@ void TestShaderParamPanel() {
     Expect(rig.panel.attribute_remove("Progress") == nullptr ||
                !rig.panel.attribute_remove("Progress")->isVisible(),
            "a uniform at its default has no reset button");
+    // Setting it, as a held slider's first tick does, keeps the row's widgets,
+    // so a drag or an open color picker is not cut off.
+    jadefx::TextField* held = rig.field("Progress");
+    engine_core::LuaSlot tick;
+    tick.kind = engine_core::LuaSlot::Kind::Number;
+    tick.number = 0.1;
+    material->set_attribute("Progress", tick);
+    rig.frame();
+    rig.frame();
+    Expect(held != nullptr && rig.field("Progress") == held, "a defaulted uniform's row survives being set");
+    material->set_attributes({});
+    rig.frame();
+    rig.frame();
+    to_bottom();
     rig.typeInto("Progress", "0.25");
     rig.enter();
     rig.frame();

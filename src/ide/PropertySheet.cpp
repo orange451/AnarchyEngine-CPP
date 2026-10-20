@@ -377,9 +377,10 @@ bool PropertyRow::operator==(const PropertyRow& other) const {
 }
 
 bool PropertyRow::same_slot(const PropertyRow& other) const {
+    // defaulted and mismatched are how the row looks, not what it is: a held
+    // slider's row survives the write that sets its attribute.
     return name == other.name && attribute == other.attribute && shader_param == other.shader_param &&
-           defaulted == other.defaulted && mismatched == other.mismatched && type_name == other.type_name &&
-           kind == other.kind &&
+           type_name == other.type_name && kind == other.kind &&
            group == other.group &&
            slider_min == other.slider_min && slider_max == other.slider_max && enum_type == other.enum_type &&
            has_choices == other.has_choices;

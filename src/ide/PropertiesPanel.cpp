@@ -1114,11 +1114,7 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
         view->row = row;
         view->name = jadefx::make<jadefx::Label>(row.name);
         view->name->getClassList().add("properties-name");
-        // A Shader's uniform at its default reads dim; one whose attribute holds
-        // the wrong type reads as a warning.
-        view->name->setStyle(row.mismatched                    ? "color: var(--ide-problems-warning-color);"
-                             : row.writable && !row.defaulted ? "color: var(--ide-text-color);"
-                                                              : "color: var(--ide-properties-readonly-name-color);");
+        style_name(*view->name, row);
         body->getChildren().add(view->name);
         std::weak_ptr<Impl> weak_self = shared_from_this();
         std::weak_ptr<RowView> weak_view = view;
@@ -1606,7 +1602,18 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
         view.pick->setGraphicTextGap(4);
     }
 
+    // A Shader's uniform at its default reads dim; one whose attribute holds
+    // the wrong type reads as a warning.
+    static void style_name(jadefx::Label& name, const PropertyRow& row) {
+        name.setStyle(row.mismatched                    ? "color: var(--ide-problems-warning-color);"
+                      : row.writable && !row.defaulted ? "color: var(--ide-text-color);"
+                                                       : "color: var(--ide-properties-readonly-name-color);");
+    }
+
     void show_row(RowView& view, const PropertyRow& row) {
+        if (row.shader_param && (row.defaulted != view.row.defaulted || row.mismatched != view.row.mismatched)) {
+            style_name(*view.name, row);
+        }
         view.row = row;
         auto put = [](PropertyField& field, const std::string& text) {
             if (field.isFocused() && field.dirty) {

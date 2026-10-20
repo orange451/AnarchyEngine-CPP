@@ -70,6 +70,13 @@ void TestOddText() {
                                    std::string("1.5e"), std::string("é = 2;\n"), std::string("a/b/*c*/d")}) {
         expect(total(ide::highlight_glsl(text)) == ide::CodePoints(text), "odd text is still covered");
     }
+    const std::string continued = "#define SAT(x) \\\n    clamp(x)\nfloat a;";
+    const auto continued_spans = ide::highlight_glsl(continued);
+    expect(style_at(continued_spans, at(continued, "clamp")) == "keyword", "a continued directive's next line too");
+    expect(style_at(continued_spans, at(continued, "float")) == "datatype", "and not the line after it");
+    const std::string after_comment = "/* c */ #define X 1\n";
+    expect(style_at(ide::highlight_glsl(after_comment), at(after_comment, "#define")) == "keyword",
+           "a directive after a comment on its line");
     const std::string block = "a /* x\ny */ b";
     const auto spans = ide::highlight_glsl(block);
     expect(style_at(spans, at(block, "y */")) == "comment", "a block comment spans lines");

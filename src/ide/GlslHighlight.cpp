@@ -103,11 +103,22 @@ std::vector<GlslSpan> highlight_glsl(std::string_view source) {
             const std::size_t close = text.find(U"*/", at + 2);
             at = close == std::u32string::npos ? text.size() : close + 2;
             spans.add(kComment, at - start);
-            line_start = false;
+            // A comment before a directive leaves the line a directive's.
             continue;
         }
         if (c == U'#' && line_start) {
-            while (at < text.size() && text[at] != U'\n') {
+            // To the line's end, and on through each line a trailing \ continues.
+            for (;;) {
+                char32_t last = U' ';
+                while (at < text.size() && text[at] != U'\n') {
+                    if (!IsSpace(text[at])) {
+                        last = text[at];
+                    }
+                    ++at;
+                }
+                if (last != U'\\' || at >= text.size()) {
+                    break;
+                }
                 ++at;
             }
             spans.add(kKeyword, at - start);

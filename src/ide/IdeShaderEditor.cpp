@@ -1,6 +1,7 @@
 #include "IdeShaderEditor.hpp"
 
 #include "EditorFont.hpp"
+#include "FindBar.hpp"
 #include "GlslHighlight.hpp"
 #include "IdeTheme.hpp"
 #include "LockWaits.hpp"
@@ -14,6 +15,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cstdlib>
+#include <functional>
 #include <optional>
 #include <utility>
 
@@ -22,6 +24,26 @@ namespace {
 
 // As the CSS editor: Source is written half a second after the last keystroke.
 constexpr std::chrono::milliseconds kSaveDelay(500);
+// The most matches the find bar counts and highlights, as the script editor.
+constexpr std::size_t kFindLimit = 19999;
+
+bool NameChar(char32_t c) {
+    return (c >= U'a' && c <= U'z') || (c >= U'A' && c <= U'Z') || (c >= U'0' && c <= U'9') || c == U'_';
+}
+
+// The name the caret at column touches in line, as code points [start, end).
+jadefx::IndexRange NameAround(const std::u32string& line, int column) {
+    const int length = static_cast<int>(line.size());
+    int start = std::clamp(column, 0, length);
+    int end = start;
+    while (start > 0 && NameChar(line[static_cast<std::size_t>(start - 1)])) {
+        --start;
+    }
+    while (end < length && NameChar(line[static_cast<std::size_t>(end)])) {
+        ++end;
+    }
+    return jadefx::IndexRange{start, end};
+}
 
 // The script editor's syntax colors, so a shader reads like a script.
 void DefineStyles(jadefx::StyleClassedTextArea& area) {
@@ -37,6 +59,15 @@ void DefineStyles(jadefx::StyleClassedTextArea& area) {
     define("datatype", "--ide-syntax-datatype-color", false);
     define("comment", "--ide-syntax-comment-color", false);
     define("number", "--ide-syntax-number-color", false);
+    // Every match of the find bar, and the one it is on.
+    jadefx::TextStyle match;
+    match.hasBackground = true;
+    match.background = theme_color("--ide-find-match-color");
+    area.defineStyleClass("find-match", match);
+    jadefx::TextStyle current;
+    current.hasBackground = true;
+    current.background = theme_color("--ide-find-current-color");
+    area.defineStyleClass("find-current", current);
 }
 
 // The line "<line>: <message>" names, or 0.
@@ -53,7 +84,32 @@ int ErrorLine(const std::string& error) {
 // Enter keeps the indent, and { brings its }, as in the CSS editor.
 class IdeShaderEditor::Area : public jadefx::CodeArea {
 public:
+    IdeShaderEditor* editor = nullptr;
+
+    // Runs work as one undo step, as the editor's Replace All needs.
+    void asOneStep(const std::function<void()>& work) { transact(false, work); }
+
     void handleKey(jadefx::KeyEvent& event) override {
+        if (editor != nullptr && (event.pressed || event.repeat)) {
+            const FindChord chord = find_chord(event);
+            if (chord == FindChord::Find || chord == FindChord::Replace) {
+                editor->openFind(chord == FindChord::Replace);
+                event.consume();
+                return;
+            }
+            if (editor->findOpen()) {
+                if (event.key == jadefx::Key::F3 || (event.shortcut() && !event.alt && event.key == jadefx::Key::G)) {
+                    editor->step_find(event.shift ? -1 : 1);
+                    event.consume();
+                    return;
+                }
+                if (event.key == jadefx::Key::Escape && !event.shift && !event.shortcut()) {
+                    editor->closeFind();
+                    event.consume();
+                    return;
+                }
+            }
+        }
         const bool plain_enter = (event.pressed || event.repeat) &&
                                  (event.key == jadefx::Key::Enter || event.key == jadefx::Key::KpEnter) &&
                                  !event.shift && !event.shortcut() && !event.alt;
@@ -117,6 +173,7 @@ IdeShaderEditor::IdeShaderEditor(engine_core::Engine& engine, std::uint32_t id)
     setIconFile("Shader.png");
     commit_->id = id;
     area_ = std::make_shared<Area>();
+    area_->editor = this;
     area_->getClassList().add("ide-script");
     (void)editor_mono_family();
     DefineStyles(*area_);
@@ -131,6 +188,17 @@ IdeShaderEditor::IdeShaderEditor(engine_core::Engine& engine, std::uint32_t id)
     area_->setOnPlainTextChange([this](const jadefx::PlainTextChange&) { noteText(); });
     Fill(*area_);
     getChildren().add(area_);
+
+    FindBar::Actions find;
+    find.changed = [this] { find_changed(); };
+    find.step = [this](int direction) { step_find(direction); };
+    find.replace = [this] { replace_find(); };
+    find.replace_all = [this] { replace_find_all(); };
+    find.close = [this] { closeFind(); };
+    find_bar_ = jadefx::make<FindBar>(std::move(find));
+    find_bar_->setVisible(false);
+    // After the text, so it draws over it and is hit first.
+    getChildren().add(find_bar_);
     load();
 }
 
@@ -170,7 +238,15 @@ void IdeShaderEditor::layoutChildren() {
     } else if (!dirty_) {
         reapply();
     }
+    if (findOpen()) {
+        find_bar_->poll();
+        // A click or an arrow key can put the selection on a match or take it off one.
+        if (current_find() != painted_find_) {
+            paint(area_->getText());
+        }
+    }
     StackPane::layoutChildren();
+    place_find_bar();
     // The source saves after a pause and can change in the place, so the editor checks again next frame.
     markLayoutDirty(LayoutDirt::Arrange);
 }
@@ -229,29 +305,310 @@ void IdeShaderEditor::load() {
 }
 
 void IdeShaderEditor::paint(const std::string& text) {
+    refresh_find(text);
+    const int current = current_find();
+    painted_find_ = current;
+    // The highlighter's spans, cut where find matches start and end. A match adds
+    // its class after the token's, so it keeps the token's color.
     jadefx::StyleSpansBuilder builder;
+    std::size_t next = 0;
+    int at = 0;
     for (const GlslSpan& span : highlight_glsl(text)) {
-        jadefx::TextStyle style;
-        if (span.style != nullptr) {
-            style.styleClass = span.style;
+        int left = span.length;
+        while (left > 0) {
+            while (next < find_matches_.size() && find_matches_[next].end <= at) {
+                ++next;
+            }
+            int piece = left;
+            const char* mark = nullptr;
+            if (next < find_matches_.size()) {
+                const TextMatch& match = find_matches_[next];
+                if (match.start > at) {
+                    piece = std::min(left, match.start - at);
+                } else {
+                    piece = std::min(left, match.end - at);
+                    mark = static_cast<int>(next) == current ? "find-current" : "find-match";
+                }
+            }
+            jadefx::TextStyle style;
+            if (span.style != nullptr) {
+                style.styleClass = span.style;
+            }
+            if (mark != nullptr) {
+                style.styleClass = style.styleClass.empty() ? std::string(mark) : style.styleClass + " " + mark;
+            }
+            builder.add(style, piece);
+            at += piece;
+            left -= piece;
         }
-        builder.add(style, span.length);
     }
+    show_find_count();
     area_->suspendUndo();
     area_->setStyleSpans(0, builder.create());
     area_->resumeUndo();
+    refresh_scroll_marks();
+}
+
+void IdeShaderEditor::refresh_scroll_marks() {
+    std::vector<jadefx::ScrollMark> marks;
+    marks.reserve(find_matches_.size() + 1);
+    // Find matches down the left half of the bar, the error down the right.
+    const jadefx::Color found = theme_color("--ide-find-scroll-color");
+    for (const TextMatch& match : find_matches_) {
+        marks.push_back({match.start, match.end, found, jadefx::ScrollMarkLane::Left});
+    }
+    if (errorEnd_ > errorStart_) {
+        marks.push_back({errorStart_, errorEnd_, theme_color("--error-color"), jadefx::ScrollMarkLane::Right});
+    }
+    area_->setScrollMarks(std::move(marks));
+}
+
+bool IdeShaderEditor::findOpen() const { return find_bar_ && find_bar_->isVisible(); }
+
+void IdeShaderEditor::place_find_bar() {
+    if (!find_bar_) {
+        return;
+    }
+    if (!findOpen()) {
+        find_bar_->performLayout(0, 0, 0, 0);
+        return;
+    }
+    const double right = contentLeft() + contentWidth() - FindBar::kRightGap;
+    const double width = std::max(0.0, std::min(FindBar::kMaxWidth, right - contentLeft() - 8));
+    const double height = find_bar_->measuredHeight(width, -1);
+    find_bar_->performLayout(right - width, contentTop(), width, height);
+}
+
+void IdeShaderEditor::openFind(bool replace) {
+    if (!area_ || !find_bar_) {
+        return;
+    }
+    // One line of selection, or the name under the caret, is what to find.
+    std::string seed;
+    if (area_->selections().size() == 1) {
+        const jadefx::IndexRange range = area_->selection();
+        if (!range.empty()) {
+            seed = area_->getText(range.start, range.end);
+            if (seed.find('\n') != std::string::npos) {
+                seed.clear();
+            }
+        } else {
+            const jadefx::TextPos at = area_->position(range.start);
+            const jadefx::IndexRange name = NameAround(area_->getParagraph(at.paragraph).content(), at.column);
+            if (!name.empty()) {
+                // Selected, so it is the match the bar starts on.
+                const int start = area_->absolutePosition(at.paragraph, name.start);
+                const int end = area_->absolutePosition(at.paragraph, name.end);
+                seed = area_->getText(start, end);
+                area_->selectRange(start, end);
+            }
+        }
+    }
+    const bool was_open = findOpen();
+    find_bar_->setVisible(true);
+    find_bar_->setReplaceEnabled(area_->isEditable());
+    if (replace || !was_open) {
+        find_bar_->setReplaceShown(replace);
+    }
+    if (!seed.empty()) {
+        find_bar_->setFindText(seed);
+    }
+    paint(area_->getText());
+    if (replace && !find_bar_->query().pattern.empty()) {
+        find_bar_->focusReplace();
+    } else {
+        find_bar_->focusFind();
+    }
+}
+
+void IdeShaderEditor::closeFind() {
+    if (!findOpen()) {
+        return;
+    }
+    find_bar_->setVisible(false);
+    find_bar_->performLayout(0, 0, 0, 0);
+    if (jadefx::Scene* scene = getScene()) {
+        scene->releaseFocus(find_bar_.get());
+    }
+    paint(area_->getText());
+    focus();
+}
+
+void IdeShaderEditor::refresh_find(const std::string& text) {
+    find_matches_.clear();
+    find_capped_ = false;
+    find_error_.clear();
+    if (!findOpen()) {
+        return;
+    }
+    const TextSearch search(find_bar_->query());
+    find_error_ = search.error();
+    if (search.ready()) {
+        find_matches_ = search.find_all(text, kFindLimit + 1);
+        if (find_matches_.size() > kFindLimit) {
+            find_matches_.resize(kFindLimit);
+            find_capped_ = true;
+        }
+    }
+}
+
+int IdeShaderEditor::current_find() const {
+    if (!area_ || find_matches_.empty() || area_->selections().size() != 1) {
+        return -1;
+    }
+    const jadefx::IndexRange range = area_->selection();
+    for (std::size_t i = 0; i < find_matches_.size(); ++i) {
+        if (find_matches_[i].start == range.start && find_matches_[i].end == range.end) {
+            return static_cast<int>(i);
+        }
+    }
+    return -1;
+}
+
+void IdeShaderEditor::show_find_count() {
+    if (findOpen()) {
+        find_bar_->showCount(current_find(), static_cast<int>(find_matches_.size()), find_capped_, find_error_);
+    }
+}
+
+void IdeShaderEditor::find_changed() {
+    // As the find text grows, the match stays where the last one started.
+    const int from = area_->selection().start;
+    paint(area_->getText());
+    if (find_matches_.empty()) {
+        return;
+    }
+    std::size_t index = 0;
+    for (std::size_t i = 0; i < find_matches_.size(); ++i) {
+        if (find_matches_[i].start >= from) {
+            index = i;
+            break;
+        }
+    }
+    select_find(index);
+}
+
+void IdeShaderEditor::select_find(std::size_t index) {
+    if (index >= find_matches_.size()) {
+        return;
+    }
+    const TextMatch& match = find_matches_[index];
+    area_->selectRange(match.start, match.end);
+    area_->showPosition(match.start);
+    paint(area_->getText());
+}
+
+void IdeShaderEditor::step_find(int direction) {
+    if (find_matches_.empty()) {
+        return;
+    }
+    const std::size_t count = find_matches_.size();
+    const int current = current_find();
+    std::size_t index = 0;
+    if (current >= 0) {
+        index = (static_cast<std::size_t>(current) + count + (direction > 0 ? 1 : count - 1)) % count;
+    } else if (direction > 0) {
+        const int from = area_->selection().end;
+        for (std::size_t i = 0; i < count; ++i) {
+            if (find_matches_[i].start >= from) {
+                index = i;
+                break;
+            }
+        }
+    } else {
+        const int before = area_->selection().start;
+        index = count - 1;
+        for (std::size_t i = count; i-- > 0;) {
+            if (find_matches_[i].start < before) {
+                index = i;
+                break;
+            }
+        }
+    }
+    select_find(index);
+}
+
+void IdeShaderEditor::replace_find() {
+    if (!findOpen() || !area_->isEditable()) {
+        return;
+    }
+    const int current = current_find();
+    // The first press only goes to a match; the next replaces it, as in VS Code.
+    if (current < 0) {
+        step_find(1);
+        return;
+    }
+    const TextSearch search(find_bar_->query());
+    if (!search.ready()) {
+        return;
+    }
+    const std::string text = area_->getText();
+    const TextMatch match = find_matches_[static_cast<std::size_t>(current)];
+    const std::string inserted = search.expand(text, match, find_bar_->replacement());
+    area_->replaceText(match.start, match.end, inserted);
+    const int after = match.start + CodePoints(inserted);
+    area_->moveTo(after);
+    for (std::size_t i = 0; i < find_matches_.size(); ++i) {
+        if (find_matches_[i].start >= after) {
+            select_find(i);
+            return;
+        }
+    }
+    show_find_count();
+}
+
+void IdeShaderEditor::replace_find_all() {
+    if (!findOpen() || !area_->isEditable()) {
+        return;
+    }
+    const TextSearch search(find_bar_->query());
+    if (!search.ready()) {
+        return;
+    }
+    apply_replacements(search, search.find_all(area_->getText()), find_bar_->replacement());
+}
+
+int IdeShaderEditor::replaceAll(const std::string& query, const std::string& replacement) {
+    if (!area_ || !loaded_ || missing_ || !area_->isEditable()) {
+        return 0;
+    }
+    SearchQuery wanted;
+    wanted.pattern = query;
+    const TextSearch search(wanted);
+    if (!search.ready()) {
+        return 0;
+    }
+    return apply_replacements(search, search.find_all(area_->getText()), replacement);
+}
+
+int IdeShaderEditor::apply_replacements(const TextSearch& search, const std::vector<TextMatch>& matches,
+                                        const std::string& replacement) {
+    if (matches.empty()) {
+        return 0;
+    }
+    const std::string text = area_->getText();
+    // Last first, so each match's place is still right; one undo step for all.
+    area_->asOneStep([&] {
+        for (std::size_t i = matches.size(); i-- > 0;) {
+            area_->replaceText(matches[i].start, matches[i].end, search.expand(text, matches[i], replacement));
+        }
+    });
+    return static_cast<int>(matches.size());
 }
 
 void IdeShaderEditor::markError(const std::string& error) {
-    if (error == shownError_ && loaded_) {
+    // The same Error over different text, as when lines above it grew, moves the mark.
+    const std::string text = area_->getText();
+    if (error == shownError_ && text == markedText_ && loaded_) {
         return;
     }
     shownError_ = error;
+    markedText_ = text;
     const int line = ErrorLine(error);
     errorLine_ = line;
     std::vector<jadefx::TextMark> marks;
-    std::vector<jadefx::ScrollMark> scroll;
-    const std::string text = area_->getText();
+    errorStart_ = 0;
+    errorEnd_ = 0;
     if (line > 0) {
         // The line's code points, start to end, found by its newlines.
         std::size_t begin = 0;
@@ -269,11 +626,12 @@ void IdeShaderEditor::markError(const std::string& error) {
             mark.end = stop;
             mark.severity = jadefx::TextMarkSeverity::Error;
             marks.push_back(mark);
-            scroll.push_back({start, stop, theme_color("--error-color"), jadefx::ScrollMarkLane::Right});
+            errorStart_ = start;
+            errorEnd_ = stop;
         }
     }
     area_->setTextMarks(std::move(marks));
-    area_->setScrollMarks(std::move(scroll));
+    refresh_scroll_marks();
 }
 
 void IdeShaderEditor::noteText() {

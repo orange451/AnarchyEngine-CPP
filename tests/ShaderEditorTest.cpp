@@ -162,6 +162,15 @@ void TestShaderTab(ide::IdeLayout& layout, jadefx::Scene& scene) {
     frame();
     Expect(SourceOf(engine, id) == kBadHint, "a flush writes Source");
     Expect(editor->errorLine() == 4, "the error's line is marked");
+    // Text added above the error leaves Error's text the same; the mark still follows its line.
+    const std::string padded =
+        "shader surface;\n// padding added above the error\n// glow is not a hint\nuniform float Shine : glow;\n\nvoid surface() {}\n";
+    code->setText(padded);
+    editor->flush();
+    frame();
+    frame();
+    const int line_four = static_cast<int>(padded.find("uniform"));
+    Expect(editor->errorMarkStart() == line_four, "the mark moves with its line when Error's text stays");
     code->setText(engine_core::kShaderStarterSource);
     editor->flush();
     frame();
@@ -270,12 +279,138 @@ void TestProblemOpensShader(ide::IdeLayout& layout, jadefx::Scene& scene) {
     frame();
 }
 
+// Ctrl+F in the shader editor: the name under the caret is found, Replace All
+// rewrites every match, and Escape closes the bar.
+void TestFindReplace(ide::IdeLayout& layout, jadefx::Scene& scene) {
+    engine_core::Engine& engine = layout.simulation();
+    double time = 80.0;
+    auto frame = [&] {
+        scene.layout(1280, 800, time);
+        time += 0.1;
+    };
+    constexpr const char* kSource =
+        "shader surface;\nuniform float Progress : range(0, 1);\nvoid surface() {\n    ALPHA = Progress * Progress;\n}\n";
+    engine_core::InstanceId id = 0;
+    engine.on_simulation([&](engine_core::DataModel& game) {
+        engine_core::Shader& shader = game.create<engine_core::Shader>();
+        game.set_name(shader.id(), "Finder");
+        game.set_parent(shader.id(), game.service("Shaders"));
+        shader.set_source(kSource);
+        id = shader.id();
+    });
+    layout.show_problems();
+    for (int i = 0; i < 4; ++i) {
+        frame();
+    }
+    // Open it the way Problems or the Assets pane would: here, through Problems'
+    // host is not needed, so the Assets pane's double-click is reused.
+    ide::IdeAssets* assets = nullptr;
+    ide::IdeDock* assets_dock = nullptr;
+    jadefx::Tab* was_front = nullptr;
+    for (jadefx::Node* node : scene.getElementsByClassName("ide-pane")) {
+        for (jadefx::Node* up = node; up != nullptr && assets == nullptr; up = up->getParent()) {
+            if (auto* dock = dynamic_cast<ide::IdeDock*>(up)) {
+                for (const std::shared_ptr<jadefx::Tab>& tab : dock->tabs()->getTabs().items()) {
+                    if (auto* pane = tab ? dynamic_cast<ide::IdeAssets*>(tab->getContent()) : nullptr) {
+                        assets_dock = dock;
+                        was_front = dock->tabs()->getSelectedTab();
+                        dock->tabs()->select(tab);
+                        assets = pane;
+                    }
+                }
+                break;
+            }
+        }
+    }
+    frame();
+    Expect(assets != nullptr, "the Assets pane is in the layout");
+    if (assets == nullptr) {
+        return;
+    }
+    assets->openFolder(engine.datamodel().service("Shaders"));
+    frame();
+    frame();
+    if (jadefx::Node* item = assets->itemNode(id)) {
+        const double x = item->getAbsoluteX() + item->getWidth() * 0.5;
+        const double y = item->getAbsoluteY() + item->getHeight() * 0.5;
+        scene.noteButton(0, true, x, y);
+        scene.noteButton(0, false, x, y);
+        scene.noteButton(0, true, x, y);
+        scene.noteButton(0, false, x, y);
+    }
+    frame();
+    frame();
+    ide::IdeShaderEditor* editor = EditorFor(scene, id);
+    Expect(editor != nullptr, "the shader opens for find");
+    if (editor == nullptr) {
+        return;
+    }
+    jadefx::CodeArea* code = nullptr;
+    for (jadefx::Node* node : scene.getElementsByClassName("ide-script")) {
+        if (node->getParent() == editor) {
+            code = dynamic_cast<jadefx::CodeArea*>(node);
+        }
+    }
+    Expect(code != nullptr, "the editor holds a code area");
+    if (code == nullptr) {
+        return;
+    }
+    // The caret inside the first "Progress", then Ctrl+F.
+    code->requestFocus();
+    code->moveTo(1, 16);
+    frame();
+    scene.noteKey(jadefx::Key::F, true, false, jadefx::Key::ModControl);
+    scene.noteKey(jadefx::Key::F, false, false, 0);
+    frame();
+    Expect(editor->findOpen(), "Ctrl+F opens the find bar");
+    Expect(editor->findMatchCount() == 3, "the name under the caret is found three times");
+    Expect(editor->replaceAll("Progress", "Amount") == 3, "Replace All rewrites every match");
+    editor->flush();
+    frame();
+    frame();
+    std::string first;
+    engine.on_simulation([&](engine_core::DataModel& game) {
+        if (auto* shader = dynamic_cast<engine_core::Shader*>(game.instance(id))) {
+            first = shader->parse()->params.empty() ? std::string() : shader->parse()->params[0].name;
+        }
+    });
+    Expect(first == "Amount", "after the write the uniform is Amount");
+    editor->openFind(false);
+    frame();
+    code->requestFocus();
+    scene.noteKey(jadefx::Key::Escape, true, false, 0);
+    scene.noteKey(jadefx::Key::Escape, false, false, 0);
+    frame();
+    Expect(!editor->findOpen(), "Escape closes the find bar");
+
+    for (jadefx::Node* node = editor; node != nullptr; node = node->getParent()) {
+        if (auto* dock = dynamic_cast<ide::IdeDock*>(node)) {
+            std::shared_ptr<jadefx::Tab> found;
+            for (const std::shared_ptr<jadefx::Tab>& tab : dock->tabs()->getTabs().items()) {
+                if (tab && tab->getContent() == editor) {
+                    found = tab;
+                }
+            }
+            if (found) {
+                dock->tabs()->close(found);
+            }
+            break;
+        }
+    }
+    if (assets_dock != nullptr && was_front != nullptr) {
+        assets_dock->tabs()->select(was_front);
+    }
+    engine.on_simulation([&](engine_core::DataModel& game) { game.destroy(id); });
+    frame();
+}
+
 }  // namespace
 
 int RunShaderEditorTests(ide::IdeLayout& layout, jadefx::Scene& scene) {
     gFailures = 0;
     TestShaderTab(layout, scene);
     TestProblemOpensShader(layout, scene);
+    TestFindReplace(layout, scene);
     if (gFailures == 0) {
         std::printf("shader editor tests passed\n");
     }

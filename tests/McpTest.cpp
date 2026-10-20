@@ -16,6 +16,7 @@
 #include "ScriptAnalysis.hpp"
 #include "ScriptRuntime.hpp"
 #include "Script.hpp"
+#include "Shader.hpp"
 #include "httplib.h"
 #include "profiler/ProfileJson.hpp"
 #include "profiler/Profiler.hpp"
@@ -437,6 +438,42 @@ bool HasProblem(const JsonValue& problems, const std::string& code, int line) {
 }
 
 // Scripts are checked, edited in part, searched, and undone.
+// read_script and write_script take a Shader: its source, and its Error as the problem.
+void TestShaderSource() {
+    engine_core::Engine engine;
+    engine_core::DataModel& game = engine.datamodel();
+    ide::McpServer server;
+    ide::add_engine_tools(server, engine, {});
+    engine_core::Shader& shader = game.create<engine_core::Shader>();
+    game.set_name(shader.id(), "Tint");
+    game.set_parent(shader.id(), game.service("Shaders"));
+
+    const JsonValue read = Call(server, "read_script", R"({"instance":"Assets.Shaders.Tint"})");
+    Expect(read.find("source") != nullptr && Member(read, "source").as_string() == engine_core::kShaderStarterSource,
+           "read_script returns a Shader's source");
+
+    const JsonValue bad = Call(server, "write_script",
+                               R"j({"instance":"Assets.Shaders.Tint","source":"shader surface;\n\nuniform float A : glow;\nvoid surface() {}\n"})j");
+    const JsonValue* problems = bad.find("problems");
+    Expect(problems != nullptr && problems->items().size() == 1 &&
+               Member(Item(*problems, 0), "line").as_number() == 3 &&
+               Member(Item(*problems, 0), "message").as_string() == "unknown hint glow" &&
+               Member(Item(*problems, 0), "code").as_string() == "Shader",
+           "write_script returns a Shader's error as its problem: " + ide::compact_json(bad));
+    Expect(shader.error() == "3: unknown hint glow", "and the source is written");
+    const JsonValue clean = Call(server, "write_script",
+                                 R"j({"instance":"Assets.Shaders.Tint","source":"shader post;\nvoid post() {}\n"})j");
+    Expect(clean.find("problems") != nullptr && Member(clean, "problems").items().empty(),
+           "a clean Shader has no problems: " + ide::compact_json(clean));
+
+    const JsonValue props = Call(server, "get_properties", R"({"instance":"Assets.Shaders.Tint"})");
+    const JsonValue* source = props.find("properties") != nullptr ? Member(props, "properties").find("Source") : nullptr;
+    Expect(source != nullptr && Member(*source, "value").as_string() == "(use read_script)",
+           "get_properties sends Source to read_script");
+    const JsonValue* kind = props.find("properties") != nullptr ? Member(props, "properties").find("Kind") : nullptr;
+    Expect(kind != nullptr && Member(*kind, "value").as_string() == "Post", "and shows Kind");
+}
+
 void TestScriptTools() {
     engine_core::Engine engine;
     engine_core::DataModel& game = engine.datamodel();
@@ -1440,6 +1477,7 @@ int main() {
     TestProtocol();
     TestEngineTools();
     TestScriptTools();
+    TestShaderSource();
     TestPlaytestRun();
     TestDiagnosticsDuringPlay();
     TestPrintSource();

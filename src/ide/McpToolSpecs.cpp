@@ -67,24 +67,24 @@ constexpr SpecText kSpecs[] = {
      R"({"type":"object","required":["files"],"properties":{
          "files":{"type":"array","minItems":1,"maxItems":64,"items":{"type":"string"},"description":"Absolute paths of image, sound, and model files."}}})"},
     {"read_script",
-     "The Source of a Script or ModuleScript, and how many lines it has. first_line and last_line "
+     "The Source of a Script, ModuleScript, or Shader, and how many lines it has. first_line and last_line "
      "return only those lines, counting from 1.",
      R"({"type":"object","required":["instance"],"properties":{
          "instance":{"type":["string","number"],"description":"Id or path."},
          "first_line":{"type":"integer","minimum":1,"description":"Default 1."},
          "last_line":{"type":"integer","minimum":1,"description":"Default: the last line."}}})"},
     {"write_script",
-     "Replaces the Source of a Script or ModuleScript. One undo step. An open editor shows the new "
+     "Replaces the Source of a Script, ModuleScript, or Shader. One undo step. An open editor shows the new "
      "source; typing not yet written from it is written first, then replaced. Returns the problems "
      "the studio's analysis finds in the new source, lines from 1, or analysis \"pending\" when it "
      "has not finished, or \"not checked\" for a script analysis does not check: one outside the "
-     "place, or one added during a playtest (see get_diagnostics). To change part of a long script, "
-     "edit_script sends less.",
+     "place, or one added during a playtest (see get_diagnostics). For a Shader, the problem is its "
+     "Error, at its line. To change part of a long script, edit_script sends less.",
      R"({"type":"object","required":["instance","source"],"properties":{
          "instance":{"type":["string","number"],"description":"Id or path."},
          "source":{"type":"string"}}})"},
     {"edit_script",
-     "Replaces text in a Script or ModuleScript's Source without sending all of it. Each edit's "
+     "Replaces text in a Script, ModuleScript, or Shader's Source without sending all of it. Each edit's "
      "old_text must appear exactly once, spaces and line breaks included, unless replace_all is set. "
      "Edits apply in order, all or none, as one undo step. Returns how many places changed and the "
      "problems analysis finds, as write_script does.",

@@ -66,12 +66,23 @@ std::string mask(std::string_view source) {
                     out[i] = ' ';
                 }
             }
-            line_start = false;
+            // A comment before a directive leaves the line a directive's.
             continue;
         }
         if (c == '#' && line_start) {
-            for (; i < out.size() && out[i] != '\n'; ++i) {
-                out[i] = ' ';
+            // To the line's end, and on through each line a trailing \ continues.
+            for (;;) {
+                char last = ' ';
+                for (; i < out.size() && out[i] != '\n'; ++i) {
+                    if (!space(out[i])) {
+                        last = out[i];
+                    }
+                    out[i] = ' ';
+                }
+                if (last != '\\' || i >= out.size()) {
+                    break;
+                }
+                ++i;
             }
             line_start = true;
             continue;

@@ -77,8 +77,25 @@ In a standalone world, remotes loop back inside the world:
 - **Size caps:** a reliable message may be at most 256 KB encoded. An unreliable message must fit in one packet's payload, about 1 KB. Firing past either cap raises an error on the sending side.
 - **Table nesting:** at most 32 levels deep.
 - **Values per message:** at most 65536, counting every argument, every table and every value inside one at any depth. A decoded value takes a few hundred bytes however small it is on the wire, so without this a 256 KB message of tiny values would unpack to about 90 MB. Firing past it raises "<Method> message has more than 65536 values"; a received one is dropped and counted.
+- **Arguments per message:** at most 1024 at the top level. Each argument takes a slot on the receiving handler's Lua stack, which holds 8000 at most. Firing past it raises "<Method> sends more than 1024 arguments"; a received one is dropped and counted. If a handler's stack still has no room for a message's values, that delivery is dropped for that handler and counted (`ScriptRuntime::dropped_deliveries`): the handler never runs for it, a `Wait` wakes with no values, and no script stops.
 - **Values per receive:** the server accepts at most 262144 decoded values from one client in one receive pass (`SessionConfig::max_remote_values_per_pass`). Past that, that receive's messages are dropped and counted, as past the 4 MB byte cap.
+- **Bytes per receive:** the server reads at most 4 MB of remote messages from one client in one receive pass (`SessionConfig::max_remote_bytes_per_pass`). The bound is per client and per receive pass, not a backlog. Past it, the rest of that client's messages in that receive are dropped unread and counted.
+- **Refused messages cost the same:** a message is charged against both per-receive caps whether it is accepted or refused. Its bytes count, and so do the values read before it failed (`decode_remote` reports them). A message whose count asks for more values than are left uses up the rest of the allowance. A stream of almost-valid messages therefore stops being decoded once the cap is reached.
 - **A client's waiting messages:** a client holds at most 4 MB of `FireServer` messages the server has not taken yet. When a server stops acking, `FireServer` past that raises "FireServer cannot send: too many messages are waiting for the server".
+- **A client's hold for unheard messages:** a client holds a server message for a remote no script listens to yet, and fires it once a listener connects. The hold is kept per remote and found in one lookup per arrival. Each receive does work per held remote, not per held message. It is bounded three ways:
+  - at most 256 messages per remote;
+  - each message for at most 10 seconds after it arrives;
+  - at most 4 MB in all, with each message's decoded size estimated from its values (a few hundred bytes a value).
+
+  Past any of these, a message is dropped and counted (`ClientSession::dropped_unheard`). Messages held for a listener that connects within the window are delivered once, in the order they arrived.
+- **Engine values:** each engine value travels in a fixed binary layout, never as JSON, so its decode cost is fixed. Every number is a 32-bit float, which is exact, since the engine keeps these values as floats. The layouts (codec version 3, the message's second byte):
+  - Vector3: 3 floats (12 bytes). Vector2: 2 floats. Color3: 3 floats (alpha arrives as 1). Matrix4: 16 floats, column-major.
+  - EnumItem: the enum type's name as a string, then the item's value as a varuint.
+  - NumberCurve: a mode byte, then by mode: Constant, a value; Range, min and max; Curve, keys; CurveRange, two sets of keys. Keys are a varuint count, 1 to 1024, then each key's time, value and interpolation byte.
+  - ColorCurve: a mode byte, then by mode: Constant, a key; RandomBetween, two keys; Gradient, keys; GradientRange, two sets of keys. A key is r, g, b and transparency. Keys are a varuint count, 1 to 1024, then each key's time and key.
+  - Nothing else travels as an engine value. A Signal, an InputObject or a TouchObject is never a value a script can send.
+
+  A curve with more than 1024 keys raises "<Method> cannot send a curve of more than 1024 keys". A received value whose count, mode, item or length is wrong fails the whole message.
 - **Received message checks:** the server checks every received message the same way. It drops a message that breaks a cap, names a RemoteEvent that client was never sent, or fails to decode, and counts it. It never kicks the client and never crashes.
 - **Rate limiting:** none. That stays the game's.
 
@@ -102,7 +119,7 @@ In a standalone world, remotes loop back inside the world:
 
   The snapshot is taken at the end of the tick and includes the RemoteEvent, so such a message never names something the client lacks. `FireClient` to such a connection is valid.
 - **What the server accepts from a client.** A message is accepted only if it names a RemoteEvent that is replicated (alive, not in ServerStorage or Core) and the client has joined. A client's instance arguments resolve against the same replicated set. There is no per-client record of what was sent.
-- **The memory bound on received messages.** This is protection, not rate limiting. Each client may have at most 4 MB of received remote messages waiting for their handlers to run. Past that, its new messages are dropped and counted until the backlog drains. A client is never kicked for this.
+- **The memory bound on received messages.** This is protection, not rate limiting. The server reads at most 4 MB of remote messages from each client in each receive pass, refused ones included. Past that, the rest of that client's messages in that receive are dropped unread and counted, and the next receive starts the allowance again. A client is never kicked for this.
 - **What the caps measure.** The size caps measure the whole encoded message, header included. On the server, a message sent to many clients counts once per client against that client's queue bytes, as tree changes do.
 - **Argument count is kept.** `FireServer(1, nil)` delivers two arguments, so `select("#", ...)` agrees on both sides.
 - **Tables:**

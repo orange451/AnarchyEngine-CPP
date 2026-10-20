@@ -65,3 +65,9 @@ Left over from sub-project 1 (transport, `src/network/`), for the sub-projects t
 - Warm the resources hash in the background at launch, so the first join does not pay for it.
 - After a leave, `Connections.LocalConnection` still names the old Connection until the next swap (only Studio's Stop clears it, with `clear_connections`).
 - Edit-mode plugins that call Join get "Only a client can join a server", which is misleading there: Studio is a client, but only during a test.
+
+## Left over from remote events
+
+- Payload priority over the reliable backlog: while reliable data is in flight, it goes first in each packet and leaves the payload about 158 bytes a tick, so most unreliable messages are dropped. Put the payload first when the connection has credit for an extra packet.
+- Standalone loopback never encodes a message, so it applies only the checks made while reading the arguments (types, nesting, values, argument count). It has no size cap, no unreliable payload limit or loss, no per-receive allowance and no unheard hold, so a game tested in single player can behave differently once networked.
+- The server does not hold a client's messages for an `OnServerEvent` listener that connects late: a message for a remote no server script listens to yet is fired to nobody and lost.

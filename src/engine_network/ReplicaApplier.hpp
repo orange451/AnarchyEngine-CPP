@@ -26,6 +26,9 @@ public:
     // were malformed or out of order; the caller ends the connection.
     ApplyResult receive_message(const std::uint8_t* data, std::size_t size);
     engine_core::InstanceId local(std::uint32_t netid) const;   // DataModel::kNoParent when not known
+    // The reverse: the netid this world's id came from; 0 when it is not the
+    // server's (a client's own instance), or is the root.
+    std::uint32_t netid_of(engine_core::InstanceId id) const;
     bool joined() const;               // the snapshot has been applied
     std::size_t skipped() const;       // operations refused or naming an instance this client no longer has
     std::uint64_t server_tick() const;

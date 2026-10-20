@@ -1161,6 +1161,7 @@ add_executable(sandbox
     sandbox/tests.cpp
     sandbox/remote_loopback_tests.cpp
     sandbox/remote_codec_tests.cpp
+    sandbox/remote_session_tests.cpp
     sandbox/wireframe_tests.cpp
     sandbox/project_identity_tests.cpp
     sandbox/constraint_tests.cpp

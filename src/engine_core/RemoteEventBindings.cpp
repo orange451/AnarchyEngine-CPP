@@ -84,9 +84,10 @@ IRemoteSink& sink_of(lua_State* state, const DataModel& game) {
     return *sink;
 }
 
-void raise_if(lua_State* state, bool sent, const std::string& error) {
+// A sink names why without the method: "message is over 262144".
+void raise_if(lua_State* state, bool sent, const char* method, const std::string& error) {
     if (!sent) {
-        luaL_error(state, "%s", error.c_str());
+        luaL_error(state, "%s %s", method, error.c_str());
     }
 }
 
@@ -122,7 +123,7 @@ int fire_server(lua_State* state) {
         }
         std::string error;
         raise_if(state, sink_of(state, game).fire_server(remote.id(), std::move(values), remote.unreliable(), error),
-                 error);
+                 "FireServer", error);
         return 0;
     });
 }
@@ -147,7 +148,7 @@ int fire_client(lua_State* state) {
         raise_if(state,
                  sink_of(state, game).fire_clients(remote.id(), connections, false, std::move(values),
                                                    remote.unreliable(), error),
-                 error);
+                 "FireClient", error);
         return 0;
     });
 }
@@ -179,7 +180,7 @@ int fire_client_ext(lua_State* state) {
         raise_if(state,
                  sink_of(state, game).fire_clients(remote.id(), connections, false, std::move(values),
                                                    remote.unreliable(), error),
-                 error);
+                 "FireClientExt", error);
         return 0;
     });
 }
@@ -198,7 +199,7 @@ int fire_client_all(lua_State* state) {
         raise_if(state,
                  sink_of(state, game).fire_clients(remote.id(), {}, true, std::move(values), remote.unreliable(),
                                                    error),
-                 error);
+                 "FireClientAll", error);
         return 0;
     });
 }

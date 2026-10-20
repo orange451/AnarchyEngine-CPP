@@ -1,7 +1,13 @@
 #include "Sessions.hpp"
 
-#include "ConnectionInstance.hpp"
+#include "RemoteCodec.hpp"
 
+#include "ConnectionInstance.hpp"
+#include "RemoteEvent.hpp"
+#include "RemoteValues.hpp"
+
+#include <algorithm>
+#include <string>
 #include <utility>
 
 namespace engine_network {
@@ -16,15 +22,24 @@ ServerSession::ServerSession(engine_core::DataModel& game, std::unique_ptr<netwo
     callbacks.on_disconnected = [this](network::PeerId peer, network::DisconnectReason, network::DenyReason) {
         on_disconnected(peer);
     };
-    callbacks.on_message = [this](network::PeerId, const std::uint8_t*, std::size_t) { ++dropped_messages_; };
+    callbacks.on_message = [this](network::PeerId peer, const std::uint8_t* data, std::size_t size) {
+        on_message(peer, data, size);
+    };
     endpoint_ = std::make_unique<network::Endpoint>(std::move(socket), config_.endpoint, std::move(callbacks));
+    game_.set_remote_sink(this);
 }
 
-ServerSession::~ServerSession() { close(now_); }
+ServerSession::~ServerSession() {
+    if (game_.remote_sink() == this) {
+        game_.set_remote_sink(nullptr);
+    }
+    close(now_);
+}
 
 network::Endpoint& ServerSession::endpoint() { return *endpoint_; }
 const Replicator& ServerSession::replicator() const { return replicator_; }
 std::size_t ServerSession::dropped_messages() const { return dropped_messages_; }
+std::size_t ServerSession::dropped_remotes() const { return dropped_remotes_; }
 std::size_t ServerSession::fell_behind() const { return fell_behind_; }
 
 InstanceId ServerSession::connection_of(network::PeerId peer) const {
@@ -63,7 +78,99 @@ void ServerSession::on_disconnected(network::PeerId peer) {
 
 void ServerSession::receive(double now) {
     now_ = now;
+    // Each receive starts every client's remote allowance again.
+    if (remote_bytes_counted_) {
+        for (auto& [peer, entry] : peers_) {
+            entry.remote_bytes = 0;
+        }
+        remote_bytes_counted_ = false;
+    }
     endpoint_->receive(now);
+}
+
+void ServerSession::on_message(network::PeerId peer, const std::uint8_t* data, std::size_t size) {
+    if (size == 0 || data[0] != static_cast<std::uint8_t>(MessageType::Remote)) {
+        ++dropped_messages_;
+        return;
+    }
+    // A RemoteEvent message. Anything wrong with it drops it and counts it; the
+    // client is never kicked for what it sent.
+    const auto found = peers_.find(peer);
+    if (found == peers_.end() || !found->second.joined || !game_.alive(found->second.connection) ||
+        found->second.remote_bytes + size > config_.max_remote_bytes_per_pass) {
+        ++dropped_remotes_;
+        return;
+    }
+    Peer& entry = found->second;
+    // A client names only what it could have been sent: instances clients see.
+    const NetToId to_id = [this](std::uint32_t netid) -> InstanceId {
+        return game_.alive(netid) && replicator_.replicated(netid) ? netid : 0;
+    };
+    ByteReader in(data, size);
+    std::uint32_t remote_netid = 0;
+    auto values = std::make_shared<engine_core::RemoteValues>();
+    if (!decode_remote(in, remote_netid, *values, to_id, engine_core::kRemoteMaxReliableBytes) ||
+        to_id(remote_netid) == 0 || remote_netid == 0 ||
+        dynamic_cast<engine_core::RemoteEvent*>(game_.instance(remote_netid)) == nullptr) {
+        ++dropped_remotes_;
+        return;
+    }
+    entry.remote_bytes += size;
+    remote_bytes_counted_ = true;
+    engine_core::EventArgs args(2);
+    args[0].kind = engine_core::LuaSlot::Kind::Instance;
+    args[0].id = entry.connection;
+    args[1].kind = engine_core::LuaSlot::Kind::Values;
+    args[1].values = std::move(values);
+    game_.fire_event(remote_netid, "OnServerEvent", std::move(args));
+}
+
+bool ServerSession::fire_server(InstanceId, std::shared_ptr<const engine_core::RemoteValues>, bool, std::string& error) {
+    // RemoteEventBindings refuses FireServer on a server before it gets here.
+    error = "is for clients";
+    return false;
+}
+
+bool ServerSession::fire_clients(InstanceId remote, const std::vector<InstanceId>& connections, bool all,
+                                 std::shared_ptr<const engine_core::RemoteValues> values, bool, std::string& error) {
+    if (values == nullptr) {
+        return true;
+    }
+    // A server's netid is its InstanceId; what clients do not hold reads nil there.
+    std::vector<std::uint8_t> bytes;
+    {
+        ByteWriter out;
+        encode_remote(remote, *values, [this](InstanceId id) -> std::uint32_t {
+            return replicator_.replicated(id) ? id : 0;
+        }, out);
+        bytes = std::move(out.data());
+    }
+    if (bytes.size() > engine_core::kRemoteMaxReliableBytes) {
+        error = "message is over " + std::to_string(engine_core::kRemoteMaxReliableBytes);
+        return false;
+    }
+    // A remote clients do not hold (one in ServerStorage) reaches no one.
+    if ((!all && connections.empty()) || !replicator_.replicated(remote)) {
+        return true;
+    }
+    outbox_.push_back(Outgoing{connections, all, std::make_shared<const std::vector<std::uint8_t>>(std::move(bytes))});
+    return true;
+}
+
+void ServerSession::route(const Outgoing& outgoing) {
+    for (auto& [peer, entry] : peers_) {
+        if (!outgoing.all && std::find(outgoing.connections.begin(), outgoing.connections.end(), entry.connection) ==
+                                 outgoing.connections.end()) {
+            continue;
+        }
+        // Through the same queue as the tree, behind this tick's changes; a client
+        // whose snapshot is not queued yet gets it after the snapshot.
+        if (entry.joined) {
+            push(entry, outgoing.message);
+        } else {
+            entry.held.push_back(outgoing.message);
+        }
+    }
 }
 
 void ServerSession::push(Peer& entry, Message message) {
@@ -130,6 +237,14 @@ void ServerSession::send(double now) {
             fresh.push_back(peer);
         }
     }
+    // RemoteEvent messages fired this tick go behind its changes, so an instance
+    // created in the same tick is on the client before a message names it.
+    if (!outbox_.empty()) {
+        for (const Outgoing& outgoing : outbox_) {
+            route(outgoing);
+        }
+        outbox_.clear();
+    }
     // After this tick's changes: a snapshot taken now already holds them, and
     // every later tick's changes queue behind it, so a client gets each change
     // once, after its snapshot.
@@ -140,6 +255,11 @@ void ServerSession::send(double now) {
         for (auto& part : snapshot) {
             push(entry, std::make_shared<const std::vector<std::uint8_t>>(std::move(part)));
         }
+        // Messages fired for it before now: the snapshot holds what they name.
+        for (Message& message : entry.held) {
+            push(entry, std::move(message));
+        }
+        entry.held.clear();
         entry.joined = true;
     }
     // Through the endpoint's slots, which a kick in flush leaves in place, so

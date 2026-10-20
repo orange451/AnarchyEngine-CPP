@@ -155,6 +155,8 @@ RemoteValues sample() {
     v.push_back(instance(77));
     v.push_back(table({number(1), nil(), table({text("deep")}, {{"k", boolean(true)}})},
                       {{"name", text("Ball")}, {"where", vec3}}));
+    // game itself, which both sides hold.
+    v.push_back(instance(0));
     // Trailing nils count too.
     v.push_back(nil());
     v.push_back(nil());
@@ -185,6 +187,8 @@ TEST_CASE("RE10 every value kind round-trips", "[remote]") {
     REQUIRE(back.values[14].slot.kind == LuaSlot::Kind::Instance);
     REQUIRE(back.values[14].slot.id == 77);
     REQUIRE(back.values[15].table->fields[0].second.slot.text == "Ball");
+    REQUIRE(back.values[16].slot.kind == LuaSlot::Kind::Instance);
+    REQUIRE(back.values[16].slot.id == 0);
 
     // No arguments at all.
     const std::vector<std::uint8_t> empty = encode(1, RemoteValues{});

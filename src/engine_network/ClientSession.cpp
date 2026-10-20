@@ -1,7 +1,12 @@
 #include "Sessions.hpp"
 
 #include "ClientWorld.hpp"
+#include "RemoteCodec.hpp"
 
+#include "RemoteEvent.hpp"
+#include "RemoteValues.hpp"
+
+#include <string>
 #include <utility>
 
 namespace engine_network {
@@ -16,11 +21,15 @@ ClientSession::ClientSession(engine_core::DataModel& game, std::unique_ptr<netwo
         on_disconnected(why, deny);
     };
     endpoint_ = std::make_unique<network::Endpoint>(std::move(socket), config_.endpoint, std::move(callbacks));
+    game_.set_remote_sink(this);
 }
 
 // Whoever destroys a session has stopped listening to it, so on_state is not told of this last leave.
 ClientSession::~ClientSession() {
     on_state = nullptr;
+    if (game_.remote_sink() == this) {
+        game_.set_remote_sink(nullptr);
+    }
     disconnect(now_);
 }
 
@@ -50,6 +59,15 @@ void ClientSession::on_message(const std::uint8_t* data, std::size_t size) {
     if (state_ != ClientState::Joining && state_ != ClientState::Joined) {
         return;
     }
+    if (size != 0 && data[0] == static_cast<std::uint8_t>(MessageType::Remote)) {
+        if (!on_remote(data, size)) {
+            if (reason_.empty()) {
+                set_reason("Bad data from the server");
+            }
+            endpoint_->disconnect(0, now_);
+        }
+        return;
+    }
     switch (applier_->receive_message(data, size)) {
         case ApplyResult::SnapshotApplied:
             set_state(ClientState::Joined);
@@ -68,6 +86,10 @@ void ClientSession::on_message(const std::uint8_t* data, std::size_t size) {
 }
 
 void ClientSession::on_disconnected(network::DisconnectReason why, network::DenyReason deny) {
+    // Nothing fired for this connection goes to the next one, either way.
+    outbox_.clear();
+    unheard_.clear();
+    unheard_bytes_ = 0;
     if (reason_.empty()) {
         set_reason(describe(why, deny));
     }
@@ -131,6 +153,9 @@ bool ClientSession::connect(const network::Address& server, double now) {
         return false;
     }
     leave_requested_ = false;
+    outbox_.clear();
+    unheard_.clear();
+    unheard_bytes_ = 0;
     // Each connection builds its world from nothing.
     applier_ = std::make_unique<ReplicaApplier>(game_);
     if (config_.client_mode == ClientMode::Swap) {
@@ -165,11 +190,20 @@ void ClientSession::receive(double now) {
         leave_requested_ = false;
         disconnect(now);
     }
+    // Before what arrives now, so a remote's messages stay in order.
+    if (!unheard_.empty()) {
+        fire_unheard();
+    }
     endpoint_->receive(now);
 }
 
 void ClientSession::send(double now) {
     now_ = now;
+    // FireServer messages go in firing order; what the window has no room for waits.
+    while (!outbox_.empty() && endpoint_->state(0) == network::ConnectionState::Connected &&
+           endpoint_->send_message(0, outbox_.front())) {
+        outbox_.pop_front();
+    }
     endpoint_->send(now);
 }
 
@@ -224,6 +258,89 @@ void ClientSession::swap_world() {
         set_role_ = true;
         game_.set_world_role(engine_core::WorldRole::Client);
     }
+}
+
+bool ClientSession::on_remote(const std::uint8_t* data, std::size_t size) {
+    // The server names its own instances by netid; one this client lacks reads nil.
+    const NetToId to_id = [this](std::uint32_t netid) -> engine_core::InstanceId {
+        const engine_core::InstanceId id = applier_->local(netid);
+        return id != engine_core::DataModel::kNoParent && game_.alive(id) ? id : 0;
+    };
+    ByteReader in(data, size);
+    std::uint32_t remote_netid = 0;
+    auto values = std::make_shared<engine_core::RemoteValues>();
+    if (!decode_remote(in, remote_netid, *values, to_id, engine_core::kRemoteMaxReliableBytes)) {
+        return false;
+    }
+    // A remote this client no longer holds (a script destroyed it) hears nothing.
+    const engine_core::InstanceId remote = remote_netid != 0 ? to_id(remote_netid) : 0;
+    if (remote == 0 || dynamic_cast<engine_core::RemoteEvent*>(game_.instance(remote)) == nullptr) {
+        return true;
+    }
+    // Nobody listens yet, or earlier ones for it still wait: it waits behind them.
+    bool waiting = !game_.event_listened(remote, "OnClientEvent");
+    for (const Unheard& held : unheard_) {
+        waiting = waiting || held.remote == remote;
+    }
+    if (waiting) {
+        if (unheard_bytes_ + size <= kMaxUnheardRemoteBytes) {
+            unheard_.push_back(Unheard{remote, std::move(values), size});
+            unheard_bytes_ += size;
+        }
+        return true;
+    }
+    engine_core::EventArgs args(1);
+    args[0].kind = engine_core::LuaSlot::Kind::Values;
+    args[0].values = std::move(values);
+    game_.fire_event(remote, "OnClientEvent", std::move(args));
+    return true;
+}
+
+void ClientSession::fire_unheard() {
+    // In order: a remote that has a listener now has it for every message of its own.
+    for (auto held = unheard_.begin(); held != unheard_.end();) {
+        const bool alive = dynamic_cast<engine_core::RemoteEvent*>(game_.instance(held->remote)) != nullptr;
+        if (alive && !game_.event_listened(held->remote, "OnClientEvent")) {
+            ++held;
+            continue;
+        }
+        if (alive) {
+            engine_core::EventArgs args(1);
+            args[0].kind = engine_core::LuaSlot::Kind::Values;
+            args[0].values = std::move(held->values);
+            game_.fire_event(held->remote, "OnClientEvent", std::move(args));
+        }
+        unheard_bytes_ -= held->bytes;
+        held = unheard_.erase(held);
+    }
+}
+
+bool ClientSession::fire_server(engine_core::InstanceId remote, std::shared_ptr<const engine_core::RemoteValues> values,
+                                bool, std::string& error) {
+    if (values == nullptr) {
+        return true;
+    }
+    // The server knows its own instances by netid; a client's own reads nil there.
+    const std::uint32_t remote_netid = applier_->netid_of(remote);
+    ByteWriter out;
+    encode_remote(remote_netid, *values, [this](engine_core::InstanceId id) { return applier_->netid_of(id); }, out);
+    if (out.data().size() > engine_core::kRemoteMaxReliableBytes) {
+        error = "message is over " + std::to_string(engine_core::kRemoteMaxReliableBytes);
+        return false;
+    }
+    // A remote of this client's own is one the server has never heard of.
+    if (remote_netid == 0 || (state_ != ClientState::Joining && state_ != ClientState::Joined)) {
+        return true;
+    }
+    outbox_.push_back(std::make_shared<const std::vector<std::uint8_t>>(std::move(out.data())));
+    return true;
+}
+
+bool ClientSession::fire_clients(engine_core::InstanceId, const std::vector<engine_core::InstanceId>&, bool,
+                                 std::shared_ptr<const engine_core::RemoteValues>, bool, std::string& error) {
+    // RemoteEventBindings refuses the server's methods on a client before they get here.
+    error = "is for the server";
+    return false;
 }
 
 network::Endpoint& ClientSession::endpoint() { return *endpoint_; }

@@ -20,7 +20,7 @@ using engine_core::RemoteTable;
 using engine_core::RemoteValue;
 
 enum Tag : std::uint8_t { Nil = 0, False = 1, True = 2, Float32 = 3, Float64 = 4, String = 5, Instance = 6, Engine = 7,
-                          Table = 8 };
+                          Table = 8, Root = 9 };
 
 // An engine value's kind on the wire. Fixed here, so LuaSlot::Kind may grow.
 enum EngineKind : std::uint8_t { Vec3 = 1, Vec2 = 2, Color = 3, Matrix4 = 4, Enum = 5, NumberCurve = 6, ColorCurve = 7 };
@@ -96,7 +96,12 @@ void write_value(ByteWriter& out, const RemoteValue& value, const IdToNet& to_ne
         out.string(slot.text);
         return;
     case LuaSlot::Kind::Instance: {
-        const std::uint32_t netid = slot.id != 0 && to_net ? to_net(slot.id) : 0;
+        // The root is game on both sides, so it needs no netid.
+        if (slot.id == 0) {
+            out.u8(Root);
+            return;
+        }
+        const std::uint32_t netid = to_net ? to_net(slot.id) : 0;
         if (netid == 0) {
             out.u8(Nil);
         } else {
@@ -168,6 +173,10 @@ struct Decoder {
             }
             break;
         }
+        case Root:
+            slot.kind = LuaSlot::Kind::Instance;
+            slot.id = 0;
+            break;
         case Engine:
             return read_engine(slot);
         case Table:

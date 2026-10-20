@@ -11,6 +11,7 @@
 //   Instance           varuint netid
 //   Engine             u8 kind, [string enum type: Enum only], json value
 //                      (slot_to_json's value, as JsonWire writes it)
+//   Root               nothing: game, which both sides hold
 //   Table              varuint count, count x value (the array part),
 //                      varuint count, count x (string key, value)
 

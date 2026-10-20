@@ -829,6 +829,7 @@ add_library(engine_network STATIC
     src/engine_network/ClientWorld.cpp
     src/engine_network/JsonWire.cpp
     src/engine_network/ProjectIdentity.cpp
+    src/engine_network/RemoteCodec.cpp
     src/engine_network/ReplicaApplier.cpp
     src/engine_network/Replicator.cpp
     src/engine_network/ServerSession.cpp
@@ -1159,6 +1160,7 @@ endif()
 add_executable(sandbox
     sandbox/tests.cpp
     sandbox/remote_loopback_tests.cpp
+    sandbox/remote_codec_tests.cpp
     sandbox/wireframe_tests.cpp
     sandbox/project_identity_tests.cpp
     sandbox/constraint_tests.cpp

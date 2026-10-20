@@ -143,6 +143,10 @@ void push_enum_item(lua_State* state, const EnumType& type, int value);
 // or its value. Anything else is an argument error. Returns the item's value.
 int check_enum_arg(lua_State* state, int index, const EnumType& type);
 
+// The EnumItem at index: its type, with its value in value. Null when the
+// value there is not an EnumItem.
+const EnumType* to_enum_item(lua_State* state, int index, int& value);
+
 // Installs the EnumItem metatable and the Enum global with every type above.
 void open_enum(lua_State* state);
 

@@ -17,6 +17,7 @@
 #include "LuauSandbox.hpp"
 #include "Matrix4.hpp"
 #include "ModuleScript.hpp"
+#include "RemoteValues.hpp"
 #include "Script.hpp"
 #include "SelectionService.hpp"
 #include "UserInputService.hpp"
@@ -49,15 +50,23 @@ void push_registered(lua_State* state, ScriptRuntime* runtime, const LuaSlot& sl
 namespace {
 
 // Pushes an event's values in order and says how many. The values are copied
-// onto the stack, so the event may go once this returns.
-int push_event_args(lua_State* state, ScriptRuntime* runtime, const EventArgs* args) {
+// onto the stack, so the event may go once this returns. A Values slot, a
+// remote message's arguments, pushes each of them, nils included.
+int push_event_args(lua_State* state, ScriptRuntime* runtime, const DataModel* world, const EventArgs* args) {
     if (args == nullptr || args->empty()) {
         return 0;
     }
-    const int count = static_cast<int>(args->size());
-    lua_checkstack(state, count);
+    int count = 0;
+    lua_checkstack(state, static_cast<int>(args->size()));
     for (const LuaSlot& slot : *args) {
+        if (slot.kind == LuaSlot::Kind::Values) {
+            if (slot.values != nullptr && world != nullptr) {
+                count += push_remote_values(state, *world, *slot.values);
+            }
+            continue;
+        }
         push_registered(state, runtime, slot, 0, 0);
+        ++count;
     }
     return count;
 }
@@ -1537,7 +1546,7 @@ void ScriptRuntime::make_ready_args(Thread& thread, const EventArgs* args) {
         return;
     }
     thread.cause = "Wait";
-    thread.nargs = push_event_args(thread.co, this, args);
+    thread.nargs = push_event_args(thread.co, this, game_, args);
     ready(thread);
 }
 
@@ -2220,7 +2229,7 @@ void ScriptRuntime::invoke_listener_args(Vm& vm, int ref, InstanceId script, std
         if (thread == nullptr) {
             return;
         }
-        thread->nargs = push_event_args(thread->co, this, args);
+        thread->nargs = push_event_args(thread->co, this, game_, args);
         run_listener(*thread);
     });
 }

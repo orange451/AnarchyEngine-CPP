@@ -203,6 +203,8 @@ bool same_slot(const LuaSlot& a, const LuaSlot& b) {
         return a.color_curve && b.color_curve && *a.color_curve == *b.color_curve;
     case LuaSlot::Kind::TouchObject:
         return a.touch.time == b.touch.time && a.touch.instance == b.touch.instance;
+    case LuaSlot::Kind::Values:
+        return a.values == b.values;
     case LuaSlot::Kind::InputObject:
         return a.input.type == b.input.type && a.input.state == b.input.state && a.input.key == b.input.key &&
                a.input.position.x == b.input.position.x && a.input.position.y == b.input.position.y &&

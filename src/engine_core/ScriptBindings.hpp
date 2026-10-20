@@ -422,6 +422,11 @@ struct ScriptBindings {
     // Camera's methods, in CameraBindings.cpp.
     static void link_camera_methods();
     static void link_physics_service_methods();
+    // RemoteEvent's methods, in RemoteEventBindings.cpp.
+    static void link_remote_event_methods();
+    // The live instance an Instance value at index names; null when the value
+    // is not one or the instance is gone. In RemoteValues.cpp.
+    static DataModel* instance_arg(lua_State* state, int index);
     // The DataModel's collision groups, for PhysicsService's methods (self at 1).
     static CollisionGroups& physics_service_groups(lua_State* state);
     // The world whose groups those are, for the methods that change them.

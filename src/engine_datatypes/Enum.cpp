@@ -477,6 +477,15 @@ void push_enum_item(lua_State* state, const EnumType& type, int value) {
     lua_remove(state, -2);
 }
 
+const EnumType* to_enum_item(lua_State* state, int index, int& value) {
+    const auto* item = static_cast<const EnumItemUd*>(test_userdata(state, index, kEnumItemMeta));
+    if (item == nullptr) {
+        return nullptr;
+    }
+    value = item->value;
+    return item->type;
+}
+
 int check_enum_arg(lua_State* state, int index, const EnumType& type) {
     if (const auto* item = static_cast<const EnumItemUd*>(test_userdata(state, index, kEnumItemMeta))) {
         if (item->type == &type) {

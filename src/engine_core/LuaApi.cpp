@@ -1163,6 +1163,35 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
     add("StringValue", "Value", "The text it holds.", "string", false, {});
     add("BoolValue", "Value", "The true or false it holds.", "boolean", false, {});
     add("ObjectValue", "Value", "The instance it refers to, or nil.", "Instance?", false, {});
+    // Remote events (docs/superpowers/specs/2026-10-20-remote-events-design.md).
+    add("RemoteEvent", "Unreliable",
+        "When true, messages may be lost or arrive out of order, and none is resent: for what is sent every "
+        "frame, where the next message replaces a lost one. Read when a message is fired.",
+        "boolean", false, {});
+    add("RemoteEvent", "FireServer",
+        "Sends the arguments to the server, where OnServerEvent fires with this client's Connection first. "
+        "Nils count, tables keep their array part and string keys, and an instance the server lacks arrives "
+        "as nil. In single-player OnServerEvent fires here, with a nil connection, after this script yields. "
+        "Raises on a server.",
+        nullptr, true, {});
+    add("RemoteEvent", "FireClient",
+        "Sends the arguments to the client of connection, where OnClientEvent fires. Raises unless connection "
+        "is a Connection of this server, and raises on a client. In single-player OnClientEvent fires here "
+        "once, whatever connection is.",
+        nullptr, true, {P("connection", "Connection?")});
+    add("RemoteEvent", "FireClientExt",
+        "Sends the arguments to each client in connections. Entries that are not a Connection of this server "
+        "are skipped. Raises on a client. In single-player OnClientEvent fires here once.",
+        nullptr, true, {P("connections", "{Connection}")});
+    add("RemoteEvent", "FireClientAll",
+        "Sends the arguments to every connected client. Raises on a client. In single-player OnClientEvent "
+        "fires here once.",
+        nullptr, true, {});
+    add("RemoteEvent", "OnServerEvent",
+        "Fires on the server with the Connection that sent the message, then what FireServer sent. In "
+        "single-player the connection is nil.",
+        "Signal", false, {});
+    add("RemoteEvent", "OnClientEvent", "Fires on a client with what the server sent.", "Signal", false, {});
     add("Constraint", "Active",
         "Whether it holds anything now: Enabled, it and both its ends in Workspace, and the ends two different "
         "objects. Read-only.",

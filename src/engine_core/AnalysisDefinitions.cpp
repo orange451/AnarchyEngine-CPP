@@ -199,6 +199,12 @@ std::string signal_type(const std::string& owner, const LuaField& field, std::ve
     type.name = "Signal_" + owner + "_" + field.name;
     for (int index = 0; index < field.param_count; ++index) {
         const LuaParam& param = field.params[index];
+        // A last "..." passes any number of values, as a RemoteEvent's events do.
+        if (param.name != nullptr && std::strcmp(param.name, "...") == 0) {
+            type.params += (index > 0 ? ", " : "") + std::string("...any");
+            type.values += (index > 0 ? ", " : "") + std::string("...any");
+            continue;
+        }
         const std::string luau = to_luau_type(param.type_name != nullptr && param.type_name[0] != '\0' ? param.type_name : "any");
         type.params += (index > 0 ? ", " : "") + std::string(param.name != nullptr && identifier(param.name) ? std::string(param.name) + ": " : "") + luau;
         type.values += (index > 0 ? ", " : "") + luau;

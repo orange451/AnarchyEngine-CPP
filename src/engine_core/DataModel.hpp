@@ -97,6 +97,7 @@ class PhysicsWorld;
 class ScriptAnalysis;
 class ScriptHost;
 class IJoinHost;
+class IRemoteSink;
 class SelectionService;
 class UserInputService;
 struct AuthoredRecord;
@@ -346,6 +347,11 @@ public:
     // before it goes away.
     void set_join_host(IJoinHost* host);
     IJoinHost* join_host() const;
+    // Where a RemoteEvent sends in a Server or Client world: the session's
+    // (RemoteSink.hpp). Null, the default, in a standalone world, which loops
+    // remotes back. The session owns it and clears it before it goes away.
+    void set_remote_sink(IRemoteSink* sink);
+    IRemoteSink* remote_sink() const;
     // Whether the physics world has stepped since play started. Until it has,
     // a driven body's GameObject decides where the body is (PhysicsWorld);
     // after, the body does, and a Transform written to it moves its GameObject

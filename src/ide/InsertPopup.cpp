@@ -51,6 +51,7 @@ const char* describe_class(const std::string& name) {
         {"StringValue", "Holds text for scripts to share."},
         {"BoolValue", "Holds true or false for scripts to share."},
         {"ObjectValue", "Holds a reference to another instance for scripts to share."},
+        {"RemoteEvent", "Sends messages between the server and its clients."},
         {"Model", "A 3D model asset."},
         {"Mesh", "A 3D shape asset."},
         {"Texture", "An image asset."},

@@ -31,6 +31,7 @@
 #include "PhysicsObject.hpp"
 #include "PlayerController.hpp"
 #include "PropertyReflection.hpp"
+#include "RemoteEvent.hpp"
 #include "Script.hpp"
 #include "ScreenSpaceReflections.hpp"
 #include "SelectionService.hpp"
@@ -264,6 +265,7 @@ DataModel& create_number_value(DataModel& world) { return world.create<NumberVal
 DataModel& create_string_value(DataModel& world) { return world.create<StringValue>(); }
 DataModel& create_bool_value(DataModel& world) { return world.create<BoolValue>(); }
 DataModel& create_object_value(DataModel& world) { return world.create<ObjectValue>(); }
+DataModel& create_remote_event(DataModel& world) { return world.create<RemoteEvent>(); }
 
 // The factories stay here, which ScriptRuntime.cpp links, so each class's
 // object file stays linked.
@@ -329,6 +331,7 @@ ANARCHY_LUA_REGISTER(register_creatable_instances) {
     register_lua_creatable("StringValue", create_string_value);
     register_lua_creatable("BoolValue", create_bool_value);
     register_lua_creatable("ObjectValue", create_object_value);
+    register_lua_creatable("RemoteEvent", create_remote_event);
 }
 
 }  // namespace
@@ -1944,6 +1947,7 @@ ANARCHY_LUA_REGISTER(register_script_methods) {
     ScriptBindings::link_animation_methods();
     ScriptBindings::link_wireframe_methods();
     ScriptBindings::link_physics_service_methods();
+    ScriptBindings::link_remote_event_methods();
 
     // AssetInstances.cpp declares the class and its Path.
     const LuaField mesh[] = {

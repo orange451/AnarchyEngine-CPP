@@ -533,6 +533,7 @@ void testValueClassesRegisterValue() {
 
 int RunLuauHighlightTests();
 int RunCssHighlightTests();
+int RunGlslHighlightTests();
 int RunLuauCompleteTests();
 int RunProblemsModelTests();
 int RunScriptMarksTests();
@@ -569,6 +570,7 @@ int main() {
         testValueClassesRegisterValue();
         gFailures += RunLuauHighlightTests();
         gFailures += RunCssHighlightTests();
+        gFailures += RunGlslHighlightTests();
         gFailures += RunLuauCompleteTests();
         gFailures += RunProblemsModelTests();
         gFailures += RunScriptMarksTests();

@@ -53,6 +53,7 @@ class IdeScriptEditor;
 class IdePrefabEditor;
 class IdeTerrainEditor;
 class IdeCssEditor;
+class IdeShaderEditor;
 struct PrefabEditorHost;
 struct TerrainEditorHost;
 struct CollisionGroupsHost;
@@ -299,11 +300,14 @@ private:
     void rename(std::uint32_t id, std::string name);
     void edit(std::uint32_t id);
     std::shared_ptr<IdeScriptEditor> open_editor(std::uint32_t id) const;
+    // The shader editor showing id, or null.
+    std::shared_ptr<IdeShaderEditor> open_shader_editor(std::uint32_t id) const;
     // Docks a Prefab editor for prefab on the scene view's tab strip, or brings
     // the one already open forward. home is where a new one docks.
     void edit_prefab(std::uint32_t prefab, IdeDock& home);
     // A CSS instance's editor: the open one, or a new one docked at home.
     void edit_css(std::uint32_t css, IdeDock& home);
+    void edit_shader(std::uint32_t shader, IdeDock& home);
     std::shared_ptr<IdePrefabEditor> open_prefab_editor(std::uint32_t prefab) const;
     // A Prefab editor's writes, each one undo step on the simulation thread.
     PrefabEditorHost prefab_editor_host();
@@ -646,6 +650,7 @@ private:
     // The open Configure Terrain tabs, by Terrain id.
     std::unordered_map<std::uint32_t, std::weak_ptr<IdeTerrainEditor>> open_terrains_;
     std::unordered_map<std::uint32_t, std::weak_ptr<IdeCssEditor>> open_css_;
+    std::unordered_map<std::uint32_t, std::weak_ptr<IdeShaderEditor>> open_shaders_;
     std::weak_ptr<class IdeConsole> console_;
     // The Search and Conflicts pages, typed, as their window entries' make last
     // built them. Null until first made. Kept while the tab is closed, so

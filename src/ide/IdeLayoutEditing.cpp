@@ -4,6 +4,7 @@
 
 #include "IdeLayoutInternal.hpp"
 #include "IdeCssEditor.hpp"
+#include "IdeShaderEditor.hpp"
 #include "IdeCollisionGroups.hpp"
 #include "IdeTerrainEditor.hpp"
 #include "QuickOpen.hpp"
@@ -14,6 +15,7 @@
 #include "InstanceFile.hpp"
 #include "GameService.hpp"
 #include "Gui.hpp"
+#include "Shader.hpp"
 #include "Terrain.hpp"
 
 namespace ide {
@@ -667,6 +669,7 @@ void IdeLayout::edit(std::uint32_t id) {
     engine_core::DataModel& game = runner_.simulation().datamodel();
     bool is_prefab = false;
     bool is_css = false;
+    bool is_shader = false;
     bool is_terrain = false;
     std::string guid;
     {
@@ -682,6 +685,8 @@ void IdeLayout::edit(std::uint32_t id) {
             is_terrain = true;
         } else if (dynamic_cast<const engine_core::Css*>(object) != nullptr) {
             is_css = true;
+        } else if (dynamic_cast<const engine_core::Shader*>(object) != nullptr) {
+            is_shader = true;
         } else if (dynamic_cast<const engine_core::LuaSource*>(object) == nullptr) {
             return;
         }
@@ -697,6 +702,10 @@ void IdeLayout::edit(std::uint32_t id) {
     }
     if (is_css) {
         edit_css(id, *home);
+        return;
+    }
+    if (is_shader) {
+        edit_shader(id, *home);
         return;
     }
     kept_sources_.erase(id);
@@ -745,6 +754,28 @@ void IdeLayout::edit_prefab(std::uint32_t prefab, IdeDock& home) {
     add_select_to_tab_menu(*editor, prefab);
     home.dock(editor);
     open_prefabs_[prefab] = editor;
+}
+
+void IdeLayout::edit_shader(std::uint32_t shader, IdeDock& home) {
+    if (const std::shared_ptr<IdeShaderEditor> existing = open_shader_editor(shader)) {
+        if (dockContaining(existing.get()) != nullptr) {
+            reveal_window(existing.get());
+            existing->focus();
+            return;
+        }
+    }
+    auto editor = jadefx::make<IdeShaderEditor>(runner_.simulation(), shader);
+    add_select_to_tab_menu(*editor, shader);
+    std::shared_ptr<jadefx::Tab> tab = home.dock(editor);
+    if (tab) {
+        tab->setOnClosed([this, shader] { open_shaders_.erase(shader); });
+    }
+    open_shaders_[shader] = editor;
+}
+
+std::shared_ptr<IdeShaderEditor> IdeLayout::open_shader_editor(std::uint32_t id) const {
+    const auto found = open_shaders_.find(id);
+    return found != open_shaders_.end() ? found->second.lock() : nullptr;
 }
 
 void IdeLayout::edit_css(std::uint32_t css, IdeDock& home) {
@@ -947,6 +978,11 @@ void IdeLayout::flush_editors() {
             editor->flush();
         }
     }
+    for (const auto& entry : open_shaders_) {
+        if (std::shared_ptr<IdeShaderEditor> editor = entry.second.lock()) {
+            editor->flush();
+        }
+    }
 }
 
 void IdeLayout::reapply_editors() {
@@ -1012,6 +1048,11 @@ void IdeLayout::close_script_editors() {
             pages.push_back(std::move(editor));
         }
     }
+    for (const auto& entry : open_shaders_) {
+        if (std::shared_ptr<IdeShaderEditor> editor = entry.second.lock()) {
+            pages.push_back(std::move(editor));
+        }
+    }
     for (const std::shared_ptr<IdePane>& editor : pages) {
         IdeDock* dock = dockContaining(editor.get());
         if (dock == nullptr || dock->tabs() == nullptr) {
@@ -1034,6 +1075,7 @@ void IdeLayout::close_script_editors() {
     open_prefabs_.clear();
     open_terrains_.clear();
     open_css_.clear();
+    open_shaders_.clear();
     kept_sources_.clear();
     last_script_focus_ = 0;
 }
@@ -1048,6 +1090,13 @@ bool IdeLayout::editors_unflushed() const {
     }
     for (const auto& entry : open_css_) {
         if (std::shared_ptr<IdeCssEditor> editor = entry.second.lock()) {
+            if (editor->hasUnflushedText()) {
+                return true;
+            }
+        }
+    }
+    for (const auto& entry : open_shaders_) {
+        if (std::shared_ptr<IdeShaderEditor> editor = entry.second.lock()) {
             if (editor->hasUnflushedText()) {
                 return true;
             }

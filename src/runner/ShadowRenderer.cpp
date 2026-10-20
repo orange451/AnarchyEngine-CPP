@@ -71,8 +71,8 @@ constexpr std::uint32_t kMovingFrames = 30;
 // version, which values, and frame (0 unless its holes follow TIME).
 std::uint64_t SurfaceFingerprint(const engine_core::SurfaceBinding& surface, std::uint32_t frame) {
     std::uint64_t hash = 1469598103934665603ull;
-    for (const std::uint64_t part : {static_cast<std::uint64_t>(surface.shader), surface.version, surface.values_hash,
-                                     static_cast<std::uint64_t>(frame)}) {
+    for (const std::uint64_t part : {static_cast<std::uint64_t>(surface.shader), surface.version,
+                                     surface.values_hash(), surface.samplers_hash, static_cast<std::uint64_t>(frame)}) {
         hash = (hash ^ part) * 1099511628211ull;
     }
     return hash | 1u;
@@ -365,7 +365,8 @@ bool ShadowRenderer::draw(const std::vector<ShadowRequest>& requests, const Mesh
         }
         casterOwners_.resize(total);
         casterFingerprints_.resize(total);
-        casterTimed_.resize(total, 0);
+        casterWatched_.resize(total, 0);
+        casterSurface_.resize(total, 0);
         casterMoving_.resize(total, 0);
         casterMovedAt_.resize(total, 0);
         std::atomic<bool> changed{false};
@@ -394,7 +395,8 @@ bool ShadowRenderer::draw(const std::vector<ShadowRequest>& requests, const Mesh
                     (mesh.transparency > 0.f && mesh.terrainLook == 0) ||
                     (mesh.terrainLook != 0 && !mesh.terrainFadeIn) ||
                     (surface != nullptr && (surface->modes.no_shadow || surface->modes.transparent))) {
-                    casterTimed_[index] = 0;
+                    casterWatched_[index] = 0;
+                    casterSurface_[index] = 0;
                     casterOwners_[index] = 0;
                     casterFingerprints_[index] = 0;
                     if (ownerWas != 0 || fingerprintWas != 0) {
@@ -409,11 +411,13 @@ bool ShadowRenderer::draw(const std::vector<ShadowRequest>& requests, const Mesh
                 caster.cutout = mesh.cutout ? mesh.texture : 0;
                 caster.owner = mesh.owner;
                 // Only a shader that cuts holes changes the shadow.
-                const bool timed = surface != nullptr && surface->cuts && surface->reads_time;
-                casterTimed_[index] = timed ? 1 : 0;
-                if (surface != nullptr && surface->cuts) {
+                const bool cuts = surface != nullptr && surface->cuts;
+                const bool timed = cuts && surface->reads_time;
+                casterWatched_[index] = cuts ? (timed ? 2 : 1) : 0;
+                if (cuts) {
                     caster.surface = SurfaceFingerprint(*surface, timed ? casterFrame_ : 0);
                 }
+                casterSurface_[index] = caster.surface;
                 caster.model = mesh.model;
                 caster.bounds = spheres[index];
                 casterOwners_[index] = mesh.owner;
@@ -423,22 +427,29 @@ bool ShadowRenderer::draw(const std::vector<ShadowRequest>& requests, const Mesh
                 }
             }
         });
-        // A caster whose shader's holes follow TIME moves every frame, changed or not.
+        // A caster whose shader cuts holes moves when its values do, its draw
+        // unchanged, and every frame when the holes follow TIME.
         for (std::size_t index = 0; index < total; ++index) {
-            if (casterTimed_[index] == 0 || casterFingerprints_[index] == 0) {
+            if (casterWatched_[index] == 0 || casterFingerprints_[index] == 0) {
                 continue;
             }
             const MeshDraw& mesh = meshes[index];
             if (mesh.surface == nullptr) {
                 continue;
             }
+            const std::uint64_t part =
+                SurfaceFingerprint(*mesh.surface, casterWatched_[index] == 2 ? casterFrame_ : 0);
+            if (part == casterSurface_[index]) {
+                continue;
+            }
+            casterSurface_[index] = part;
             ShadowCaster caster;
             caster.mesh = reinterpret_cast<std::uintptr_t>(mesh.mesh);
             caster.revision = mesh.mesh->generation();
             caster.pose = mesh.bones != nullptr ? mesh.poseRevision : 0;
             caster.cutout = mesh.cutout ? mesh.texture : 0;
             caster.owner = mesh.owner;
-            caster.surface = SurfaceFingerprint(*mesh.surface, casterFrame_);
+            caster.surface = part;
             caster.model = mesh.model;
             caster.bounds = spheres[index];
             const std::uint64_t fingerprint = ShadowCasterFingerprint(caster);

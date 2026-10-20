@@ -50,15 +50,23 @@ bool same_value(const LuaSlot& a, const LuaSlot& b) {
            a.color.b == b.color.b;
 }
 
-bool same_binding(const SurfaceBinding& a, const SurfaceBinding& b) {
-    if (a.shader != b.shader || a.version != b.version || a.parse != b.parse || a.values.size() != b.values.size() ||
-        a.samplers.size() != b.samplers.size()) {
+bool same_values(const SurfaceValues& a, const SurfaceValues& b) {
+    if (a.slots.size() != b.slots.size()) {
         return false;
     }
-    for (std::size_t i = 0; i < a.values.size(); ++i) {
-        if (!same_value(a.values[i], b.values[i])) {
+    for (std::size_t i = 0; i < a.slots.size(); ++i) {
+        if (!same_value(a.slots[i], b.slots[i])) {
             return false;
         }
+    }
+    return true;
+}
+
+// The same Shader, version, and textures: all but the values.
+bool same_binding(const SurfaceBinding& a, const SurfaceBinding& b) {
+    if (a.shader != b.shader || a.version != b.version || a.parse != b.parse ||
+        a.samplers.size() != b.samplers.size()) {
+        return false;
     }
     for (std::size_t i = 0; i < a.samplers.size(); ++i) {
         if (a.samplers[i].path != b.samplers[i].path || a.samplers[i].flip_y != b.samplers[i].flip_y ||
@@ -89,18 +97,27 @@ void describe_surface(SurfaceBinding& binding) {
     binding.reads_time = binding.parse->reads_time;
     binding.cuts = binding.parse->cuts;
     Hash hash;
-    for (const LuaSlot& value : binding.values) {
+    for (const SurfaceBinding::Sampler& sampler : binding.samplers) {
+        hash.bytes(sampler.path.data(), sampler.path.size());
+        hash.add(sampler.flip_y);
+    }
+    binding.samplers_hash = hash.value;
+}
+
+void SurfaceBinding::set_values(std::vector<LuaSlot> slots) const {
+    auto next = std::make_shared<SurfaceValues>();
+    Hash hash;
+    for (const LuaSlot& value : slots) {
         hash.add(value.kind);
         hash.add(value.number);
         hash.add(value.flag);
         hash.add(value.vec);
         hash.add(value.color);
     }
-    for (const SurfaceBinding::Sampler& sampler : binding.samplers) {
-        hash.bytes(sampler.path.data(), sampler.path.size());
-        hash.add(sampler.flip_y);
-    }
-    binding.values_hash = hash.value;
+    next->slots = std::move(slots);
+    next->hash = hash.value;
+    values_hash_.store(next->hash, std::memory_order_release);
+    std::atomic_store(&values_, std::shared_ptr<const SurfaceValues>(std::move(next)));
 }
 
 std::shared_ptr<const SurfaceBinding> make_surface_binding(const DataModel& world, const Material& material) {
@@ -112,6 +129,7 @@ std::shared_ptr<const SurfaceBinding> make_surface_binding(const DataModel& worl
     binding->shader = shader->id();
     binding->version = shader->source_version();
     binding->parse = shader->parse();
+    std::vector<LuaSlot> slots;
     for (const ShaderParam& param : binding->parse->params) {
         const LuaSlot held = material.attribute(param.name);
         if (param.type == ShaderParamType::Sampler) {
@@ -123,7 +141,7 @@ std::shared_ptr<const SurfaceBinding> make_surface_binding(const DataModel& worl
                 sampler.flip_y = texture->flip_y();
                 sampler.always_loaded = texture->streaming() == TextureStreaming::AlwaysLoaded;
             }
-            binding->values.emplace_back();
+            slots.emplace_back();
             continue;
         }
         const LuaSlot& value = held.kind == slot_kind(param.type) ? held : param.fallback;
@@ -142,9 +160,10 @@ std::shared_ptr<const SurfaceBinding> make_surface_binding(const DataModel& worl
                 kept.number = std::clamp(kept.number, param.min, param.max);
             }
         }
-        binding->values.push_back(std::move(kept));
+        slots.push_back(std::move(kept));
     }
     describe_surface(*binding);
+    binding->set_values(std::move(slots));
     return binding;
 }
 
@@ -165,6 +184,12 @@ std::shared_ptr<const SurfaceBinding> SurfaceBindingCache::get(const DataModel& 
     if (made != nullptr) {
         if (const auto last = previous_.find(id);
             last != previous_.end() && last->second != nullptr && same_binding(*last->second, *made)) {
+            // Kept, with only its values swapped when they moved: every draw
+            // of the Material stays the same draw.
+            const auto fresh = made->values();
+            if (!same_values(*last->second->values(), *fresh)) {
+                last->second->set_values(fresh->slots);
+            }
             made = last->second;
         }
     }

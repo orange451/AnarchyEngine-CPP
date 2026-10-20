@@ -38,7 +38,8 @@ bool same_surface(const std::shared_ptr<const engine_core::SurfaceBinding>& a,
     if (a == nullptr || b == nullptr) {
         return a == b;
     }
-    return a->shader == b->shader && a->version == b->version && a->values_hash == b->values_hash;
+    return a->shader == b->shader && a->version == b->version && a->values_hash() == b->values_hash() &&
+           a->samplers_hash == b->samplers_hash;
 }
 
 }  // namespace

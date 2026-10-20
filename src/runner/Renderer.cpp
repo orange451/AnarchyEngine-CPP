@@ -2217,11 +2217,14 @@ void Renderer::useGeometryProgram(const Program& program, const float* projectio
 void Renderer::bindSurface(const SurfacePrograms::Variant& variant, const MeshDraw& draw) {
     const engine_core::SurfaceBinding& binding = *draw.surface;
     const std::vector<engine_core::ShaderParam>& params = binding.parse->params;
+    // The values now: the simulation thread may have swapped them since the snapshot.
+    const std::shared_ptr<const engine_core::SurfaceValues> held = binding.values();
+    const std::vector<engine_core::LuaSlot>& values = held->slots;
     int sampler = 0;
-    for (std::size_t i = 0; i < params.size() && i < variant.locations.size() && i < binding.values.size(); ++i) {
+    for (std::size_t i = 0; i < params.size() && i < variant.locations.size() && i < values.size(); ++i) {
         const engine_core::ShaderParam& param = params[i];
         const int location = variant.locations[i];
-        const engine_core::LuaSlot& value = binding.values[i];
+        const engine_core::LuaSlot& value = values[i];
         if (param.type == engine_core::ShaderParamType::Sampler) {
             const int unit = kSurfaceTextureUnit + sampler;
             const unsigned texture = sampler < 3 ? draw.surfaceTextures[sampler] : 0u;

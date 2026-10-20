@@ -2416,14 +2416,16 @@ std::shared_ptr<engine_core::SurfaceBinding> SurfaceFor(engine_core::InstanceId 
     binding->shader = id;
     binding->version = version;
     binding->parse = std::make_shared<engine_core::ShaderParse>(engine_core::parse_shader(source));
+    std::vector<engine_core::LuaSlot> slots;
     for (std::size_t i = 0; i < binding->parse->params.size(); ++i) {
         const engine_core::ShaderParam& param = binding->parse->params[i];
-        binding->values.push_back(i < values.size() ? values[i] : param.fallback);
+        slots.push_back(i < values.size() ? values[i] : param.fallback);
         if (param.type == engine_core::ShaderParamType::Sampler) {
             binding->samplers.emplace_back();
         }
     }
     engine_core::describe_surface(*binding);
+    binding->set_values(std::move(slots));
     return binding;
 }
 
@@ -2663,6 +2665,22 @@ void CheckSurfaceShadows(const GpuMesh* cube, int size, int fbWidth, int fbHeigh
     seen = lit(spot);
     Expect(seen[1] > middleFront,
            "surface shadows: new values draw the cached map again (" + std::to_string(seen[1]) + ")");
+
+    // The same binding with new values, as a Material's attribute changes it:
+    // no draw changes, yet the cached map is drawn again.
+    spot.id = 44;
+    const auto kept = SurfaceFor(9205, 1, cut);
+    scene[0].surface = kept;
+    lit(spot);
+    // From here the renderer is told no draw changed, as a scene view's kept rows tell it.
+    renderer.noteDrawChanges(2, {});
+    seen = lit(spot);
+    Expect(seen[1] < middleFront, "surface shadows: the kept binding casts the whole cube first");
+    kept->set_values({zero});
+    renderer.noteDrawChanges(2, {});
+    seen = lit(spot);
+    Expect(seen[1] > middleFront,
+           "surface shadows: new values in a kept binding draw the cached map again (" + std::to_string(seen[1]) + ")");
 
     // no_shadow casts nothing.
     spot.id = 42;

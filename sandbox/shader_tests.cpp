@@ -457,12 +457,13 @@ TEST_CASE("SHA16 a surface binding holds each uniform's value, held to its type 
     REQUIRE(binding != nullptr);
     REQUIRE(binding->shader == dissolve.id());
     REQUIRE(binding->version == dissolve.source_version());
-    REQUIRE(binding->values.size() == 3);
-    REQUIRE(binding->values[0].kind == engine_core::LuaSlot::Kind::Number);
-    REQUIRE(binding->values[0].number == 0.3);
-    REQUIRE(binding->values[1].kind == engine_core::LuaSlot::Kind::Color);
-    REQUIRE(binding->values[1].color.g == 0.5f);
-    REQUIRE(binding->values[2].kind == engine_core::LuaSlot::Kind::Nil);
+    const auto values = binding->values();
+    REQUIRE(values->slots.size() == 3);
+    REQUIRE(values->slots[0].kind == engine_core::LuaSlot::Kind::Number);
+    REQUIRE(values->slots[0].number == 0.3);
+    REQUIRE(values->slots[1].kind == engine_core::LuaSlot::Kind::Color);
+    REQUIRE(values->slots[1].color.g == 0.5f);
+    REQUIRE(values->slots[2].kind == engine_core::LuaSlot::Kind::Nil);
     REQUIRE(binding->samplers.size() == 1);
     REQUIRE(binding->samplers[0].path.empty());
     REQUIRE_FALSE(binding->reads_time);
@@ -472,11 +473,11 @@ TEST_CASE("SHA16 a surface binding holds each uniform's value, held to its type 
     text.kind = engine_core::LuaSlot::Kind::String;
     text.text = "half";
     REQUIRE_FALSE(brick.set_attribute("Progress", text));
-    REQUIRE(engine_core::make_surface_binding(game, brick)->values[0].number == 0.0);
+    REQUIRE(engine_core::make_surface_binding(game, brick)->values()->slots[0].number == 0.0);
 
     // Out of range: held to 1.
     REQUIRE_FALSE(brick.set_attribute("Progress", number_slot(5)));
-    REQUIRE(engine_core::make_surface_binding(game, brick)->values[0].number == 1.0);
+    REQUIRE(engine_core::make_surface_binding(game, brick)->values()->slots[0].number == 1.0);
 
     // A Texture attribute is the sampler's path.
     engine_core::Texture& noise = game.create<engine_core::Texture>();
@@ -501,9 +502,9 @@ TEST_CASE("SHA17 two Materials on one Shader bind their own values", "[shader]")
     REQUIRE_FALSE(b.set_attribute("Progress", number_slot(0.75)));
     auto first = engine_core::make_surface_binding(game, a);
     auto second = engine_core::make_surface_binding(game, b);
-    REQUIRE(first->values[0].number == 0.25);
-    REQUIRE(second->values[0].number == 0.75);
-    REQUIRE(first->values_hash != second->values_hash);
+    REQUIRE(first->values()->slots[0].number == 0.25);
+    REQUIRE(second->values()->slots[0].number == 0.75);
+    REQUIRE(first->values_hash() != second->values_hash());
 
     // A shader that names TIME redraws its shadows each frame.
     Shader& wave = add_shader(game, "Wave");
@@ -552,15 +553,26 @@ TEST_CASE("SHA18 the snapshot shares one binding per Material across its Models"
     REQUIRE(meshes()[0].surface == meshes()[1].surface);
     REQUIRE(meshes()[2].surface == nullptr);
 
-    // Unchanged, the next frame keeps the same binding; a changed value makes a new one.
+    // Unchanged, the next frame keeps the same binding; so does a changed
+    // value, which the binding's values carry, so no draw of the Material changes.
     const auto before = meshes()[0].surface;
+    const std::uint64_t hash = before->values_hash();
     frame();
     REQUIRE(meshes()[0].surface == before);
     REQUIRE_FALSE(brick.set_attribute("Progress", number_slot(0.5)));
     frame();
-    REQUIRE(meshes()[0].surface != before);
-    REQUIRE(meshes()[0].surface->values[0].number == 0.5);
+    REQUIRE(meshes()[0].surface == before);
+    REQUIRE(meshes()[0].surface->values()->slots[0].number == 0.5);
+    REQUIRE(meshes()[0].surface->values_hash() != hash);
     REQUIRE(meshes()[0].surface == meshes()[1].surface);
+    // A Texture on a sampler is a new binding: the draws' textures change.
+    engine_core::Texture& noise = game.create<engine_core::Texture>();
+    game.set_parent(noise.id(), game.service("Textures"));
+    REQUIRE_FALSE(noise.set_path("textures/noise.png"));
+    REQUIRE_FALSE(brick.set_attribute("Noise", instance_ref(noise.id())));
+    frame();
+    REQUIRE(meshes()[0].surface != before);
+    REQUIRE(meshes()[0].surface->samplers[0].path == "textures/noise.png");
 
     // A source edit is a new version.
     dissolve.set_source(std::string(kDissolve) + "\n");

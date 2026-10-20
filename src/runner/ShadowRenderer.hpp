@@ -168,9 +168,11 @@ private:
         const MeshDraw* draw = nullptr;
     };
     SurfaceShadows surfaces_;
-    // Per caster, nonzero while its surface Shader reads TIME and cuts holes:
-    // its fingerprint moves every frame.
-    std::vector<std::uint8_t> casterTimed_;
+    // Per caster, nonzero while its surface Shader cuts holes (2 when it also
+    // reads TIME), and the surface part of its fingerprint: its values can
+    // change while its draw does not, so it is checked every frame.
+    std::vector<std::uint8_t> casterWatched_;
+    std::vector<std::uint64_t> casterSurface_;
     std::vector<CasterRun> casterRuns_;
     std::vector<InstanceData> casterRows_;
     std::vector<int> casterOrder_;

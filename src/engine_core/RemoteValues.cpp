@@ -41,6 +41,10 @@ struct Reader {
         return false;
     }
 
+    bool refuse_curve() {
+        return refuse("cannot send a curve of more than " + std::to_string(kRemoteMaxCurveKeys) + " keys");
+    }
+
     // Counts more values against kRemoteMaxValues, before anything is made for them.
     bool take(std::size_t count) {
         if (count > kRemoteMaxValues - values) {
@@ -119,11 +123,17 @@ struct Reader {
             return true;
         }
         if (std::shared_ptr<const NumberCurve> curve = to_number_curve(state, index)) {
+            if (curve->keys_a().size() > kRemoteMaxCurveKeys || curve->keys_b().size() > kRemoteMaxCurveKeys) {
+                return refuse_curve();
+            }
             slot.kind = LuaSlot::Kind::NumberCurve;
             slot.number_curve = std::move(curve);
             return true;
         }
         if (std::shared_ptr<const ColorCurve> curve = to_color_curve(state, index)) {
+            if (curve->keys_a().size() > kRemoteMaxCurveKeys || curve->keys_b().size() > kRemoteMaxCurveKeys) {
+                return refuse_curve();
+            }
             slot.kind = LuaSlot::Kind::ColorCurve;
             slot.color_curve = std::move(curve);
             return true;

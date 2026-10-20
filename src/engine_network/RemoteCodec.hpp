@@ -1,19 +1,36 @@
 #pragma once
 
 // A RemoteEvent's message on the wire (docs/superpowers/specs/2026-10-20-remote-events-design.md):
-//   u8 MessageType::Remote, u8 kCodecVersion, varuint remote netid,
-//   varuint count, count x value
+//   u8 MessageType::Remote, u8 kRemoteCodecVersion, varuint remote netid,
+//   varuint count (at most kRemoteMaxArgs), count x value
 // A value is a u8 tag, then:
 //   Nil, False, True   nothing
 //   Float32            f32: a number a float holds exactly
 //   Float64            f64: every other number
 //   String             string (varuint length, bytes)
 //   Instance           varuint netid
-//   Engine             u8 kind, [string enum type: Enum only], json value
-//                      (slot_to_json's value, as JsonWire writes it)
+//   Engine             u8 kind, then that kind's fixed layout (below)
 //   Root               nothing: game, which both sides hold
 //   Table              varuint count, count x value (the array part),
 //                      varuint count, count x (string key, value)
+// An engine value's layout, every number an f32 (the engine keeps them as
+// floats, so each arrives exact):
+//   Vector3            x, y, z: 12 bytes
+//   Vector2            x, y
+//   Color3             r, g, b (alpha arrives as 1)
+//   Matrix4            16 floats, column-major
+//   EnumItem           string type name, varuint item value
+//   NumberCurve        u8 mode, then Constant: value; Range: min, max;
+//                      Curve: keys; CurveRange: keys, keys
+//                      keys: varuint count (1..kRemoteMaxCurveKeys),
+//                            count x (time, value, u8 interp)
+//   ColorCurve         u8 mode, then Constant: key; RandomBetween: key, key;
+//                      Gradient: keys; GradientRange: keys, keys
+//                      key: r, g, b, transparency
+//                      keys: varuint count (1..kRemoteMaxCurveKeys),
+//                            count x (time, key)
+// No other LuaSlot kind travels: a Signal, an InputObject, a TouchObject and
+// a Values slot are never a script's value to send.
 
 #include "ByteBuffer.hpp"
 
@@ -29,6 +46,10 @@
 #include <vector>
 
 namespace engine_network {
+
+// A remote message's layout version, its second byte. 3: engine values in
+// fixed binary layouts (2 sent them as JSON).
+constexpr std::uint8_t kRemoteCodecVersion = 3;
 
 // Instance values are NetIds on the wire; the two callbacks map them.
 // 0: the instance is not on the other side, so it arrives as nil.

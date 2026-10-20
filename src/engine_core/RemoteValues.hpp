@@ -53,14 +53,17 @@ constexpr std::size_t kRemoteMaxValues = 65536;
 // A message's most arguments, at the top level. Each takes a stack slot on
 // the receiving side, and a Luau stack holds 8000 at most.
 constexpr std::size_t kRemoteMaxArgs = 1024;
+// A NumberCurve's or ColorCurve's most keys, in each of its curves: a
+// received curve is read without trusting its count.
+constexpr std::size_t kRemoteMaxCurveKeys = 1024;
 
 // Reads stack[first..top] into out, every slot counted, nils included. False
 // with error when a value cannot be sent: "<method> cannot send a <type>" for
 // a function, a thread, a userdata the engine does not know, or a table that
 // contains itself, "<method> tables nest deeper than 32", "<method> message
-// has more than 65536 values", and "<method> sends more than 1024 arguments".
-// An instance that is gone is sent as nil. Runs on the thread that holds the
-// script's VM.
+// has more than 65536 values", "<method> sends more than 1024 arguments", and
+// "<method> cannot send a curve of more than 1024 keys". An instance that is
+// gone is sent as nil. Runs on the thread that holds the script's VM.
 bool remote_values_from_lua(lua_State* state, int first, const char* method, RemoteValues& out, std::string& error);
 
 // The stack slots push_remote_values needs: one per value, and room for

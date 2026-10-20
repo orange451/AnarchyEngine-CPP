@@ -3,13 +3,18 @@
 #include "JsonWire.hpp"
 #include "TreeCodec.hpp"
 
+#include "Curve.hpp"
+#include "CurveJson.hpp"
 #include "Enum.hpp"
-#include "PropertyReflection.hpp"
 
 #include <limits>
 #include <memory>
+#include <optional>
 #include <string>
+#include <string_view>
+#include <unordered_map>
 #include <utility>
+#include <vector>
 
 namespace engine_network {
 
@@ -25,42 +30,151 @@ enum Tag : std::uint8_t { Nil = 0, False = 1, True = 2, Float32 = 3, Float64 = 4
 // An engine value's kind on the wire. Fixed here, so LuaSlot::Kind may grow.
 enum EngineKind : std::uint8_t { Vec3 = 1, Vec2 = 2, Color = 3, Matrix4 = 4, Enum = 5, NumberCurve = 6, ColorCurve = 7 };
 
-// The type name slot_to_json and slot_from_json know an engine kind by. Null
-// for a kind that is not an engine value.
-const char* engine_type(EngineKind kind) {
-    switch (kind) {
-    case Vec3: return "Vector3";
-    case Vec2: return "Vector2";
-    case Color: return "Color3";
-    case Matrix4: return "Matrix4";
-    case NumberCurve: return "NumberCurve";
-    case ColorCurve: return "ColorCurve";
-    case Enum: return "";
-    }
-    return nullptr;
-}
-
-bool engine_kind_of(LuaSlot::Kind kind, EngineKind& out) {
-    switch (kind) {
-    case LuaSlot::Kind::Vec3: out = Vec3; return true;
-    case LuaSlot::Kind::Vec2: out = Vec2; return true;
-    case LuaSlot::Kind::Color: out = Color; return true;
-    case LuaSlot::Kind::Matrix4: out = Matrix4; return true;
-    case LuaSlot::Kind::Enum: out = Enum; return true;
-    case LuaSlot::Kind::NumberCurve: out = NumberCurve; return true;
-    case LuaSlot::Kind::ColorCurve: out = ColorCurve; return true;
-    default: return false;
-    }
-}
-
-const engine_core::EnumType* enum_type_named(const std::string& name) {
-    for (int index = 0; index < engine_core::enum_type_count(); ++index) {
-        const engine_core::EnumType& type = engine_core::enum_type_at(index);
-        if (name == type.name) {
-            return &type;
+// Every Enum type by name, made once.
+const engine_core::EnumType* enum_type_named(std::string_view name) {
+    static const std::unordered_map<std::string_view, const engine_core::EnumType*> types = [] {
+        std::unordered_map<std::string_view, const engine_core::EnumType*> out;
+        for (int index = 0; index < engine_core::enum_type_count(); ++index) {
+            const engine_core::EnumType& type = engine_core::enum_type_at(index);
+            out.emplace(type.name, &type);
         }
+        return out;
+    }();
+    const auto found = types.find(name);
+    return found != types.end() ? found->second : nullptr;
+}
+
+void write_floats(ByteWriter& out, const float* values, int count) {
+    for (int index = 0; index < count; ++index) {
+        out.f32(values[index]);
     }
-    return nullptr;
+}
+
+void write_number_keys(ByteWriter& out, const std::vector<engine_core::NumberKey>& keys) {
+    out.varuint(keys.size());
+    for (const engine_core::NumberKey& key : keys) {
+        out.f32(key.time);
+        out.f32(key.value);
+        out.u8(static_cast<std::uint8_t>(key.interp));
+    }
+}
+
+void write_color_key(ByteWriter& out, const engine_core::ColorKey& key) {
+    out.f32(key.color.r);
+    out.f32(key.color.g);
+    out.f32(key.color.b);
+    out.f32(key.transparency);
+}
+
+void write_color_keys(ByteWriter& out, const std::vector<engine_core::ColorKey>& keys) {
+    out.varuint(keys.size());
+    for (const engine_core::ColorKey& key : keys) {
+        out.f32(key.time);
+        write_color_key(out, key);
+    }
+}
+
+// The layouts the header names. False, having written nothing, for a slot
+// that is not an engine value or one that cannot travel: an Enum with no
+// type or item, a curve with too many keys.
+bool write_engine(ByteWriter& out, const LuaSlot& slot) {
+    switch (slot.kind) {
+    case LuaSlot::Kind::Vec3: {
+        out.u8(Engine);
+        out.u8(Vec3);
+        const float axes[3] = {slot.vec.x, slot.vec.y, slot.vec.z};
+        write_floats(out, axes, 3);
+        return true;
+    }
+    case LuaSlot::Kind::Vec2: {
+        out.u8(Engine);
+        out.u8(Vec2);
+        const float axes[2] = {slot.vec.x, slot.vec.y};
+        write_floats(out, axes, 2);
+        return true;
+    }
+    case LuaSlot::Kind::Color: {
+        out.u8(Engine);
+        out.u8(Color);
+        const float channels[3] = {slot.color.r, slot.color.g, slot.color.b};
+        write_floats(out, channels, 3);
+        return true;
+    }
+    case LuaSlot::Kind::Matrix4:
+        out.u8(Engine);
+        out.u8(Matrix4);
+        write_floats(out, slot.transform.m, 16);
+        return true;
+    case LuaSlot::Kind::Enum: {
+        const int item = static_cast<int>(slot.number);
+        if (slot.enum_type == nullptr || item < 0 || engine_core::enum_item_name(*slot.enum_type, item) == nullptr) {
+            return false;
+        }
+        out.u8(Engine);
+        out.u8(Enum);
+        out.string(slot.enum_type->name);
+        out.varuint(static_cast<std::uint64_t>(item));
+        return true;
+    }
+    case LuaSlot::Kind::NumberCurve: {
+        const engine_core::NumberCurve* curve = slot.number_curve.get();
+        if (curve == nullptr || curve->keys_a().size() > engine_core::kRemoteMaxCurveKeys ||
+            curve->keys_b().size() > engine_core::kRemoteMaxCurveKeys) {
+            return false;
+        }
+        out.u8(Engine);
+        out.u8(NumberCurve);
+        out.u8(static_cast<std::uint8_t>(curve->mode()));
+        switch (curve->mode()) {
+        case engine_core::NumberCurveMode::Constant:
+            out.f32(curve->min());
+            break;
+        case engine_core::NumberCurveMode::Range:
+            out.f32(curve->min());
+            out.f32(curve->max());
+            break;
+        case engine_core::NumberCurveMode::Curve:
+            write_number_keys(out, curve->keys_a());
+            break;
+        case engine_core::NumberCurveMode::CurveRange:
+            write_number_keys(out, curve->keys_a());
+            write_number_keys(out, curve->keys_b());
+            break;
+        }
+        return true;
+    }
+    case LuaSlot::Kind::ColorCurve: {
+        const engine_core::ColorCurve* curve = slot.color_curve.get();
+        if (curve == nullptr || curve->keys_a().size() > engine_core::kRemoteMaxCurveKeys ||
+            curve->keys_b().size() > engine_core::kRemoteMaxCurveKeys) {
+            return false;
+        }
+        const bool one_key = curve->mode() == engine_core::ColorCurveMode::Constant ||
+                             curve->mode() == engine_core::ColorCurveMode::RandomBetween;
+        const bool two = curve->mode() == engine_core::ColorCurveMode::RandomBetween ||
+                         curve->mode() == engine_core::ColorCurveMode::GradientRange;
+        if (one_key && (curve->keys_a().size() != 1 || (two && curve->keys_b().size() != 1))) {
+            return false;
+        }
+        out.u8(Engine);
+        out.u8(ColorCurve);
+        out.u8(static_cast<std::uint8_t>(curve->mode()));
+        if (one_key) {
+            write_color_key(out, curve->keys_a()[0]);
+            if (two) {
+                write_color_key(out, curve->keys_b()[0]);
+            }
+        } else {
+            write_color_keys(out, curve->keys_a());
+            if (two) {
+                write_color_keys(out, curve->keys_b());
+            }
+        }
+        return true;
+    }
+    default:
+        return false;
+    }
 }
 
 void write_value(ByteWriter& out, const RemoteValue& value, const IdToNet& to_net) {
@@ -113,17 +227,7 @@ void write_value(ByteWriter& out, const RemoteValue& value, const IdToNet& to_ne
     default:
         break;
     }
-    EngineKind kind{};
-    engine_core::JsonValue json;
-    if (engine_kind_of(slot.kind, kind) &&
-        (kind != Enum || slot.enum_type != nullptr) &&
-        engine_core::slot_to_json(slot, engine_type(kind), json)) {
-        out.u8(Engine);
-        out.u8(kind);
-        if (kind == Enum) {
-            out.string(slot.enum_type->name);
-        }
-        write_json(out, json);
+    if (write_engine(out, slot)) {
         return;
     }
     // Nil, and what never travels (a Signal, an input record): nothing sends one.
@@ -198,26 +302,217 @@ struct Decoder {
         return !in.failed();
     }
 
-    bool read_engine(LuaSlot& slot) {
-        const std::uint8_t kind = in.u8();
-        if (in.failed() || kind < Vec3 || kind > ColorCurve) {
+    bool read_floats(float* out, int count) {
+        for (int index = 0; index < count; ++index) {
+            out[index] = in.f32();
+        }
+        return !in.failed();
+    }
+
+    // A curve's keys: a count of 1..kRemoteMaxCurveKeys, then each key.
+    // key_bytes is what one takes, so a count past what is left is a lie.
+    bool read_key_count(std::size_t key_bytes, std::size_t& count) {
+        const std::uint64_t declared = in.varuint();
+        if (in.failed() || declared == 0 || declared > engine_core::kRemoteMaxCurveKeys ||
+            declared > in.left() / key_bytes) {
             return false;
         }
-        const engine_core::EnumType* enum_type = nullptr;
-        if (kind == Enum) {
-            const std::string name = in.string();
-            enum_type = in.failed() ? nullptr : enum_type_named(name);
-            if (enum_type == nullptr) {
+        count = static_cast<std::size_t>(declared);
+        return true;
+    }
+
+    bool read_number_keys(std::vector<engine_core::NumberKey>& keys) {
+        std::size_t count = 0;
+        if (!read_key_count(9, count)) {
+            return false;
+        }
+        keys.resize(count);
+        for (engine_core::NumberKey& key : keys) {
+            key.time = in.f32();
+            key.value = in.f32();
+            const std::uint8_t interp = in.u8();
+            if (interp > static_cast<std::uint8_t>(engine_core::CurveInterp::Step)) {
+                return false;
+            }
+            key.interp = static_cast<engine_core::CurveInterp>(interp);
+        }
+        return !in.failed();
+    }
+
+    bool read_color_key(engine_core::ColorKey& key) {
+        float parts[4] = {};
+        if (!read_floats(parts, 4)) {
+            return false;
+        }
+        key.color = engine_core::ColorRgb{parts[0], parts[1], parts[2], 1.f};
+        key.transparency = parts[3];
+        return true;
+    }
+
+    bool read_color_keys(std::vector<engine_core::ColorKey>& keys) {
+        std::size_t count = 0;
+        if (!read_key_count(20, count)) {
+            return false;
+        }
+        keys.resize(count);
+        for (engine_core::ColorKey& key : keys) {
+            key.time = in.f32();
+            if (!read_color_key(key)) {
                 return false;
             }
         }
-        engine_core::JsonValue json;
-        if (!read_json(in, json)) {
+        return true;
+    }
+
+    bool read_number_curve(LuaSlot& slot) {
+        using engine_core::NumberCurveMode;
+        const std::uint8_t mode = in.u8();
+        std::optional<engine_core::NumberCurve> curve;
+        std::vector<engine_core::NumberKey> a;
+        std::vector<engine_core::NumberKey> b;
+        std::string error;
+        switch (static_cast<NumberCurveMode>(mode)) {
+        case NumberCurveMode::Constant: {
+            const float value = in.f32();
+            curve = engine_core::NumberCurve::constant(value);
+            break;
+        }
+        case NumberCurveMode::Range: {
+            float bounds[2] = {};
+            if (!read_floats(bounds, 2)) {
+                return false;
+            }
+            curve = engine_core::NumberCurve::range(bounds[0], bounds[1]);
+            break;
+        }
+        case NumberCurveMode::Curve:
+            if (!read_number_keys(a)) {
+                return false;
+            }
+            curve = engine_core::NumberCurve::keys(std::move(a), error);
+            break;
+        case NumberCurveMode::CurveRange:
+            if (!read_number_keys(a) || !read_number_keys(b)) {
+                return false;
+            }
+            curve = engine_core::NumberCurve::keys_range(std::move(a), std::move(b), error);
+            break;
+        default:
             return false;
         }
+        if (in.failed() || !curve) {
+            return false;
+        }
+        slot = engine_core::number_curve_slot(std::move(*curve));
+        return true;
+    }
+
+    bool read_color_curve(LuaSlot& slot) {
+        using engine_core::ColorCurveMode;
+        const std::uint8_t mode = in.u8();
+        std::optional<engine_core::ColorCurve> curve;
+        std::vector<engine_core::ColorKey> a;
+        std::vector<engine_core::ColorKey> b;
+        engine_core::ColorKey one;
+        engine_core::ColorKey other;
         std::string error;
-        return engine_core::slot_from_json(json, engine_type(static_cast<EngineKind>(kind)), "value", slot, error,
-                                           enum_type);
+        switch (static_cast<ColorCurveMode>(mode)) {
+        case ColorCurveMode::Constant:
+            if (!read_color_key(one)) {
+                return false;
+            }
+            curve = engine_core::ColorCurve::constant(one.color, one.transparency);
+            break;
+        case ColorCurveMode::RandomBetween:
+            if (!read_color_key(one) || !read_color_key(other)) {
+                return false;
+            }
+            curve = engine_core::ColorCurve::between(one.color, one.transparency, other.color, other.transparency);
+            break;
+        case ColorCurveMode::Gradient:
+            if (!read_color_keys(a)) {
+                return false;
+            }
+            curve = engine_core::ColorCurve::gradient(std::move(a), error);
+            break;
+        case ColorCurveMode::GradientRange:
+            if (!read_color_keys(a) || !read_color_keys(b)) {
+                return false;
+            }
+            curve = engine_core::ColorCurve::gradient_range(std::move(a), std::move(b), error);
+            break;
+        default:
+            return false;
+        }
+        if (in.failed() || !curve) {
+            return false;
+        }
+        slot = engine_core::color_curve_slot(std::move(*curve));
+        return true;
+    }
+
+    // An engine value's fixed layout (the header), read straight into slot:
+    // every size is fixed or checked against what is left before anything is
+    // made for it.
+    bool read_engine(LuaSlot& slot) {
+        const std::uint8_t kind = in.u8();
+        if (in.failed()) {
+            return false;
+        }
+        switch (kind) {
+        case Vec3: {
+            float axes[3] = {};
+            if (!read_floats(axes, 3)) {
+                return false;
+            }
+            slot.kind = LuaSlot::Kind::Vec3;
+            slot.vec = engine_core::Vec3{axes[0], axes[1], axes[2]};
+            return true;
+        }
+        case Vec2: {
+            float axes[2] = {};
+            if (!read_floats(axes, 2)) {
+                return false;
+            }
+            slot.kind = LuaSlot::Kind::Vec2;
+            slot.vec = engine_core::Vec3{axes[0], axes[1], 0.f};
+            return true;
+        }
+        case Color: {
+            float channels[3] = {};
+            if (!read_floats(channels, 3)) {
+                return false;
+            }
+            slot.kind = LuaSlot::Kind::Color;
+            slot.color = engine_core::ColorRgb{channels[0], channels[1], channels[2], 1.f};
+            return true;
+        }
+        case Matrix4:
+            if (!read_floats(slot.transform.m, 16)) {
+                return false;
+            }
+            slot.kind = LuaSlot::Kind::Matrix4;
+            return true;
+        case Enum: {
+            const std::string name = in.string();
+            const engine_core::EnumType* type = in.failed() ? nullptr : enum_type_named(name);
+            const std::uint64_t item = in.varuint();
+            if (type == nullptr || in.failed() || item > static_cast<std::uint64_t>(std::numeric_limits<int>::max()) ||
+                engine_core::enum_item_name(*type, static_cast<int>(item)) == nullptr) {
+                return false;
+            }
+            slot.kind = LuaSlot::Kind::Enum;
+            slot.enum_type = type;
+            slot.number = static_cast<double>(item);
+            return true;
+        }
+        case NumberCurve:
+            return read_number_curve(slot);
+        case ColorCurve:
+            return read_color_curve(slot);
+        default:
+            return false;
+        }
     }
 
     bool read_table(RemoteValue& out, std::size_t depth) {
@@ -262,7 +557,7 @@ struct Decoder {
 void encode_remote(std::uint32_t remote_netid, const engine_core::RemoteValues& values, const IdToNet& to_net,
                    ByteWriter& out) {
     out.u8(static_cast<std::uint8_t>(MessageType::Remote));
-    out.u8(kCodecVersion);
+    out.u8(kRemoteCodecVersion);
     out.varuint(remote_netid);
     out.varuint(values.values.size());
     for (const RemoteValue& value : values.values) {
@@ -279,7 +574,7 @@ bool decode_remote(ByteReader& in, std::uint32_t& remote_netid, engine_core::Rem
     if (in.left() > max_bytes) {
         return false;
     }
-    if (in.u8() != static_cast<std::uint8_t>(MessageType::Remote) || in.u8() != kCodecVersion) {
+    if (in.u8() != static_cast<std::uint8_t>(MessageType::Remote) || in.u8() != kRemoteCodecVersion) {
         return false;
     }
     const std::uint64_t netid = in.varuint();

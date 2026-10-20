@@ -9,6 +9,7 @@
 #include "Folder.hpp"
 #include "ModuleScript.hpp"
 #include "Script.hpp"
+#include "Shader.hpp"
 #include "ScriptAnalysis.hpp"
 
 #include "jadefx/jadefx.hpp"
@@ -444,6 +445,49 @@ int RunProblemsPaneTests(engine_core::Engine& engine) {
     game.destroy(logic.id());
     game.destroy(core_script.id());
     settle(engine);
+
+    // A Shader's Error is a row of its own: one error at its line, which opens there.
+    {
+        engine_core::Shader& shader = game.create<engine_core::Shader>();
+        game.set_name(shader.id(), "Dissolve");
+        game.set_parent(shader.id(), game.service("Shaders"));
+        Harness s(engine);
+        s.frame();
+        expect(!lists(*s.pane, shader.id()), "a Shader with no error is not listed");
+        shader.set_source("shader surface;\n\n// glow is not a hint\nuniform float Shine : glow;\n\nvoid surface() {}\n");
+        s.frame();
+        s.frame();
+        expect(lists(*s.pane, shader.id()), "a Shader's error lists it within a frame");
+        const ide::ScriptProblems* row = nullptr;
+        for (const ide::ScriptProblems& listed : s.pane->list().scripts) {
+            if (listed.id == shader.id()) {
+                row = &listed;
+            }
+        }
+        expect(row != nullptr && row->name == "Dissolve" && row->class_name == "Shader" && row->path == "Assets.Shaders",
+               "the row names the Shader and where it is");
+        expect(row != nullptr && row->problems.size() == 1 && row->problems[0].line == 4 &&
+                   row->problems[0].message == "unknown hint glow" && row->problems[0].code == "Shader" &&
+                   row->problems[0].severity == engine_core::Severity::Error,
+               "one error at line 4");
+        expect(row != nullptr && row->problems[0].column == 0 && row->problems[0].column_end == 27,
+               "it covers the line");
+        expect(row_shows(*s.pane, "Dissolve"), "the row is in the tree");
+        // The Shader is the only source listed, so its row is first and its error the row's first child.
+        const auto& shader_rows = s.pane->tree().getRoot()->getChildren();
+        if (!shader_rows.empty() && !shader_rows.items()[0]->getChildren().empty()) {
+            s.pane->openRow(shader_rows.items()[0]->getChildren().items()[0].get());
+        }
+        expect(!s.opened.empty() && std::get<0>(s.opened.back()) == shader.id() && std::get<1>(s.opened.back()) == 4,
+               "opening it asks for the Shader at line 4");
+        shader.set_source(engine_core::kShaderStarterSource);
+        // While analysis is busy the list follows at most every kBusyRebuildInterval.
+        for (int i = 0; i < 8; ++i) {
+            s.frame();
+        }
+        expect(!lists(*s.pane, shader.id()), "fixing it removes the row");
+        game.destroy(shader.id());
+    }
     return gFailures;
 }
 

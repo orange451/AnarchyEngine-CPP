@@ -151,6 +151,11 @@ private:
     int rebuilds_ = 0;
     // DataModel::tree_revision when the names and paths were last read.
     std::uint64_t seen_tree_ = 0;
+    // The place's authored revision when Shaders' errors were last read, and
+    // each Shader's id and Error then, in tree order: a Shader's Error changes
+    // with its Source, which no analysis publishes.
+    std::uint64_t seen_authored_ = 0;
+    std::vector<std::pair<std::uint32_t, std::string>> shader_errors_;
     // The scene time of the latest tick, and of the last refresh, which a
     // long check batch spaces out.
     double now_ = 0;

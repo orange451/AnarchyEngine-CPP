@@ -184,6 +184,8 @@ std::shared_ptr<IdePane> IdeLayout::make_problems() {
         edit(id);
         if (const std::shared_ptr<IdeScriptEditor> editor = open_editor(id)) {
             editor->showRange(line, column, column_end);
+        } else if (const std::shared_ptr<IdeShaderEditor> shader = open_shader_editor(id)) {
+            shader->showLine(line);
         }
     };
     return jadefx::make<IdeProblems>(runner_.simulation(), std::move(host));

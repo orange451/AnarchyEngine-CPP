@@ -173,6 +173,14 @@ int RunProblemsModelTests() {
     {
         const ide::ProblemList empty = ide::build_problems({source(1, "A", "Workspace", {})}, {});
         expect(ide::problems_summary(empty) == "No problems", "no problems");
+        // With a Shader among them, they are files, not scripts.
+        std::vector<ide::ProblemSource> mixed;
+        mixed.push_back(source(1, "Main", "Workspace", {problem(Severity::Error, 1, "a")}));
+        ide::ProblemSource shader = source(2, "Look", "Assets.Shaders", {problem(Severity::Error, 4, "b", "Shader")});
+        shader.class_name = "Shader";
+        mixed.push_back(shader);
+        expect(ide::problems_summary(ide::build_problems(mixed, ide::ProblemFilter{})) == "2 errors in 2 files",
+               "a Shader among them makes them files");
         expect(ide::problems_title(empty) == "Problems", "no count in the title");
         const ide::ProblemList one = ide::build_problems(
             {source(1, "A", "Workspace", {problem(Severity::Warning, 1, "w")})}, {});

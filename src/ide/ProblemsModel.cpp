@@ -200,7 +200,12 @@ std::string problems_summary(const ProblemList& list) {
     add(list.shown.errors, "error", "errors");
     add(list.shown.warnings, "warning", "warnings");
     add(list.shown.info, "info", "info");
-    return text + " in " + counted(static_cast<std::size_t>(list.shown.scripts), "script", "scripts");
+    // A Shader among them makes them files: not every one is a script.
+    const bool files = std::any_of(list.scripts.begin(), list.scripts.end(), [](const ScriptProblems& source) {
+        return source.class_name != "Script" && source.class_name != "ModuleScript";
+    });
+    return text + " in " +
+           counted(static_cast<std::size_t>(list.shown.scripts), files ? "file" : "script", files ? "files" : "scripts");
 }
 
 std::string problems_title(const ProblemList& list) {

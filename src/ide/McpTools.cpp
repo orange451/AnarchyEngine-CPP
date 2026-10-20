@@ -14,6 +14,7 @@
 #include "IdeResources.hpp"
 #include "LuaApi.hpp"
 #include "LuaSource.hpp"
+#include "Shader.hpp"
 #include "PropertySheet.hpp"
 #include "ScopedRecording.hpp"
 #include "ScriptAnalysis.hpp"
@@ -365,7 +366,7 @@ JsonValue Properties(DataModel& world, InstanceId id) {
     if (!attributes.members().empty()) {
         out.set("attributes", std::move(attributes));
     }
-    if (dynamic_cast<const engine_core::LuaSource*>(world.instance(id)) != nullptr) {
+    if (dynamic_cast<const engine_core::SourceText*>(world.instance(id)) != nullptr) {
         JsonValue entry = JsonValue::object();
         entry.set("type", JsonValue::string("string"));
         entry.set("value", JsonValue::string("(use read_script)"));
@@ -551,10 +552,12 @@ const std::string& StringArg(const JsonValue& arguments, const char* key) {
     return value->as_string();
 }
 
-engine_core::LuaSource& ScriptAt(DataModel& world, InstanceId id) {
-    auto* source = dynamic_cast<engine_core::LuaSource*>(world.instance(id));
+// A Script's, ModuleScript's, or Shader's source.
+engine_core::SourceText& ScriptAt(DataModel& world, InstanceId id) {
+    auto* source = dynamic_cast<engine_core::SourceText*>(world.instance(id));
     if (source == nullptr) {
-        throw std::runtime_error(PathOf(world, id) + " is a " + ClassOf(world, id) + ", not a Script or ModuleScript.");
+        throw std::runtime_error(PathOf(world, id) + " is a " + ClassOf(world, id) +
+                                 ", not a Script, ModuleScript, or Shader.");
     }
     return *source;
 }
@@ -732,13 +735,14 @@ JsonValue WriteSource(engine_core::Engine& engine, const McpStudio& studio, cons
     }
     JsonValue out = RunEdit(engine, [instance, change = std::move(change)](DataModel& world) {
         const InstanceId id = Resolve(world, &instance);
-        engine_core::LuaSource& script = ScriptAt(world, id);
+        engine_core::SourceText& script = ScriptAt(world, id);
         const std::string source = change(script.source());
         if (script.source() != source) {
             // The same waypoint an editor's typing makes.
             std::optional<std::string> recording;
             if (!world.simulation_running()) {
-                recording = world.history().try_begin_recording("Edit Script");
+                recording = world.history().try_begin_recording(
+                    dynamic_cast<const engine_core::Shader*>(&script) != nullptr ? "Edit Shader" : "Edit Script");
             }
             script.set_source(source);
             if (recording) {
@@ -748,12 +752,29 @@ JsonValue WriteSource(engine_core::Engine& engine, const McpStudio& studio, cons
                 world.capture_place();
             }
         }
-        return Brief(world, id);
+        JsonValue brief = Brief(world, id);
+        // A Shader's problem is its Error, parsed as Source was set; analysis checks only Luau.
+        if (const auto* shader = dynamic_cast<const engine_core::Shader*>(&script)) {
+            JsonValue problems = JsonValue::array();
+            if (const auto& error = shader->parse()->error) {
+                JsonValue entry = JsonValue::object();
+                entry.set("line", JsonValue::number(error->line));
+                entry.set("column", JsonValue::number(1));
+                entry.set("severity", JsonValue::string("error"));
+                entry.set("code", JsonValue::string("Shader"));
+                entry.set("message", JsonValue::string(error->message));
+                problems.items().push_back(std::move(entry));
+            }
+            brief.set("problems", std::move(problems));
+        }
+        return brief;
     });
     if (studio.refresh_scripts) {
         studio.refresh_scripts();
     }
-    AddProblems(engine, static_cast<InstanceId>(out.find("id")->as_number()), out);
+    if (out.find("problems") == nullptr) {
+        AddProblems(engine, static_cast<InstanceId>(out.find("id")->as_number()), out);
+    }
     return out;
 }
 

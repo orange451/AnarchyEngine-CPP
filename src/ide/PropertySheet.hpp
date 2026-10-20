@@ -15,6 +15,9 @@ namespace ide {
 // pane writes it; a reference row in Properties takes it.
 inline constexpr const char* kInstanceDragFormat = "application/x-anarchy-instances";
 
+// The Properties group every instance's attributes show under, after every other.
+inline constexpr const char* kAttributesGroup = "Attributes";
+
 // kInstanceDragFormat's text for ids: each in decimal, joined by commas.
 std::string instance_drag_text(const std::vector<engine_core::InstanceId>& ids);
 // The ids in that text, in order. Empty when any part is not a plain decimal
@@ -70,6 +73,9 @@ struct PropertyRow {
     std::string name;
     std::string type_name;
     PropertyKind kind = PropertyKind::String;
+    // An attribute (DataModel::attributes) rather than a class property: name is
+    // the attribute's, group is "Attributes", and edits go through set_attribute.
+    bool attribute = false;
     // "Instance", the field's registered group (lua_group), or "Data".
     std::string group = "Data";
     // The group comes before the others (lua_lead_group).
@@ -141,6 +147,8 @@ struct PropertyEdit {
     PropertyKind kind = PropertyKind::String;
     PropertyValue value;
     int axis = -1;
+    // The row is an attribute: write it with set_attribute, not the class's field.
+    bool attribute = false;
 };
 
 struct EditResult {
@@ -162,6 +170,7 @@ EditResult apply_edit(engine_core::DataModel& world, const std::vector<engine_co
 // drag's first write reached it, as its property's read gave it.
 struct LiveEdit {
     std::string property;
+    bool attribute = false;
     std::vector<std::pair<engine_core::InstanceId, engine_core::LuaSlot>> before;
 };
 

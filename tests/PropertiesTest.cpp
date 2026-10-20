@@ -2290,6 +2290,114 @@ void TestConstraintRows() {
     Expect(root != nullptr && !root->writable, "a part shows a read-only AssemblyRoot");
 }
 
+engine_core::LuaSlot AttrNumber(double value) {
+    engine_core::LuaSlot slot;
+    slot.kind = engine_core::LuaSlot::Kind::Number;
+    slot.number = value;
+    return slot;
+}
+
+engine_core::LuaSlot AttrText(const char* text) {
+    engine_core::LuaSlot slot;
+    slot.kind = engine_core::LuaSlot::Kind::String;
+    slot.text = text;
+    return slot;
+}
+
+const ide::PropertyRow* AttributeRow(const ide::PropertySheet& sheet, const std::string& name) {
+    for (const ide::PropertyRow& row : sheet.rows) {
+        if (row.attribute && row.name == name) {
+            return &row;
+        }
+    }
+    return nullptr;
+}
+
+void TestAttributeRows() {
+    engine_core::set_thread_role(engine_core::ThreadRole::Simulation);
+    Rig rig;
+    engine_core::LuaSlot tint;
+    tint.kind = engine_core::LuaSlot::Kind::Color;
+    tint.color = {1.f, 0.5f, 0.f, 1.f};
+    rig.game.instance(rig.a)->set_attribute("Health", AttrNumber(5));
+    rig.game.instance(rig.a)->set_attribute("Tint", tint);
+    // An attribute may share a property's name; it is its own row.
+    rig.game.instance(rig.a)->set_attribute("Color", AttrText("red"));
+
+    const ide::PropertySheet sheet = ide::read_sheet(rig.game, {rig.a});
+    const ide::PropertyRow* health = AttributeRow(sheet, "Health");
+    Expect(health != nullptr, "an attribute is a row");
+    Expect(health != nullptr && health->group == "Attributes" && health->kind == ide::PropertyKind::Number &&
+               health->value.number == 5 && health->writable,
+           "the Health row is a writable number under Attributes");
+    const ide::PropertyRow* color = AttributeRow(sheet, "Tint");
+    Expect(color != nullptr && color->kind == ide::PropertyKind::Color3 && color->value.color.g == 0.5f,
+           "the Tint row is a color");
+    Expect(AttributeRow(sheet, "Color") != nullptr && AttributeRow(sheet, "Color")->kind == ide::PropertyKind::String,
+           "an attribute named Color is a row of its own");
+    bool class_color = false;
+    for (const ide::PropertyRow& row : sheet.rows) {
+        class_color = class_color || (!row.attribute && row.name == "Color" && row.kind == ide::PropertyKind::Color3);
+    }
+    Expect(class_color, "the GameObject's own Color row stays");
+    // Attributes come last, by name.
+    const std::size_t count = sheet.rows.size();
+    Expect(count >= 3 && sheet.rows[count - 3].name == "Color" && sheet.rows[count - 2].name == "Health" &&
+               sheet.rows[count - 1].name == "Tint",
+           "the Attributes rows come after every other row, by name");
+
+    // A row is shown only where every selected instance holds it with the same kind.
+    rig.game.instance(rig.b)->set_attribute("Health", AttrText("x"));
+    Expect(AttributeRow(ide::read_sheet(rig.game, {rig.a, rig.b}), "Health") == nullptr,
+           "a Health of another kind on b drops the row");
+    rig.game.instance(rig.b)->set_attribute("Health", AttrNumber(6));
+    const ide::PropertyRow* mixed = AttributeRow(ide::read_sheet(rig.game, {rig.a, rig.b}), "Health");
+    Expect(mixed != nullptr && mixed->mixed, "5 and 6 make a mixed row");
+    Expect(AttributeRow(ide::read_sheet(rig.game, {rig.a, rig.b}), "Tint") == nullptr,
+           "an attribute only a holds is not a row for both");
+}
+
+void TestAttributeEdit() {
+    engine_core::set_thread_role(engine_core::ThreadRole::Simulation);
+    Rig rig;
+    rig.game.instance(rig.a)->set_attribute("Health", AttrNumber(5));
+    rig.game.instance(rig.a)->set_attribute("Color", AttrText("red"));
+    rig.game.history().reset_waypoints();
+
+    ide::PropertyEdit edit;
+    edit.property = "Health";
+    edit.kind = ide::PropertyKind::Number;
+    edit.value.number = 9;
+    edit.attribute = true;
+    const ide::EditResult wrote = ide::apply_edit(rig.game, {rig.a}, edit);
+    Expect(wrote.written == 1 && rig.game.instance(rig.a)->attribute("Health").number == 9,
+           "an attribute edit writes the attribute");
+    const auto undo = rig.game.history().can_undo();
+    Expect(undo.first && undo.second == "Set Health", "the edit is one Set Health step");
+
+    const ide::EditResult none = ide::apply_edit(rig.game, {rig.b}, edit);
+    Expect(none.written == 0 && !none.rejected && rig.game.instance(rig.b)->attributes().empty(),
+           "an instance without the attribute is left alone");
+
+    // The attribute named Color, not the GameObject's Color.
+    const engine_core::ColorRgb before = rig.game.game_object(rig.a)->color();
+    ide::PropertyEdit text;
+    text.property = "Color";
+    text.kind = ide::PropertyKind::String;
+    text.value.text = "blue";
+    text.attribute = true;
+    ide::apply_edit(rig.game, {rig.a}, text);
+    Expect(rig.game.instance(rig.a)->attribute("Color").text == "blue", "the Color attribute is written");
+    Expect(engine_core::same_color(rig.game.game_object(rig.a)->color(), before), "the Color property is not");
+
+    // Through the panel: typing into the row writes the attribute.
+    rig.select({rig.a});
+    rig.frame();
+    rig.typeInto("Health", "12");
+    rig.enter();
+    Expect(rig.game.instance(rig.a)->attribute("Health").number == 12, "typing into the Health row writes it");
+}
+
 int main() {
     TestGroupMarkersRegister();
     TestSheetGroupOrder();
@@ -2334,6 +2442,8 @@ int main() {
     TestModuleScriptHasNoEnabled();
     TestFieldUndoThenPlace();
     TestPlayEditIsUndoable();
+    TestAttributeRows();
+    TestAttributeEdit();
     if (gFailures == 0) {
         std::printf("properties tests passed\n");
         return 0;

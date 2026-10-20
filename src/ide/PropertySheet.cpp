@@ -1,5 +1,6 @@
 #include "PropertySheet.hpp"
 
+#include "Attributes.hpp"
 #include "ChangeHistoryService.hpp"
 #include "CurveEditModel.hpp"
 #include "CurveJson.hpp"
@@ -120,11 +121,20 @@ std::string color_curve_summary(const engine_core::ColorCurve& curve) {
     return std::string();
 }
 
+bool value_from_slot(const LuaSlot& slot, const engine_core::EnumType* enum_type, PropertyKind kind,
+                     PropertyValue& out);
+
 bool read_value(DataModel& world, DataModel& object, const LuaField& field, PropertyKind kind, PropertyValue& out) {
     LuaSlot slot;
     if (!field.read(world, object, slot)) {
         return false;
     }
+    return value_from_slot(slot, field.enum_type, kind, out);
+}
+
+// slot as a row of kind shows it. False when slot is not that kind.
+bool value_from_slot(const LuaSlot& slot, const engine_core::EnumType* enum_type, PropertyKind kind,
+                     PropertyValue& out) {
     switch (kind) {
     case PropertyKind::String:
         out.text = slot.text;
@@ -137,7 +147,7 @@ bool read_value(DataModel& world, DataModel& object, const LuaField& field, Prop
         return slot.kind == LuaSlot::Kind::Number;
     case PropertyKind::Enum:
         out.number = slot.number;
-        return slot.kind == LuaSlot::Kind::Enum && slot.enum_type == field.enum_type;
+        return slot.kind == LuaSlot::Kind::Enum && slot.enum_type == enum_type;
     case PropertyKind::Vector3:
         out.vec = slot.vec;
         return slot.kind == LuaSlot::Kind::Vec3;
@@ -363,7 +373,8 @@ bool PropertyRow::operator==(const PropertyRow& other) const {
 }
 
 bool PropertyRow::same_slot(const PropertyRow& other) const {
-    return name == other.name && type_name == other.type_name && kind == other.kind && group == other.group &&
+    return name == other.name && attribute == other.attribute && type_name == other.type_name && kind == other.kind &&
+           group == other.group &&
            slider_min == other.slider_min && slider_max == other.slider_max && enum_type == other.enum_type &&
            has_choices == other.has_choices;
 }
@@ -516,19 +527,69 @@ PropertySheet read_sheet(DataModel& world, const std::vector<InstanceId>& select
         sheet.rows.push_back(std::move(row));
     }
 
+    // Then the attributes the first instance holds, by name: a row when every
+    // instance holds one of that name with the same kind.
+    if (DataModel* first_object = object_of(world, sheet.ids.front())) {
+        for (const auto& [name, held] : first_object->attributes()) {
+            const char* type_name = engine_core::attribute_type_name(held.kind);
+            PropertyKind kind{};
+            if (type_name == nullptr || !property_kind_for(type_name, kind)) {
+                continue;
+            }
+            PropertyRow row;
+            row.name = name;
+            row.type_name = type_name;
+            row.kind = kind;
+            row.group = kAttributesGroup;
+            row.attribute = true;
+            row.writable = true;
+            bool keep = true;
+            bool have_first = false;
+            for (InstanceId id : sheet.ids) {
+                DataModel* object = object_of(world, id);
+                const auto found = object != nullptr ? object->attributes().find(name) : first_object->attributes().end();
+                PropertyValue value;
+                if (object == nullptr || found == object->attributes().end() || found->second.kind != held.kind ||
+                    !value_from_slot(object->attribute(name), nullptr, kind, value)) {
+                    keep = false;
+                    break;
+                }
+                if (!have_first) {
+                    row.value = std::move(value);
+                    have_first = true;
+                } else {
+                    merge(row, value);
+                }
+            }
+            if (!keep) {
+                continue;
+            }
+            blank_mixed(row);
+            if (row.kind == PropertyKind::Ref && !row.mixed && !row.value.nil_ref()) {
+                row.label = ref_label(world, row.value.ref);
+                row.path = ref_path(world, row.value.ref);
+            }
+            sheet.rows.push_back(std::move(row));
+        }
+    }
+
     // Instance first, then the groups a class leads with (lua_lead_group),
     // then the rest in the order the member list first names them, then Data.
     // Rows in a group keep member order, base fields first.
     std::vector<std::string> order;
     for (const bool leading : {true, false}) {
         for (const PropertyRow& row : sheet.rows) {
-            if (row.group_leads == leading && row.group != "Instance" && row.group != "Data" &&
+            if (!row.attribute && row.group_leads == leading && row.group != "Instance" && row.group != "Data" &&
                 std::find(order.begin(), order.end(), row.group) == order.end()) {
                 order.push_back(row.group);
             }
         }
     }
     const auto rank = [&order](const PropertyRow& row) -> std::size_t {
+        // Attributes after everything, Data included.
+        if (row.attribute) {
+            return order.size() + 2;
+        }
         if (row.group == "Instance") {
             return 0;
         }
@@ -588,6 +649,13 @@ EditResult finish_live_edit(DataModel& world, const std::vector<InstanceId>& ids
         HistoryOff off(world.history());
         for (auto& [id, slot] : live.before) {
             DataModel* object = world.alive(id) ? object_of(world, id) : nullptr;
+            if (object != nullptr && live.attribute) {
+                // As it was held, an Instance by its GUID, through the whole map.
+                engine_core::AttributeMap next = object->attributes();
+                next[live.property] = slot;
+                object->set_attributes(std::move(next));
+                continue;
+            }
             const LuaField* field =
                 object != nullptr ? engine_core::lua_class_find(object->class_name(), live.property) : nullptr;
             if (field != nullptr && field->write != nullptr) {
@@ -598,10 +666,22 @@ EditResult finish_live_edit(DataModel& world, const std::vector<InstanceId>& ids
     }
     live.before.clear();
     live.property.clear();
+    live.attribute = false;
     return commit ? apply_edit(world, ids, edit) : EditResult{};
 }
 
 namespace {
+
+// A target's value now, as an edit of one component starts from: its field's
+// read, or an attribute as a script reads it. False when there is none.
+bool read_target(DataModel& world, DataModel& object, const LuaField& field, bool attribute,
+                 const std::string& property, LuaSlot& out) {
+    if (attribute) {
+        out = object.attribute(property);
+        return out.kind != LuaSlot::Kind::Nil;
+    }
+    return field.read != nullptr && field.read(world, object, out);
+}
 
 EditResult write_edit(DataModel& world, const std::vector<InstanceId>& ids, const PropertyEdit& edit, bool record,
                       LiveEdit* live) {
@@ -623,6 +703,9 @@ EditResult write_edit(DataModel& world, const std::vector<InstanceId>& ids, cons
     struct Target {
         DataModel* object = nullptr;
         LuaField field;
+        // An attribute edit: field holds only its type name, and reads and
+        // writes go through the object's attributes.
+        bool attribute = false;
     };
     std::vector<Target> targets;
     for (InstanceId id : ids) {
@@ -631,6 +714,20 @@ EditResult write_edit(DataModel& world, const std::vector<InstanceId>& ids, cons
         }
         DataModel* object = object_of(world, id);
         if (object == nullptr) {
+            continue;
+        }
+        if (edit.attribute) {
+            // Only an instance holding the attribute with this edit's kind.
+            const auto held = object->attributes().find(edit.property);
+            const char* type_name =
+                held != object->attributes().end() ? engine_core::attribute_type_name(held->second.kind) : nullptr;
+            PropertyKind kind{};
+            if (type_name == nullptr || !property_kind_for(type_name, kind) || kind != edit.kind) {
+                continue;
+            }
+            LuaField field;
+            field.type_name = type_name;
+            targets.push_back({object, field, true});
             continue;
         }
         const LuaField* field = engine_core::lua_class_find(object->class_name(), edit.property);
@@ -657,10 +754,10 @@ EditResult write_edit(DataModel& world, const std::vector<InstanceId>& ids, cons
     // Checked for every target before any is written, so a refusal changes nothing.
     for (const Target& target : targets) {
         std::optional<std::string> error;
-        if (edit.property == "Parent" && edit.kind == PropertyKind::Ref) {
+        if (!edit.attribute && edit.property == "Parent" && edit.kind == PropertyKind::Ref) {
             const InstanceId parent = edit.value.nil_ref() ? DataModel::kNoParent : edit.value.ref;
             error = world.parent_error(target.object->id(), parent);
-        } else if (edit.property == "Name" && edit.kind == PropertyKind::String) {
+        } else if (!edit.attribute && edit.property == "Name" && edit.kind == PropertyKind::String) {
             error = world.rename_error(target.object->id(), edit.value.text);
         } else if (edit.kind == PropertyKind::Ref && !edit.value.nil_ref()) {
             const std::string klass = engine_core::reference_class(target.field.type_name);
@@ -680,9 +777,14 @@ EditResult write_edit(DataModel& world, const std::vector<InstanceId>& ids, cons
     // A drag's first write keeps what each instance held, so its end can put it back.
     if (live != nullptr && live->before.empty()) {
         live->property = edit.property;
+        live->attribute = edit.attribute;
         for (const Target& target : targets) {
             LuaSlot current;
-            if (target.field.read != nullptr && target.field.read(world, *target.object, current)) {
+            if (target.attribute) {
+                // As held, an Instance by GUID, so the drag's end puts back exactly this.
+                current = target.object->attributes().find(edit.property)->second;
+                live->before.emplace_back(target.object->id(), std::move(current));
+            } else if (target.field.read != nullptr && target.field.read(world, *target.object, current)) {
                 live->before.emplace_back(target.object->id(), std::move(current));
             }
         }
@@ -726,7 +828,7 @@ EditResult write_edit(DataModel& world, const std::vector<InstanceId>& ids, cons
             if (edit.axis >= 0 && edit.axis < vector_axes(edit.kind)) {
                 // One component: the others stay what this instance has.
                 LuaSlot current;
-                if (target.field.read == nullptr || !target.field.read(world, *target.object, current) ||
+                if (!read_target(world, *target.object, target.field, target.attribute, edit.property, current) ||
                     current.kind != slot.kind) {
                     continue;
                 }
@@ -743,7 +845,7 @@ EditResult write_edit(DataModel& world, const std::vector<InstanceId>& ids, cons
             if (edit.axis >= 0 && edit.axis < kTransformParts) {
                 // One part: the rest of this instance's Transform stays.
                 LuaSlot current;
-                if (target.field.read == nullptr || !target.field.read(world, *target.object, current) ||
+                if (!read_target(world, *target.object, target.field, target.attribute, edit.property, current) ||
                     current.kind != LuaSlot::Kind::Matrix4) {
                     continue;
                 }
@@ -794,6 +896,17 @@ EditResult write_edit(DataModel& world, const std::vector<InstanceId>& ids, cons
             slot = engine_core::color_curve_slot(*edit.value.color_curve);
             break;
         case PropertyKind::ReadOnlyText:
+            continue;
+        }
+        if (target.attribute) {
+            if (const auto refused = target.object->set_attribute(edit.property, slot)) {
+                // The first refusal shows under the rows, as a Parent's does.
+                if (result.error.empty()) {
+                    result.error = *refused;
+                }
+                continue;
+            }
+            ++result.written;
             continue;
         }
         if (target.field.write(world, *target.object, slot)) {

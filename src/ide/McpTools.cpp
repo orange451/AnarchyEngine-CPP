@@ -351,6 +351,8 @@ JsonValue RowValue(const DataModel& world, const PropertyRow& row) {
 JsonValue Properties(DataModel& world, InstanceId id) {
     JsonValue out = Brief(world, id);
     JsonValue properties = JsonValue::object();
+    // Attributes apart, since one may share a property's name.
+    JsonValue attributes = JsonValue::object();
     for (const PropertyRow& row : read_sheet(world, {id}, true).rows) {
         JsonValue entry = JsonValue::object();
         entry.set("type", JsonValue::string(row.type_name.empty() ? KindName(row.kind) : row.type_name));
@@ -358,7 +360,10 @@ JsonValue Properties(DataModel& world, InstanceId id) {
         if (!row.writable || row.kind == PropertyKind::ReadOnlyText) {
             entry.set("readonly", JsonValue::boolean(true));
         }
-        properties.set(row.name, std::move(entry));
+        (row.attribute ? attributes : properties).set(row.name, std::move(entry));
+    }
+    if (!attributes.members().empty()) {
+        out.set("attributes", std::move(attributes));
     }
     if (dynamic_cast<const engine_core::LuaSource*>(world.instance(id)) != nullptr) {
         JsonValue entry = JsonValue::object();

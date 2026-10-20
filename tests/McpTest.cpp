@@ -280,6 +280,21 @@ void TestEngineTools() {
     const JsonValue* parent = props.find("properties") != nullptr ? Member(props, "properties").find("Parent") : nullptr;
     Expect(parent != nullptr && Member(Member(*parent, "value"), "path").as_string() == "Workspace.Stuff",
            "an Instance property shows its target's path");
+    {
+        const engine_core::InstanceId inner = game.find_first_child(game.find_first_child(game.scene_service("Workspace"), "Stuff"), "Inner");
+        engine_core::LuaSlot health;
+        health.kind = engine_core::LuaSlot::Kind::Number;
+        health.number = 5;
+        game.instance(inner)->set_attribute("Health", health);
+        const JsonValue held = Call(server, "get_properties", R"({"instance":"Workspace.Stuff.Inner"})");
+        const JsonValue* attributes = held.find("attributes");
+        const JsonValue* entry = attributes != nullptr ? attributes->find("Health") : nullptr;
+        Expect(entry != nullptr && Member(*entry, "type").as_string() == "number" &&
+                   Member(*entry, "value").as_number() == 5,
+               "get_properties lists an attribute under attributes");
+        Expect(Member(held, "properties").find("Health") == nullptr, "an attribute is not listed as a property");
+        game.instance(inner)->set_attribute("Health", engine_core::LuaSlot{});
+    }
 
     Call(server, "set_property", R"({"instance":"Workspace.Stuff.Inner","property":"Name","value":"Renamed"})");
     Expect(game.find_first_child(game.find_first_child(game.scene_service("Workspace"), "Stuff"), "Renamed") != 0,

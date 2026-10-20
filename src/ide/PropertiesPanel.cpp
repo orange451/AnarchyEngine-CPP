@@ -630,6 +630,7 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
 
     bool picking = false;
     std::string pick_name;
+    bool pick_attribute = false;
     std::vector<InstanceId> pick_ids;
     std::uint64_t pick_seen = 0;
 
@@ -1400,6 +1401,7 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
                     }
                     PropertyEdit edit;
                     edit.property = row_view->row.name;
+                    edit.attribute = row_view->row.attribute;
                     edit.kind = PropertyKind::Ref;
                     edit.value.ref = ids.front();
                     self->submit(row_view->ids, edit);
@@ -1783,6 +1785,7 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
         field.dirty = false;
         PropertyEdit edit;
         edit.property = view.row.name;
+        edit.attribute = view.row.attribute;
         edit.kind = view.row.kind;
         const std::string text = field.getText();
         switch (view.row.kind) {
@@ -1889,6 +1892,7 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
         }
         PropertyEdit edit;
         edit.property = view.row.name;
+        edit.attribute = view.row.attribute;
         edit.kind = PropertyKind::NumberCurve;
         edit.value.number_curve = std::make_shared<const engine_core::NumberCurve>(view.curve->model().curve());
         if (done) {
@@ -1905,6 +1909,7 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
         }
         PropertyEdit edit;
         edit.property = view.row.name;
+        edit.attribute = view.row.attribute;
         edit.kind = PropertyKind::ColorCurve;
         edit.value.color_curve = std::make_shared<const engine_core::ColorCurve>(view.gradient->model().curve());
         if (done) {
@@ -1927,6 +1932,7 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
         editor.sent();
         PropertyEdit edit;
         edit.property = view.row.name;
+        edit.attribute = view.row.attribute;
         edit.kind = PropertyKind::ColorCurve;
         edit.value.color_curve = std::make_shared<const engine_core::ColorCurve>(editor.model().curve());
         if (done) {
@@ -1946,6 +1952,7 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
         editor.sent();
         PropertyEdit edit;
         edit.property = view.row.name;
+        edit.attribute = view.row.attribute;
         edit.kind = PropertyKind::ColorCurve;
         edit.value.color_curve = std::make_shared<const engine_core::ColorCurve>(editor.model().curve());
         if (done) {
@@ -1979,6 +1986,7 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
         }
         PropertyEdit edit;
         edit.property = view.row.name;
+        edit.attribute = view.row.attribute;
         edit.kind = PropertyKind::Enum;
         edit.value.number = value;
         submit(view.ids, edit);
@@ -2032,6 +2040,7 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
         }
         PropertyEdit edit;
         edit.property = view.row.name;
+        edit.attribute = view.row.attribute;
         edit.kind = PropertyKind::String;
         edit.value.text = value;
         submit(view.ids, edit);
@@ -2043,6 +2052,7 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
         }
         PropertyEdit edit;
         edit.property = view.row.name;
+        edit.attribute = view.row.attribute;
         edit.kind = PropertyKind::Bool;
         // From mixed, a click checks every one.
         edit.value.flag = view.check->isSelected();
@@ -2053,6 +2063,7 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
     PropertyEdit color_edit(const RowView& view) const {
         PropertyEdit edit;
         edit.property = view.row.name;
+        edit.attribute = view.row.attribute;
         edit.kind = PropertyKind::Color3;
         const jadefx::Color picked = view.color->getValue();
         edit.value.color = engine_core::Color3{picked.r, picked.g, picked.b};
@@ -2084,6 +2095,7 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
     PropertyEdit slider_edit(const RowView& view) const {
         PropertyEdit edit;
         edit.property = view.row.name;
+        edit.attribute = view.row.attribute;
         edit.kind = PropertyKind::Number;
         edit.value.number = slider_value(view);
         return edit;
@@ -2115,6 +2127,7 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
         }
         PropertyEdit edit;
         edit.property = view.row.name;
+        edit.attribute = view.row.attribute;
         edit.kind = PropertyKind::Number;
         edit.value.number = slider_value(view);
         view.field->show(format_number(edit.value.number));
@@ -2131,6 +2144,7 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
         }
         PropertyEdit edit;
         edit.property = view.row.name;
+        edit.attribute = view.row.attribute;
         edit.kind = PropertyKind::Ref;
         edit.value.ref = engine_core::DataModel::kNoParent;
         submit(view.ids, edit);
@@ -2221,6 +2235,7 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
         }
         picking = true;
         pick_name = view.row.name;
+        pick_attribute = view.row.attribute;
         pick_ids = view.ids;
         pick_seen = selection->revision();
         status = "Click an instance in an explorer or the Assets pane to set " + pick_name + ". Click " + pick_name + " again to cancel.";
@@ -2288,6 +2303,7 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
         }
         PropertyEdit edit;
         edit.property = view.row.name;
+        edit.attribute = view.row.attribute;
         edit.kind = PropertyKind::Ref;
         edit.value.ref = id;
         submit(view.ids, edit);
@@ -2306,6 +2322,7 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
             return;
         }
         const std::string name = pick_name;
+        const bool attribute = pick_attribute;
         const std::vector<InstanceId> targets = pick_ids;
         cancel_pick();
         selection->set(targets);
@@ -2314,6 +2331,7 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
         }
         PropertyEdit edit;
         edit.property = name;
+        edit.attribute = attribute;
         edit.kind = PropertyKind::Ref;
         edit.value.ref = picked.back();
         submit(targets, edit);

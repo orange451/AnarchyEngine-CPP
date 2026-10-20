@@ -2691,6 +2691,13 @@ void TestShaderParamPanel() {
     rig.frame();
     rig.frame();
     Expect(material->attributes().empty(), "reset removes the attribute, back to the shader's default");
+
+    // A uniform added to the Shader shows while its Material stays selected.
+    shader.set_source("shader surface;\nuniform float Progress : range(0, 1);\nuniform float Speed;\nvoid surface() {}\n");
+    rig.frame();
+    rig.frame();
+    to_bottom();
+    Expect(rig.field("Speed") != nullptr, "a uniform added to the selected Material's Shader gets its row");
 }
 
 int main() {

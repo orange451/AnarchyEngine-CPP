@@ -21,6 +21,7 @@
 #include "DataModelLock.hpp"
 #include "Enum.hpp"
 #include "PropertyReflection.hpp"
+#include "Shader.hpp"
 #include "SelectionService.hpp"
 #include "SoundEmitter.hpp"
 #include "SoundPreview.hpp"
@@ -632,6 +633,8 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
     ChangeFlag changed;
     std::uint64_t watch = 0;
     std::vector<InstanceId> watched;
+    // The Shaders of the selected Materials, watched beside them.
+    std::vector<InstanceId> shader_watch;
     std::uint64_t seen_selection = ~std::uint64_t{0};
     std::uint64_t seen_tree = ~std::uint64_t{0};
     // Active and AssemblyRoot fire no Changed: a moved assembly revision reads them again.
@@ -941,10 +944,13 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
         const bool moved = selection->revision() != seen_selection || tree != seen_tree || assemblies != seen_assemblies;
         std::uint64_t revision = 0;
         const std::vector<InstanceId> ids = selection->get(revision);
-        // Watched before the read, so a write that lands during it is heard.
-        if (ids != watched) {
-            watched = ids;
-            world->set_watched(watch, ids);
+        // Watched before the read, so a write that lands during it is heard;
+        // with the selected Materials' Shaders, whose uniforms are rows here.
+        std::vector<InstanceId> want = ids;
+        want.insert(want.end(), shader_watch.begin(), shader_watch.end());
+        if (want != watched) {
+            watched = want;
+            world->set_watched(watch, want);
         }
         // Taken before the read, so a change made while reading reads again next frame.
         if (!changed.take() && !moved && !force) {
@@ -961,6 +967,19 @@ struct PropertiesPanel::Impl : std::enable_shared_from_this<PropertiesPanel::Imp
             }
             next = read_sheet(*world, ids);
             next_preview = read_preview(ids);
+            std::vector<InstanceId> shaders;
+            for (const InstanceId id : ids) {
+                const auto* material = dynamic_cast<const engine_core::Material*>(world->instance(id));
+                const engine_core::Shader* shader = material != nullptr ? material->shader(*world) : nullptr;
+                if (shader != nullptr && std::find(shaders.begin(), shaders.end(), shader->id()) == shaders.end()) {
+                    shaders.push_back(shader->id());
+                }
+            }
+            if (shaders != shader_watch) {
+                shader_watch = std::move(shaders);
+                // Watched from the next frame: read again then, in case it changed meanwhile.
+                changed.set();
+            }
         }
         seen_selection = revision;
         seen_tree = tree;

@@ -4,11 +4,17 @@
 #include "support.hpp"
 
 #include "Containment.hpp"
+#include "InstanceFile.hpp"
+#include "Project.hpp"
+#include "Script.hpp"
 #include "LuaApi.hpp"
 #include "Shader.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <string>
 #include <vector>
 
@@ -153,4 +159,162 @@ TEST_CASE("SHA6 scripts make a Shader and read its Kind and Error", "[shader][lu
     REQUIRE(out[1] == "1: a post shader needs void post()\n");
     REQUIRE(out[2].rfind("kind\tfalse\t", 0) == 0);
     REQUIRE(out[3].rfind("error\tfalse\t", 0) == 0);
+}
+
+namespace {
+
+using engine_core::Project;
+using engine_core::ProjectError;
+
+// Where a save puts id's file when it has no children, as project_tests' leaf.
+std::filesystem::path leaf(const engine_core::DataModel& game, InstanceId id, const char* ext) {
+    std::string path = engine_core::sanitize_file_name(game.name(id)) + "." + game.guid(id) + ext;
+    for (InstanceId up = game.parent(id); up != 0 && up != engine_core::DataModel::kNoParent; up = game.parent(up)) {
+        path = engine_core::sanitize_file_name(game.name(up)) + "." + game.guid(up) + "/" + path;
+    }
+    return std::filesystem::path("src") / path;
+}
+
+std::string read_text(const std::filesystem::path& path) {
+    std::ifstream in(path, std::ios::binary);
+    return std::string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+}
+
+std::string load_error(const std::filesystem::path& root) {
+    try {
+        Project::load(root);
+    } catch (const ProjectError& error) {
+        return error.what();
+    }
+    return std::string();
+}
+
+}  // namespace
+
+TEST_CASE("SHA7 a Shader saves as a .glsl file beside its .meta.json", "[shader][project]") {
+    SimRole role;
+    TempDir dir;
+    std::string guid;
+    {
+        engine_core::Game game;
+        Project project = Project::create(dir.path, game);
+        Shader& shader = add_shader(game, "Dissolve");
+        shader.set_source(kVignette);
+        guid = game.guid(shader.id());
+        project.save();
+        const std::filesystem::path glsl = dir.path / leaf(game, shader.id(), ".glsl");
+        const std::filesystem::path meta = dir.path / leaf(game, shader.id(), ".meta.json");
+        REQUIRE(std::filesystem::exists(glsl));
+        REQUIRE(read_text(glsl) == kVignette);
+        REQUIRE(std::filesystem::exists(meta));
+        REQUIRE(read_text(meta).find("Source") == std::string::npos);
+        REQUIRE(!std::filesystem::exists(dir.path / leaf(game, shader.id(), ".luau")));
+        REQUIRE(!std::filesystem::exists(dir.path / leaf(game, shader.id(), ".json")));
+    }
+    engine_core::Game game;
+    Project read = Project::load(dir.path, game);
+    const std::optional<InstanceId> id = game.find_guid(guid);
+    REQUIRE(id.has_value());
+    const auto* shader = dynamic_cast<const Shader*>(game.instance(*id));
+    REQUIRE(shader != nullptr);
+    REQUIRE(shader->source() == kVignette);
+    REQUIRE(shader->kind() == ShaderKind::Post);
+}
+
+TEST_CASE("SHA8 a renamed Shader's files follow its name", "[shader][project]") {
+    SimRole role;
+    TempDir dir;
+    engine_core::Game game;
+    Project project = Project::create(dir.path, game);
+    Shader& shader = add_shader(game, "Old");
+    project.save();
+    const std::filesystem::path old_glsl = dir.path / leaf(game, shader.id(), ".glsl");
+    const std::filesystem::path old_meta = dir.path / leaf(game, shader.id(), ".meta.json");
+    REQUIRE(std::filesystem::exists(old_glsl));
+    game.set_name(shader.id(), "New");
+    project.save();
+    REQUIRE(std::filesystem::exists(dir.path / leaf(game, shader.id(), ".glsl")));
+    REQUIRE(std::filesystem::exists(dir.path / leaf(game, shader.id(), ".meta.json")));
+    REQUIRE(!std::filesystem::exists(old_glsl));
+    REQUIRE(!std::filesystem::exists(old_meta));
+}
+
+TEST_CASE("SHA9 a Shader in the folder form, init.glsl with init.meta.json, loads", "[shader][project]") {
+    // A Shader is an asset, which holds no children, so a save never makes the
+    // folder form; a hand-made one still loads, as a script's does.
+    SimRole role;
+    TempDir dir;
+    std::string guid;
+    {
+        engine_core::Game game;
+        Project project = Project::create(dir.path, game);
+        Shader& shader = add_shader(game, "Lib");
+        shader.set_source(kVignette);
+        guid = game.guid(shader.id());
+        project.save();
+        const std::filesystem::path glsl = dir.path / leaf(game, shader.id(), ".glsl");
+        const std::filesystem::path meta = dir.path / leaf(game, shader.id(), ".meta.json");
+        const std::filesystem::path folder = dir.path / leaf(game, shader.id(), "");
+        std::filesystem::create_directories(folder);
+        std::filesystem::rename(glsl, folder / "init.glsl");
+        std::filesystem::rename(meta, folder / "init.meta.json");
+    }
+    engine_core::Game game;
+    Project read = Project::load(dir.path, game);
+    const auto* shader = dynamic_cast<const Shader*>(game.instance(*game.find_guid(guid)));
+    REQUIRE(shader != nullptr);
+    REQUIRE(shader->source() == kVignette);
+}
+
+TEST_CASE("SHA10 a source file with the other class's extension fails the load", "[shader][project]") {
+    SimRole role;
+    TempDir dir;
+    std::filesystem::path glsl;
+    std::filesystem::path luau;
+    {
+        engine_core::Game game;
+        Project project = Project::create(dir.path, game);
+        Shader& shader = add_shader(game, "Look");
+        engine_core::Script& script = add_script(game, "Main", "print(1)\n");
+        project.save();
+        glsl = dir.path / leaf(game, shader.id(), ".glsl");
+        luau = dir.path / leaf(game, script.id(), ".luau");
+    }
+    std::filesystem::path renamed = glsl;
+    renamed.replace_extension(".luau");
+    std::filesystem::rename(glsl, renamed);
+    REQUIRE(load_error(dir.path).find("a Shader keeps Source in a .glsl file") != std::string::npos);
+    std::filesystem::rename(renamed, glsl);
+    REQUIRE(load_error(dir.path).empty());
+    std::filesystem::path script_glsl = luau;
+    script_glsl.replace_extension(".glsl");
+    std::filesystem::rename(luau, script_glsl);
+    REQUIRE(load_error(dir.path).find("a Script keeps Source in a .luau file") != std::string::npos);
+}
+
+TEST_CASE("SHA11 a new project's .gitattributes keeps .glsl as LF text", "[shader][project]") {
+    SimRole role;
+    TempDir dir;
+    engine_core::Game game;
+    Project project = Project::create(dir.path, game);
+    REQUIRE(read_text(dir.path / ".gitattributes").find("*.glsl text eol=lf") != std::string::npos);
+}
+
+TEST_CASE("SHA12 copy, paste, clone, and instance files keep a Shader's source", "[shader][copy]") {
+    SimRole role;
+    engine_core::Game game;
+    Shader& shader = add_shader(game, "Look");
+    shader.set_source(kVignette);
+    const InstanceId clone = engine_core::clone_tree(game, shader.id());
+    REQUIRE(clone != 0);
+    REQUIRE(dynamic_cast<const Shader*>(game.instance(clone))->source() == kVignette);
+    REQUIRE(dynamic_cast<const Shader*>(game.instance(clone))->kind() == ShaderKind::Post);
+    const engine_core::JsonValue file = engine_core::write_instance_file({engine_core::copy_tree(game, shader.id())});
+    std::vector<engine_core::CopiedNode> roots;
+    std::string error;
+    REQUIRE(engine_core::read_instance_file(file, roots, error));
+    std::vector<InstanceId> made;
+    REQUIRE(engine_core::paste_copies(game, roots, game.service("Shaders"), &made));
+    REQUIRE(made.size() == 1);
+    REQUIRE(dynamic_cast<const Shader*>(game.instance(made[0]))->source() == kVignette);
 }

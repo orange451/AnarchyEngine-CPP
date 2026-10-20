@@ -61,6 +61,8 @@ struct AuthoredNode {
     // has_source is always set for a Script or ModuleScript. source is filled
     // only when the node was wanted.
     bool has_source = false;
+    // Its SourceText::source_extension, as "luau" or "glsl"; null without source.
+    const char* source_extension = nullptr;
     std::string source;
     std::vector<std::size_t> children;
 };
@@ -819,6 +821,7 @@ private:
         std::string class_name;
         PropertyBag properties;
         bool has_source = false;
+        const char* source_extension = nullptr;
         std::string source;
         bool simulated = false;
         bool visual_only = false;

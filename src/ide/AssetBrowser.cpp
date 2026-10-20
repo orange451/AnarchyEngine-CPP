@@ -357,7 +357,7 @@ std::string AssetBrowser::new_kind(engine_core::InstanceId folder) const {
     while (at != 0 && at != engine_core::DataModel::kNoParent) {
         const engine_core::DataModel* here = world_.instance(at);
         if (here != nullptr && here->is_service()) {
-            for (const char* klass : {"Material", "Prefab", "Mesh", "Texture", "Sound"}) {
+            for (const char* klass : {"Material", "Prefab", "Mesh", "Texture", "Sound", "Shader"}) {
                 const char* home = engine_core::asset_home(klass);
                 if (home != nullptr && std::string(home) == here->class_name()) {
                     return klass;

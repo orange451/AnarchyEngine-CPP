@@ -3568,3 +3568,55 @@ TEST_CASE("a large tree's load writes a load pack that the next load reads", "[p
         CHECK_FALSE(project.scan_disk().has_disk_changes);
     }
 }
+
+namespace {
+
+// Every file under root/src, by its path relative to root, with its bytes.
+std::map<std::string, std::string> src_files(const std::filesystem::path& root) {
+    std::map<std::string, std::string> out;
+    for (const auto& entry : std::filesystem::recursive_directory_iterator(root / "src")) {
+        if (!entry.is_regular_file()) {
+            continue;
+        }
+        std::ifstream in(entry.path(), std::ios::binary);
+        out[std::filesystem::relative(entry.path(), root).generic_string()] =
+            std::string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+    }
+    return out;
+}
+
+}  // namespace
+
+TEST_CASE("P50 a script-only project saves byte-identical files", "[P50][project]") {
+    SimRole role;
+    TempDir dir;
+    std::map<std::string, std::string> first;
+    {
+        engine_core::Game game;
+        engine_core::Project project = engine_core::Project::create(dir.path, game);
+        add_script(game, "Main", "print('hi')\n");
+        engine_core::ModuleScript& module = game.create<engine_core::ModuleScript>();
+        game.set_name(module.id(), "Lib");
+        module.set_source("return {}\n");
+        game.set_parent(module.id(), game.scene_service("Scripts"));
+        engine_core::Folder& folder = game.create<engine_core::Folder>();
+        game.set_name(folder.id(), "Logic");
+        game.set_parent(folder.id(), game.scene_service("Workspace"));
+        engine_core::Script& outer = add_script(game, folder.id(), "Outer", "local x = 1\n");
+        add_script(game, outer.id(), "Inner", "local y = 2\n");
+        project.save();
+        first = src_files(dir.path);
+        project.save();
+        REQUIRE(src_files(dir.path) == first);
+    }
+    // Loaded fresh and saved again: the same files with the same bytes.
+    engine_core::Game game;
+    engine_core::Project moved = engine_core::Project::load(dir.path, game);
+    moved.save();
+    REQUIRE(src_files(dir.path) == first);
+    bool luau = false;
+    for (const auto& [path, bytes] : first) {
+        luau = luau || path.find(".luau") != std::string::npos;
+    }
+    REQUIRE(luau);
+}

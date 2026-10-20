@@ -36,6 +36,7 @@
 #include "ParticleEmitter.hpp"
 #include "SoundEmitter.hpp"
 #include "Script.hpp"
+#include "Shader.hpp"
 #include "Brush.hpp"
 #include "Terrain.hpp"
 #include "TerrainMaterial.hpp"
@@ -85,10 +86,43 @@ constexpr const char* kGitignore =
 constexpr const char* kGitattributes =
     "* text=auto eol=lf\n"
     "*.luau text eol=lf\n"
+    "*.glsl text eol=lf\n"
     "*.json text eol=lf\n"
     "resources/textures/** binary\n"
     "resources/meshes/** binary\n"
     "resources/audio/** binary\n";
+
+// The extensions a SourceText keeps its text in, without the dot: a Script's
+// .luau and a Shader's .glsl (SourceText::source_extension).
+constexpr const char* kSourceExtensions[] = {"luau", "glsl"};
+
+// The source extension name ends in, as ".luau", or null.
+const char* source_suffix_of(std::string_view name) {
+    static const std::string suffixes[] = {".luau", ".glsl"};
+    for (const std::string& suffix : suffixes) {
+        if (name.size() > suffix.size() && name.substr(name.size() - suffix.size()) == suffix) {
+            return suffix.c_str();
+        }
+    }
+    return nullptr;
+}
+
+// Whether name is a folder instance's source file: init.luau or init.glsl.
+bool init_source(std::string_view name) {
+    for (const char* extension : kSourceExtensions) {
+        if (name == std::string("init.") + extension) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// The extension of path's file, without the dot: "glsl" for ".../X.guid.glsl".
+std::string extension_of(const std::string& path) {
+    const std::size_t dot = path.rfind('.');
+    const std::size_t slash = path.rfind('/');
+    return dot == std::string::npos || (slash != std::string::npos && dot < slash) ? std::string() : path.substr(dot + 1);
+}
 
 constexpr const char* kResourcesReadme =
     "# Resources\n"
@@ -138,7 +172,7 @@ DataModel& existing_service(DataModel& world) {
     return *service;
 }
 
-static_assert(std::size(kServices) == 14, "one registry entry per service");
+static_assert(std::size(kServices) == 15, "one registry entry per service");
 
 std::vector<ClassEntry>& class_registry() {
     static std::vector<ClassEntry> entries = [] {
@@ -157,6 +191,7 @@ std::vector<ClassEntry>& class_registry() {
         out.push_back({kServices[11].class_name, existing_service<11>});
         out.push_back({kServices[12].class_name, existing_service<12>});
         out.push_back({kServices[13].class_name, existing_service<13>});
+        out.push_back({kServices[14].class_name, existing_service<14>});
         out.push_back({"DataModel", [](DataModel& world) -> DataModel& { return world.create(); }});
         out.push_back({"GameObject", [](DataModel& world) -> DataModel& { return world.create_game_object(); }});
         out.push_back({"Camera", [](DataModel& world) -> DataModel& { return world.create<Camera>(); }});
@@ -220,6 +255,7 @@ std::vector<ClassEntry>& class_registry() {
         out.push_back({"Sound", [](DataModel& world) -> DataModel& { return world.create<Sound>(); }});
         out.push_back({"Animation", [](DataModel& world) -> DataModel& { return world.create<Animation>(); }});
         out.push_back({"Material", [](DataModel& world) -> DataModel& { return world.create<Material>(); }});
+        out.push_back({"Shader", [](DataModel& world) -> DataModel& { return world.create<Shader>(); }});
         out.push_back({"Model", [](DataModel& world) -> DataModel& { return world.create<Model>(); }});
         out.push_back({"LodLayer", [](DataModel& world) -> DataModel& { return world.create<LodLayer>(); }});
         out.push_back({"Prefab", [](DataModel& world) -> DataModel& { return world.create<Prefab>(); }});
@@ -797,7 +833,8 @@ private:
         }
         std::sort(entries.begin(), entries.end());
 
-        std::map<std::string, std::string> luau;
+        // Source files of every extension, by GUID.
+        std::map<std::string, std::string> sources;
         std::map<std::string, std::string> meta;
         const bool instance_folder = parent != 0 || dir != layout_.src;
         for (const auto& [name, is_dir] : entries) {
@@ -806,7 +843,7 @@ private:
                 continue;
             }
             const std::string path = join(dir, name);
-            if (!is_dir && (name == "init.json" || name == "init.meta.json" || name == "init.luau")) {
+            if (!is_dir && (name == "init.json" || name == "init.meta.json" || init_source(name))) {
                 // The folder's own files. The root's init.json was read already.
                 if (!instance_folder && name != "init.json") {
                     fail(path + ": the root cannot be a script");
@@ -828,12 +865,12 @@ private:
                 if (!meta.emplace(guid, path).second) {
                     fail("GUID " + guid + " has two .meta.json files in " + dir);
                 }
-            } else if (ends_with(name, ".luau")) {
-                if (!split_stem(name.substr(0, name.size() - 5), guid)) {
-                    fail(path + ": a filename must be <Name>.<guid>.luau");
+            } else if (const char* suffix = source_suffix_of(name)) {
+                if (!split_stem(name.substr(0, name.size() - std::strlen(suffix)), guid)) {
+                    fail(path + ": a filename must be <Name>.<guid>" + suffix);
                 }
-                if (!luau.emplace(guid, path).second) {
-                    fail("GUID " + guid + " has two .luau files in " + dir);
+                if (!sources.emplace(guid, path).second) {
+                    fail("GUID " + guid + " has two source files in " + dir);
                 }
             } else if (ends_with(name, ".json")) {
                 if (!split_stem(name.substr(0, name.size() - 5), guid)) {
@@ -842,16 +879,17 @@ private:
                 queue(path, guid, std::string(), parent);
             }
         }
-        // A script is its .meta.json and its .luau, paired by GUID, never by Name.
+        // A script or shader is its .meta.json and its source file, paired by
+        // GUID, never by Name.
         for (const auto& [guid, path] : meta) {
-            const auto source = luau.find(guid);
-            if (source == luau.end()) {
-                fail(path + ": no .luau file with GUID " + guid);
+            const auto source = sources.find(guid);
+            if (source == sources.end()) {
+                fail(path + ": no .luau or .glsl file with GUID " + guid);
             }
             queue(path, guid, source->second, parent);
-            luau.erase(source);
+            sources.erase(source);
         }
-        for (const auto& [guid, path] : luau) {
+        for (const auto& [guid, path] : sources) {
             fail(path + ": no .meta.json file with GUID " + guid);
         }
     }
@@ -860,21 +898,31 @@ private:
         std::error_code error;
         const bool plain = fs::is_regular_file(disk_path(root_, join(dir, "init.json")), error);
         const bool meta = fs::is_regular_file(disk_path(root_, join(dir, "init.meta.json")), error);
-        const bool source = fs::is_regular_file(disk_path(root_, join(dir, "init.luau")), error);
+        std::string init;
+        for (const char* extension : kSourceExtensions) {
+            const std::string candidate = join(dir, std::string("init.") + extension);
+            if (fs::is_regular_file(disk_path(root_, candidate), error)) {
+                if (!init.empty()) {
+                    fail(dir + ": has two init source files");
+                }
+                init = candidate;
+            }
+        }
+        const bool source = !init.empty();
         if (plain && meta) {
             fail(dir + ": has both init.json and init.meta.json");
         }
         if (source && !meta) {
-            fail(join(dir, "init.luau") + ": no init.meta.json");
+            fail(init + ": no init.meta.json");
         }
         if (meta && !source) {
-            fail(join(dir, "init.meta.json") + ": no init.luau");
+            fail(join(dir, "init.meta.json") + ": no init.luau or init.glsl");
         }
         if (!plain && !meta) {
             fail(dir + ": a folder instance needs init.json");
         }
         const std::string props = join(dir, plain ? "init.json" : "init.meta.json");
-        const std::size_t index = queue(props, guid, meta ? join(dir, "init.luau") : std::string(), parent);
+        const std::size_t index = queue(props, guid, meta ? init : std::string(), parent);
         scan(dir, index);
     }
 
@@ -1048,7 +1096,7 @@ private:
 };
 
 // Every file under src that carries a GUID in its name, by GUID: <Name>.<guid>.json,
-// .meta.json, and .luau, and a folder's init files under <Name>.<guid>/. Names
+// .meta.json, and its source file (.luau, .glsl), and a folder's init files under <Name>.<guid>/. Names
 // that fit none of these, dotfiles, dot folders, and .tmp files are skipped, as
 // a load skips or reports them.
 std::map<std::string, std::vector<std::string>> guid_claims(const fs::path& root, const std::string& src) {
@@ -1070,7 +1118,7 @@ std::map<std::string, std::vector<std::string>> guid_claims(const fs::path& root
         if (name.empty() || name[0] == '.' || ends_with(name, ".tmp") || !it->is_regular_file(kind)) {
             continue;
         }
-        if (name == "init.json" || name == "init.meta.json" || name == "init.luau") {
+        if (name == "init.json" || name == "init.meta.json" || init_source(name)) {
             // The root's init.json names no GUID; its GUID is inside.
             if (it->path().parent_path() == top || !split_stem(utf8_path(it->path().parent_path().filename()), guid)) {
                 continue;
@@ -1079,8 +1127,8 @@ std::map<std::string, std::vector<std::string>> guid_claims(const fs::path& root
             std::string stem;
             if (ends_with(name, ".meta.json")) {
                 stem = name.substr(0, name.size() - 10);
-            } else if (ends_with(name, ".luau")) {
-                stem = name.substr(0, name.size() - 5);
+            } else if (const char* suffix = source_suffix_of(name)) {
+                stem = name.substr(0, name.size() - std::strlen(suffix));
             } else if (ends_with(name, ".json")) {
                 stem = name.substr(0, name.size() - 5);
             } else {
@@ -1256,9 +1304,14 @@ std::vector<InstanceId> build(DataModel& world, const std::vector<PlanNode>& pla
         world.set_guid(id, node.guid);
         world.set_name(id, node.name);
         apply_properties(object, node);
-        auto* lua = dynamic_cast<LuaSource*>(&object);
+        auto* lua = dynamic_cast<SourceText*>(&object);
         if (lua != nullptr && !node.has_source) {
-            fail(node.props_path + ": class " + node.class_name + " keeps Source in a .luau file; use .meta.json");
+            fail(node.props_path + ": class " + node.class_name + " keeps Source in a ." + lua->source_extension() +
+                 " file; use .meta.json");
+        }
+        if (lua != nullptr && extension_of(node.source_path) != lua->source_extension()) {
+            fail(node.source_path + ": a " + node.class_name + " keeps Source in a ." + lua->source_extension() +
+                 " file");
         }
         if (lua == nullptr && node.has_source) {
             fail(node.props_path + ": class " + node.class_name + " has no Source; use .json");
@@ -1283,7 +1336,7 @@ InstanceId create_from(DataModel& world, const PlanNode& node) {
     world.set_guid(id, node.guid);
     world.set_name(id, node.name);
     apply_properties(object, node);
-    if (auto* lua = dynamic_cast<LuaSource*>(&object)) {
+    if (auto* lua = dynamic_cast<SourceText*>(&object)) {
         lua->set_source(node.source);
     }
     return id;
@@ -2032,16 +2085,17 @@ std::map<std::string, Project::Files> Project::plan_files(const std::vector<Auth
             const std::string stem = sanitize_file_name(node.name) + "." + node.guid;
             const bool folder = !node.children.empty();
             files.has_source = node.has_source;
+            const char* source_extension = node.source_extension != nullptr ? node.source_extension : "luau";
             if (folder) {
                 const std::string own = join(dir, stem);
                 files.props_path = join(own, node.has_source ? "init.meta.json" : "init.json");
-                files.source_path = node.has_source ? join(own, "init.luau") : std::string();
+                files.source_path = node.has_source ? join(own, std::string("init.") + source_extension) : std::string();
                 for (std::size_t child : node.children) {
                     dirs[child] = own;
                 }
             } else {
                 files.props_path = join(dir, stem + (node.has_source ? ".meta.json" : ".json"));
-                files.source_path = node.has_source ? join(dir, stem + ".luau") : std::string();
+                files.source_path = node.has_source ? join(dir, stem + "." + source_extension) : std::string();
             }
         }
         files.parent = index == 0 ? std::string() : tree[parents[index]].guid;
@@ -3579,7 +3633,7 @@ void Project::apply_changes(const Comparison& compared, std::vector<std::string>
         if (action->key == "Name") {
             world.set_name(*id, node.name);
         } else if (action->key == "Source") {
-            if (auto* lua = dynamic_cast<LuaSource*>(&object)) {
+            if (auto* lua = dynamic_cast<SourceText*>(&object)) {
                 lua->set_source(node.source);
             }
         } else if (action->key == "children") {
@@ -3864,7 +3918,9 @@ bool Project::plan_changed(const AuthoredDirty& dirty, PendingSave& save) const 
             return;
         }
         const DataModel* object = world.instance(id);
-        const bool script = dynamic_cast<const LuaSource*>(object) != nullptr;
+        const auto* text = dynamic_cast<const SourceText*>(object);
+        const bool script = text != nullptr;
+        const std::string extension = script ? text->source_extension() : "";
         world.authored_children(id, children);
         const std::string dir = own_folder_of(world.parent(id));
         const std::string stem = sanitize_file_name(world.name(id)) + "." + world.guid(id);
@@ -3872,10 +3928,10 @@ bool Project::plan_changed(const AuthoredDirty& dirty, PendingSave& save) const 
         if (!children.empty()) {
             const std::string own = join(dir, stem);
             files.props_path = join(own, script ? "init.meta.json" : "init.json");
-            files.source_path = script ? join(own, "init.luau") : std::string();
+            files.source_path = script ? join(own, "init." + extension) : std::string();
         } else {
             files.props_path = join(dir, stem + (script ? ".meta.json" : ".json"));
-            files.source_path = script ? join(dir, stem + ".luau") : std::string();
+            files.source_path = script ? join(dir, stem + "." + extension) : std::string();
         }
         files.parent = world.guid(world.parent(id));
     };

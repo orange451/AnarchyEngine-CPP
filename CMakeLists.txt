@@ -72,6 +72,7 @@ set(STUDIO_CORE_SOURCES
     src/ide/LuauComplete.cpp
     src/ide/LuauHighlight.cpp
     src/ide/CssHighlight.cpp
+    src/ide/GlslHighlight.cpp
     src/ide/McpServer.cpp
     src/ide/McpTools.cpp
     src/ide/McpToolSpecs.cpp
@@ -121,6 +122,7 @@ set(STUDIO_SOURCES
     src/ide/IdeConflicts.cpp
     src/ide/IdeConsole.cpp
     src/ide/IdeCssEditor.cpp
+    src/ide/IdeShaderEditor.cpp
     src/ide/IdeTerminal.cpp
     src/ide/TerminalView.cpp
     src/ide/ConsoleLog.cpp
@@ -662,6 +664,8 @@ add_library(engine_instances STATIC
     src/engine_instances/Gui.cpp
     src/engine_instances/Light.cpp
     src/engine_instances/LuaSource.cpp
+    src/engine_instances/SourceText.cpp
+    src/engine_instances/Shader.cpp
     src/engine_instances/ModuleScript.cpp
     src/engine_instances/PhysicsBase.cpp
     src/engine_instances/PhysicsObject.cpp
@@ -720,6 +724,7 @@ add_library(engine_core STATIC
     src/engine_core/InstanceFile.cpp
     src/engine_core/PropertyReflection.cpp
     src/engine_core/Attributes.cpp
+    src/engine_core/ShaderSource.cpp
     src/engine_core/CurveJson.cpp
     src/engine_core/ParticleBursts.cpp
     src/engine_core/particles/ParticleShapes.cpp
@@ -965,6 +970,7 @@ add_executable(studio-tests
     tests/ProblemsTest.cpp
     tests/StatusBarTest.cpp
     tests/ScriptTabsTest.cpp
+    tests/ShaderEditorTest.cpp
     tests/LandingPageTest.cpp
     tests/TerminalPaneTest.cpp
     tests/GuiStyleTest.cpp
@@ -1015,6 +1021,7 @@ add_executable(engine-tests
     tests/ColorLiteralsTest.cpp
     tests/LuauHighlightTest.cpp
     tests/CssHighlightTest.cpp
+    tests/GlslHighlightTest.cpp
     tests/LuauCompleteTest.cpp
     tests/ProblemsModelTest.cpp
     tests/ScriptMarksTest.cpp
@@ -1254,6 +1261,8 @@ add_executable(sandbox
     sandbox/core_tests.cpp
     sandbox/archivable_tests.cpp
     sandbox/attribute_tests.cpp
+    sandbox/shader_source_tests.cpp
+    sandbox/shader_tests.cpp
     sandbox/cylinder_shape_tests.cpp
     sandbox/cylinder_world_tests.cpp
     sandbox/cylinder_car_tests.cpp

@@ -37,7 +37,7 @@ TEST_CASE("GS1 the placement rules, by class name", "[GS1]") {
     using engine_core::placement_error;
 
     // The service table, in the order game and Assets hold them.
-    REQUIRE(std::size(engine_core::kServices) == 14);
+    REQUIRE(std::size(engine_core::kServices) == 15);
     REQUIRE(std::string(engine_core::kServices[6].class_name) == "Gui");
     REQUIRE(std::string(engine_core::kServices[3].class_name) == "ClientStorage");
     REQUIRE(std::string(engine_core::kServices[3].parent_class) == "Storage");
@@ -65,9 +65,9 @@ TEST_CASE("GS1 the placement rules, by class name", "[GS1]") {
 
     // Assets takes only its categories.
     REQUIRE(reason(placement_error("Assets", "Folder", "Box")) ==
-            "Assets holds only Materials, Prefabs, Meshes, Textures, and Audio");
+            "Assets holds only Materials, Prefabs, Meshes, Textures, Audio, Animations, and Shaders");
     REQUIRE(reason(placement_error("Assets", "Texture", "Brick")) ==
-            "Assets holds only Materials, Prefabs, Meshes, Textures, and Audio");
+            "Assets holds only Materials, Prefabs, Meshes, Textures, Audio, Animations, and Shaders");
 
     // A category takes its class and Folders.
     REQUIRE_FALSE(placement_error("Textures", "Texture", "Brick"));
@@ -125,7 +125,7 @@ TEST_CASE("GS2 a new Game holds Assets and its five categories, hidden from the 
     REQUIRE(assets != 0);
     REQUIRE(game.parent(assets) == 0);
     REQUIRE(child_classes(game, assets) ==
-            std::vector<std::string>{"Materials", "Prefabs", "Meshes", "Textures", "Audio", "Animations"});
+            std::vector<std::string>{"Materials", "Prefabs", "Meshes", "Textures", "Audio", "Animations", "Shaders"});
     for (const engine_core::ServiceSpec& spec : engine_core::kServices) {
         INFO(spec.class_name);
         const InstanceId id = game.service(spec.class_name);
@@ -175,7 +175,7 @@ TEST_CASE("GS3 a game service cannot be moved, renamed, or destroyed", "[GS3]") 
     SimRole role;
     game.start_simulation();
     game.stop_simulation();
-    REQUIRE(child_classes(game, assets).size() == 6);
+    REQUIRE(child_classes(game, assets).size() == 7);
 }
 
 namespace {
@@ -205,9 +205,9 @@ TEST_CASE("GS4 each category takes its class and Folders", "[GS4]") {
     REQUIRE(reason(game.parent_error(rock, folder)) == "Textures holds Textures and Folders");
     REQUIRE(reason(game.parent_error(brick, game.service("Workspace"))) == "A Texture must be in Assets.Textures");
     REQUIRE(reason(game.parent_error(brick, game.service("Assets"))) ==
-            "Assets holds only Materials, Prefabs, Meshes, Textures, and Audio");
+            "Assets holds only Materials, Prefabs, Meshes, Textures, Audio, Animations, and Shaders");
     REQUIRE(reason(game.parent_error(folder, game.service("Assets"))) ==
-            "Assets holds only Materials, Prefabs, Meshes, Textures, and Audio");
+            "Assets holds only Materials, Prefabs, Meshes, Textures, Audio, Animations, and Shaders");
     game.set_parent(brick, folder);
     REQUIRE(game.parent(brick) == folder);
 
@@ -299,7 +299,7 @@ TEST_CASE("GS18 Instance.new with a parent that refuses the class makes nothing"
         end
         _G.texture = refuses(function() Instance.new("Texture", workspace) end, "A Texture must be in Assets.Textures")
         _G.folder = refuses(function() Instance.new("Folder", game.Assets) end,
-            "Assets holds only Materials, Prefabs, Meshes, Textures, and Audio")
+            "Assets holds only Materials, Prefabs, Meshes, Textures, Audio, Animations, and Shaders")
         _G.script = refuses(function() Instance.new("Script", game.Assets.Textures) end,
             "Textures holds Textures and Folders")
         _G.allowed = Instance.new("Texture", game.Assets.Textures).Parent == game.Assets.Textures
@@ -317,7 +317,7 @@ TEST_CASE("GS18 Instance.new with a parent that refuses the class makes nothing"
     // Only the allowed Texture was made.
     REQUIRE(rig.game.room_left() == room - 1);
     REQUIRE(rig.game.get_children(rig.game.service("Textures")).size() == 1);
-    REQUIRE(rig.game.get_children(rig.game.service("Assets")).size() == 6);
+    REQUIRE(rig.game.get_children(rig.game.service("Assets")).size() == 7);
     REQUIRE(rig.game.get_children(rig.game.service("Workspace")).size() == 1);
 }
 
@@ -672,7 +672,7 @@ TEST_CASE("GS11 the Assets tree and its references round-trip through a project"
     DataModel& game = loaded.datamodel();
     const InstanceId assets = game.service("Assets");
     REQUIRE(child_classes(game, assets) ==
-            std::vector<std::string>{"Materials", "Prefabs", "Meshes", "Textures", "Audio", "Animations"});
+            std::vector<std::string>{"Materials", "Prefabs", "Meshes", "Textures", "Audio", "Animations", "Shaders"});
     const InstanceId brick = *game.find_guid(brick_guid);
     REQUIRE(game.name(game.parent(brick)) == "Walls");
     REQUIRE(dynamic_cast<engine_core::Texture*>(game.instance(brick))->path() == "textures/brick.png");
@@ -720,7 +720,7 @@ TEST_CASE("GS13 a place saved before Assets loads with the whole tree made", "[G
     DataModel& game = project.datamodel();
     REQUIRE(child_classes(game, 0) ==
             std::vector<std::string>{"Workspace", "Lighting", "Storage", "Scripts", "Gui", "Assets", "Core", "Connections"});
-    REQUIRE(child_classes(game, game.service("Assets")).size() == 6);
+    REQUIRE(child_classes(game, game.service("Assets")).size() == 7);
     // A load that filled in what the files lacked opens clean; the next save still writes them.
     REQUIRE_FALSE(project.unsaved());
     REQUIRE_FALSE(std::filesystem::exists(dir.path / "src" / "Assets.assets"));
@@ -739,7 +739,7 @@ TEST_CASE("GS14 an Assets folder that lacks a category gets it", "[GS14][project
     engine_core::Project project = engine_core::Project::load(dir.path);
     DataModel& game = project.datamodel();
     REQUIRE(child_classes(game, game.service("Assets")) ==
-            std::vector<std::string>{"Materials", "Prefabs", "Meshes", "Textures", "Audio", "Animations"});
+            std::vector<std::string>{"Materials", "Prefabs", "Meshes", "Textures", "Audio", "Animations", "Shaders"});
     REQUIRE(game.guid(game.service("Textures")) == "textures");
 }
 
@@ -770,7 +770,7 @@ TEST_CASE("GS15 a file that breaks a placement rule fails the load and names the
             write_text(assets / "init.json", file_of("Assets", "assets", "Assets"));
             write_text(assets / "Loose.gggg.json", file_of("Folder", "gggg", "Loose"));
         },
-        "Loose.gggg.json: Assets holds only Materials, Prefabs, Meshes, Textures, and Audio");
+        "Loose.gggg.json: Assets holds only Materials, Prefabs, Meshes, Textures, Audio, Animations, and Shaders");
     expect_failure(
         [&](const std::filesystem::path& root) {
             const std::filesystem::path textures = root / src / "Assets.assets" / "Textures.textures";
@@ -827,7 +827,7 @@ TEST_CASE("GS16 apply_disk reorders assets directly under a category, but Assets
                        ",\n  \"children\": [\"audio\", \"textures\", \"meshes\", \"prefabs\", \"materials\"]"));
     project.apply_disk();
     REQUIRE(child_classes(game, game.service("Assets")) ==
-            std::vector<std::string>{"Materials", "Prefabs", "Meshes", "Textures", "Audio", "Animations"});
+            std::vector<std::string>{"Materials", "Prefabs", "Meshes", "Textures", "Audio", "Animations", "Shaders"});
 }
 
 TEST_CASE("GS17 GameObject.Prefab is nil by default, takes a Prefab, undoes, and Stop restores it", "[GS17]") {

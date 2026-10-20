@@ -241,7 +241,7 @@ bool ReplicaApplier::apply(const Op& op) {
         }
         case Op::Kind::Source: {
             const InstanceId id = alive_local(op.netid);
-            auto* lua = id == DataModel::kNoParent || id == 0 ? nullptr : dynamic_cast<engine_core::LuaSource*>(game_.instance(id));
+            auto* lua = id == DataModel::kNoParent || id == 0 ? nullptr : dynamic_cast<engine_core::SourceText*>(game_.instance(id));
             if (lua == nullptr) {
                 ++skipped_;
                 return true;
@@ -293,7 +293,7 @@ bool ReplicaApplier::apply_create(const Op& op) {
         }
     }
     if (op.has_source) {
-        if (auto* lua = dynamic_cast<engine_core::LuaSource*>(made)) {
+        if (auto* lua = dynamic_cast<engine_core::SourceText*>(made)) {
             lua->set_source(op.source);
         }
     }

@@ -1088,7 +1088,7 @@ void insert_refused_leaves_nothing() {
     std::string error;
     const engine_core::InstanceId made = ide::insert_instance(game, "Folder", game.service("Assets"), error);
     Expect(made == 0, "Assets refuses a Folder");
-    Expect(error == "Assets holds only Materials, Prefabs, Meshes, Textures, and Audio", "and says why");
+    Expect(error == "Assets holds only Materials, Prefabs, Meshes, Textures, Audio, Animations, and Shaders", "and says why");
     Expect(game.room_left() == before, "nothing is left behind");
     Expect(game.get_children(game.service("Assets")).size() == 5, "Assets is unchanged");
     Expect(game.history().can_undo() == undo_before, "a refused insert leaves no undo step");

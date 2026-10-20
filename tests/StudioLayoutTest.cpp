@@ -46,6 +46,7 @@ int RunProblemsStartupTests();
 int RunProblemsPaneTests(engine_core::Engine& engine);
 int RunProblemsWindowTests(ide::IdeLayout& layout, jadefx::Scene& scene);
 int RunScriptTabTests(ide::IdeLayout& layout, jadefx::Scene& scene);
+int RunShaderEditorTests(ide::IdeLayout& layout, jadefx::Scene& scene);
 int RunLandingPageTests(ide::IdeLayout& layout, jadefx::Scene& scene);
 int RunTerminalPaneTests();
 int RunGuiStyleTests(ide::IdeLayout& layout, jadefx::Scene& scene);
@@ -1130,6 +1131,7 @@ int main() {
     pick_window("Game Explorer");
     scene->layout(1280, 800, 5.9);
     failures += RunScriptTabTests(layout, *scene);
+    failures += RunShaderEditorTests(layout, *scene);
     failures += RunLandingPageTests(layout, *scene);
     failures += RunTerminalPaneTests();
     failures += RunGuiStyleTests(layout, *scene);

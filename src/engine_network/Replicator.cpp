@@ -98,7 +98,7 @@ void Replicator::on_change(const engine_core::TreeChange& change) {
 }
 
 std::string Replicator::client_source(const DataModel& object) {
-    const auto* lua = dynamic_cast<const engine_core::LuaSource*>(&object);
+    const auto* lua = dynamic_cast<const engine_core::SourceText*>(&object);
     if (lua == nullptr) {
         return std::string();
     }
@@ -129,7 +129,7 @@ void Replicator::write_record(OpWriter& writer, InstanceId id) const {
     if (const auto* connection = dynamic_cast<const engine_core::ConnectionInstance*>(&object)) {
         engine_core::bag_set(properties, "Id", engine_core::JsonValue::string(connection->connection_id()));
     }
-    const bool has_source = dynamic_cast<const engine_core::LuaSource*>(&object) != nullptr;
+    const bool has_source = dynamic_cast<const engine_core::SourceText*>(&object) != nullptr;
     const std::string source = has_source ? client_source(object) : std::string();
     writer.create(id, parent, object.class_name(), game_.guid(id), game_.name(id), properties,
                   has_source ? &source : nullptr);
@@ -382,7 +382,7 @@ bool Replicator::end_tick(std::vector<std::uint8_t>& message) {
         }
         const DataModel& object = *game_.instance(id);
         if (name == "Source") {
-            if (dynamic_cast<const engine_core::LuaSource*>(&object) == nullptr) {
+            if (dynamic_cast<const engine_core::SourceText*>(&object) == nullptr) {
                 continue;
             }
             const auto* script = dynamic_cast<const engine_core::Script*>(&object);

@@ -1,0 +1,225 @@
+// parse_shader: a shader's header, render_mode, groups, and uniforms with
+// their hints, read from its GLSL source before any GL sees it.
+
+#include "ShaderSource.hpp"
+
+#include <catch2/catch_test_macros.hpp>
+
+#include <algorithm>
+#include <string>
+
+namespace {
+
+using engine_core::LuaSlot;
+using engine_core::parse_shader;
+using engine_core::ShaderKind;
+using engine_core::ShaderParamType;
+using engine_core::ShaderParse;
+
+constexpr const char* kDissolve = R"(shader surface;
+
+uniform float Progress : range(0, 1) = 0.0;
+uniform vec3 EdgeColor : color = vec3(1.0, 0.5, 0.1);
+uniform sampler2D Noise : repeat;
+
+void surface() {
+    float n = texture(Noise, UV).r;
+    if (n < Progress) {
+        discard;
+    }
+    EMISSIVE += EdgeColor * 4.0 * (1.0 - smoothstep(Progress, Progress + 0.06, n));
+}
+)";
+
+constexpr const char* kVignette = R"(shader post;
+
+uniform float Strength : range(0, 1) = 0.5;
+uniform float Radius : range(0, 1) = 0.75;
+
+void post() {
+    float d = length(SCREEN_UV - 0.5) / 0.7071;
+    COLOR.rgb *= 1.0 - Strength * smoothstep(Radius, 1.0, d);
+}
+)";
+
+std::size_t lines(const std::string& text) { return static_cast<std::size_t>(std::count(text.begin(), text.end(), '\n')); }
+
+// A surface shader holding body above its surface(), for one rule at a time.
+std::string surface(const std::string& body) { return "shader surface;\n" + body + "\nvoid surface() {}\n"; }
+
+std::string error_of(const std::string& source) {
+    const ShaderParse parse = parse_shader(source);
+    return parse.error ? std::to_string(parse.error->line) + ": " + parse.error->message : std::string();
+}
+
+}  // namespace
+
+TEST_CASE("SH1 the Dissolve example parses into three uniforms", "[shader]") {
+    const ShaderParse parse = parse_shader(kDissolve);
+    INFO(error_of(kDissolve));
+    REQUIRE(!parse.error);
+    REQUIRE(parse.kind == ShaderKind::Surface);
+    REQUIRE(parse.params.size() == 3);
+    REQUIRE(parse.params[0].name == "Progress");
+    REQUIRE(parse.params[0].type == ShaderParamType::Float);
+    REQUIRE(parse.params[0].ranged);
+    REQUIRE(parse.params[0].min == 0);
+    REQUIRE(parse.params[0].max == 1);
+    REQUIRE(parse.params[0].fallback.kind == LuaSlot::Kind::Number);
+    REQUIRE(parse.params[0].fallback.number == 0);
+    REQUIRE(parse.params[0].line == 3);
+    REQUIRE(parse.params[1].name == "EdgeColor");
+    REQUIRE(parse.params[1].type == ShaderParamType::Color);
+    REQUIRE(parse.params[1].fallback.kind == LuaSlot::Kind::Color);
+    REQUIRE(parse.params[1].fallback.color.g == 0.5f);
+    REQUIRE(parse.params[2].name == "Noise");
+    REQUIRE(parse.params[2].type == ShaderParamType::Sampler);
+    REQUIRE(!parse.params[2].clamp);
+    REQUIRE(parse.params[2].fallback.kind == LuaSlot::Kind::Nil);
+    REQUIRE(lines(parse.glsl) == lines(kDissolve));
+    REQUIRE(parse.glsl.find("uniform float Progress") != std::string::npos);
+    REQUIRE(parse.glsl.find("range(") == std::string::npos);
+    REQUIRE(parse.glsl.find("shader surface") == std::string::npos);
+    REQUIRE(parse.glsl.find("void surface()") != std::string::npos);
+}
+
+TEST_CASE("SH2 the Vignette example is a post shader", "[shader]") {
+    const ShaderParse parse = parse_shader(kVignette);
+    INFO(error_of(kVignette));
+    REQUIRE(!parse.error);
+    REQUIRE(parse.kind == ShaderKind::Post);
+    REQUIRE(parse.params.size() == 2);
+    REQUIRE(parse.params[1].fallback.number == 0.75);
+}
+
+TEST_CASE("SH3 a shader starts with its header", "[shader]") {
+    const std::string message = "a shader starts with `shader surface;` or `shader post;`";
+    REQUIRE(error_of("void surface() {}\n") == "1: " + message);
+    REQUIRE(error_of("\n\nshader fancy;\nvoid surface() {}\n") == "3: " + message);
+    REQUIRE(error_of("// hello\nuniform float A;\nshader surface;\nvoid surface() {}\n") == "2: " + message);
+    REQUIRE(error_of("") == "1: " + message);
+}
+
+TEST_CASE("SH4 render_mode takes the kind's words", "[shader]") {
+    const ShaderParse parse = parse_shader("shader surface;\nrender_mode transparent, two_sided;\nvoid surface() {}\n");
+    REQUIRE(!parse.error);
+    REQUIRE(parse.modes == std::vector<std::string>{"transparent", "two_sided"});
+    REQUIRE(error_of("shader surface;\nrender_mode hdr;\nvoid surface() {}\n") ==
+            "2: unknown render_mode hdr; a surface shader has transparent, two_sided, no_shadow");
+    REQUIRE(error_of("shader post;\nrender_mode bogus;\nvoid post() {}\n") ==
+            "2: unknown render_mode bogus; a post shader has hdr");
+    REQUIRE(!parse_shader("shader post;\nrender_mode hdr;\nvoid post() {}\n").error);
+}
+
+TEST_CASE("SH5 every refusal says why, on its line", "[shader]") {
+    SECTION("types") {
+        for (const char* type : {"vec4", "mat3", "mat4", "sampler3D", "samplerCube", "double"}) {
+            INFO(type);
+            REQUIRE(error_of(surface(std::string("uniform ") + type + " X;")) ==
+                    "2: a uniform is float, int, bool, vec2, vec3, or sampler2D");
+        }
+    }
+    SECTION("array") { REQUIRE(error_of(surface("uniform float X[4];")) == "2: a uniform cannot be an array"); }
+    SECTION("block") {
+        REQUIRE(error_of(surface("uniform Block { float x; };")) == "2: uniform blocks are not supported");
+    }
+    SECTION("reserved") {
+        REQUIRE(error_of(surface("uniform float ALBEDO;")) == "2: ALBEDO is the engine's name");
+        REQUIRE(error_of(surface("uniform float uColor;")) == "2: uColor is the engine's name");
+        REQUIRE(error_of(surface("uniform float gl_Thing;")) == "2: gl_Thing is the engine's name");
+        REQUIRE(!parse_shader(surface("uniform float under;")).error);
+    }
+    SECTION("twice") {
+        REQUIRE(error_of(surface("uniform float A;\nuniform vec3 A;")) == "3: A is declared twice");
+    }
+    SECTION("hints") {
+        REQUIRE(error_of(surface("uniform float A : glow;")) == "2: unknown hint glow");
+        REQUIRE(error_of(surface("uniform bool A : range(0, 1);")) == "2: range is for float and int");
+        REQUIRE(error_of(surface("uniform float A : color;")) == "2: color is for vec3 and sampler2D");
+        REQUIRE(error_of(surface("uniform float A : repeat;")) == "2: repeat is for sampler2D");
+        REQUIRE(error_of(surface("uniform vec3 A : nearest;")) == "2: nearest is for sampler2D");
+        REQUIRE(error_of(surface("uniform float A : range(1, 1);")) ==
+                "2: range takes two numbers, the first below the second");
+        REQUIRE(error_of(surface("uniform float A : range(1);")) ==
+                "2: range takes two numbers, the first below the second");
+    }
+    SECTION("defaults") {
+        REQUIRE(error_of(surface("uniform float A = true;")) == "2: the default must be a float");
+        REQUIRE(error_of(surface("uniform vec3 A = vec2(1.0, 2.0);")) == "2: the default must be a vec3");
+        REQUIRE(error_of(surface("uniform bool A = 1;")) == "2: the default must be a bool");
+        REQUIRE(error_of(surface("uniform sampler2D A = 1;")) == "2: a sampler2D has no default; use white or black");
+    }
+    SECTION("functions") {
+        REQUIRE(error_of("shader surface;\nuniform float A;\n") == "2: a surface shader needs void surface()");
+        REQUIRE(error_of("shader post;\nvoid surface() {}\n") == "2: a post shader needs void post()");
+    }
+}
+
+TEST_CASE("SH6 group names the uniforms after it", "[shader]") {
+    const ShaderParse parse =
+        parse_shader(surface("uniform float A;\ngroup Edge;\nuniform float B;\nuniform float C;\ngroup;\nuniform float D;"));
+    REQUIRE(!parse.error);
+    REQUIRE(parse.params.size() == 4);
+    REQUIRE(parse.params[0].group.empty());
+    REQUIRE(parse.params[1].group == "Edge");
+    REQUIRE(parse.params[2].group == "Edge");
+    REQUIRE(parse.params[3].group.empty());
+}
+
+TEST_CASE("SH7 defaults take their type's shape", "[shader]") {
+    const ShaderParse parse = parse_shader(surface(
+        "uniform int Steps = 2.9;\nuniform vec3 Gray = vec3(0.5);\nuniform bool On = true;\nuniform vec3 Tint : color;\n"
+        "uniform float Zero;\nuniform vec2 Flat = vec2(1.0, 2.0);\nuniform sampler2D Mask : white, clamp, nearest, hidden;"));
+    INFO((parse.error ? parse.error->message : std::string()));
+    REQUIRE(!parse.error);
+    REQUIRE(parse.params[0].type == ShaderParamType::Int);
+    REQUIRE(parse.params[0].fallback.number == 2);
+    REQUIRE(parse.params[1].fallback.kind == LuaSlot::Kind::Vec3);
+    REQUIRE(parse.params[1].fallback.vec.z == 0.5f);
+    REQUIRE(parse.params[2].fallback.kind == LuaSlot::Kind::Bool);
+    REQUIRE(parse.params[2].fallback.flag);
+    REQUIRE(parse.params[3].fallback.kind == LuaSlot::Kind::Color);
+    REQUIRE(parse.params[3].fallback.color.r == 1.f);
+    REQUIRE(parse.params[3].fallback.color.b == 1.f);
+    REQUIRE(parse.params[4].fallback.number == 0);
+    REQUIRE(parse.params[5].fallback.kind == LuaSlot::Kind::Vec2);
+    REQUIRE(parse.params[5].fallback.vec.y == 2.f);
+    REQUIRE(parse.params[6].clamp);
+    REQUIRE(parse.params[6].nearest);
+    REQUIRE(parse.params[6].hidden);
+    REQUIRE(!parse.params[6].black);
+}
+
+TEST_CASE("SH8 comments are skipped, preprocessor branches are not evaluated", "[shader]") {
+    const ShaderParse parse = parse_shader(
+        surface("/* uniform vec4 Bad; */\n// uniform vec4 Worse;\n#if 0\nuniform float Y;\n#endif\nuniform float Z; // trailing"));
+    INFO((parse.error ? parse.error->message : std::string()));
+    REQUIRE(!parse.error);
+    REQUIRE(parse.params.size() == 2);
+    REQUIRE(parse.params[0].name == "Y");
+    REQUIRE(parse.params[1].name == "Z");
+    REQUIRE(parse.params[1].line == 7);
+    // A uniform inside a function body is the body's business, not a parameter.
+    REQUIRE(parse_shader("shader surface;\nvoid surface() { float uniformish = 1.0; }\n").params.empty());
+}
+
+TEST_CASE("SH9 a shader holds at most 64 uniforms and a few samplers", "[shader]") {
+    std::string many;
+    for (int i = 0; i < 64; ++i) {
+        many += "uniform float P" + std::to_string(i) + ";\n";
+    }
+    REQUIRE(!parse_shader(surface(many)).error);
+    REQUIRE(error_of(surface(many + "uniform float Extra;")) == "66: a shader has at most 64 uniforms");
+    const std::string three = "uniform sampler2D A;\nuniform sampler2D B;\nuniform sampler2D C;\n";
+    REQUIRE(!parse_shader(surface(three)).error);
+    REQUIRE(error_of(surface(three + "uniform sampler2D D;")) == "5: a surface shader has at most 3 sampler2D");
+    const std::string four = "shader post;\n" + three + "uniform sampler2D D;\n";
+    REQUIRE(!parse_shader(four + "void post() {}\n").error);
+    REQUIRE(error_of(four + "uniform sampler2D E;\nvoid post() {}\n") == "6: a post shader has at most 4 sampler2D");
+}
+
+TEST_CASE("SH10 an error reads as its line and message", "[shader]") {
+    REQUIRE(engine_core::shader_error_text({9, "x"}) == "9: x");
+    REQUIRE(engine_core::shader_reserved_name("TIME"));
+    REQUIRE(!engine_core::shader_reserved_name("Time"));
+}

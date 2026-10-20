@@ -105,6 +105,9 @@ struct HoverInfo {
 // a module replaces after defining it reads as the replacement.
 // GetService("...") completes registered services, FindFirstChild("...") the
 // receiver's children, and Instance.new("...") the classes it can create.
+// GetAttribute("..."), SetAttribute("..."), and GetAttributeChangedSignal("...")
+// complete the receiver's attributes when the tree resolves it and it has
+// some, else every attribute in the place and the names scripts set.
 // Connect(function) completes the signal's callback arguments, and any other
 // function-typed argument a function with its parameters. A value of a written
 // type offers what that type expects first: the strings a literal type allows,

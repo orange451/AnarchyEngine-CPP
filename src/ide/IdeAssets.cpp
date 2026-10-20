@@ -894,9 +894,10 @@ void IdeAssets::show_item_menu(const AssetRow& row, double x, double y) {
     }
     menu_ = jadefx::make<jadefx::Menu>();
     const engine_core::InstanceId id = row.id;
-    if (row.class_name == "Prefab") {
+    if (row.class_name == "Prefab" || row.class_name == "Shader") {
         auto edit = jadefx::make<jadefx::MenuItem>(engine_core::action_label(InstanceAction::Edit));
-        if (std::shared_ptr<jadefx::ImageView> icon = icon_graphic("ModelAlt.png")) {
+        if (std::shared_ptr<jadefx::ImageView> icon =
+                icon_graphic(row.class_name == "Shader" ? "Shader.png" : "ModelAlt.png")) {
             edit->setGraphic(std::move(icon));
         }
         edit->setDisable(!static_cast<bool>(host_.actions.run));
@@ -906,6 +907,8 @@ void IdeAssets::show_item_menu(const AssetRow& row, double x, double y) {
             }
         });
         menu_->getItems().add(std::move(edit));
+    }
+    if (row.class_name == "Prefab") {
         auto add_as_game_object = jadefx::make<jadefx::MenuItem>("Add as GameObject");
         if (std::shared_ptr<jadefx::ImageView> icon = icon_graphic("GameObject.png")) {
             add_as_game_object->setGraphic(std::move(icon));
@@ -1580,7 +1583,8 @@ void IdeAssets::clicked(const AssetRow& row, const jadefx::MouseEvent& event) {
         click_id_ = 0;
         if (event.clickCount == 2 && row.opens && browser_.folder() != row.id) {
             openFolder(row.id);
-        } else if (event.clickCount == 2 && row.class_name == "Prefab" && host_.actions.run) {
+        } else if (event.clickCount == 2 && (row.class_name == "Prefab" || row.class_name == "Shader") &&
+                   host_.actions.run) {
             host_.actions.run(InstanceAction::Edit, row.id);
         }
         return;

@@ -386,6 +386,9 @@ struct Rig {
         }
         const double x = node->getAbsoluteX() + node->getWidth() * 0.5;
         const double y = node->getAbsoluteY() + node->getHeight() * 0.5;
+        // A widget scrolled past the scene's edge takes no click: say so here,
+        // rather than letting the click land on nothing.
+        Expect(x >= 0 && x < kWidth && y >= 0 && y < kHeight, "the widget to click is inside the scene");
         scene->noteButton(0, true, x, y);
         scene->noteButton(0, false, x, y);
     }
@@ -1653,6 +1656,32 @@ void TestParticleEmitterRows() {
     Expect(group != nullptr && group->enabled, "CollisionGroup is live for World collision");
 }
 
+// Persistent is an Instance row, after ClassName. A service always survives
+// a swap, so its row is greyed: visible, never editable.
+void TestPersistentRow() {
+    Rig rig;
+    rig.select({rig.folder});
+    rig.frame();
+    const ide::PropertySheet folder = rig.panel.sheet();
+    const ide::PropertyRow* row = folder.find("Persistent");
+    Expect(row != nullptr && row->group == "Instance", "Persistent shows under Instance");
+    Expect(folder.rows.size() >= 4 && folder.rows[3].name == "Persistent", "after ClassName");
+    Expect(row != nullptr && row->enabled && row->writable, "a Folder's is live");
+
+    const InstanceId workspace = rig.game.scene_service("Workspace");
+    rig.select({workspace});
+    rig.frame();
+    row = rig.panel.sheet().find("Persistent");
+    Expect(row != nullptr && row->group == "Instance", "a service shows it under Instance too");
+    Expect(row != nullptr && !row->enabled && !row->writable, "greyed: a service always survives");
+    ide::PropertyEdit edit;
+    edit.property = "Persistent";
+    edit.kind = ide::PropertyKind::Bool;
+    edit.value.flag = true;
+    Expect(ide::apply_edit(rig.game, {workspace}, edit).written == 0, "and an edit writes nothing");
+    Expect(!rig.game.persistent(workspace), "Workspace stays as it was");
+}
+
 // A joint's settings grey while the switch above them is off: the solver
 // ignores them then.
 void TestJointRowsGreyWithTheirSwitch() {
@@ -2088,8 +2117,8 @@ void TestSheetGroupOrder() {
     Rig rig;
     const InstanceId kid = rig.add<GroupKid>("Kid");
     const std::vector<std::string> expected = {
-        "Instance:Name", "Instance:Parent", "Instance:ClassName", "Look:Zeta", "Look:Kappa",
-        "Extra:Alpha",   "Extra:Beta",      "Feel:Mid",           "Data:Loose",
+        "Instance:Name", "Instance:Parent", "Instance:ClassName", "Instance:Persistent", "Look:Zeta",
+        "Look:Kappa",    "Extra:Alpha",     "Extra:Beta",         "Feel:Mid",            "Data:Loose",
     };
     Expect(RowOrder(ide::read_sheet(rig.game, {kid})) == expected,
            "Instance, then groups by first appearance with base rows first, then Data");
@@ -2097,7 +2126,8 @@ void TestSheetGroupOrder() {
     // Mixed classes: the first instance's groups, no repeated header.
     const InstanceId base = rig.add<GroupBase>("Base");
     const std::vector<std::string> mixed_expected = {
-        "Instance:Name", "Instance:Parent", "Instance:ClassName", "Look:Zeta", "Look:Alpha", "Feel:Mid",
+        "Instance:Name", "Instance:Parent", "Instance:ClassName", "Instance:Persistent",
+        "Look:Zeta",     "Look:Alpha",      "Feel:Mid",
     };
     Expect(RowOrder(ide::read_sheet(rig.game, {base, kid})) == mixed_expected,
            "a mixed selection uses the first class's groups");
@@ -2231,6 +2261,10 @@ void TestGroupsFold() {
     Expect(rig.panel.editor("Roughness")->isVisible(), "and a second click opens it");
 
     const double with_preview = scroll->getContentBounds().height;
+    // The Preview is the last section, below the scene's bottom on this page:
+    // scroll to it, as a user would, before clicking its header.
+    scroll->setVvalue(scroll->getVmax());
+    rig.frame();
     rig.click(rig.panel.group_header("Preview"));
     rig.frame();
     rig.frame();
@@ -2518,6 +2552,7 @@ int main() {
     TestEnumRowAndShownWhen();
     TestParticleEmitterRows();
     TestJointRowsGreyWithTheirSwitch();
+    TestPersistentRow();
     TestCurveEditModel();
     TestCurveRows();
     TestGradientColorCancel();

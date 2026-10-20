@@ -148,7 +148,7 @@ void DataModel::capture_place_unlocked() {
         const char* label = part.instance->class_name();
         record.class_name = label != nullptr ? label : "";
         record.properties = merged_properties(*part.instance);
-        if (const auto* lua = dynamic_cast<const LuaSource*>(part.instance)) {
+        if (const auto* lua = dynamic_cast<const SourceText*>(part.instance)) {
             record.has_source = true;
             record.source = lua->source();
         }
@@ -462,7 +462,7 @@ AuthoredNode DataModel::authored_node(InstanceId id) const {
     node.has_properties = true;
     node.properties = merged_properties(*object);
     if (id != 0) {
-        if (const auto* lua = dynamic_cast<const LuaSource*>(object)) {
+        if (const auto* lua = dynamic_cast<const SourceText*>(object)) {
             node.has_source = true;
             node.source = lua->source();
         }
@@ -504,7 +504,7 @@ std::vector<AuthoredNode> DataModel::authored_tree(const std::function<bool(Inst
                 const char* label = object->class_name();
                 node.class_name = label != nullptr ? label : "";
                 node.name = object->name_;
-                const auto* lua = dynamic_cast<const LuaSource*>(object);
+                const auto* lua = dynamic_cast<const SourceText*>(object);
                 node.has_source = lua != nullptr;
                 if (wanted(child)) {
                     node.has_properties = true;

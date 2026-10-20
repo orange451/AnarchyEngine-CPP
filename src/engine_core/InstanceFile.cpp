@@ -3,7 +3,7 @@
 #include "Constraint.hpp"
 #include "FileBytes.hpp"
 #include "LuaApi.hpp"
-#include "LuaSource.hpp"
+#include "SourceText.hpp"
 #include "PropertyReflection.hpp"
 
 #include <optional>
@@ -40,7 +40,7 @@ InstanceId build_copy(DataModel& world, const CopiedNode& node, InstanceId paren
         }
     }
     if (node.has_source) {
-        if (auto* lua = dynamic_cast<LuaSource*>(made)) {
+        if (auto* lua = dynamic_cast<SourceText*>(made)) {
             lua->set_source(node.source);
         }
     }
@@ -168,7 +168,7 @@ CopiedNode copy_tree(const DataModel& game, InstanceId id) {
             bag_set(node.properties, member.first, member.second);
         }
     }
-    if (const auto* lua = dynamic_cast<const LuaSource*>(object)) {
+    if (const auto* lua = dynamic_cast<const SourceText*>(object)) {
         node.has_source = true;
         node.source = lua->source();
     }

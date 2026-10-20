@@ -272,7 +272,7 @@ AuthoredRecord DataModel::capture_record(InstanceId id, bool subtree) const {
         record.spatial = true;
         record.transform = body->transform();
     }
-    if (const LuaSource* source = dynamic_cast<const LuaSource*>(object)) {
+    if (const SourceText* source = dynamic_cast<const SourceText*>(object)) {
         record.has_source = true;
         record.source = source->source();
     }
@@ -314,7 +314,7 @@ void DataModel::apply_record_fields(const AuthoredRecord& record) {
         }
     }
     if (record.has_source) {
-        if (auto* source = dynamic_cast<LuaSource*>(instance(record.id))) {
+        if (auto* source = dynamic_cast<SourceText*>(instance(record.id))) {
             source->set_source(record.source);
         }
         if (auto* script = dynamic_cast<Script*>(instance(record.id))) {
@@ -353,7 +353,7 @@ void DataModel::revive_record(const AuthoredRecord& record) {
     if (record.spatial) {
         note(record.id, VisualField::Transform, WriteOrigin::Simulation);
     }
-    if (dynamic_cast<LuaSource*>(instance(record.id)) != nullptr) {
+    if (dynamic_cast<SourceText*>(instance(record.id)) != nullptr) {
         if (ScriptAnalysis* analysis = script_analysis()) {
             analysis->invalidate(record.id);
         }
@@ -451,7 +451,7 @@ void DataModel::apply_property(InstanceId id, const PropertyValue& value) {
         set_name(id, value.text);
         break;
     case HistoryProp::Source:
-        if (auto* source = dynamic_cast<LuaSource*>(instance(id))) {
+        if (auto* source = dynamic_cast<SourceText*>(instance(id))) {
             source->set_source(value.text);
         }
         break;

@@ -662,6 +662,7 @@ add_library(engine_instances STATIC
     src/engine_instances/Gui.cpp
     src/engine_instances/Light.cpp
     src/engine_instances/LuaSource.cpp
+    src/engine_instances/SourceText.cpp
     src/engine_instances/ModuleScript.cpp
     src/engine_instances/PhysicsBase.cpp
     src/engine_instances/PhysicsObject.cpp

@@ -1254,7 +1254,7 @@ std::vector<InstanceId> build(DataModel& world, const std::vector<PlanNode>& pla
         world.set_guid(id, node.guid);
         world.set_name(id, node.name);
         apply_properties(object, node);
-        auto* lua = dynamic_cast<LuaSource*>(&object);
+        auto* lua = dynamic_cast<SourceText*>(&object);
         if (lua != nullptr && !node.has_source) {
             fail(node.props_path + ": class " + node.class_name + " keeps Source in a .luau file; use .meta.json");
         }
@@ -1281,7 +1281,7 @@ InstanceId create_from(DataModel& world, const PlanNode& node) {
     world.set_guid(id, node.guid);
     world.set_name(id, node.name);
     apply_properties(object, node);
-    if (auto* lua = dynamic_cast<LuaSource*>(&object)) {
+    if (auto* lua = dynamic_cast<SourceText*>(&object)) {
         lua->set_source(node.source);
     }
     return id;
@@ -3577,7 +3577,7 @@ void Project::apply_changes(const Comparison& compared, std::vector<std::string>
         if (action->key == "Name") {
             world.set_name(*id, node.name);
         } else if (action->key == "Source") {
-            if (auto* lua = dynamic_cast<LuaSource*>(&object)) {
+            if (auto* lua = dynamic_cast<SourceText*>(&object)) {
                 lua->set_source(node.source);
             }
         } else if (action->key == "children") {
@@ -3862,7 +3862,7 @@ bool Project::plan_changed(const AuthoredDirty& dirty, PendingSave& save) const 
             return;
         }
         const DataModel* object = world.instance(id);
-        const bool script = dynamic_cast<const LuaSource*>(object) != nullptr;
+        const bool script = dynamic_cast<const SourceText*>(object) != nullptr;
         world.authored_children(id, children);
         const std::string dir = own_folder_of(world.parent(id));
         const std::string stem = sanitize_file_name(world.name(id)) + "." + world.guid(id);

@@ -1,6 +1,7 @@
 #include "ShaderSource.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdlib>
 
@@ -555,7 +556,47 @@ private:
 
 }  // namespace
 
-ShaderParse parse_shader(std::string_view source) { return Parser(source).run(); }
+namespace {
+
+// Whether text names token as a whole word outside // and /* */ comments.
+bool names_token(std::string_view text, std::string_view token) {
+    const auto word = [](char c) { return std::isalnum(static_cast<unsigned char>(c)) != 0 || c == '_'; };
+    std::size_t i = 0;
+    while (i < text.size()) {
+        if (text.compare(i, 2, "//") == 0) {
+            const std::size_t end = text.find('\n', i);
+            i = end == std::string_view::npos ? text.size() : end;
+            continue;
+        }
+        if (text.compare(i, 2, "/*") == 0) {
+            const std::size_t end = text.find("*/", i + 2);
+            i = end == std::string_view::npos ? text.size() : end + 2;
+            continue;
+        }
+        if (!word(text[i])) {
+            ++i;
+            continue;
+        }
+        std::size_t end = i;
+        while (end < text.size() && word(text[end])) {
+            ++end;
+        }
+        if (text.substr(i, end - i) == token) {
+            return true;
+        }
+        i = end;
+    }
+    return false;
+}
+
+}  // namespace
+
+ShaderParse parse_shader(std::string_view source) {
+    ShaderParse out = Parser(source).run();
+    out.reads_time = names_token(out.glsl, "TIME");
+    out.cuts = names_token(out.glsl, "discard") || names_token(out.glsl, "ALPHA");
+    return out;
+}
 
 std::string shader_error_text(const ShaderError& error) { return std::to_string(error.line) + ": " + error.message; }
 

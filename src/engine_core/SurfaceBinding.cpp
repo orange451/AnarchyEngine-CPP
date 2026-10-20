@@ -5,7 +5,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <regex>
 
 namespace engine_core {
 namespace {
@@ -87,10 +86,8 @@ void describe_surface(SurfaceBinding& binding) {
         return;
     }
     binding.modes = surface_modes(*binding.parse);
-    static const std::regex time_word(R"(\bTIME\b)");
-    static const std::regex cut_word(R"(\b(discard|ALPHA)\b)");
-    binding.reads_time = std::regex_search(binding.parse->glsl, time_word);
-    binding.cuts = std::regex_search(binding.parse->glsl, cut_word);
+    binding.reads_time = binding.parse->reads_time;
+    binding.cuts = binding.parse->cuts;
     Hash hash;
     for (const LuaSlot& value : binding.values) {
         hash.add(value.kind);

@@ -59,6 +59,10 @@ struct ShaderParse {
     // and each uniform's hints and default turned to spaces, newlines kept, so
     // its line numbers are the source's.
     std::string glsl;
+    // The code, comments aside, names TIME; and names discard or ALPHA, so it
+    // can cut holes.
+    bool reads_time = false;
+    bool cuts = false;
 };
 
 // Reads source's header, render_mode, groups, and uniforms. Comments are

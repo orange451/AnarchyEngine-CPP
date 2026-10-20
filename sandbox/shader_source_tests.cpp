@@ -239,3 +239,19 @@ TEST_CASE("SH11 a continued directive and one after a comment are skipped whole"
     REQUIRE(commented.params.size() == 1);
     REQUIRE(commented.params[0].name == "B");
 }
+
+TEST_CASE("SH-T the parse says whether the code names TIME and cuts holes, comments aside", "[shader]") {
+    const ShaderParse plain = parse_shader("shader surface;\n// TIME, discard, and ALPHA in a comment\n/* discard */\nvoid surface() { ALBEDO *= 0.5; }\n");
+    REQUIRE_FALSE(plain.reads_time);
+    REQUIRE_FALSE(plain.cuts);
+    const ShaderParse timed = parse_shader("shader surface;\nvoid surface() { ALBEDO *= sin(TIME); }\n");
+    REQUIRE(timed.reads_time);
+    REQUIRE_FALSE(timed.cuts);
+    const ShaderParse cut = parse_shader("shader surface;\nvoid surface() { if (UV.x < 0.5) discard; }\n");
+    REQUIRE(cut.cuts);
+    const ShaderParse alpha = parse_shader("shader surface;\nvoid surface() { ALPHA = 0.5; }\n");
+    REQUIRE(alpha.cuts);
+    const ShaderParse near = parse_shader("shader surface;\nfloat ALPHAS = 1.0;\nfloat MYTIME = 2.0;\nvoid surface() {}\n");
+    REQUIRE_FALSE(near.cuts);
+    REQUIRE_FALSE(near.reads_time);
+}

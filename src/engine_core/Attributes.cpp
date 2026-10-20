@@ -64,6 +64,8 @@ const char* attribute_type_name(LuaSlot::Kind kind) {
     }
 }
 
+std::string attribute_event_name(std::string_view name) { return "AttributeChanged:" + std::string(name); }
+
 std::string attributes_to_json(const AttributeMap& map) {
     if (map.empty()) {
         return {};

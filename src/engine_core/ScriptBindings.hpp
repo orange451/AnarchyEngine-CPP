@@ -308,6 +308,16 @@ struct ScriptBindings {
     static int instance_find(lua_State* state);
     static int instance_wait_child(lua_State* state);
     static int instance_isa(lua_State* state);
+    // Instance:SetAttribute(name, value), GetAttribute(name), GetAttributes(),
+    // and GetAttributeChangedSignal(name) (Attributes.hpp).
+    static int instance_set_attribute(lua_State* state);
+    static int instance_get_attribute(lua_State* state);
+    static int instance_get_attributes(lua_State* state);
+    static int instance_get_attribute_changed_signal(lua_State* state);
+    // The value at index as an attribute takes it: nil, a boolean, number,
+    // string, Vector3, Vector2, Color3, Matrix4, or a live Instance. False for
+    // anything else; raises for an Instance that is gone.
+    static bool attribute_from_stack(lua_State* state, ScriptRuntime& runtime, int index, LuaSlot& out);
     static int instance_tostring(lua_State* state);
     static int instance_service(lua_State* state);
     // What a signal userdata names: an instance's Changed, an UserInputService

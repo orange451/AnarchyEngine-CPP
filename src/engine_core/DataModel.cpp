@@ -2117,13 +2117,19 @@ void DataModel::set_attributes(AttributeMap next) {
     after.text = attributes_to_json(attributes());
     // One undo step holds the whole map, and Changed fires with "Attributes".
     note_property_change("Attributes", before, after);
-    // A load or Stop writes attributes with nothing connected: no event to queue.
-    if (event_listened(id_, "AttributeChanged")) {
-        for (const std::string& name : moved) {
+    // Per name, AttributeChanged with the name, then GetAttributeChangedSignal's
+    // with nothing. A load or Stop writes with nothing connected: nothing queues.
+    const bool any = event_listened(id_, "AttributeChanged");
+    for (const std::string& name : moved) {
+        if (any) {
             LuaSlot arg;
             arg.kind = LuaSlot::Kind::String;
             arg.text = name;
             fire_event(id_, "AttributeChanged", {arg});
+        }
+        const std::string own = attribute_event_name(name);
+        if (event_listened(id_, own)) {
+            state_->events.emit_args(event_signal(id_, own).id(), id_, EventArgs{});
         }
     }
 }

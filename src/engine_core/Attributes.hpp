@@ -33,6 +33,10 @@ std::optional<std::string> attribute_value_error(const LuaSlot& value);
 // "Matrix4", or "Instance?". Null for any other kind.
 const char* attribute_type_name(LuaSlot::Kind kind);
 
+// The instance event GetAttributeChangedSignal(name) connects to:
+// "AttributeChanged:<name>", which no declared event can be named.
+std::string attribute_event_name(std::string_view name);
+
 // map as the hidden Attributes property holds it: a JSON object of
 // {"<name>": {"type": "<type name>", "value": <value>}}, compact. Empty for
 // an empty map.

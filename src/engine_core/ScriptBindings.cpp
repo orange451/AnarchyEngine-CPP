@@ -6,6 +6,7 @@
 #include "Animator.hpp"
 #include "Bone.hpp"
 #include "Atmosphere.hpp"
+#include "Attributes.hpp"
 #include "BloomEffect.hpp"
 #include "Camera.hpp"
 #include "ChangeHistoryService.hpp"
@@ -60,11 +61,13 @@
 #include <cstring>
 #include <exception>
 #include <memory>
+#include <mutex>
 #include <new>
 #include <optional>
 #include <limits>
 #include <string>
 #include <string_view>
+#include <unordered_set>
 #include <utility>
 
 namespace engine_core {
@@ -797,6 +800,165 @@ int ScriptBindings::instance_isa(lua_State* state) {
             return 1;
         }
         lua_pushboolean(state, is_a(*object, name) ? 1 : 0);
+        return 1;
+    });
+}
+
+namespace {
+
+// "AttributeChanged:<name>", the event GetAttributeChangedSignal(name) connects
+// to, kept for the process so a signal userdata can point at it.
+const char* attribute_signal_name(std::string_view name) {
+    static std::mutex mutex;
+    static std::unordered_set<std::string> names;
+    const std::lock_guard<std::mutex> lock(mutex);
+    return names.insert(attribute_event_name(name)).first->c_str();
+}
+
+}  // namespace
+
+bool ScriptBindings::attribute_from_stack(lua_State* state, ScriptRuntime& runtime, int index, LuaSlot& out) {
+    out = LuaSlot{};
+    switch (lua_type(state, index)) {
+    case LUA_TNIL:
+    case LUA_TNONE:
+        return true;
+    case LUA_TBOOLEAN:
+        out.kind = LuaSlot::Kind::Bool;
+        out.flag = lua_toboolean(state, index) != 0;
+        return true;
+    case LUA_TNUMBER:
+        out.kind = LuaSlot::Kind::Number;
+        out.number = lua_tonumber(state, index);
+        return true;
+    case LUA_TSTRING: {
+        std::size_t length = 0;
+        const char* text = lua_tolstring(state, index, &length);
+        out.kind = LuaSlot::Kind::String;
+        out.text.assign(text != nullptr ? text : "", length);
+        return true;
+    }
+    case LUA_TVECTOR: {
+        const float* components = lua_tovector(state, index);
+        out.kind = LuaSlot::Kind::Vec3;
+        out.vec = Vec3{components[0], components[1], components[2]};
+        return true;
+    }
+    default:
+        break;
+    }
+    if (const Vec2* flat = to_vector2(state, index)) {
+        out.kind = LuaSlot::Kind::Vec2;
+        out.vec = Vec3{flat->x, flat->y, 0.f};
+        return true;
+    }
+    if (read_color3(state, index, out.color)) {
+        out.kind = LuaSlot::Kind::Color;
+        return true;
+    }
+    if (const Matrix4* frame = to_matrix4(state, index)) {
+        out.kind = LuaSlot::Kind::Matrix4;
+        out.transform = *frame;
+        return true;
+    }
+    if (auto* other = static_cast<InstanceUd*>(test_userdata(state, index, kInstanceMeta))) {
+        if (runtime.resolve_id(other->id, other->world) == nullptr) {
+            luaL_error(state, "the instance is gone");
+        }
+        out.kind = LuaSlot::Kind::Instance;
+        out.id = other->id;
+        return true;
+    }
+    return false;
+}
+
+int ScriptBindings::instance_set_attribute(lua_State* state) {
+    return lua_guard(state, [&] {
+        auto* ud = static_cast<InstanceUd*>(luaL_checkudata(state, 1, kInstanceMeta));
+        const char* name = luaL_checkstring(state, 2);
+        ScriptRuntime* runtime = runtime_from(state);
+        DataModel* object = runtime != nullptr ? runtime->resolve_id(ud->id, ud->world) : nullptr;
+        if (object == nullptr) {
+            luaL_error(state, "instance is gone");
+        }
+        LuaSlot value;
+        if (!attribute_from_stack(state, *runtime, 3, value)) {
+            luaL_error(state, "%s",
+                       "an attribute holds a number, boolean, string, Vector2, Vector3, Color3, Matrix4, or Instance");
+        }
+        const bool deferred_before = runtime->in_render_window_ && runtime->game_->has_deferred_violation();
+        if (const auto error = object->set_attribute(name, std::move(value))) {
+            luaL_error(state, "%s", error->c_str());
+        }
+        raise_window_refusal(state, *runtime, "SetAttribute", deferred_before);
+        return 0;
+    });
+}
+
+int ScriptBindings::instance_get_attribute(lua_State* state) {
+    return lua_guard(state, [&] {
+        auto* ud = static_cast<InstanceUd*>(luaL_checkudata(state, 1, kInstanceMeta));
+        const char* name = luaL_checkstring(state, 2);
+        ScriptRuntime* runtime = runtime_from(state);
+        DataModel* object = runtime != nullptr ? runtime->resolve_id(ud->id, ud->world) : nullptr;
+        if (object == nullptr) {
+            lua_pushnil(state);
+            return 1;
+        }
+        const LuaSlot slot = object->attribute(name);
+        if (slot.kind == LuaSlot::Kind::Instance && hidden_from_play(state, *runtime, slot.id)) {
+            lua_pushnil(state);
+            return 1;
+        }
+        push_registered(state, runtime, slot, object->id(), ud->world);
+        return 1;
+    });
+}
+
+int ScriptBindings::instance_get_attributes(lua_State* state) {
+    return lua_guard(state, [&] {
+        auto* ud = static_cast<InstanceUd*>(luaL_checkudata(state, 1, kInstanceMeta));
+        ScriptRuntime* runtime = runtime_from(state);
+        DataModel* object = runtime != nullptr ? runtime->resolve_id(ud->id, ud->world) : nullptr;
+        lua_newtable(state);
+        if (object == nullptr) {
+            return 1;
+        }
+        for (const auto& entry : object->attributes()) {
+            const LuaSlot slot = object->attribute(entry.first);
+            // A dead or hidden target reads nil, which a table cannot hold: left out.
+            if (slot.kind == LuaSlot::Kind::Nil ||
+                (slot.kind == LuaSlot::Kind::Instance && hidden_from_play(state, *runtime, slot.id))) {
+                continue;
+            }
+            lua_pushlstring(state, entry.first.data(), entry.first.size());
+            push_registered(state, runtime, slot, object->id(), ud->world);
+            lua_rawset(state, -3);
+        }
+        return 1;
+    });
+}
+
+int ScriptBindings::instance_get_attribute_changed_signal(lua_State* state) {
+    return lua_guard(state, [&] {
+        auto* ud = static_cast<InstanceUd*>(luaL_checkudata(state, 1, kInstanceMeta));
+        const char* name = luaL_checkstring(state, 2);
+        if (const auto error = attribute_name_error(name)) {
+            luaL_error(state, "%s", error->c_str());
+        }
+        ScriptRuntime* runtime = runtime_from(state);
+        DataModel* object = runtime != nullptr ? runtime->resolve_id(ud->id, ud->world) : nullptr;
+        if (object == nullptr) {
+            luaL_error(state, "instance is gone");
+        }
+        auto* signal = static_cast<SignalUd*>(lua_newuserdata(state, sizeof(SignalUd)));
+        *signal = SignalUd{};
+        signal->kind = kSignalEvent;
+        signal->id = object->id();
+        signal->world = ud->world;
+        signal->event_name = attribute_signal_name(name);
+        luaL_getmetatable(state, kSignalMeta);
+        lua_setmetatable(state, -2);
         return 1;
     });
 }
@@ -1717,6 +1879,11 @@ ANARCHY_LUA_REGISTER(register_script_methods) {
         lua_method("WaitForChild", "Instance", reinterpret_cast<void*>(&ScriptBindings::instance_wait_child), false, true,
                    false),
         lua_method("IsA", "boolean", reinterpret_cast<void*>(&ScriptBindings::instance_isa)),
+        lua_method("SetAttribute", "nil", reinterpret_cast<void*>(&ScriptBindings::instance_set_attribute)),
+        lua_method("GetAttribute", "", reinterpret_cast<void*>(&ScriptBindings::instance_get_attribute)),
+        lua_method("GetAttributes", "", reinterpret_cast<void*>(&ScriptBindings::instance_get_attributes)),
+        lua_method("GetAttributeChangedSignal", "Signal",
+                   reinterpret_cast<void*>(&ScriptBindings::instance_get_attribute_changed_signal)),
     };
     register_lua_class("DataModel", nullptr, methods, static_cast<int>(std::size(methods)));
     // Services hang off game alone. Game.cpp declares the class.

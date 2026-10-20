@@ -8,15 +8,21 @@
 #include "GameObject.hpp"
 #include "InstanceFile.hpp"
 #include "Project.hpp"
+#include "Script.hpp"
+#include "ScriptAnalysis.hpp"
 #include "PropertyBag.hpp"
 #include "LuaApi.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
+#include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
 #include <string>
+#include <thread>
+#include <vector>
 
 namespace {
 
@@ -435,4 +441,115 @@ TEST_CASE("ATR13 Clone and paste copy attributes and remap an Instance inside th
     engine_core::remap_references(game, map);
     REQUIRE(made.size() == 1);
     check(made[0]);
+}
+
+namespace {
+
+std::vector<std::string> printed(const engine_core::ScriptRuntime::OutputBatch& batch) {
+    std::vector<std::string> out;
+    for (const auto& line : batch.lines) {
+        out.push_back(line.text);
+    }
+    return out;
+}
+
+bool has_line(const std::vector<std::string>& lines, const std::string& text) {
+    return std::find(lines.begin(), lines.end(), text) != lines.end();
+}
+
+bool has_prefix(const std::vector<std::string>& lines, const std::string& prefix) {
+    for (const std::string& line : lines) {
+        if (line.rfind(prefix, 0) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+}  // namespace
+
+TEST_CASE("ATR14 scripts set, get, list, and remove attributes", "[attributes][lua]") {
+    ScriptRig rig;
+    rig.game.set_name(create_part(rig.game).id(), "Part");
+    rig.runtime.run_chunk(R"(
+        local p = game.Workspace.Part
+        p:SetAttribute("Health", 5)
+        p:SetAttribute("Tint", Color3.new(1, 0, 0))
+        p:SetAttribute("Where", Vector3.new(1, 2, 3))
+        p:SetAttribute("Flat", Vector2.new(4, 5))
+        p:SetAttribute("Open", true)
+        p:SetAttribute("Label", "hi")
+        p:SetAttribute("Target", game.Workspace)
+        print(p:GetAttribute("Health"), p:GetAttribute("Tint").R, p:GetAttribute("Where").Z, p:GetAttribute("Flat").Y,
+              p:GetAttribute("Open"), p:GetAttribute("Label"), p:GetAttribute("Target").Name)
+        local n = 0
+        for k, v in pairs(p:GetAttributes()) do n += 1 end
+        print("count", n, p:GetAttributes().Health)
+        p:SetAttribute("Health", nil)
+        print("removed", p:GetAttribute("Health"))
+        print("missing", p:GetAttribute("Nothing"))
+        print("name", pcall(function() p:SetAttribute("bad name", 1) end))
+        print("kind", pcall(function() p:SetAttribute("X", p.Changed) end))
+        print("root", pcall(function() game:SetAttribute("X", 1) end))
+    )");
+    const std::vector<std::string> out = printed(rig.runtime.drain_output());
+    INFO(rig.runtime.last_error());
+    for (const std::string& line : out) {
+        UNSCOPED_INFO(line);
+    }
+    REQUIRE(has_line(out, "5\t1\t3\t5\ttrue\thi\tWorkspace\n"));
+    REQUIRE(has_line(out, "count\t7\t5\n"));
+    REQUIRE(has_line(out, "removed\tnil\n"));
+    REQUIRE(has_line(out, "missing\tnil\n"));
+    REQUIRE(has_prefix(out, "name\tfalse\t"));
+    REQUIRE(has_prefix(out, "kind\tfalse\t"));
+    REQUIRE(has_prefix(out, "root\tfalse\t"));
+    REQUIRE(rig.game.instance(rig.game.find_first_child(workspace_of(rig.game), "Part"))->attributes().size() == 6);
+}
+
+TEST_CASE("ATR15 AttributeChanged and GetAttributeChangedSignal fire for the right name", "[attributes][lua]") {
+    ScriptRig rig;
+    rig.game.set_name(create_part(rig.game).id(), "Part");
+    rig.runtime.run_chunk(R"(
+        local p = game.Workspace.Part
+        p.AttributeChanged:Connect(function(name) print("any", name) end)
+        p:GetAttributeChangedSignal("A"):Connect(function(...) print("A changed", select("#", ...)) end)
+        p:GetAttributeChangedSignal("B"):Connect(function() print("B changed") end)
+        p:SetAttribute("A", 1)
+        p:SetAttribute("A", 1)
+        p:SetAttribute("B", nil)
+        p:SetAttribute("B", true)
+    )");
+    rig.frames(1);
+    const std::vector<std::string> out = printed(rig.runtime.drain_output());
+    INFO(rig.runtime.last_error());
+    REQUIRE(out == std::vector<std::string>{"any\tA\n", "A changed\t0\n", "any\tB\n", "B changed\n"});
+}
+
+TEST_CASE("ATR16 strict script analysis accepts the attribute members", "[attributes][lua]") {
+    ScriptRig rig;
+    engine_core::ScriptAnalysis analysis(rig.game);
+    engine_core::Script& script = add_script(rig.game, "Uses", R"(--!strict
+local p = workspace
+p:SetAttribute("Health", 5)
+local health = p:GetAttribute("Health")
+local all = p:GetAttributes()
+print(health, all.Health)
+p.AttributeChanged:Connect(function(name: string) print(name) end)
+p:GetAttributeChangedSignal("Health"):Connect(function() end)
+)");
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(20);
+    while (!analysis.idle()) {
+        analysis.pump();
+        REQUIRE(std::chrono::steady_clock::now() < deadline);
+        std::this_thread::yield();
+    }
+    std::string problems;
+    for (const engine_core::Diagnostic& diagnostic : analysis.diagnostics(script.id())) {
+        if (diagnostic.severity == engine_core::Severity::Error || diagnostic.severity == engine_core::Severity::Warning) {
+            problems += diagnostic.code + " @" + std::to_string(diagnostic.range.start.line) + " " + diagnostic.message + "\n";
+        }
+    }
+    INFO(problems);
+    REQUIRE(problems.empty());
 }

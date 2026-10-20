@@ -1019,6 +1019,16 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
         "Client or Any.",
         "boolean", false, {});
     add("DataModel", "Destroy", "Unparents this instance and its descendants.", nullptr, false, {});
+    add("DataModel", "SetAttribute",
+        "Sets the attribute, or removes it with nil. A name is letters, digits, and underscores, up to 100; a value "
+        "is a number, boolean, string, Vector2, Vector3, Color3, Matrix4, or Instance.",
+        nullptr, false, {P("name", "string"), P("value", "any")});
+    add("DataModel", "GetAttribute", "The attribute's value, or nil when it has none.", "any", false, {P("name", "string")});
+    add("DataModel", "GetAttributes", "Every attribute, as a table of name to value.", "{[string]: any}", false, {});
+    add("DataModel", "GetAttributeChangedSignal", "Fires each time that attribute is set or removed.", "Signal", false,
+        {P("name", "string")});
+    add("DataModel", "AttributeChanged", "Fires with the name of the attribute that was set or removed.", "Signal",
+        false, {});
     add("DataModel", "Clone",
         "A copy of this instance and everything under it, with no parent. References inside the copy point at "
         "the copies: a cloned car's constraints join the cloned parts.",

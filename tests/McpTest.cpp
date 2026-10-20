@@ -236,8 +236,8 @@ void TestEngineTools() {
             }
         }
     }
-    Expect(sawAssets && categories == std::vector<std::string>{"Materials", "Prefabs", "Meshes", "Textures", "Audio", "Animations"},
-           "get_tree lists Assets and its six categories");
+    Expect(sawAssets && categories == std::vector<std::string>{"Materials", "Prefabs", "Meshes", "Textures", "Audio", "Animations", "Shaders"},
+           "get_tree lists Assets and its seven categories");
 
     const JsonValue brick = Call(server, "create_instance",
                                  R"({"class":"Texture","name":"Brick","parent":"Assets.Textures"})");
@@ -250,7 +250,7 @@ void TestEngineTools() {
                std::string::npos,
            "create_instance refuses a Texture in its default parent, Workspace");
     Expect(ErrorText(server, "create_instance", R"({"class":"Folder","parent":"Assets"})")
-                   .find("Assets holds only Materials, Prefabs, Meshes, Textures, and Audio") != std::string::npos,
+                   .find("Assets holds only Materials, Prefabs, Meshes, Textures, Audio, Animations, and Shaders") != std::string::npos,
            "create_instance refuses a Folder in Assets");
     Expect(game.room_left() == room, "a refused create_instance makes nothing");
 

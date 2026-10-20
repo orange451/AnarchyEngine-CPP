@@ -24,7 +24,7 @@ inline constexpr ServiceSpec kServices[] = {
     {"ClientStorage", "Storage"}, {"ServerStorage", "Storage"},
     {"Scripts", nullptr},     {"Gui", nullptr},            {"Assets", nullptr},  {"Materials", "Assets"},
     {"Prefabs", "Assets"},    {"Meshes", "Assets"},        {"Textures", "Assets"}, {"Audio", "Assets"},
-    {"Animations", "Assets"},
+    {"Animations", "Assets"}, {"Shaders", "Assets"},
 };
 
 // The studio's own service, outside the place: never saved or undone, and left

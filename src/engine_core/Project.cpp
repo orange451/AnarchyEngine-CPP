@@ -36,6 +36,7 @@
 #include "ParticleEmitter.hpp"
 #include "SoundEmitter.hpp"
 #include "Script.hpp"
+#include "Shader.hpp"
 #include "Brush.hpp"
 #include "Terrain.hpp"
 #include "TerrainMaterial.hpp"
@@ -137,7 +138,7 @@ DataModel& existing_service(DataModel& world) {
     return *service;
 }
 
-static_assert(std::size(kServices) == 14, "one registry entry per service");
+static_assert(std::size(kServices) == 15, "one registry entry per service");
 
 std::vector<ClassEntry>& class_registry() {
     static std::vector<ClassEntry> entries = [] {
@@ -156,6 +157,7 @@ std::vector<ClassEntry>& class_registry() {
         out.push_back({kServices[11].class_name, existing_service<11>});
         out.push_back({kServices[12].class_name, existing_service<12>});
         out.push_back({kServices[13].class_name, existing_service<13>});
+        out.push_back({kServices[14].class_name, existing_service<14>});
         out.push_back({"DataModel", [](DataModel& world) -> DataModel& { return world.create(); }});
         out.push_back({"GameObject", [](DataModel& world) -> DataModel& { return world.create_game_object(); }});
         out.push_back({"Camera", [](DataModel& world) -> DataModel& { return world.create<Camera>(); }});
@@ -219,6 +221,7 @@ std::vector<ClassEntry>& class_registry() {
         out.push_back({"Sound", [](DataModel& world) -> DataModel& { return world.create<Sound>(); }});
         out.push_back({"Animation", [](DataModel& world) -> DataModel& { return world.create<Animation>(); }});
         out.push_back({"Material", [](DataModel& world) -> DataModel& { return world.create<Material>(); }});
+        out.push_back({"Shader", [](DataModel& world) -> DataModel& { return world.create<Shader>(); }});
         out.push_back({"Model", [](DataModel& world) -> DataModel& { return world.create<Model>(); }});
         out.push_back({"LodLayer", [](DataModel& world) -> DataModel& { return world.create<LodLayer>(); }});
         out.push_back({"Prefab", [](DataModel& world) -> DataModel& { return world.create<Prefab>(); }});

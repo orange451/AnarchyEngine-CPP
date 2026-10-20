@@ -32,6 +32,7 @@
 #include "PlayerController.hpp"
 #include "PropertyReflection.hpp"
 #include "Script.hpp"
+#include "Shader.hpp"
 #include "ScreenSpaceReflections.hpp"
 #include "SelectionService.hpp"
 #include "Skybox.hpp"
@@ -253,6 +254,7 @@ DataModel& create_mesh(DataModel& world) { return world.create<Mesh>(); }
 DataModel& create_sound(DataModel& world) { return world.create<Sound>(); }
 DataModel& create_animation(DataModel& world) { return world.create<Animation>(); }
 DataModel& create_material(DataModel& world) { return world.create<Material>(); }
+DataModel& create_shader(DataModel& world) { return world.create<Shader>(); }
 DataModel& create_model(DataModel& world) { return world.create<Model>(); }
 DataModel& create_lod_layer(DataModel& world) { return world.create<LodLayer>(); }
 DataModel& create_prefab(DataModel& world) { return world.create<Prefab>(); }
@@ -318,6 +320,7 @@ ANARCHY_LUA_REGISTER(register_creatable_instances) {
     register_lua_creatable("Sound", create_sound);
     register_lua_creatable("Animation", create_animation);
     register_lua_creatable("Material", create_material);
+    register_lua_creatable("Shader", create_shader);
     register_lua_creatable("Model", create_model);
     register_lua_creatable("LodLayer", create_lod_layer);
     register_lua_creatable("Prefab", create_prefab);
@@ -1871,6 +1874,16 @@ ANARCHY_LUA_REGISTER(register_script_methods) {
     LuaField get_service =
         lua_method("GetService", "", reinterpret_cast<void*>(&ScriptBindings::instance_service), true, false, false);
     get_service.service_arg = true;
+    LuaField set_attribute =
+        lua_method("SetAttribute", "nil", reinterpret_cast<void*>(&ScriptBindings::instance_set_attribute));
+    set_attribute.attribute_arg = true;
+    LuaField get_attribute =
+        lua_method("GetAttribute", "", reinterpret_cast<void*>(&ScriptBindings::instance_get_attribute));
+    get_attribute.attribute_arg = true;
+    LuaField attribute_changed =
+        lua_method("GetAttributeChangedSignal", "Signal",
+                   reinterpret_cast<void*>(&ScriptBindings::instance_get_attribute_changed_signal));
+    attribute_changed.attribute_arg = true;
     const LuaField methods[] = {
         lua_method("Destroy", "nil", reinterpret_cast<void*>(&ScriptBindings::instance_destroy)),
         lua_method("Clone", "Instance", reinterpret_cast<void*>(&ScriptBindings::instance_clone)),
@@ -1879,11 +1892,10 @@ ANARCHY_LUA_REGISTER(register_script_methods) {
         lua_method("WaitForChild", "Instance", reinterpret_cast<void*>(&ScriptBindings::instance_wait_child), false, true,
                    false),
         lua_method("IsA", "boolean", reinterpret_cast<void*>(&ScriptBindings::instance_isa)),
-        lua_method("SetAttribute", "nil", reinterpret_cast<void*>(&ScriptBindings::instance_set_attribute)),
-        lua_method("GetAttribute", "", reinterpret_cast<void*>(&ScriptBindings::instance_get_attribute)),
+        set_attribute,
+        get_attribute,
         lua_method("GetAttributes", "", reinterpret_cast<void*>(&ScriptBindings::instance_get_attributes)),
-        lua_method("GetAttributeChangedSignal", "Signal",
-                   reinterpret_cast<void*>(&ScriptBindings::instance_get_attribute_changed_signal)),
+        attribute_changed,
     };
     register_lua_class("DataModel", nullptr, methods, static_cast<int>(std::size(methods)));
     // Services hang off game alone. Game.cpp declares the class.

@@ -290,6 +290,9 @@ const EnumType kToneMappingModeType{"ToneMappingMode", kToneMappingModes, count_
 // Fast is normalized Blinn-Phong with a cheap visibility term, for low-end GPUs.
 const EnumEntry kShadingModels[] = {{"Standard", 0}, {"Fast", 1}};
 const EnumType kShadingModelType{"ShadingModel", kShadingModels, count_of(kShadingModels)};
+// What a Shader draws, its Kind.
+const EnumEntry kShaderKinds[] = {{"Surface", 0}, {"Post", 1}};
+const EnumType kShaderKindType{"ShaderKind", kShaderKinds, count_of(kShaderKinds)};
 // The asset class an AssetPicker lists.
 const EnumEntry kAssetTypes[] = {{"Material", 0}, {"Prefab", 1}, {"Texture", 2}, {"Mesh", 3}, {"Sound", 4}, {"Model", 5}};
 const EnumType kAssetTypeType{"AssetType", kAssetTypes, count_of(kAssetTypes)};
@@ -328,7 +331,8 @@ const EnumType* const kTypes[] = {&kNormalIdType,       &kAxisType,          &kR
                                   &kCollisionFilterTypeType,
                                   &kParticleShapeType, &kParticleEmitFromType, &kParticleCollisionType,
                                   &kParticleCollisionResponseType, &kParticleTextureModeType, &kParticleFacingType,
-                                  &kParticleBlendModeType, &kLodKindType, &kRunContextType, &kJoinStateType};
+                                  &kParticleBlendModeType, &kLodKindType, &kRunContextType, &kJoinStateType,
+                                  &kShaderKindType};
 
 int enum_item_index(lua_State* state) {
     auto* item = static_cast<EnumItemUd*>(luaL_checkudata(state, 1, kEnumItemMeta));
@@ -429,6 +433,7 @@ const EnumType& texture_size_enum() { return kTextureSizeType; }
 const EnumType& texture_streaming_enum() { return kTextureStreamingType; }
 const EnumType& tone_mapping_mode_enum() { return kToneMappingModeType; }
 const EnumType& shading_model_enum() { return kShadingModelType; }
+const EnumType& shader_kind_enum() { return kShaderKindType; }
 const EnumType& asset_type_enum() { return kAssetTypeType; }
 
 int enum_item_value(const EnumType& type, std::string_view name) {

@@ -117,6 +117,9 @@ enum class ToneMappingMode { Classic = 0, Cinematic = 1 };
 const EnumType& shading_model_enum();
 // shading_model_enum's items, by value.
 enum class ShadingModel { Standard = 0, Fast = 1 };
+// What a Shader draws: Surface 0 (a Material's surface), Post 1 (the finished
+// frame). Shader.Kind; the values are ShaderSource.hpp's ShaderKind.
+const EnumType& shader_kind_enum();
 // The asset class an AssetPicker lists: Material 0, Prefab 1, Texture 2, Mesh 3, Sound 4, Model 5.
 const EnumType& asset_type_enum();
 // What a Prefab's LodLayer draws from its Distance on: Model 0, its own

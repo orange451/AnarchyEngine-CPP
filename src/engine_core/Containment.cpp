@@ -19,6 +19,7 @@ struct Category {
 constexpr Category kCategories[] = {
     {"Materials", "Material", "Materials"}, {"Prefabs", "Prefab", "Prefabs"}, {"Meshes", "Mesh", "Meshes"},
     {"Textures", "Texture", "Textures"},    {"Audio", "Sound", "Sounds"},   {"Animations", "Animation", "Animations"},
+    {"Shaders", "Shader", "Shaders"},
 };
 
 const Category* category_named(std::string_view service) {
@@ -116,7 +117,7 @@ std::optional<std::string> placement_error(std::string_view holder_class, std::s
         if (spec != nullptr && spec->parent_class != nullptr && std::string_view(spec->parent_class) == "Assets") {
             return std::nullopt;
         }
-        return std::string("Assets holds only Materials, Prefabs, Meshes, Textures, and Audio");
+        return std::string("Assets holds only Materials, Prefabs, Meshes, Textures, Audio, Animations, and Shaders");
     }
     if (const Category* category = category_named(holder_class)) {
         if (child_class == category->asset || child_class == "Folder") {

@@ -1552,6 +1552,13 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
     add("SpotLight", "InnerFOVScale",
         "How much of the cone, from 0 to 1, is at full brightness. The light fades from there to the cone's edge.",
         "number", false, {});
+    add("Shader", "Source",
+        "The GLSL: `shader surface;` or `shader post;`, then uniforms, then void surface() or void post(). It is "
+        "the .glsl file beside the Shader's .meta.json.",
+        "string", false, {});
+    add("Shader", "Kind", "What the shader draws: Surface, a Material's surface, or Post, the finished frame. "
+        "Read from the source's first line.", "EnumItem", false, {});
+    add("Shader", "Error", "The first problem in the source, as \"<line>: <message>\", or empty.", "string", false, {});
     add("Material", "Color", "The color that tints this material's surface. White leaves it as it is.", "Color3",
         false, {});
     add("Material", "Metalness", "How metallic this material is, from 0 to 1. Scales its MetalnessTexture.", "number",

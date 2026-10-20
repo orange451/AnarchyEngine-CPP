@@ -1,11 +1,13 @@
 #include "DataModel.hpp"
 
+#include "Attributes.hpp"
 #include "Containment.hpp"
 #include "DataModelState.hpp"
 #include "LuaApi.hpp"
 #include "PropertyReflection.hpp"
 
 #include <algorithm>
+#include <cstdio>
 #include <iterator>
 #include <memory>
 #include <mutex>
@@ -586,6 +588,7 @@ DataModel* DataModel::pooled_object(InstancePool& pool, std::uint32_t storage, I
         // Reused storage starts as a new instance would.
         object->archivable_ = true;
         object->persistent_ = false;
+        object->attributes_.reset();
         object->on_reuse();
     }
     return object;
@@ -2015,6 +2018,60 @@ void DataModel::set_persistent(InstanceId id, bool persistent) {
     object->note_property_change("Persistent", before, after);
 }
 
+const AttributeMap& DataModel::attributes() const {
+    static const AttributeMap kNone;
+    return attributes_ != nullptr ? *attributes_ : kNone;
+}
+
+LuaSlot DataModel::attribute(std::string_view name) const {
+    if (attributes_ == nullptr) {
+        return LuaSlot{};
+    }
+    const auto found = attributes_->find(name);
+    if (found == attributes_->end()) {
+        return LuaSlot{};
+    }
+    LuaSlot slot = found->second;
+    if (slot.kind == LuaSlot::Kind::Instance) {
+        const std::optional<InstanceId> target = find_guid(slot.text);
+        slot.id = target.value_or(0);
+        if (slot.id == 0 || !alive(slot.id)) {
+            slot.id = 0;
+            slot.kind = LuaSlot::Kind::Nil;
+        }
+    }
+    return slot;
+}
+
+std::optional<std::string> DataModel::set_attribute(std::string_view name, LuaSlot value) {
+    AttributeMap next = attributes();
+    if (value.kind == LuaSlot::Kind::Nil) {
+        const auto found = next.find(name);
+        if (found != next.end()) {
+            next.erase(found);
+        }
+    } else {
+        if (value.kind == LuaSlot::Kind::Instance) {
+            value.text = guid(value.id);
+            value.id = 0;
+        }
+        next[std::string(name)] = std::move(value);
+    }
+    set_attributes(std::move(next));
+    return std::nullopt;
+}
+
+void DataModel::set_attributes(AttributeMap next) {
+    if (next.empty()) {
+        attributes_.reset();
+        return;
+    }
+    if (attributes_ == nullptr) {
+        attributes_ = std::make_unique<AttributeMap>();
+    }
+    *attributes_ = std::move(next);
+}
+
 InstanceId DataModel::core() const {
     // Game makes Core once; until then, and in a DataModel that is not a Game, there is none.
     if (state_->core_id == 0 || !alive(state_->core_id)) {
@@ -2840,6 +2897,34 @@ bool read_lua_changed(DataModel&, DataModel&, LuaSlot& out) {
     return true;
 }
 
+// The hidden Attributes property: every attribute as one JSON object, so a
+// save, a load, Stop, copy, paste, and undo carry them as they carry any
+// saved property.
+bool read_lua_attributes(DataModel&, DataModel& object, LuaSlot& out) {
+    out.kind = LuaSlot::Kind::String;
+    out.text = attributes_to_json(object.attributes());
+    return true;
+}
+
+bool write_lua_attributes(DataModel& world, DataModel& object, LuaSlot& in) {
+    if (in.kind != LuaSlot::Kind::String) {
+        in.error = "Attributes must be JSON text";
+        return false;
+    }
+    AttributeMap next;
+    std::string error;
+    const bool read = attributes_from_json(in.text, next, error);
+    if (!read) {
+        in.error = std::move(error);
+        return false;
+    }
+    if (!error.empty()) {
+        std::fprintf(stderr, "%s: %s\n", world.name(object.id()).c_str(), error.c_str());
+    }
+    object.set_attributes(std::move(next));
+    return true;
+}
+
 ANARCHY_LUA_REGISTER(register_datamodel_lua) {
     // Changed passes the name of the property that changed.
     static const LuaParam kChangedArgs[] = {{"property", "string"}};
@@ -2855,6 +2940,8 @@ ANARCHY_LUA_REGISTER(register_datamodel_lua) {
         lua_hidden(lua_property("Archivable", "boolean", true, read_lua_archivable, write_lua_archivable)),
         lua_enabled_when(lua_saved_property("Persistent", "boolean", read_lua_persistent, write_lua_persistent, "false"),
                          persistent_editable),
+        lua_hidden(lua_json_text(
+            lua_saved_property("Attributes", "string", read_lua_attributes, write_lua_attributes, "null"))),
     };
     register_lua_class("DataModel", nullptr, fields, static_cast<int>(std::size(fields)));
 }

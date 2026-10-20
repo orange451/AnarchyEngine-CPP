@@ -718,6 +718,7 @@ add_library(engine_core STATIC
     src/engine_core/LuaApi.cpp
     src/engine_core/InstanceFile.cpp
     src/engine_core/PropertyReflection.cpp
+    src/engine_core/Attributes.cpp
     src/engine_core/CurveJson.cpp
     src/engine_core/ParticleBursts.cpp
     src/engine_core/particles/ParticleShapes.cpp
@@ -1239,6 +1240,7 @@ add_executable(sandbox
     sandbox/event_args_tests.cpp
     sandbox/core_tests.cpp
     sandbox/archivable_tests.cpp
+    sandbox/attribute_tests.cpp
     sandbox/cylinder_shape_tests.cpp
     sandbox/cylinder_world_tests.cpp
     sandbox/cylinder_car_tests.cpp

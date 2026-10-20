@@ -13,6 +13,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <map>
 #include <memory>
 #include <new>
 #include <optional>
@@ -101,6 +102,8 @@ class UserInputService;
 struct AuthoredRecord;
 struct Mutation;
 struct LuaSlot;
+// Attributes.hpp names it too; the two must stay the same type.
+using AttributeMap = std::map<std::string, LuaSlot, std::less<>>;
 struct PropertyValue;
 
 // Live source of truth. SimulationThread is the only thread that may run
@@ -638,6 +641,19 @@ public:
     // SimulationThread guard asks this.
     bool on_gameplay_thread() const;
 
+    // Attributes: named values this instance carries beside its class's
+    // properties (Attributes.hpp). attributes() is the map as held, an Instance
+    // value by its target's GUID; attribute(name) is one value as a script
+    // reads it, an Instance resolved to its live target (kind Nil, GUID kept in
+    // text, when the target is gone), and kind Nil when there is none.
+    const AttributeMap& attributes() const;
+    LuaSlot attribute(std::string_view name) const;
+    // Sets name to value; nil removes it. Returns why it refused, changing nothing.
+    std::optional<std::string> set_attribute(std::string_view name, LuaSlot value);
+    // Replaces every attribute at once, as the hidden Attributes property's
+    // write does for a load, Stop, or undo.
+    void set_attributes(AttributeMap next);
+
     // Pool construction. Outsiders cannot build a ChildTag or a State.
     class ChildTag {
         friend class DataModel;
@@ -818,6 +834,8 @@ private:
     std::string guid_;
     bool archivable_ = true;
     bool persistent_ = false;
+    // Null until the first attribute is set: most instances never have one.
+    std::unique_ptr<AttributeMap> attributes_;
     PropertyBag extras_;
 
     bool lock_write_blocking();

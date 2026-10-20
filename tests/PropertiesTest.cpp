@@ -386,6 +386,9 @@ struct Rig {
         }
         const double x = node->getAbsoluteX() + node->getWidth() * 0.5;
         const double y = node->getAbsoluteY() + node->getHeight() * 0.5;
+        // A widget scrolled past the scene's edge takes no click: say so here,
+        // rather than letting the click land on nothing.
+        Expect(x >= 0 && x < kWidth && y >= 0 && y < kHeight, "the widget to click is inside the scene");
         scene->noteButton(0, true, x, y);
         scene->noteButton(0, false, x, y);
     }
@@ -2258,6 +2261,10 @@ void TestGroupsFold() {
     Expect(rig.panel.editor("Roughness")->isVisible(), "and a second click opens it");
 
     const double with_preview = scroll->getContentBounds().height;
+    // The Preview is the last section, below the scene's bottom on this page:
+    // scroll to it, as a user would, before clicking its header.
+    scroll->setVvalue(scroll->getVmax());
+    rig.frame();
     rig.click(rig.panel.group_header("Preview"));
     rig.frame();
     rig.frame();

@@ -77,6 +77,8 @@ private:
     std::vector<InstanceId> walk_;
     VisualViewport scratch_;
     VisualPrefab prefab_scratch_;
+    // Each Material's surface binding, kept while unchanged so same_prefab sees it unchanged.
+    SurfaceBindingCache surfaces_;
     VisualSky sky_scratch_;
     // Pane Brushes' meshes, each drawn on its own; brush_scratch_ is their
     // draws as read again to compare.

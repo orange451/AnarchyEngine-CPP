@@ -1,5 +1,6 @@
 #pragma once
 
+#include "SurfaceBinding.hpp"
 #include "amesh.hpp"
 #include "types.hpp"
 
@@ -73,6 +74,8 @@ private:
     std::map<CellKey, std::vector<InstanceId>> members_;
     std::uint64_t bakes_ = 0;
     std::vector<float> scales_;
+    // Each Material's surface binding, shared across a pass's draws.
+    SurfaceBindingCache surfaces_;
 };
 
 }  // namespace engine_core

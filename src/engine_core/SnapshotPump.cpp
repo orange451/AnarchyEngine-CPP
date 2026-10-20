@@ -384,7 +384,8 @@ void SnapshotPump::set_row_prefab(VisualInstance& inst, const std::string& guid)
     pose_touched_.push_back(inst.id);
 }
 
-void fill_visual_material(const DataModel& game, const Material* material, VisualMesh& out) {
+void fill_visual_material(const DataModel& game, const Material* material, VisualMesh& out,
+                          SurfaceBindingCache* surfaces) {
     // Assigned in place, so unchanged strings keep their buffers. Empty for no Material or no Texture.
     const auto texture_path = [&](std::size_t index, std::string& path, bool& flip_y, bool& always_loaded) {
         const Texture* texture = material != nullptr ? ReferencedAs<Texture>(game, *material, index) : nullptr;
@@ -409,6 +410,11 @@ void fill_visual_material(const DataModel& game, const Material* material, Visua
     out.roughness = unit(material != nullptr ? material->roughness() : Material::kDefaultRoughness);
     out.reflectivity = unit(material != nullptr ? material->reflectivity() : Material::kDefaultReflectivity);
     out.transparency = unit(material != nullptr ? material->transparency() : Material::kDefaultTransparency);
+    if (surfaces != nullptr) {
+        out.surface = surfaces->get(game, material);
+    } else {
+        out.surface = material != nullptr ? make_surface_binding(game, *material) : nullptr;
+    }
 }
 
 namespace {
@@ -418,7 +424,8 @@ namespace {
 // skeleton's bones. A Model with no Mesh, or a Mesh with neither a Path nor
 // session geometry, adds nothing.
 void fill_models(const DataModel& game, InstanceId holder, bool names_skeleton,
-                 std::shared_ptr<const Skeleton>& skeleton, std::vector<VisualMesh>& meshes) {
+                 std::shared_ptr<const Skeleton>& skeleton, std::vector<VisualMesh>& meshes,
+                 SurfaceBindingCache* surfaces) {
     std::size_t used = 0;
     for (InstanceId child = game.first_child(holder); child != 0; child = game.next_sibling(child)) {
         const auto* model = dynamic_cast<const Model*>(game.instance(child));
@@ -454,14 +461,15 @@ void fill_models(const DataModel& game, InstanceId holder, bool names_skeleton,
             mesh_out.path = mesh->path();
             mesh_out.session.reset();
         }
-        fill_visual_material(game, ReferencedAs<Material>(game, *model, Model::kMaterialReference), mesh_out);
+        fill_visual_material(game, ReferencedAs<Material>(game, *model, Model::kMaterialReference), mesh_out, surfaces);
     }
     meshes.resize(used);
 }
 
 }  // namespace
 
-void fill_visual_prefab(const DataModel& game, const std::string& guid, InstanceId& cached, VisualPrefab& out) {
+void fill_visual_prefab(const DataModel& game, const std::string& guid, InstanceId& cached, VisualPrefab& out,
+                        SurfaceBindingCache* surfaces) {
     // The first Model whose Mesh has bones names the skeleton, as prefab_skeleton finds it.
     std::shared_ptr<const Skeleton>& skeleton = out.skeleton;
     skeleton.reset();
@@ -476,7 +484,7 @@ void fill_visual_prefab(const DataModel& game, const std::string& guid, Instance
         return;
     }
     // The base layer: the Prefab's own Models. Only they name the skeleton.
-    fill_models(game, cached, true, skeleton, out.meshes);
+    fill_models(game, cached, true, skeleton, out.meshes, surfaces);
     // Its LodLayers, nearest first; two at one distance stay in child order.
     std::vector<const LodLayer*> layers;
     for (InstanceId child = game.first_child(cached); child != 0; child = game.next_sibling(child)) {
@@ -493,7 +501,7 @@ void fill_visual_prefab(const DataModel& game, const std::string& guid, Instance
         lod.distance = static_cast<float>(layer.distance());
         lod.kind = layer.kind();
         if (lod.kind == LodKind::Model) {
-            fill_models(game, layer.id(), false, skeleton, lod.meshes);
+            fill_models(game, layer.id(), false, skeleton, lod.meshes, surfaces);
         } else {
             lod.meshes.clear();
         }
@@ -502,7 +510,7 @@ void fill_visual_prefab(const DataModel& game, const std::string& guid, Instance
                              lod.kind == LodKind::Billboard
                                  ? ReferencedAs<Material>(game, layer, LodLayer::kMaterialReference)
                                  : nullptr,
-                             lod.card);
+                             lod.card, surfaces);
         lod.width = layer.size().x;
         lod.height = layer.size().y;
     }
@@ -514,7 +522,7 @@ void SnapshotPump::resolve_prefabs(DataModel& game) {
         PrefabEntry& entry = prefab_entries_[index];
         VisualPrefab& prefab = base_.prefabs[index];
         if (entry.rows != 0) {
-            fill_visual_prefab(game, entry.guid, entry.cached, prefab);
+            fill_visual_prefab(game, entry.guid, entry.cached, prefab, &surfaces_);
         } else {
             prefab.skeleton.reset();
             prefab.meshes.clear();
@@ -911,6 +919,7 @@ void SnapshotPump::anchor_billboards(VisualSnapshot& dst) const {
 }
 
 void SnapshotPump::take_changes(DataModel& game) {
+    surfaces_.begin();
     InvalidationQueue& queue = game.invalidations();
     {
         PROFILE_SCOPE("Snapshot changes", profiler::Group::Engine);

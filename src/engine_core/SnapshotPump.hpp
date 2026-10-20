@@ -9,6 +9,7 @@
 #include "Skeleton.hpp"
 #include "ParticleWorld.hpp"
 #include "SharedRows.hpp"
+#include "SurfaceBinding.hpp"
 #include "TerrainWorld.hpp"
 #include "types.hpp"
 
@@ -252,12 +253,17 @@ struct VisualMesh {
     float roughness = 0.4f;
     float reflectivity = 0.5f;
     float transparency = 0.f;
+    // The Material's surface Shader and its uniforms' values, shared by every
+    // mesh drawing the Material this frame; null for none.
+    std::shared_ptr<const SurfaceBinding> surface;
 };
 
 // A Material's look, filled into out as resolve_prefabs fills a Model's: its
-// textures' paths and its numbers; null is the default material.
+// textures' paths and its numbers; null is the default material. surfaces,
+// when given, shares one binding per Material across the frame.
 class Material;
-void fill_visual_material(const DataModel& game, const Material* material, VisualMesh& out);
+void fill_visual_material(const DataModel& game, const Material* material, VisualMesh& out,
+                          SurfaceBindingCache* surfaces = nullptr);
 
 // One draw of Brush geometry: one Material's triangles of a baked cell (world
 // space, world identity) or of one Brush (its own space). look.session is the
@@ -330,7 +336,8 @@ struct VisualViewport {
 // What one Prefab draws, filled into out as the DataModel is now. cached is
 // the Prefab's id as last found, looked for again by guid when it no longer
 // names it. Strings are assigned in place, so an unchanged Prefab keeps them.
-void fill_visual_prefab(const DataModel& game, const std::string& guid, InstanceId& cached, VisualPrefab& out);
+void fill_visual_prefab(const DataModel& game, const std::string& guid, InstanceId& cached, VisualPrefab& out,
+                        SurfaceBindingCache* surfaces = nullptr);
 // A Skybox's image, numbers, and tint into out; out.present is left as it is.
 class Skybox;
 void fill_visual_sky(const DataModel& game, const Skybox& skybox, VisualSky& out);
@@ -467,6 +474,8 @@ private:
     void resolve_terrains(DataModel& game);
     void resolve_particles();
     BrushVisuals brushes_;
+    // Each Material's surface binding, shared across a frame's Prefabs.
+    SurfaceBindingCache surfaces_;
     // Points each row's anchor at its anchor_instance's row in dst, after overrides.
     void anchor_billboards(VisualSnapshot& dst) const;
     void release_prefab(std::uint32_t entry);

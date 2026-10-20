@@ -10,6 +10,9 @@
 #include "Script.hpp"
 #include "LuaApi.hpp"
 #include "Shader.hpp"
+#include "SnapshotPump.hpp"
+#include "SurfaceBinding.hpp"
+#include "GameObject.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -397,4 +400,170 @@ TEST_CASE("SHA15 a Material's Shader saves and loads by GUID", "[shader][project
     REQUIRE(brick != nullptr);
     REQUIRE(brick->shader(game) != nullptr);
     REQUIRE(game.guid(brick->shader(game)->id()) == shader_guid);
+}
+
+namespace {
+
+// Progress has no default, so an unset or mistyped one reads 0.
+constexpr const char* kDissolve = R"(shader surface;
+
+uniform float Progress : range(0, 1);
+uniform vec3 EdgeColor : color = vec3(1.0, 0.5, 0.0);
+uniform sampler2D Noise;
+
+void surface() {
+    if (texture(Noise, UV).r < Progress) {
+        discard;
+    }
+    EMISSIVE = EdgeColor;
+}
+)";
+
+engine_core::LuaSlot instance_ref(InstanceId id) {
+    engine_core::LuaSlot slot;
+    slot.kind = engine_core::LuaSlot::Kind::Instance;
+    slot.id = id;
+    return slot;
+}
+
+engine_core::LuaSlot number_slot(double value) {
+    engine_core::LuaSlot slot;
+    slot.kind = engine_core::LuaSlot::Kind::Number;
+    slot.number = value;
+    return slot;
+}
+
+engine_core::Material& add_material(engine_core::DataModel& game, const char* name, InstanceId shader) {
+    engine_core::Material& made = game.create<engine_core::Material>();
+    game.set_name(made.id(), name);
+    game.set_parent(made.id(), game.service("Materials"));
+    if (shader != 0) {
+        REQUIRE_FALSE(made.set_reference(engine_core::Material::kShaderReference, instance_ref(shader)));
+    }
+    return made;
+}
+
+}  // namespace
+
+TEST_CASE("SHA16 a surface binding holds each uniform's value, held to its type and range", "[shader]") {
+    SimRole role;
+    engine_core::Game game;
+    Shader& dissolve = add_shader(game, "Dissolve");
+    dissolve.set_source(kDissolve);
+    engine_core::Material& brick = add_material(game, "Brick", dissolve.id());
+    REQUIRE_FALSE(brick.set_attribute("Progress", number_slot(0.3)));
+
+    auto binding = engine_core::make_surface_binding(game, brick);
+    REQUIRE(binding != nullptr);
+    REQUIRE(binding->shader == dissolve.id());
+    REQUIRE(binding->version == dissolve.source_version());
+    REQUIRE(binding->values.size() == 3);
+    REQUIRE(binding->values[0].kind == engine_core::LuaSlot::Kind::Number);
+    REQUIRE(binding->values[0].number == 0.3);
+    REQUIRE(binding->values[1].kind == engine_core::LuaSlot::Kind::Color);
+    REQUIRE(binding->values[1].color.g == 0.5f);
+    REQUIRE(binding->values[2].kind == engine_core::LuaSlot::Kind::Nil);
+    REQUIRE(binding->samplers.size() == 1);
+    REQUIRE(binding->samplers[0].path.empty());
+    REQUIRE_FALSE(binding->reads_time);
+
+    // A string is not a float: the default, 0.
+    engine_core::LuaSlot text;
+    text.kind = engine_core::LuaSlot::Kind::String;
+    text.text = "half";
+    REQUIRE_FALSE(brick.set_attribute("Progress", text));
+    REQUIRE(engine_core::make_surface_binding(game, brick)->values[0].number == 0.0);
+
+    // Out of range: held to 1.
+    REQUIRE_FALSE(brick.set_attribute("Progress", number_slot(5)));
+    REQUIRE(engine_core::make_surface_binding(game, brick)->values[0].number == 1.0);
+
+    // A Texture attribute is the sampler's path.
+    engine_core::Texture& noise = game.create<engine_core::Texture>();
+    game.set_parent(noise.id(), game.service("Textures"));
+    REQUIRE_FALSE(noise.set_path("textures/noise.png"));
+    REQUIRE_FALSE(brick.set_attribute("Noise", instance_ref(noise.id())));
+    REQUIRE(engine_core::make_surface_binding(game, brick)->samplers[0].path == "textures/noise.png");
+
+    // No Shader, no binding.
+    engine_core::Material& plain = add_material(game, "Plain", 0);
+    REQUIRE(engine_core::make_surface_binding(game, plain) == nullptr);
+}
+
+TEST_CASE("SHA17 two Materials on one Shader bind their own values", "[shader]") {
+    SimRole role;
+    engine_core::Game game;
+    Shader& dissolve = add_shader(game, "Dissolve");
+    dissolve.set_source(kDissolve);
+    engine_core::Material& a = add_material(game, "A", dissolve.id());
+    engine_core::Material& b = add_material(game, "B", dissolve.id());
+    REQUIRE_FALSE(a.set_attribute("Progress", number_slot(0.25)));
+    REQUIRE_FALSE(b.set_attribute("Progress", number_slot(0.75)));
+    auto first = engine_core::make_surface_binding(game, a);
+    auto second = engine_core::make_surface_binding(game, b);
+    REQUIRE(first->values[0].number == 0.25);
+    REQUIRE(second->values[0].number == 0.75);
+    REQUIRE(first->values_hash != second->values_hash);
+
+    // A shader that names TIME redraws its shadows each frame.
+    Shader& wave = add_shader(game, "Wave");
+    wave.set_source("shader surface;\nvoid surface() { ALBEDO *= 0.5 + 0.5 * sin(TIME); }\n");
+    engine_core::Material& water = add_material(game, "Water", wave.id());
+    REQUIRE(engine_core::make_surface_binding(game, water)->reads_time);
+}
+
+TEST_CASE("SHA18 the snapshot shares one binding per Material across its Models", "[shader][render]") {
+    SimRole role;
+    engine_core::Game game;
+    engine_core::SnapshotPump pump;
+    pump.reserve(engine_core::DataModel::kMaxInstances);
+    const auto frame = [&] {
+        pump.prepare_copy(game);
+        pump.publish();
+    };
+    Shader& dissolve = add_shader(game, "Dissolve");
+    dissolve.set_source(kDissolve);
+    engine_core::Material& brick = add_material(game, "Brick", dissolve.id());
+    engine_core::Material& plain = add_material(game, "Plain", 0);
+    engine_core::Mesh& body = game.create<engine_core::Mesh>();
+    game.set_parent(body.id(), game.service("Meshes"));
+    REQUIRE_FALSE(body.set_path("meshes/body.amesh"));
+    engine_core::Prefab& crate = game.create<engine_core::Prefab>();
+    game.set_parent(crate.id(), game.service("Prefabs"));
+    for (InstanceId look : {brick.id(), brick.id(), plain.id()}) {
+        engine_core::Model& part = game.create<engine_core::Model>();
+        game.set_parent(part.id(), crate.id());
+        REQUIRE_FALSE(part.set_reference(engine_core::Model::kMeshReference, instance_ref(body.id())));
+        REQUIRE_FALSE(part.set_reference(engine_core::Model::kMaterialReference, instance_ref(look)));
+    }
+    engine_core::GameObject& box = game.create_game_object();
+    game.set_parent(box.id(), workspace_of(game));
+    REQUIRE_FALSE(box.set_prefab(instance_ref(crate.id())));
+    const auto meshes = [&]() -> const std::vector<engine_core::VisualMesh>& {
+        const engine_core::VisualInstance* row = pump.find(box.id());
+        REQUIRE(row != nullptr);
+        const auto& list = pump.front().prefabs[row->prefab].meshes;
+        REQUIRE(list.size() == 3);
+        return list;
+    };
+
+    frame();
+    REQUIRE(meshes()[0].surface != nullptr);
+    REQUIRE(meshes()[0].surface == meshes()[1].surface);
+    REQUIRE(meshes()[2].surface == nullptr);
+
+    // Unchanged, the next frame keeps the same binding; a changed value makes a new one.
+    const auto before = meshes()[0].surface;
+    frame();
+    REQUIRE(meshes()[0].surface == before);
+    REQUIRE_FALSE(brick.set_attribute("Progress", number_slot(0.5)));
+    frame();
+    REQUIRE(meshes()[0].surface != before);
+    REQUIRE(meshes()[0].surface->values[0].number == 0.5);
+    REQUIRE(meshes()[0].surface == meshes()[1].surface);
+
+    // A source edit is a new version.
+    dissolve.set_source(std::string(kDissolve) + "\n");
+    frame();
+    REQUIRE(meshes()[0].surface->version == dissolve.source_version());
 }

@@ -14,6 +14,29 @@ using engine_core::texture::Usage;
 
 namespace {
 
+// draw's surface Shader, as source's Material binds it, with its samplers'
+// textures loaded through textures as their hints say.
+void ApplySurface(const engine_core::VisualMesh& source, TextureCache& textures, MeshDraw& draw) {
+    draw.surface = source.surface;
+    std::fill(std::begin(draw.surfaceTextures), std::end(draw.surfaceTextures), 0u);
+    if (draw.surface == nullptr) {
+        return;
+    }
+    std::size_t sampler = 0;
+    for (const engine_core::ShaderParam& param : draw.surface->parse->params) {
+        if (param.type != engine_core::ShaderParamType::Sampler) {
+            continue;
+        }
+        if (sampler >= std::size(draw.surfaceTextures) || sampler >= draw.surface->samplers.size()) {
+            break;
+        }
+        const engine_core::SurfaceBinding::Sampler& bound = draw.surface->samplers[sampler];
+        const Usage usage = param.srgb ? Usage::Color : param.normal ? Usage::Normal : Usage::Mask;
+        draw.surfaceTextures[sampler] = textures.get(bound.path, usage, bound.flip_y, bound.always_loaded);
+        ++sampler;
+    }
+}
+
 // draw drawn with source's Material: its textures, loaded through textures, and its numbers.
 void ApplyMaterial(const engine_core::VisualMesh& source, TextureCache& textures, MeshDraw& draw) {
     draw.texture = textures.get(source.diffuse_texture, Usage::Color, source.diffuse_flip_y, source.diffuse_always_loaded,
@@ -33,6 +56,7 @@ void ApplyMaterial(const engine_core::VisualMesh& source, TextureCache& textures
     draw.roughness = source.roughness;
     draw.reflectivity = source.reflectivity;
     draw.transparency = source.transparency;
+    ApplySurface(source, textures, draw);
 }
 
 // sources as templates drawn from lodNear up to lodFar.
@@ -261,7 +285,8 @@ bool SameDraw(const MeshDraw& a, const MeshDraw& b) {
            a.terrainLayerCount == b.terrainLayerCount && a.skinned == b.skinned && a.bones == b.bones &&
            a.poseRevision == b.poseRevision && a.boneCount == b.boneCount && SameBits(a.poseMin, b.poseMin) &&
            SameBits(a.poseMax, b.poseMax) && SameBits(a.lodNear, b.lodNear) && SameBits(a.lodFar, b.lodFar) &&
-           a.billboard == b.billboard && SameBits(a.billboardSize, b.billboardSize);
+           a.billboard == b.billboard && SameBits(a.billboardSize, b.billboardSize) && a.surface == b.surface &&
+           SameBits(a.surfaceTextures, b.surfaceTextures);
 }
 
 void RowDrawCache::update(const engine_core::VisualRows& rows, const std::vector<std::vector<MeshDraw>>& templates,
@@ -404,6 +429,7 @@ void AppendBrushDraws(const std::vector<engine_core::VisualBrushDraw>& brushes, 
         draw.roughness = look.roughness;
         draw.reflectivity = look.reflectivity;
         draw.transparency = 1.f - (1.f - std::clamp(look.transparency, 0.f, 1.f)) * (1.f - source.transparency);
+        ApplySurface(look, textures, draw);
         draw.lod = static_cast<std::uint8_t>(std::min<std::uint32_t>(source.lod, 255));
         draw.castsShadow = source.casts_shadow;
         draw.slot = 0;

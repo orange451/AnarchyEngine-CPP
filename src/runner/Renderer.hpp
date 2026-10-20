@@ -17,6 +17,7 @@
 #include "SceneDepth.hpp"
 #include "ShadowRenderer.hpp"
 #include "SkyMath.hpp"
+#include "SurfaceBinding.hpp"
 #include "ViewCapture.hpp"
 #include "Visibility.hpp"
 #include "types.hpp"
@@ -146,6 +147,13 @@ struct MeshDraw {
     // leaves out the holes the G-buffer's alpha test does, at the cost of a
     // texture read a texel. False casts the whole mesh, depth only.
     bool cutout = false;
+    // The Material's surface Shader and its uniforms' values, or null for the
+    // engine's own surface. Shared by every draw of the Material this frame,
+    // so draws compare it by pointer.
+    std::shared_ptr<const engine_core::SurfaceBinding> surface;
+    // Its sampler2D uniforms' GL textures, in order; 0 is unset (white, or
+    // black with the hint) and loads as the hints say.
+    unsigned surfaceTextures[3] = {0, 0, 0};
 };
 
 // A Terrain's look table: a 256 x 4 GL_RGBA32F texture, GL_NEAREST, from

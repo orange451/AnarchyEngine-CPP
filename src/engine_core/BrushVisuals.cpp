@@ -181,6 +181,7 @@ void BrushVisuals::texture_scales(const DataModel& game, const brush::Mesh& mesh
 }
 
 void BrushVisuals::begin_singles() {
+    surfaces_.begin();
     for (auto& [id, single] : singles_) {
         single.seen = false;
     }
@@ -212,7 +213,7 @@ void BrushVisuals::append_single(const DataModel& game, const Brush& brush, std:
     }
     for (std::size_t i = 0; i < single.materials.size(); ++i) {
         VisualBrushDraw& draw = out.emplace_back();
-        fill_visual_material(game, material(game, single.materials[i]), draw.look);
+        fill_visual_material(game, material(game, single.materials[i]), draw.look, &surfaces_);
         draw.look.session = single.mesh;
         draw.look.revision = single.revision;
         draw.lod = static_cast<std::uint32_t>(i + 1);
@@ -306,7 +307,7 @@ void BrushVisuals::update(DataModel& game, std::vector<VisualBrushDraw>& out) {
         }
         for (std::size_t i = 0; i < cell.materials.size(); ++i) {
             VisualBrushDraw& draw = out.emplace_back();
-            fill_visual_material(game, material(game, cell.materials[i]), draw.look);
+            fill_visual_material(game, material(game, cell.materials[i]), draw.look, &surfaces_);
             draw.look.session = cell.mesh;
             draw.look.revision = cell.revision;
             draw.lod = static_cast<std::uint32_t>(i + 1);

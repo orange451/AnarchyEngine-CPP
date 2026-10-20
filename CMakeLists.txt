@@ -712,6 +712,7 @@ add_library(engine_core STATIC
     src/engine_core/DataModelPlace.cpp
     src/engine_core/DataModelLock.cpp
     src/engine_core/SnapshotPump.cpp
+    src/engine_core/SurfaceBinding.cpp
     src/engine_core/ViewportScenes.cpp
     src/engine_core/Skeleton.cpp
     src/engine_core/Skinning.cpp

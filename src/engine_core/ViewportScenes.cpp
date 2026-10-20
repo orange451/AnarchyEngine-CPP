@@ -27,7 +27,7 @@ bool same_mesh(const VisualMesh& a, const VisualMesh& b) {
            a.metalness_always_loaded == b.metalness_always_loaded &&
            a.emissive_always_loaded == b.emissive_always_loaded && same_color(a.emissive, b.emissive) &&
            a.metalness == b.metalness && a.roughness == b.roughness && a.reflectivity == b.reflectivity &&
-           a.transparency == b.transparency;
+           a.transparency == b.transparency && a.surface == b.surface;
 }
 
 bool same_brushes(const std::vector<VisualBrushDraw>& a, const std::vector<VisualBrushDraw>& b) {
@@ -155,7 +155,7 @@ std::uint32_t ViewportScenes::find_prefab(const DataModel& game, const std::stri
     entry.cached = 0;
     entry.panes = 0;
     VisualPrefab made;
-    fill_visual_prefab(game, guid, entry.cached, made);
+    fill_visual_prefab(game, guid, entry.cached, made, &surfaces_);
     entry.current = std::make_shared<const VisualPrefab>(std::move(made));
     ++entry.revision;
     prefab_by_guid_.emplace(guid, index);
@@ -173,12 +173,13 @@ void ViewportScenes::release_prefabs(Pane& pane) {
 }
 
 void ViewportScenes::refresh_prefabs(const DataModel& game) {
+    surfaces_.begin();
     for (Prefab& entry : prefabs_) {
         if (entry.panes == 0 || entry.guid.empty()) {
             continue;
         }
         // Assigned in place, so an unchanged Prefab reuses last update's strings.
-        fill_visual_prefab(game, entry.guid, entry.cached, prefab_scratch_);
+        fill_visual_prefab(game, entry.guid, entry.cached, prefab_scratch_, &surfaces_);
         if (entry.current == nullptr || !same_prefab(prefab_scratch_, *entry.current)) {
             entry.current = std::make_shared<const VisualPrefab>(prefab_scratch_);
             ++entry.revision;

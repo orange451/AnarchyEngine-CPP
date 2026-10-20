@@ -185,6 +185,16 @@ void testLibraries() {
     }
 }
 
+void testAttributeMembers() {
+    const ide::CompletionList methods = at_end("workspace:");
+    expect_has(methods, "SetAttribute", "workspace:SetAttribute");
+    expect_has(methods, "GetAttribute", "workspace:GetAttribute");
+    expect_has(methods, "GetAttributes", "workspace:GetAttributes");
+    expect_has(methods, "GetAttributeChangedSignal", "workspace:GetAttributeChangedSignal");
+    const ide::CompletionList members = at_end("script.");
+    expect_has(members, "AttributeChanged", "script.AttributeChanged");
+}
+
 void testInstances() {
     const ide::CompletionList game = at_end("game.");
     expect_has(game, "Name", "game.Name");
@@ -3095,6 +3105,7 @@ int RunLuauCompleteTests() {
     try {
         testLibraries();
         testInstances();
+        testAttributeMembers();
         testVector3();
         testModule();
         testModuleMethods();

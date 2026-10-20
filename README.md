@@ -99,6 +99,8 @@ Instance.new("DirectionalLight", pane)
 
 A script runs against the live place. It gets `game` for the root, `workspace` for `game.Workspace`, and `script` for itself. From there it creates instances with `Instance.new`, finds children, reads and writes properties, and connects to signals such as `Changed`. `task.wait`, `task.spawn`, `task.defer`, and `task.delay` schedule work on the simulation clock. A `ModuleScript` runs when another script calls `require`.
 
+Any instance can carry attributes: named values beside its properties, for a script to tag and tune things without a new class. `instance:SetAttribute("Health", 100)` sets one and `SetAttribute("Health", nil)` removes it; a name is up to 100 letters, digits, and underscores, and a value is a number, boolean, string, `Vector2`, `Vector3`, `Color3`, `Matrix4`, or an instance. `GetAttribute(name)` reads one (nil when there is none, or when the instance it names is gone), `GetAttributes()` returns them all as a table, `AttributeChanged` fires with the name of each that is set or removed, and `GetAttributeChangedSignal(name)` fires for one name. They save with the place, undo, and come back at Stop. In the studio they are the last group in Properties: each is a row you edit like a property, with an x that removes it, and the group's + adds one by name and type to every selected instance.
+
 ```lua
 local camera = workspace:FindFirstChild("Camera")
 assert(camera)

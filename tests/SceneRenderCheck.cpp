@@ -2438,6 +2438,30 @@ std::shared_ptr<engine_core::SurfaceBinding> SurfaceFor(engine_core::InstanceId 
     return binding;
 }
 
+// A post Shader's binding from its text, as a ShaderEffect's would be: its
+// values the defaults, or values where given.
+std::shared_ptr<engine_core::SurfaceBinding> PostFor(engine_core::InstanceId id, std::uint64_t version,
+                                                     const char* source,
+                                                     std::vector<engine_core::LuaSlot> values = {}, bool hdr = false) {
+    auto binding = std::make_shared<engine_core::SurfaceBinding>();
+    binding->shader = id;
+    binding->version = version;
+    binding->parse = std::make_shared<engine_core::ShaderParse>(
+        engine_core::parse_shader(source, engine_core::ShaderStage::Fragment, engine_core::ShaderKind::Post));
+    binding->hdr = hdr;
+    std::vector<engine_core::LuaSlot> slots;
+    for (std::size_t i = 0; i < binding->parse->params.size(); ++i) {
+        const engine_core::ShaderParam& param = binding->parse->params[i];
+        slots.push_back(i < values.size() ? values[i] : param.fallback);
+        if (param.type == engine_core::ShaderParamType::Sampler) {
+            binding->samplers.emplace_back();
+        }
+    }
+    engine_core::describe_surface(*binding);
+    binding->set_values(std::move(slots));
+    return binding;
+}
+
 // How many pixels of the width by height framebuffer are not the clear color.
 int DrawnPixels(int width, int height) {
     std::vector<unsigned char> rgba(static_cast<std::size_t>(width) * static_cast<std::size_t>(height) * 4);
@@ -2590,6 +2614,19 @@ void CheckSurfaceShaders(const GpuMesh* cube, int size, int fbWidth, int fbHeigh
     plainShader.surface = SurfaceFor(9010, 1, tint);
     drawOne(plainShader);
     Expect(programs.builds() == fragmentOnly + 1, "vertex stage: a Shader without one builds once as before");
+
+    // A post Shader builds one program, and a broken one reports the fragment stage at the user's line.
+    const auto invert = PostFor(9301, 1, "void post() {\n    COLOR.rgb = 1.0 - COLOR.rgb;\n}\n");
+    Expect(programs.get(*invert, 0.0).post.program.id != 0, "post shader: a post program builds");
+    Expect(programs.take_errors().empty(), "post shader: a post program that builds reports nothing");
+    const auto brokenPost = PostFor(9302, 1, "void post() {\n    COLOR.rgb = ;\n}\n");
+    Expect(programs.get(*brokenPost, 0.0).post.program.id == 0, "post shader: a broken post program is not built");
+    const auto postErrors = programs.take_errors();
+    Expect(postErrors.size() == 1 && std::get<0>(postErrors[0]) == 9302 && std::get<1>(postErrors[0]) == 1 &&
+               std::get<2>(postErrors[0]) == engine_core::ShaderStage::Fragment &&
+               (std::get<3>(postErrors[0]).rfind("2:", 0) == 0 || std::get<3>(postErrors[0]).rfind("3:", 0) == 0),
+           "post shader: the failure is reported for the fragment stage at the user's line" +
+               (postErrors.empty() ? std::string() : " (" + std::get<3>(postErrors[0]) + ")"));
     renderer.setCamera(engine_core::matrix4_identity(), runner::Renderer::kCameraFovYDegrees);
     renderer.shutdown();
 }

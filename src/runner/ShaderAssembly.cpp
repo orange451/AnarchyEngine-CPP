@@ -77,6 +77,40 @@ AssembledSource AssembleSurface(const char* main_file, std::initializer_list<con
     return out;
 }
 
+AssembledSource AssemblePost(const std::string& user_glsl) {
+    AssembledSource out;
+    const std::string main = LoadShader("pipeline/post.frag");
+    if (main.empty()) {
+        return out;
+    }
+    const std::size_t line_end = main.find('\n');
+    std::string text = main.substr(0, line_end == std::string::npos ? main.size() : line_end + 1);
+    if (text.back() != '\n') {
+        text += '\n';
+    }
+    text += "#define POST_SHADER\n";
+    for (const char* library : {"pipeline/gbuffer.glsl", "pipeline/view_position.glsl", "pipeline/post_shader.glsl"}) {
+        const std::string source = LoadShader(library);
+        if (source.empty()) {
+            return out;
+        }
+        text += source;
+        text += '\n';
+    }
+    out.user_first_line = count_lines(text) + 1;
+    std::string user = user_glsl;
+    if (!user.empty() && user.back() != '\n') {
+        user += '\n';
+    }
+    out.user_lines = count_lines(user);
+    text += user;
+    if (line_end != std::string::npos) {
+        text += main.substr(line_end + 1);
+    }
+    out.text = std::move(text);
+    return out;
+}
+
 AssembledSource AssembleVertex(const char* main_file, const std::string& user_glsl) {
     AssembledSource out;
     const std::string main = LoadShader(main_file);

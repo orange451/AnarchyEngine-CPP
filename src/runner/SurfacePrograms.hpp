@@ -17,10 +17,14 @@ namespace runner {
 // The texture unit a surface shader's first sampler2D uniform reads; the
 // others follow it, up to engine_core's kMaxSurfaceSamplers (3).
 constexpr int kSurfaceTextureUnit = 6;
+// The same for a post shader's, up to kMaxPostSamplers (4): the sky's units,
+// which no post program reads.
+constexpr int kPostTextureUnit = 12;
 
-// A Material's surface Shader built into the engine's passes, by Shader id;
-// each built from one source_version, and built again only when it moves.
-// Needs the GL context current; Renderer owns one.
+// A Shader built into the engine's passes, by Shader id: a surface Shader's
+// G-buffer, see-through, and shadow programs, or a post Shader's one post
+// program; each built from one source_version, and built again only when it
+// moves. Needs the GL context current; Renderer owns one.
 class SurfacePrograms {
 public:
     // One pass's program and its uniforms' locations, one per parse param (-1
@@ -37,6 +41,8 @@ public:
         Variant forward;
         // The shadow maps', only for a shader that cuts holes (SurfaceBinding::cuts).
         Variant shadow;
+        // A post Shader's, over the stage's image (post.frag); the three above stay empty.
+        Variant post;
         // "" or "<line>: <message>", at the user's line of error_stage.
         std::string error;
         engine_core::ShaderStage error_stage = engine_core::ShaderStage::Fragment;
@@ -49,8 +55,8 @@ public:
 
     void setFinish(Finish finish) { finish_ = std::move(finish); }
     // The programs for binding, built on first use or when its version moved.
-    // A binding with no parse, a parse error, or a post shader has none. now
-    // is in seconds, as reclaim takes it.
+    // A binding with no parse or a parse error has none. now is in seconds,
+    // as reclaim takes it.
     const Built& get(const engine_core::SurfaceBinding& binding, double now);
     // Errors found since the last call, as (shader id, version, stage, "<line>: <message>").
     using Error = std::tuple<engine_core::InstanceId, std::uint64_t, engine_core::ShaderStage, std::string>;

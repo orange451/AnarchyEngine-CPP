@@ -10,8 +10,9 @@ namespace {
 // Seconds a Shader's programs live after the last draw that asked for them.
 constexpr double kUnusedSeconds = 60.0;
 
-// The Variant's per-param locations, and each sampler pointed at its unit.
-void FindParams(const engine_core::ShaderParse& parse, SurfacePrograms::Variant& variant) {
+// The Variant's per-param locations, and each sampler pointed at its unit,
+// from first_unit on.
+void FindParams(const engine_core::ShaderParse& parse, SurfacePrograms::Variant& variant, int first_unit) {
     const unsigned id = variant.program.id;
     variant.locations.assign(parse.params.size(), -1);
     glUseProgram(id);
@@ -21,7 +22,7 @@ void FindParams(const engine_core::ShaderParse& parse, SurfacePrograms::Variant&
         variant.locations[i] = glGetUniformLocation(id, param.name.c_str());
         if (param.type == engine_core::ShaderParamType::Sampler) {
             if (variant.locations[i] >= 0) {
-                glUniform1i(variant.locations[i], kSurfaceTextureUnit + sampler);
+                glUniform1i(variant.locations[i], first_unit + sampler);
             }
             ++sampler;
         }
@@ -46,7 +47,7 @@ void AddDefine(AssembledSource& source, const char* name) {
 
 const SurfacePrograms::Built& SurfacePrograms::get(const engine_core::SurfaceBinding& binding, double now) {
     static const Built kNone;
-    if (binding.parse == nullptr || binding.parse->error || binding.parse->kind != engine_core::ShaderKind::Surface) {
+    if (binding.parse == nullptr || binding.parse->error) {
         return kNone;
     }
     auto found = built_.find(binding.shader);
@@ -86,7 +87,8 @@ bool SurfacePrograms::link(const engine_core::SurfaceBinding& binding, const std
     if (finish_) {
         finish_(variant.program);
     }
-    FindParams(*binding.parse, variant);
+    FindParams(*binding.parse, variant,
+               binding.parse->kind == engine_core::ShaderKind::Post ? kPostTextureUnit : kSurfaceTextureUnit);
     glUseProgram(static_cast<GLuint>(previous));
     return true;
 }
@@ -96,6 +98,12 @@ void SurfacePrograms::build(const engine_core::SurfaceBinding& binding, Built& b
     built.version = binding.version;
     ++builds_;
     const std::string& glsl = binding.parse->glsl;
+    if (binding.parse->kind == engine_core::ShaderKind::Post) {
+        // One program: the full-screen triangle, and post() over the stage's image.
+        const AssembledSource post = AssemblePost(glsl);
+        link(binding, LoadShader("pipeline/fullscreen.vert"), nullptr, post, built.post, built);
+        return;
+    }
     const AssembledSource gbuffer =
         AssembleSurface("pipeline/deferred.frag", {"pipeline/gbuffer.glsl", "pipeline/surface.glsl"}, glsl, true);
     // The vertex stage, when the Shader has one, spliced into the engine's vertex shader.
@@ -148,7 +156,7 @@ void SurfacePrograms::build(const engine_core::SurfaceBinding& binding, Built& b
 }
 
 void SurfacePrograms::destroy(Built& built) {
-    for (Variant* variant : {&built.gbuffer, &built.forward, &built.shadow}) {
+    for (Variant* variant : {&built.gbuffer, &built.forward, &built.shadow, &built.post}) {
         if (variant->program.id != 0) {
             glDeleteProgram(variant->program.id);
         }

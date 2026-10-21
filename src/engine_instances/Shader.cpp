@@ -70,8 +70,8 @@ void Shader::rebuild() {
     const std::string was_error = error_;
     const std::string was_vertex = vertex_error_;
     const std::string was_fragment = fragment_error_;
-    // The vertex stage counts only while it has text.
-    const ShaderParse* vertex = has_vertex_stage() ? vertex_parse_.get() : nullptr;
+    // The vertex stage counts only in a surface Shader, while it has text.
+    const ShaderParse* vertex = kind_ == ShaderKind::Surface && has_vertex_stage() ? vertex_parse_.get() : nullptr;
     const MergedParams merged = merge_shader_params(*fragment_parse_, vertex);
     auto whole = std::make_shared<ShaderParse>(*fragment_parse_);
     whole->params = merged.params;

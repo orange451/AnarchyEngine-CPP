@@ -941,3 +941,19 @@ TEST_CASE("SHA29 renaming a Folder of a Shader with a vertex stage moves its ver
     REQUIRE(shader != nullptr);
     REQUIRE(shader->vertex_source() == kLift);
 }
+
+TEST_CASE("SHA30 a post Shader builds without its vertex text, which it never uses", "[shader]") {
+    SimRole role;
+    engine_core::Game game;
+    Shader& shader = add_shader(game, "Fade");
+    shader.set_vertex_source("uniform float A;\n");
+    REQUIRE(shader.error() == "vertex 1: a vertex stage needs void vertex()");
+    shader.set_source(kVignette);
+    REQUIRE(shader.kind() == ShaderKind::Post);
+    REQUIRE(shader.error().empty());
+    REQUIRE(shader.vertex_error().empty());
+    REQUIRE(shader.parse()->params.size() == 1);
+    // Back to a surface, the vertex text counts again.
+    REQUIRE_FALSE(shader.set_kind(ShaderKind::Surface));
+    REQUIRE(shader.vertex_error() == "1: a vertex stage needs void vertex()");
+}

@@ -129,8 +129,14 @@ std::optional<std::string> Shader::set_mode(const char* property, T& field, T va
         note_property_change(property, kind_slot(previous), kind_slot(value));
     }
     if (rebuilds) {
-        // Programs build from the kind and the modes too.
+        // Programs build from the kind and the modes too. The driver's errors
+        // were for the old program, so they go with its version.
         ++source_version_;
+        if (!fragment_compile_error_.empty() || !vertex_compile_error_.empty()) {
+            fragment_compile_error_.clear();
+            vertex_compile_error_.clear();
+            rebuild();
+        }
     }
     return std::nullopt;
 }
@@ -140,8 +146,6 @@ std::optional<std::string> Shader::set_kind(ShaderKind kind) {
         return std::nullopt;
     }
     set_mode("Kind", kind_, kind, true);
-    fragment_compile_error_.clear();
-    vertex_compile_error_.clear();
     reparse(ShaderStage::Fragment);
     reparse(ShaderStage::Vertex);
     rebuild();
@@ -187,8 +191,6 @@ std::string Shader::prepare_source(int stage, std::string text) {
     if (peek.header_kind && *peek.header_kind != kind_) {
         // Kind alone: the text about to be stored is parsed under it next.
         set_mode("Kind", kind_, *peek.header_kind, true);
-        fragment_compile_error_.clear();
-        vertex_compile_error_.clear();
         kind_changed = true;
     }
     if (peek.header_modes) {

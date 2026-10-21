@@ -76,7 +76,7 @@ public:
     const std::string& fragment_error() const { return fragment_error_; }
     // The driver's error building stage at source_version version, as the
     // Renderer found it: kept while that version is current, cleared by the
-    // next text of that stage. Not undoable and not saved. Simulation thread.
+    // next text of that stage or a Kind or mode change. Not undoable and not saved. Simulation thread.
     void set_compile_error(std::uint64_t version, ShaderStage stage, std::string error);
 
     // The Shader as a whole: the fragment stage's parse with both stages'

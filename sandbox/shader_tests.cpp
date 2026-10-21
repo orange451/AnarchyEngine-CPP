@@ -973,3 +973,23 @@ TEST_CASE("SHA31 header and render_mode lines count only in the fragment stage",
     REQUIRE(shader.vertex_source() == moded);
     REQUIRE(shader.vertex_error() == "1: render_mode belongs in the fragment stage");
 }
+
+TEST_CASE("SHA32 a mode change clears the driver's error, which was for the old program", "[shader]") {
+    SimRole role;
+    engine_core::Game game;
+    Shader& shader = add_shader(game, "Look");
+    shader.set_vertex_source(kLift);
+    shader.set_compile_error(shader.source_version(), engine_core::ShaderStage::Fragment, "3: driver");
+    shader.set_compile_error(shader.source_version(), engine_core::ShaderStage::Vertex, "2: driver");
+    REQUIRE(shader.error() == "vertex 2: driver");
+    REQUIRE_FALSE(shader.set_transparent(true));
+    REQUIRE(shader.error().empty());
+    REQUIRE(shader.fragment_error().empty());
+    REQUIRE(shader.vertex_error().empty());
+    shader.set_compile_error(shader.source_version(), engine_core::ShaderStage::Fragment, "3: driver");
+    REQUIRE_FALSE(shader.set_two_sided(true));
+    REQUIRE(shader.error().empty());
+    shader.set_compile_error(shader.source_version(), engine_core::ShaderStage::Fragment, "3: driver");
+    REQUIRE_FALSE(shader.set_casts_shadow(false));
+    REQUIRE(shader.error().empty());
+}

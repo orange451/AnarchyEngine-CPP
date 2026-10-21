@@ -17,6 +17,7 @@
 #include "LuaApi.hpp"
 #include "PVInstance.hpp"
 #include "ScreenSpaceReflections.hpp"
+#include "ShaderEffect.hpp"
 #include "Skybox.hpp"
 #include "TerrainWorld.hpp"
 #include "ViewportScenes.hpp"
@@ -713,6 +714,39 @@ void SnapshotPump::resolve_lighting(DataModel& game) {
         bloom.size = static_cast<float>(effect->size());
         bloom.threshold = static_cast<float>(effect->threshold());
     }
+    // Every ShaderEffect under Lighting, through Folders, in tree order; then
+    // by Order, equal Orders keeping that order.
+    base_.effects.clear();
+    if (lighting != nullptr) {
+        lighting_walk_.clear();
+        lighting_walk_.push_back(lighting->id());
+        while (!lighting_walk_.empty()) {
+            const InstanceId id = lighting_walk_.back();
+            lighting_walk_.pop_back();
+            const DataModel* object = game.instance(id);
+            if (object == nullptr || (id != lighting->id() && object->viewport_pane())) {
+                continue;
+            }
+            if (const auto* effect = dynamic_cast<const ShaderEffect*>(object)) {
+                VisualShaderEffect row;
+                row.effect = id;
+                row.enabled = effect->enabled();
+                row.order = effect->order();
+                row.binding = surfaces_.get(game, effect);
+                if (row.binding != nullptr) {
+                    base_.effects.push_back(std::move(row));
+                }
+            }
+            // Children are pushed last first, so the first child comes off the walk first.
+            std::size_t first = lighting_walk_.size();
+            for (InstanceId child = game.first_child(id); child != 0; child = game.next_sibling(child)) {
+                lighting_walk_.push_back(child);
+            }
+            std::reverse(lighting_walk_.begin() + static_cast<std::ptrdiff_t>(first), lighting_walk_.end());
+        }
+        std::stable_sort(base_.effects.begin(), base_.effects.end(),
+                         [](const VisualShaderEffect& a, const VisualShaderEffect& b) { return a.order < b.order; });
+    }
     const Atmosphere* air = lighting != nullptr ? find_first<Atmosphere>(game, lighting->id()) : nullptr;
     VisualAtmosphere& atmosphere = base_.atmosphere;
     atmosphere = VisualAtmosphere{};
@@ -771,6 +805,7 @@ void SnapshotPump::blit(VisualSnapshot& dst) const {
     dst.sky = base_.sky;
     dst.dynamic_sky = base_.dynamic_sky;
     dst.bloom = base_.bloom;
+    dst.effects = base_.effects;
     dst.atmosphere = base_.atmosphere;
     dst.reflections = base_.reflections;
     dst.occlusion = base_.occlusion;

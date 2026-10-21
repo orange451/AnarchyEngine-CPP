@@ -168,3 +168,68 @@ TEST_CASE("SFX4 scripts make a ShaderEffect, give it a Shader, and set its attri
         REQUIRE(value);
     }
 }
+
+TEST_CASE("SFX5 the snapshot carries every ShaderEffect with a post Shader, in Order", "[shader-effect][render]") {
+    SimRole role;
+    engine_core::Game game;
+    engine_core::SnapshotPump pump;
+    pump.reserve(engine_core::DataModel::kMaxInstances);
+    const auto frame = [&] {
+        pump.prepare_copy(game);
+        pump.publish();
+    };
+    frame();
+    REQUIRE(pump.front().effects.empty());
+
+    Shader& fade = add_shader(game, "Fade", ShaderKind::Post, kVignette);
+    Shader& look = add_shader(game, "Look", ShaderKind::Surface, kTint);
+    const InstanceId lighting = game.scene_service("Lighting");
+    engine_core::Folder& folder = game.create<engine_core::Folder>();
+    game.set_parent(folder.id(), lighting);
+    ShaderEffect& late = add_effect(game, "Late", folder.id());
+    ShaderEffect& first = add_effect(game, "First", lighting);
+    ShaderEffect& second = add_effect(game, "Second", lighting);
+    ShaderEffect& plain = add_effect(game, "Plain", lighting);
+    ShaderEffect& bare = add_effect(game, "Bare", lighting);
+    for (ShaderEffect* effect : {&late, &first, &second}) {
+        REQUIRE_FALSE(effect->set_reference(ShaderEffect::kShaderReference, instance_ref(fade.id())));
+    }
+    // Plain's Shader turned Surface after it was set: kept, and left out.
+    Shader& other = add_shader(game, "Other", ShaderKind::Post, kVignette);
+    REQUIRE_FALSE(plain.set_reference(ShaderEffect::kShaderReference, instance_ref(other.id())));
+    REQUIRE_FALSE(other.set_kind(ShaderKind::Surface));
+    (void)look;
+    REQUIRE_FALSE(late.set_order(2.0));
+    REQUIRE_FALSE(second.set_enabled(false));
+    frame();
+    const std::vector<engine_core::VisualShaderEffect>& effects = pump.front().effects;
+    REQUIRE(effects.size() == 3);
+    REQUIRE(effects[0].effect == first.id());
+    REQUIRE(effects[0].enabled);
+    REQUIRE(effects[1].effect == second.id());
+    REQUIRE_FALSE(effects[1].enabled);
+    REQUIRE(effects[2].effect == late.id());
+    REQUIRE(effects[2].order == 2.0);
+    for (const engine_core::VisualShaderEffect& row : effects) {
+        REQUIRE(row.binding != nullptr);
+        REQUIRE(row.binding->shader == fade.id());
+    }
+    (void)bare;
+    // Unchanged, the bindings are last frame's.
+    const std::shared_ptr<const engine_core::SurfaceBinding> kept = effects[0].binding;
+    frame();
+    REQUIRE(pump.front().effects[0].binding == kept);
+    // An attribute change swaps the values, not the binding; a text change makes a new one.
+    REQUIRE_FALSE(first.set_attribute("Strength", [] {
+        engine_core::LuaSlot slot;
+        slot.kind = engine_core::LuaSlot::Kind::Number;
+        slot.number = 0.9;
+        return slot;
+    }()));
+    frame();
+    REQUIRE(pump.front().effects[0].binding == kept);
+    REQUIRE(kept->values()->slots[0].number == 0.9);
+    fade.set_source("void post() {}\n");
+    frame();
+    REQUIRE(pump.front().effects[0].binding != kept);
+}

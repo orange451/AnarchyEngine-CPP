@@ -50,6 +50,11 @@ engine_core::VisualSnapshot Frame(std::uint64_t number, std::size_t rows) {
     snapshot.sky.rotation = static_cast<float>(number);
     snapshot.bloom.present = true;
     snapshot.bloom.size = static_cast<float>(number);
+    engine_core::VisualShaderEffect effect;
+    effect.effect = 77;
+    effect.order = static_cast<double>(number);
+    effect.binding = std::make_shared<const engine_core::SurfaceBinding>();
+    snapshot.effects.push_back(effect);
     snapshot.lighting.antialiasing = static_cast<int>(number % 2);
     snapshot.reflections.present = true;
     snapshot.reflections.max_distance = static_cast<float>(number);
@@ -83,6 +88,8 @@ bool Whole(const engine_core::VisualSnapshot& snapshot) {
              snapshot.sky.image == "textures/" + std::to_string(snapshot.frame) + ".hdr" &&
              snapshot.sky.rotation == static_cast<float>(snapshot.frame) &&
              snapshot.bloom.present && snapshot.bloom.size == static_cast<float>(snapshot.frame) &&
+             snapshot.effects.size() == 1 && snapshot.effects[0].order == static_cast<double>(snapshot.frame) &&
+             snapshot.effects[0].binding != nullptr &&
              snapshot.lighting.antialiasing == static_cast<int>(snapshot.frame % 2) &&
              snapshot.reflections.present && snapshot.reflections.max_distance == static_cast<float>(snapshot.frame) &&
              snapshot.occlusion.present && snapshot.occlusion.radius == static_cast<float>(snapshot.frame) &&

@@ -154,6 +154,18 @@ struct VisualBloom {
     float threshold = 0.f;
 };
 
+// One ShaderEffect under Lighting with a live post Shader, as the renderer
+// runs it. The snapshot lists every one, Order low to high and equal Orders
+// in tree order; a disabled one rides along, so a toggle is one field, not a
+// list change.
+struct VisualShaderEffect {
+    InstanceId effect = 0;
+    bool enabled = true;
+    double order = 0.0;
+    // Kept across frames while nothing but its values changed (SurfaceBindingCache).
+    std::shared_ptr<const SurfaceBinding> binding;
+};
+
 // The first Atmosphere under Lighting, in tree order, as the renderer reads
 // it. present is false with none, and the renderer draws no air.
 struct VisualAtmosphere {
@@ -371,6 +383,8 @@ struct VisualSnapshot {
     VisualSky sky;
     VisualDynamicSky dynamic_sky;
     VisualBloom bloom;
+    // Every ShaderEffect under Lighting with a post Shader, in Order.
+    std::vector<VisualShaderEffect> effects;
     VisualAtmosphere atmosphere;
     VisualReflections reflections;
     VisualAmbientOcclusion occlusion;

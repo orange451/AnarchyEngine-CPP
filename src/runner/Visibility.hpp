@@ -66,6 +66,9 @@ struct DrawItem {
     // Its surface Shader says render_mode transparent: see-through whatever
     // its transparency.
     bool seeThrough = false;
+    // How far its surface Shader's vertex stage may move a vertex, in world
+    // units: its culling sphere grows by it. 0 without a vertex stage.
+    float margin = 0.f;
 };
 
 // A drawable mesh the camera may see.

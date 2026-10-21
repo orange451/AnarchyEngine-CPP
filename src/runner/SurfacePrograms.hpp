@@ -2,6 +2,7 @@
 
 #include "RenderProgram.hpp"
 #include "ShaderAssembly.hpp"
+#include "ShaderSource.hpp"
 #include "SurfaceBinding.hpp"
 
 #include <cstdint>
@@ -36,8 +37,9 @@ public:
         Variant forward;
         // The shadow maps', only for a shader that cuts holes (SurfaceBinding::cuts).
         Variant shadow;
-        // "" or "<line>: <message>", at the user's line.
+        // "" or "<line>: <message>", at the user's line of error_stage.
         std::string error;
+        engine_core::ShaderStage error_stage = engine_core::ShaderStage::Fragment;
         // When get last asked for it, in the seconds reclaim is given.
         double used = 0;
     };
@@ -50,8 +52,9 @@ public:
     // A binding with no parse, a parse error, or a post shader has none. now
     // is in seconds, as reclaim takes it.
     const Built& get(const engine_core::SurfaceBinding& binding, double now);
-    // Errors found since the last call, as (shader id, version, text).
-    std::vector<std::tuple<engine_core::InstanceId, std::uint64_t, std::string>> take_errors();
+    // Errors found since the last call, as (shader id, version, stage, "<line>: <message>").
+    using Error = std::tuple<engine_core::InstanceId, std::uint64_t, engine_core::ShaderStage, std::string>;
+    std::vector<Error> take_errors();
     // Deletes programs of shaders not asked for in the 60 seconds before now.
     void reclaim(double now);
     // Deletes every GL object.
@@ -62,14 +65,16 @@ public:
 
 private:
     void build(const engine_core::SurfaceBinding& binding, Built& built);
-    // Links fragment into variant; false, with built's error set once, when it fails.
-    bool link(const engine_core::SurfaceBinding& binding, const std::string& vertex, const AssembledSource& fragment,
-              Variant& variant, Built& built);
+    // Links vertex and fragment into variant; false, with built's error set
+    // once, when it fails. vertex_map, when given, is the vertex text with the
+    // user's lines in it, so a vertex failure maps to them.
+    bool link(const engine_core::SurfaceBinding& binding, const std::string& vertex, const AssembledSource* vertex_map,
+              const AssembledSource& fragment, Variant& variant, Built& built);
     static void destroy(Built& built);
 
     Finish finish_;
     std::unordered_map<engine_core::InstanceId, Built> built_;
-    std::vector<std::tuple<engine_core::InstanceId, std::uint64_t, std::string>> errors_;
+    std::vector<Error> errors_;
     std::uint64_t builds_ = 0;
     std::uint64_t shadowBuilds_ = 0;
 };

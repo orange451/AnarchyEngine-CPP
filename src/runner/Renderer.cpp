@@ -2543,6 +2543,9 @@ void Renderer::findVisible(const MeshDraw* meshes, int count, const CameraView& 
                 item.terrain = draw.terrainLook != 0;
                 item.shadowOnly = draw.shadowOnly;
                 item.program = draw.surface != nullptr ? draw.surface->shader : 0;
+                // A vertex stage may move it: culling allows for the Shader's margin.
+                item.margin =
+                    draw.surface != nullptr && draw.surface->has_vertex ? draw.surface->displacement_margin : 0.f;
                 item.seeThrough = draw.surface != nullptr && draw.surface->modes.transparent;
                 if (item.terrain) {
                     item.transparency = 0.f;

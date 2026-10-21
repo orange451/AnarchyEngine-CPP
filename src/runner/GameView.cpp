@@ -216,15 +216,14 @@ void GameView::linkCamera(std::string guid) {
     }
 }
 
-void GameView::postSurfaceErrors(
-    std::vector<std::tuple<engine_core::InstanceId, std::uint64_t, std::string>> errors) {
+void GameView::postSurfaceErrors(std::vector<SurfacePrograms::Error> errors) {
     if (engine_ == nullptr || errors.empty()) {
         return;
     }
     engine_->on_simulation([errors = std::move(errors)](engine_core::DataModel& game) {
-        for (const auto& [id, version, text] : errors) {
+        for (const auto& [id, version, stage, text] : errors) {
             if (auto* shader = dynamic_cast<engine_core::Shader*>(game.instance(id))) {
-                shader->set_compile_error(version, engine_core::ShaderStage::Fragment, text);
+                shader->set_compile_error(version, stage, text);
             }
         }
     });

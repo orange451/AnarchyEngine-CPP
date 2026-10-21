@@ -426,10 +426,8 @@ public:
     // take_errors are the compile errors to show on each Shader.
     SurfacePrograms& surfacePrograms() { return surfacePrograms_; }
     // The surface Shaders that failed to build since the last call, as
-    // (Shader id, source version, "<line>: <message>").
-    std::vector<std::tuple<engine_core::InstanceId, std::uint64_t, std::string>> takeSurfaceErrors() {
-        return surfacePrograms_.take_errors();
-    }
+    // (Shader id, source version, stage, "<line>: <message>").
+    std::vector<SurfacePrograms::Error> takeSurfaceErrors() { return surfacePrograms_.take_errors(); }
 
     // Where meshes are seen from: a Camera's Transform, looking down its -Z
     // with its +Y up, and the vertical angle it sees in degrees. Any scale in

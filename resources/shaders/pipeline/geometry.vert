@@ -111,11 +111,17 @@ void billboard() {
     vec3 right = cross(up, forward);
     float width = length(aModel[0].xyz);
     vec3 world = origin + right * (aPosition.x * width) + upAxis * aPosition.y;
+    vec3 worldNormal = forward;
+    vec4 color = aColor * vec4(aTint.rgb, 1.0);
+#ifdef VERTEX_SHADER
+    // The Material's Shader's vertex stage (vertex_shader.glsl), on the turned card.
+    runVertexShader(world, worldNormal, aUv, color);
+#endif
     vec4 viewPosition = uView * vec4(world, 1.0);
-    vViewNormal = mat3(uView) * forward;
+    vViewNormal = mat3(uView) * worldNormal;
     vViewPosition = viewPosition.xyz;
     vUv = aUv;
-    vColor = aColor * vec4(aTint.rgb, 1.0);
+    vColor = color;
     gl_Position = uProjection * viewPosition;
 }
 
@@ -126,11 +132,18 @@ void main() {
     }
     vLodFade = lodFade(aTint.w);
     mat4 skinning = skin();
-    vec4 viewPosition = uView * (aModel * (skinning * vec4(aPosition, 1.0)));
+    vec3 world = (aModel * (skinning * vec4(aPosition, 1.0))).xyz;
+    vec3 worldNormal = aNormalMatrix * (mat3(skinning) * aNormal);
+    vec4 color = aColor * vec4(aTint.rgb, 1.0);
+#ifdef VERTEX_SHADER
+    // The Material's Shader's vertex stage (vertex_shader.glsl) moves it in world space.
+    runVertexShader(world, worldNormal, aUv, color);
+#endif
+    vec4 viewPosition = uView * vec4(world, 1.0);
     // The view has no scale, so its rotation carries normals on.
-    vViewNormal = mat3(uView) * (aNormalMatrix * (mat3(skinning) * aNormal));
+    vViewNormal = mat3(uView) * worldNormal;
     vViewPosition = viewPosition.xyz;
     vUv = aUv;
-    vColor = aColor * vec4(aTint.rgb, 1.0);
+    vColor = color;
     gl_Position = uProjection * viewPosition;
 }

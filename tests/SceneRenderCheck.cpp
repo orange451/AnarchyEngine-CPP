@@ -2411,11 +2411,20 @@ void CheckParticleDepthCopy() {
 // its default unless values says otherwise.
 std::shared_ptr<engine_core::SurfaceBinding> SurfaceFor(engine_core::InstanceId id, std::uint64_t version,
                                                         const char* source,
-                                                        std::vector<engine_core::LuaSlot> values = {}) {
+                                                        std::vector<engine_core::LuaSlot> values = {},
+                                                        const char* vertex = nullptr, float margin = 1.f) {
     auto binding = std::make_shared<engine_core::SurfaceBinding>();
     binding->shader = id;
     binding->version = version;
     binding->parse = std::make_shared<engine_core::ShaderParse>(engine_core::parse_shader(source));
+    if (vertex != nullptr) {
+        const engine_core::ShaderParse stage =
+            engine_core::parse_shader(vertex, engine_core::ShaderStage::Vertex, engine_core::ShaderKind::Surface);
+        binding->has_vertex = !stage.error;
+        binding->vertex_glsl = stage.glsl;
+        binding->vertex_reads_time = stage.reads_time;
+    }
+    binding->displacement_margin = margin;
     std::vector<engine_core::LuaSlot> slots;
     for (std::size_t i = 0; i < binding->parse->params.size(); ++i) {
         const engine_core::ShaderParam& param = binding->parse->params[i];
@@ -2481,7 +2490,7 @@ void CheckSurfaceShaders(const GpuMesh* cube, int size, int fbWidth, int fbHeigh
     Expect(errors.size() == 1 && std::get<0>(errors[0]) == 9003 && std::get<1>(errors[0]) == 1,
            "surface shaders: the failure is reported once, for its Shader and version");
     if (!errors.empty()) {
-        const std::string& text = std::get<2>(errors[0]);
+        const std::string& text = std::get<3>(errors[0]);
         Expect(text.rfind("3: ", 0) == 0 || text.rfind("4: ", 0) == 0,
                "surface shaders: the error is at the user's line (" + text + ")");
     }
@@ -2527,6 +2536,51 @@ void CheckSurfaceShaders(const GpuMesh* cube, int size, int fbWidth, int fbHeigh
     renderer.draw(0, 0, size, size, size, size, many.data(), static_cast<int>(many.size()));
     Expect(programs.builds() == before + 1,
            "surface shaders: 200 draws of one Shader build it once (" + std::to_string(programs.builds() - before) + ")");
+
+    // A vertex stage moves the cube: lifted 2 units, the middle clears and the top shows it.
+    const char* tint = "shader surface;\nvoid surface() {\n    ALBEDO = vec3(1.0, 0.2, 0.2);\n}\n";
+    renderer.setCamera(engine_core::matrix4_translation(0.f, 0.f, 5.f), 50.f);
+    runner::MeshDraw lifted = plainDraw;
+    lifted.surface = SurfaceFor(9007, 1, tint, {}, "void vertex() {\n    VERTEX.y += 2.0;\n}\n");
+    Expect(!IsClear(drawOne(plainDraw)), "vertex stage: the cube at rest fills the middle");
+    const Pixel liftedMiddle = drawOne(lifted);
+    const Pixel liftedTop = ReadPixel(fbWidth / 2, fbHeight * 88 / 100);
+    Expect(IsClear(liftedMiddle) && !IsClear(liftedTop) && liftedTop.r > liftedTop.g + 40,
+           "vertex stage: VERTEX.y += 2 draws the cube above the middle (" + Text(liftedMiddle) + " / " +
+               Text(liftedTop) + ")");
+    Expect(programs.take_errors().empty(), "vertex stage: a vertex stage that builds reports nothing");
+
+    // A vertex stage that does not build: plain, and its error names the stage and the user's line.
+    runner::MeshDraw brokenVertex = plainDraw;
+    brokenVertex.surface = SurfaceFor(9008, 1, tint, {}, "void vertex() {\n    VERTEX.y += ;\n}\n");
+    const Pixel brokenMiddle = drawOne(brokenVertex);
+    Expect(!IsClear(brokenMiddle) && brokenMiddle.r < brokenMiddle.g + 40,
+           "vertex stage: a vertex stage that fails draws the plain Material (" + Text(brokenMiddle) + ")");
+    const auto vertexErrors = programs.take_errors();
+    Expect(vertexErrors.size() == 1 && std::get<0>(vertexErrors[0]) == 9008 &&
+               std::get<2>(vertexErrors[0]) == engine_core::ShaderStage::Vertex &&
+               (std::get<3>(vertexErrors[0]).rfind("2: ", 0) == 0 || std::get<3>(vertexErrors[0]).rfind("3: ", 0) == 0),
+           "vertex stage: the failure is reported for the vertex stage at the user's line" +
+               (vertexErrors.empty() ? std::string() : " (" + std::get<3>(vertexErrors[0]) + ")"));
+
+    // Culling allows for the margin: a cube at rest out of view, moved into it by its vertex stage.
+    runner::MeshDraw moved = plainDraw;
+    moved.model = engine_core::matrix4_translation(-4.f, 0.f, 0.f);
+    moved.surface = SurfaceFor(9009, 1, tint, {}, "void vertex() {\n    VERTEX.x += 4.0;\n}\n", 4.f);
+    const Pixel movedIn = drawOne(moved);
+    Expect(!IsClear(movedIn) && movedIn.r > movedIn.g + 40,
+           "vertex stage: a cube moved into view within its margin draws (" + Text(movedIn) + ")");
+    moved.surface = SurfaceFor(9009, 2, tint, {}, "void vertex() {\n    VERTEX.x += 4.0;\n}\n", 0.f);
+    Expect(IsClear(drawOne(moved)) && DrawnPixels(fbWidth, fbHeight) == 0,
+           "vertex stage: with no margin the cube at rest out of view is culled");
+
+    // A Shader with no vertex stage builds as before: one build, no vertex program.
+    const std::uint64_t fragmentOnly = programs.builds();
+    runner::MeshDraw plainShader = plainDraw;
+    plainShader.surface = SurfaceFor(9010, 1, tint);
+    drawOne(plainShader);
+    Expect(programs.builds() == fragmentOnly + 1, "vertex stage: a Shader without one builds once as before");
+    renderer.setCamera(engine_core::matrix4_identity(), runner::Renderer::kCameraFovYDegrees);
     renderer.shutdown();
 }
 

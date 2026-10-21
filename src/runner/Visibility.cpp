@@ -59,6 +59,7 @@ void BoundItem(const DrawItem& item, Sphere& sphere, std::uint16_t& traits, Visi
         return;
     }
     sphere = WorldBounds(*item.model, item.boundsMin, item.boundsMax);
+    sphere.radius += item.margin;
     const bool banded = item.lodNear > 0.f || item.lodFar < std::numeric_limits<float>::infinity();
     traits = static_cast<std::uint16_t>(kTraitDrawable | (item.shadowOnly ? kTraitShadowOnly : 0) |
                                         (item.transparency > 0.f || item.seeThrough ? kTraitTransparent : 0) |

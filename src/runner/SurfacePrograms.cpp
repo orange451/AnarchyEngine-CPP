@@ -49,17 +49,21 @@ const SurfacePrograms::Built& SurfacePrograms::get(const engine_core::SurfaceBin
 }
 
 bool SurfacePrograms::link(const engine_core::SurfaceBinding& binding, const std::string& vertex,
-                           const AssembledSource& fragment, Variant& variant, Built& built) {
+                           const AssembledSource* vertex_map, const AssembledSource& fragment, Variant& variant,
+                           Built& built) {
     std::string log;
-    variant.program.id = LinkProgramLog(vertex, fragment.text, log);
+    LinkStage failed = LinkStage::Link;
+    variant.program.id = LinkProgramLog(vertex, fragment.text, log, failed);
     if (variant.program.id == 0) {
         // One error a version: the first pass's that fails.
         if (built.error.empty()) {
-            built.error = MapShaderError(log, fragment);
+            const bool in_vertex = failed == LinkStage::Vertex && vertex_map != nullptr;
+            built.error_stage = in_vertex ? engine_core::ShaderStage::Vertex : engine_core::ShaderStage::Fragment;
+            built.error = MapShaderError(log, in_vertex ? *vertex_map : fragment);
             if (built.error.empty()) {
                 built.error = "1: the shader did not build";
             }
-            errors_.emplace_back(binding.shader, binding.version, built.error);
+            errors_.emplace_back(binding.shader, binding.version, built.error_stage, built.error);
         }
         return false;
     }
@@ -81,8 +85,15 @@ void SurfacePrograms::build(const engine_core::SurfaceBinding& binding, Built& b
     const std::string& glsl = binding.parse->glsl;
     const AssembledSource gbuffer =
         AssembleSurface("pipeline/deferred.frag", {"pipeline/gbuffer.glsl", "pipeline/surface.glsl"}, glsl, true);
-    const std::string geometry = LoadShader("pipeline/geometry.vert");
-    if (!link(binding, geometry, gbuffer, built.gbuffer, built)) {
+    // The vertex stage, when the Shader has one, spliced into the engine's vertex shader.
+    AssembledSource geometry;
+    if (binding.has_vertex) {
+        geometry = AssembleVertex("pipeline/geometry.vert", binding.vertex_glsl);
+    } else {
+        geometry.text = LoadShader("pipeline/geometry.vert");
+    }
+    const AssembledSource* vertex_map = binding.has_vertex ? &geometry : nullptr;
+    if (!link(binding, geometry.text, vertex_map, gbuffer, built.gbuffer, built)) {
         return;
     }
     AssembledSource forward = AssembleSurface("pipeline/forward.frag",
@@ -99,12 +110,12 @@ void SurfacePrograms::build(const engine_core::SurfaceBinding& binding, Built& b
             ++forward.user_first_line;
         }
     }
-    link(binding, geometry, forward, built.forward, built);
+    link(binding, geometry.text, vertex_map, forward, built.forward, built);
     if (binding.cuts) {
         ++shadowBuilds_;
         const AssembledSource vertex = AssembleSurface("pipeline/shadow.vert", {}, std::string(), false);
         const AssembledSource shadow = AssembleSurface("pipeline/shadow.frag", {"pipeline/surface.glsl"}, glsl, true);
-        link(binding, vertex.text, shadow, built.shadow, built);
+        link(binding, vertex.text, nullptr, shadow, built.shadow, built);
     }
 }
 
@@ -117,7 +128,7 @@ void SurfacePrograms::destroy(Built& built) {
     }
 }
 
-std::vector<std::tuple<engine_core::InstanceId, std::uint64_t, std::string>> SurfacePrograms::take_errors() {
+std::vector<SurfacePrograms::Error> SurfacePrograms::take_errors() {
     auto out = std::move(errors_);
     errors_.clear();
     return out;

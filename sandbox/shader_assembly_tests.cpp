@@ -67,3 +67,29 @@ TEST_CASE("SA4 driver errors map to the user's lines", "[shader-assembly]") {
     // A log with no line still reports at line 1.
     REQUIRE(runner::MapShaderError("Link failed: too many samplers\n", source) == "1: Link failed: too many samplers");
 }
+
+TEST_CASE("SA5 a vertex stage is spliced into geometry.vert after the define, at its own first line", "[shader-assembly]") {
+    const std::string user = "void vertex() {\n    VERTEX.y += 1.0;\n}\n";
+    const runner::AssembledSource source = runner::AssembleVertex("pipeline/geometry.vert", user);
+    REQUIRE(!source.text.empty());
+    REQUIRE(source.text.rfind("#version", 0) == 0);
+    const std::size_t define = source.text.find("#define VERTEX_SHADER\n");
+    REQUIRE(define != std::string::npos);
+    REQUIRE(define < source.text.find("void vertex();"));
+    REQUIRE(source.user_lines == 3);
+    // The user's first line is where it says.
+    std::size_t at = 0;
+    for (int line = 1; line < source.user_first_line; ++line) {
+        at = source.text.find('\n', at) + 1;
+    }
+    REQUIRE(source.text.compare(at, 15, "void vertex() {") == 0);
+    // The engine's main follows the user's text.
+    REQUIRE(source.text.find("runVertexShader(", at) != std::string::npos);
+    REQUIRE(runner::AssembleVertex("pipeline/shadow.vert", user).text.find("#define VERTEX_SHADER") != std::string::npos);
+}
+
+TEST_CASE("SA6 a vertex log maps to the user's line", "[shader-assembly]") {
+    const runner::AssembledSource source = runner::AssembleVertex("pipeline/geometry.vert", "void vertex() {\n    VERTEX.y += ;\n}\n");
+    const std::string log = "0(" + std::to_string(source.user_first_line + 1) + ") : error C0000: syntax error\n";
+    REQUIRE(runner::MapShaderError(log, source) == "2: syntax error");
+}

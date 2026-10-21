@@ -439,7 +439,8 @@ void TestCompileErrorReachesShader(ide::IdeLayout& layout, jadefx::Scene& scene)
         id = shader.id();
         version = shader.source_version();
     });
-    view->postSurfaceErrors({{id, version, "4: 'wobble' : no matching overloaded function found"}});
+    view->postSurfaceErrors(
+        {{id, version, engine_core::ShaderStage::Fragment, "4: 'wobble' : no matching overloaded function found"}});
     std::string error;
     engine.on_simulation([&](engine_core::DataModel& game) {
         if (auto* shader = dynamic_cast<engine_core::Shader*>(game.instance(id))) {

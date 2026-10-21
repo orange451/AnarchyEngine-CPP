@@ -28,8 +28,12 @@ bool CanDraw(GLuint program);
 
 // Compiles and links a program. Returns 0 after reporting the failure.
 GLuint LinkProgram(const std::string& vertexSource, const std::string& fragmentSource, const char* name);
+// Which step of a link failed.
+enum class LinkStage { Vertex, Fragment, Link };
 // LinkProgram, quietly: on failure, 0 with the driver's log in log (the
-// stage's compile log, or the link's), for a user's shader to show.
-GLuint LinkProgramLog(const std::string& vertexSource, const std::string& fragmentSource, std::string& log);
+// stage's compile log, or the link's) and which step it was in failed, for a
+// user's shader to show.
+GLuint LinkProgramLog(const std::string& vertexSource, const std::string& fragmentSource, std::string& log,
+                      LinkStage& failed);
 
 }  // namespace runner

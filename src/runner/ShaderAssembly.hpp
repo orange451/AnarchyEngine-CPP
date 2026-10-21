@@ -20,6 +20,11 @@ struct AssembledSource {
 AssembledSource AssembleSurface(const char* main_file, std::initializer_list<const char*> libraries,
                                 const std::string& user_glsl, bool fragment);
 
+// main_file's #version line (geometry.vert or shadow.vert), "#define
+// VERTEX_SHADER", vertex_shader.glsl, user_glsl (a vertex stage's ShaderParse
+// glsl), then the rest of main_file. Empty text when any file cannot be read.
+AssembledSource AssembleVertex(const char* main_file, const std::string& user_glsl);
+
 // The first error in a driver's compile or link log as "<line>: <message>", the
 // line counted in the user's glsl: NVIDIA's "0(12) : error C0000: msg", Mesa's
 // and Intel's "0:12(3): error: msg", and Apple's and ANGLE's "ERROR: 0:12: msg".

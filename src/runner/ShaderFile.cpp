@@ -134,17 +134,24 @@ GLuint LinkProgram(const std::string& vertexSource, const std::string& fragmentS
     return program;
 }
 
-GLuint LinkProgramLog(const std::string& vertexSource, const std::string& fragmentSource, std::string& log) {
+GLuint LinkProgramLog(const std::string& vertexSource, const std::string& fragmentSource, std::string& log,
+                      LinkStage& failed) {
     log.clear();
+    failed = LinkStage::Link;
     if (vertexSource.empty() || fragmentSource.empty()) {
         log = "a shader file of the engine's could not be read";
+        failed = vertexSource.empty() ? LinkStage::Vertex : LinkStage::Fragment;
         return 0;
     }
     GLuint vertex = CompileQuiet(GL_VERTEX_SHADER, vertexSource, log);
-    GLuint fragment = vertex != 0 ? CompileQuiet(GL_FRAGMENT_SHADER, fragmentSource, log) : 0;
-    if (vertex == 0 || fragment == 0) {
+    if (vertex == 0) {
+        failed = LinkStage::Vertex;
+        return 0;
+    }
+    GLuint fragment = CompileQuiet(GL_FRAGMENT_SHADER, fragmentSource, log);
+    if (fragment == 0) {
+        failed = LinkStage::Fragment;
         glDeleteShader(vertex);
-        glDeleteShader(fragment);
         return 0;
     }
     GLuint program = glCreateProgram();

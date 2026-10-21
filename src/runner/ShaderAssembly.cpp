@@ -77,6 +77,35 @@ AssembledSource AssembleSurface(const char* main_file, std::initializer_list<con
     return out;
 }
 
+AssembledSource AssembleVertex(const char* main_file, const std::string& user_glsl) {
+    AssembledSource out;
+    const std::string main = LoadShader(main_file);
+    const std::string hook = LoadShader("pipeline/vertex_shader.glsl");
+    if (main.empty() || hook.empty()) {
+        return out;
+    }
+    const std::size_t line_end = main.find('\n');
+    std::string text = main.substr(0, line_end == std::string::npos ? main.size() : line_end + 1);
+    if (text.back() != '\n') {
+        text += '\n';
+    }
+    text += "#define VERTEX_SHADER\n";
+    text += hook;
+    text += '\n';
+    out.user_first_line = count_lines(text) + 1;
+    std::string user = user_glsl;
+    if (!user.empty() && user.back() != '\n') {
+        user += '\n';
+    }
+    out.user_lines = count_lines(user);
+    text += user;
+    if (line_end != std::string::npos) {
+        text += main.substr(line_end + 1);
+    }
+    out.text = std::move(text);
+    return out;
+}
+
 std::string MapShaderError(const std::string& log, const AssembledSource& source) {
     static const std::regex nvidia(R"(^\s*\d+\((\d+)\)\s*:\s*error\b[^:]*:\s*(.*)$)");
     static const std::regex mesa(R"(^\s*\d+:(\d+)\(\d+\)\s*:\s*error\s*:\s*(.*)$)");

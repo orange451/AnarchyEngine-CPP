@@ -63,7 +63,8 @@ void OpWriter::bind(std::uint32_t netid, std::string_view guid) {
 }
 
 void OpWriter::create(std::uint32_t netid, std::uint32_t parent, std::string_view class_name, std::string_view guid,
-                      std::string_view name, const engine_core::PropertyBag& properties, const std::string* source) {
+                      std::string_view name, const engine_core::PropertyBag& properties, const std::string* source,
+                      const std::vector<std::string>* extra_sources) {
     // Strings first: their Define ops must come before the op that uses them.
     const std::uint32_t klass = ref(class_name);
     std::vector<std::uint32_t> keys;
@@ -85,6 +86,11 @@ void OpWriter::create(std::uint32_t netid, std::uint32_t parent, std::string_vie
     out_.u8(source != nullptr ? 1 : 0);
     if (source != nullptr) {
         out_.string(*source);
+        const std::size_t extras = extra_sources != nullptr ? extra_sources->size() : 0;
+        out_.varuint(extras);
+        for (std::size_t i = 0; i < extras; ++i) {
+            out_.string((*extra_sources)[i]);
+        }
     }
     ++ops_;
 }
@@ -118,9 +124,10 @@ void OpWriter::set(std::uint32_t netid, std::string_view property, const engine_
     ++ops_;
 }
 
-void OpWriter::source(std::uint32_t netid, std::string_view source) {
+void OpWriter::source(std::uint32_t netid, std::string_view source, std::uint8_t stage) {
     out_.u8(static_cast<std::uint8_t>(Op::Kind::Source));
     out_.u32(netid);
+    out_.u8(stage);
     out_.string(source);
     ++ops_;
 }
@@ -199,6 +206,13 @@ bool read_ops(ByteReader& in, StringTable& strings, std::vector<Op>& out) {
                 op.has_source = has_source == 1;
                 if (op.has_source) {
                     op.source = in.string();
+                    const std::uint64_t extras = in.varuint();
+                    if (in.failed() || extras > 8) {
+                        return false;
+                    }
+                    for (std::uint64_t i = 0; i < extras; ++i) {
+                        op.extra_sources.push_back(in.string());
+                    }
                 }
                 break;
             }
@@ -225,6 +239,7 @@ bool read_ops(ByteReader& in, StringTable& strings, std::vector<Op>& out) {
             }
             case Op::Kind::Source:
                 op.netid = in.u32();
+                op.stage = in.u8();
                 op.text = in.string();
                 break;
             default:

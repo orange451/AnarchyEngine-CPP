@@ -12,7 +12,7 @@ class LuaSource : public SourceText {
 public:
     LuaSource(DataModel::ChildTag tag, DataModel::State& state, InstanceId id) : SourceText(tag, state, id) {}
 
-    const char* source_extension() const override { return "luau"; }
+    const char* source_extension(int = 0) const override { return "luau"; }
 
 protected:
     // Script analysis checks it again.

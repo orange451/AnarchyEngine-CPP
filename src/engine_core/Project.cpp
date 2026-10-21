@@ -95,10 +95,29 @@ constexpr const char* kGitattributes =
 // The extensions a SourceText keeps its text in, without the dot: a Script's
 // .luau and a Shader's .glsl (SourceText::source_extension).
 constexpr const char* kSourceExtensions[] = {"luau", "glsl"};
+// The extensions of stages past the first (SourceText::stage_count): a
+// Shader's vertex text. Matched before kSourceExtensions, as ".vert.glsl"
+// ends in ".glsl" too.
+constexpr const char* kExtraExtensions[] = {"vert.glsl"};
 
-// The source extension name ends in, as ".luau", or null.
+// The extra stage's extension name ends in, as ".vert.glsl", or null.
+const char* extra_suffix_of(std::string_view name) {
+    static const std::string suffixes[] = {".vert.glsl"};
+    for (const std::string& suffix : suffixes) {
+        if (name.size() > suffix.size() && name.substr(name.size() - suffix.size()) == suffix) {
+            return suffix.c_str();
+        }
+    }
+    return nullptr;
+}
+
+// The source extension name ends in, as ".luau", or null; an extra stage's
+// file is not a source file.
 const char* source_suffix_of(std::string_view name) {
     static const std::string suffixes[] = {".luau", ".glsl"};
+    if (extra_suffix_of(name) != nullptr) {
+        return nullptr;
+    }
     for (const std::string& suffix : suffixes) {
         if (name.size() > suffix.size() && name.substr(name.size() - suffix.size()) == suffix) {
             return suffix.c_str();
@@ -115,6 +134,22 @@ bool init_source(std::string_view name) {
         }
     }
     return false;
+}
+
+// Whether name is a folder instance's extra stage file: init.vert.glsl.
+bool init_extra(std::string_view name) {
+    for (const char* extension : kExtraExtensions) {
+        if (name == std::string("init.") + extension) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// The extra stage extension of path's file, without the dot: "vert.glsl", or "".
+std::string extra_extension_of(const std::string& path) {
+    const char* suffix = extra_suffix_of(path);
+    return suffix != nullptr ? std::string(suffix + 1) : std::string();
 }
 
 // The extension of path's file, without the dot: "glsl" for ".../X.guid.glsl".
@@ -490,6 +525,12 @@ struct PlanNode {
     std::string props_bytes;
     std::string source_path;
     std::string source_bytes;
+    // Extra stage files found beside the source, each its path and bytes.
+    struct Extra {
+        std::string path;
+        std::string bytes;
+    };
+    std::vector<Extra> extras;
     std::vector<std::size_t> children;
     // The properties file as parsed.
     JsonValue doc;
@@ -610,6 +651,49 @@ void read_plan_source(const fs::path& tree_root, PlanNode& node, const std::stri
     node.source_bytes = cached != nullptr ? std::string(*cached) : read_file(disk_path(tree_root, path));
     node.source = node.source_bytes;
 }
+
+void read_plan_extra(const fs::path& tree_root, PlanNode& node, const std::string& path,
+                     const std::string_view* cached = nullptr) {
+    PlanNode::Extra extra;
+    extra.path = path;
+    extra.bytes = cached != nullptr ? std::string(*cached) : read_file(disk_path(tree_root, path));
+    node.extras.push_back(std::move(extra));
+}
+
+// Each of node's extra files into the stage whose extension it carries; a
+// stage with no file reads as empty. A file no stage takes fails the load.
+void apply_extras(SourceText& text, const PlanNode& node) {
+    std::vector<bool> given(static_cast<std::size_t>(std::max(text.stage_count(), 1)), false);
+    for (const PlanNode::Extra& extra : node.extras) {
+        const std::string extension = extra_extension_of(extra.path);
+        int stage = -1;
+        for (int candidate = 1; candidate < text.stage_count(); ++candidate) {
+            if (extension == text.source_extension(candidate)) {
+                stage = candidate;
+            }
+        }
+        if (stage < 0) {
+            throw ProjectError(extra.path + ": a " + text.class_name() + " has no ." + extension + " stage");
+        }
+        text.set_source(stage, extra.bytes);
+        given[static_cast<std::size_t>(stage)] = true;
+    }
+    for (int stage = 1; stage < text.stage_count(); ++stage) {
+        if (!given[static_cast<std::size_t>(stage)]) {
+            text.set_source(stage, std::string());
+        }
+    }
+}
+
+// node's extra stage texts, stage 1 first, as compared_json takes them.
+std::vector<std::string> extra_bytes_of(const PlanNode& node) {
+    std::vector<std::string> out;
+    for (const PlanNode::Extra& extra : node.extras) {
+        out.push_back(extra.bytes);
+    }
+    return out;
+}
+
 
 
 class PlanReader {
@@ -733,6 +817,8 @@ private:
         std::string guid;
         // Its .luau, or empty for none.
         std::string source;
+        // Its extra stage files (.vert.glsl), if any.
+        std::vector<std::string> extras;
         // Past the instance limit: the walk stopped here.
         bool over_limit = false;
         // Why its files did not read, or empty.
@@ -742,7 +828,7 @@ private:
 
     // A node in walk order, its files read later by read_queued.
     std::size_t queue(const std::string& props, const std::string& guid, const std::string& source,
-                      std::size_t parent) {
+                      std::size_t parent, std::vector<std::string> extras = {}) {
         const std::size_t index = nodes_.size();
         nodes_.emplace_back();
         nodes_[parent].children.push_back(index);
@@ -750,6 +836,7 @@ private:
         job.props = props;
         job.guid = guid;
         job.source = source;
+        job.extras = std::move(extras);
         // Building more would stop the studio at the world's capacity. The
         // root, nodes_[0], takes no instance slot.
         if (index > Project::instance_limit()) {
@@ -767,6 +854,9 @@ private:
                 read_plan_props(root_, nodes_[index], job.props, job.guid, false, cached(job.props));
                 if (!job.source.empty()) {
                     read_plan_source(root_, nodes_[index], job.source, cached(job.source));
+                }
+                for (const std::string& extra : job.extras) {
+                    read_plan_extra(root_, nodes_[index], extra, cached(extra));
                 }
             } catch (const std::exception& error) {
                 job.error = error.what();
@@ -833,8 +923,9 @@ private:
         }
         std::sort(entries.begin(), entries.end());
 
-        // Source files of every extension, by GUID.
+        // Source files of every extension, by GUID, and the extra stage files.
         std::map<std::string, std::string> sources;
+        std::map<std::string, std::vector<std::string>> extras;
         std::map<std::string, std::string> meta;
         const bool instance_folder = parent != 0 || dir != layout_.src;
         for (const auto& [name, is_dir] : entries) {
@@ -843,7 +934,7 @@ private:
                 continue;
             }
             const std::string path = join(dir, name);
-            if (!is_dir && (name == "init.json" || name == "init.meta.json" || init_source(name))) {
+            if (!is_dir && (name == "init.json" || name == "init.meta.json" || init_source(name) || init_extra(name))) {
                 // The folder's own files. The root's init.json was read already.
                 if (!instance_folder && name != "init.json") {
                     fail(path + ": the root cannot be a script");
@@ -865,6 +956,11 @@ private:
                 if (!meta.emplace(guid, path).second) {
                     fail("GUID " + guid + " has two .meta.json files in " + dir);
                 }
+            } else if (const char* extra = extra_suffix_of(name)) {
+                if (!split_stem(name.substr(0, name.size() - std::strlen(extra)), guid)) {
+                    fail(path + ": a filename must be <Name>.<guid>" + extra);
+                }
+                extras[guid].push_back(path);
             } else if (const char* suffix = source_suffix_of(name)) {
                 if (!split_stem(name.substr(0, name.size() - std::strlen(suffix)), guid)) {
                     fail(path + ": a filename must be <Name>.<guid>" + suffix);
@@ -886,11 +982,18 @@ private:
             if (source == sources.end()) {
                 fail(path + ": no .luau or .glsl file with GUID " + guid);
             }
-            queue(path, guid, source->second, parent);
+            const auto extra = extras.find(guid);
+            queue(path, guid, source->second, parent, extra != extras.end() ? extra->second : std::vector<std::string>{});
             sources.erase(source);
+            if (extra != extras.end()) {
+                extras.erase(extra);
+            }
         }
         for (const auto& [guid, path] : sources) {
             fail(path + ": no .meta.json file with GUID " + guid);
+        }
+        for (const auto& [guid, paths] : extras) {
+            fail(paths.front() + ": no .meta.json file with GUID " + guid);
         }
     }
 
@@ -922,7 +1025,14 @@ private:
             fail(dir + ": a folder instance needs init.json");
         }
         const std::string props = join(dir, plain ? "init.json" : "init.meta.json");
-        const std::size_t index = queue(props, guid, meta ? init : std::string(), parent);
+        std::vector<std::string> extras;
+        for (const char* extension : kExtraExtensions) {
+            const std::string candidate = join(dir, std::string("init.") + extension);
+            if (meta && fs::is_regular_file(disk_path(root_, candidate), error)) {
+                extras.push_back(candidate);
+            }
+        }
+        const std::size_t index = queue(props, guid, meta ? init : std::string(), parent, std::move(extras));
         scan(dir, index);
     }
 
@@ -1118,7 +1228,7 @@ std::map<std::string, std::vector<std::string>> guid_claims(const fs::path& root
         if (name.empty() || name[0] == '.' || ends_with(name, ".tmp") || !it->is_regular_file(kind)) {
             continue;
         }
-        if (name == "init.json" || name == "init.meta.json" || init_source(name)) {
+        if (name == "init.json" || name == "init.meta.json" || init_source(name) || init_extra(name)) {
             // The root's init.json names no GUID; its GUID is inside.
             if (it->path().parent_path() == top || !split_stem(utf8_path(it->path().parent_path().filename()), guid)) {
                 continue;
@@ -1127,6 +1237,8 @@ std::map<std::string, std::vector<std::string>> guid_claims(const fs::path& root
             std::string stem;
             if (ends_with(name, ".meta.json")) {
                 stem = name.substr(0, name.size() - 10);
+            } else if (const char* extra = extra_suffix_of(name)) {
+                stem = name.substr(0, name.size() - std::strlen(extra));
             } else if (const char* suffix = source_suffix_of(name)) {
                 stem = name.substr(0, name.size() - std::strlen(suffix));
             } else if (ends_with(name, ".json")) {
@@ -1204,14 +1316,26 @@ std::pair<std::string, std::string> differing_lines(const std::string& a, const 
 // An instance's file as merge_keys compares it: with its parent's GUID as
 // "Parent" and a script's text as "Source". The root has no parent.
 JsonValue compared_json(JsonValue props, const std::string& parent, bool root, bool has_source,
-                        const std::string& source) {
+                        const std::string& source, const std::vector<std::string>& extras = {}) {
     if (!root) {
         props.set("Parent", JsonValue::string(parent));
     }
     if (has_source) {
         props.set("Source", JsonValue::string(source));
+        if (!extras.empty()) {
+            props.set("VertexSource", JsonValue::string(extras.front()));
+        }
     }
     return props;
+}
+
+// A node's extra stage texts, stage 1 first, as compared_json takes them.
+std::vector<std::string> extra_texts(const std::vector<AuthoredNode>& tree, std::size_t index) {
+    std::vector<std::string> out;
+    for (const ExtraSource& extra : tree[index].extra_sources) {
+        out.push_back(extra.text);
+    }
+    return out;
 }
 
 // b differs from a in some key.
@@ -1318,6 +1442,7 @@ std::vector<InstanceId> build(DataModel& world, const std::vector<PlanNode>& pla
         }
         if (lua != nullptr) {
             lua->set_source(node.source);
+            apply_extras(*lua, node);
         }
     }
     // set_parent puts a child last, so children go in in their saved order.
@@ -1338,6 +1463,7 @@ InstanceId create_from(DataModel& world, const PlanNode& node) {
     apply_properties(object, node);
     if (auto* lua = dynamic_cast<SourceText*>(&object)) {
         lua->set_source(node.source);
+        apply_extras(*lua, node);
     }
     return id;
 }
@@ -1728,6 +1854,12 @@ Project::Files Project::from_disk(const detail::PlanNode& node, std::string pare
     files.has_source = node.has_source;
     files.source_path = node.source_path;
     files.source_bytes = node.source_bytes;
+    for (const PlanNode::Extra& extra : node.extras) {
+        Files::Extra own;
+        own.path = extra.path;
+        own.bytes = extra.bytes;
+        files.extras.push_back(std::move(own));
+    }
     files.props = std::move(props);
     files.parent = std::move(parent);
     return files;
@@ -2011,6 +2143,11 @@ void Project::write_pack() const {
         if (files.has_source) {
             add(files.source_path, files.source_bytes);
         }
+        for (const Files::Extra& extra : files.extras) {
+            if (!extra.path.empty()) {
+                add(extra.path, extra.bytes);
+            }
+        }
     }
     project_pack::write_in_background(project_pack::path_for(root_), std::move(sources));
 }
@@ -2097,6 +2234,18 @@ std::map<std::string, Project::Files> Project::plan_files(const std::vector<Auth
                 files.props_path = join(dir, stem + (node.has_source ? ".meta.json" : ".json"));
                 files.source_path = node.has_source ? join(dir, stem + "." + source_extension) : std::string();
             }
+            // An extra stage with text gets its file beside the source; one without has none.
+            if (node.has_properties) {
+                for (const ExtraSource& extra : node.extra_sources) {
+                    Files::Extra own;
+                    if (!extra.text.empty()) {
+                        own.path = folder ? join(join(dir, stem), std::string("init.") + extra.extension)
+                                          : join(dir, stem + "." + extra.extension);
+                    }
+                    own.bytes = extra.text;
+                    files.extras.push_back(std::move(own));
+                }
+            }
         }
         files.parent = index == 0 ? std::string() : tree[parents[index]].guid;
         if (node.has_properties) {
@@ -2108,6 +2257,7 @@ std::map<std::string, Project::Files> Project::plan_files(const std::vector<Auth
             files.props = known.props;
             files.props_bytes = known.props_bytes;
             files.source_bytes = known.source_bytes;
+            files.extras = known.extras;
         }
         next.emplace(node.guid, std::move(files));
     }
@@ -2135,6 +2285,10 @@ std::uint64_t Project::place_fingerprint(const DataModel& game) {
             mix(entry.props_bytes);
             mix(entry.source_path);
             mix(entry.source_bytes);
+            for (const Files::Extra& extra : entry.extras) {
+                mix(extra.path);
+                mix(extra.bytes);
+            }
         }
     } catch (const ProjectError& error) {
         // A place that cannot be written is never "saved".
@@ -2233,7 +2387,8 @@ std::vector<SaveConflict> Project::outside_changes(const std::vector<AuthoredNod
                             planned.source_path != base->second.source_path ||
                             planned.has_source != base->second.has_source ||
                             planned.props_bytes != base->second.props_bytes ||
-                            planned.source_bytes != base->second.source_bytes;
+                            planned.source_bytes != base->second.source_bytes ||
+                            planned.extras != base->second.extras;
         for (std::size_t up = parent[index]; places; up = parent[up]) {
             if (!holds.insert(tree[up].guid).second || up == 0) {
                 break;
@@ -2247,7 +2402,11 @@ std::vector<SaveConflict> Project::outside_changes(const std::vector<AuthoredNod
             return false;
         }
         return std::any_of(claimed->second.begin(), claimed->second.end(), [&base](const std::string& path) {
-            return path != base.props_path && path != base.source_path;
+            if (path == base.props_path || path == base.source_path) {
+                return false;
+            }
+            return std::none_of(base.extras.begin(), base.extras.end(),
+                                [&path](const Files::Extra& extra) { return path == extra.path; });
         });
     };
 
@@ -2277,9 +2436,18 @@ std::vector<SaveConflict> Project::outside_changes(const std::vector<AuthoredNod
                            removed || !planned->second.has_source ||
                                planned->second.source_bytes != base.source_bytes});
         }
+        for (std::size_t i = 0; i < base.extras.size(); ++i) {
+            const Files::Extra& extra = base.extras[i];
+            if (extra.path.empty()) {
+                continue;
+            }
+            const bool kept = !removed && i < planned->second.extras.size() && planned->second.extras[i] == extra;
+            own.push_back({&extra.path, &extra.bytes.str(), !kept});
+        }
         const bool touched = removed || holds.count(guid) != 0 || planned->second.props_path != base.props_path ||
                              planned->second.source_path != base.source_path ||
                              planned->second.has_source != base.has_source ||
+                             planned->second.extras != base.extras ||
                              std::any_of(own.begin(), own.end(), [](const Own& file) { return file.rewritten; });
 
         const std::string* gone = nullptr;
@@ -2355,17 +2523,34 @@ std::vector<SaveConflict> Project::outside_changes(const std::vector<AuthoredNod
                 }
             }
         }
-        if (own.size() > 1 && own[1].rewritten) {
-            const std::string text = read_file(disk_path(root_, base.source_path));
-            if (text != base.source_bytes && (removed || text != planned->second.source_bytes)) {
-                if (removed) {
+        for (std::size_t i = 1; i < own.size(); ++i) {
+            if (!own[i].rewritten) {
+                continue;
+            }
+            const bool primary = i == 1 && base.has_source;
+            const std::string text = read_file(disk_path(root_, *own[i].path));
+            const std::string* planned_bytes = nullptr;
+            if (!removed) {
+                if (primary) {
+                    planned_bytes = &planned->second.source_bytes.str();
+                } else {
+                    // The planned extra at this path, or none when the stage was emptied.
+                    for (const Files::Extra& extra : planned->second.extras) {
+                        if (extra.path == *own[i].path) {
+                            planned_bytes = &extra.bytes.str();
+                        }
+                    }
+                }
+            }
+            if (text != *own[i].bytes && (removed || planned_bytes == nullptr || text != *planned_bytes)) {
+                if (removed || planned_bytes == nullptr) {
                     if (edited.empty()) {
                         edited.push_back(whole(base.props_path));
                     }
                 } else {
-                    SaveConflict source = row(guid, base.source_path, SaveConflict::Kind::EditedOutside);
-                    source.key = "Source";
-                    std::tie(source.studio, source.disk) = differing_lines(planned->second.source_bytes, text);
+                    SaveConflict source = row(guid, *own[i].path, SaveConflict::Kind::EditedOutside);
+                    source.key = primary ? "Source" : "VertexSource";
+                    std::tie(source.studio, source.disk) = differing_lines(*planned_bytes, text);
                     edited.push_back(std::move(source));
                 }
             }
@@ -2783,12 +2968,21 @@ bool Project::read_changed(Comparison& out, std::vector<std::size_t>& compare,
             }
             const bool props = paths.count(files.props_path) != 0;
             const bool source = files.has_source && paths.count(files.source_path) != 0;
-            if (!props && !source) {
+            std::size_t extras = 0;
+            bool extra_changed = false;
+            for (const Files::Extra& extra : files.extras) {
+                if (extra.path.empty() || paths.count(extra.path) == 0) {
+                    continue;
+                }
+                ++extras;
+                extra_changed = extra_changed || read_file(disk_path(root_, extra.path)) != extra.bytes;
+            }
+            if (!props && !source && extras == 0) {
                 continue;
             }
-            owned += (props ? 1 : 0) + (source ? 1 : 0);
+            owned += (props ? 1 : 0) + (source ? 1 : 0) + extras;
             if ((props && read_file(disk_path(root_, files.props_path)) != files.props_bytes) ||
-                (source && read_file(disk_path(root_, files.source_path)) != files.source_bytes)) {
+                (source && read_file(disk_path(root_, files.source_path)) != files.source_bytes) || extra_changed) {
                 changed.insert(guid);
             }
         }
@@ -2837,6 +3031,11 @@ bool Project::read_changed(Comparison& out, std::vector<std::size_t>& compare,
                 if (base.has_source) {
                     read_plan_source(root_, node, base.source_path);
                 }
+                for (const Files::Extra& extra : base.extras) {
+                    if (!extra.path.empty()) {
+                        read_plan_extra(root_, node, extra.path);
+                    }
+                }
                 const std::string was_class = top ? std::string("Game") : base_text(base, "class");
                 if (node.class_name != was_class) {
                     return false;
@@ -2864,6 +3063,11 @@ bool Project::read_changed(Comparison& out, std::vector<std::size_t>& compare,
                 node.source_path = base.source_path;
                 node.source = base.source_bytes;
                 node.source_bytes = base.source_bytes;
+                for (const Files::Extra& extra : base.extras) {
+                    if (!extra.path.empty()) {
+                        node.extras.push_back(PlanNode::Extra{extra.path, extra.bytes.str()});
+                    }
+                }
                 node.doc = base.props;
                 for (const JsonValue::Member& member : base.props.members()) {
                     if (!reserved_key(member.first)) {
@@ -2958,16 +3162,21 @@ void Project::read_whole(Comparison& out) const {
 void Project::find_rows(Comparison& out, const std::vector<std::size_t>* only) const {
     using Type = Comparison::Action::Type;
     auto base_json = [&](const Files& base) {
-        return compared_json(base.props, base.parent, base.parent.empty(), base.has_source, base.source_bytes);
+        std::vector<std::string> extras;
+        for (const Files::Extra& extra : base.extras) {
+            extras.push_back(extra.bytes.str());
+        }
+        return compared_json(base.props, base.parent, base.parent.empty(), base.has_source, base.source_bytes, extras);
     };
     auto disk_json = [&](std::size_t index) {
         const PlanNode& node = out.plan[index];
-        return compared_json(out.docs[index], out.disk_parent(index), index == 0, node.has_source, node.source);
+        return compared_json(out.docs[index], out.disk_parent(index), index == 0, node.has_source, node.source,
+                             extra_bytes_of(node));
     };
     auto studio_json = [&](std::size_t index) {
         const AuthoredNode& node = out.tree[index];
         return compared_json(instance_json(node, out.tree), out.studio_parent(index), index == 0, node.has_source,
-                             node.source);
+                             node.source, extra_texts(out.tree, index));
     };
     // The studio changed index, or anything under it, since the base.
     std::function<bool(std::size_t)> studio_below = [&](std::size_t index) {
@@ -3227,6 +3436,11 @@ bool Project::disk_matches(const std::optional<DiskStamp>& now) const {
             base_bytes.emplace(files.props_path, &files.props_bytes.str());
             if (files.has_source) {
                 base_bytes.emplace(files.source_path, &files.source_bytes.str());
+            }
+            for (const Files::Extra& extra : files.extras) {
+                if (!extra.path.empty()) {
+                    base_bytes.emplace(extra.path, &extra.bytes.str());
+                }
             }
         }
         for (const std::string& path : synced_stamp_->racy) {
@@ -3636,6 +3850,10 @@ void Project::apply_changes(const Comparison& compared, std::vector<std::string>
             if (auto* lua = dynamic_cast<SourceText*>(&object)) {
                 lua->set_source(node.source);
             }
+        } else if (action->key == "VertexSource") {
+            if (auto* lua = dynamic_cast<SourceText*>(&object)) {
+                apply_extras(*lua, node);
+            }
         } else if (action->key == "children") {
             order_children_as(world, *id, node.doc);
         } else if (action->key != "Parent") {
@@ -3911,6 +4129,7 @@ bool Project::plan_changed(const AuthoredDirty& dirty, PendingSave& save) const 
     };
     auto paths = [&](InstanceId id, Files& files) {
         files.source_path.clear();
+        files.extras.clear();
         if (id == 0) {
             files.props_path = join(save.src, "init.json");
             files.has_source = false;
@@ -3932,6 +4151,16 @@ bool Project::plan_changed(const AuthoredDirty& dirty, PendingSave& save) const 
         } else {
             files.props_path = join(dir, stem + (script ? ".meta.json" : ".json"));
             files.source_path = script ? join(dir, stem + "." + extension) : std::string();
+        }
+        for (int stage = 1; script && stage < text->stage_count(); ++stage) {
+            Files::Extra extra;
+            const std::string& held = text->source(stage);
+            if (!held.empty()) {
+                extra.path = !children.empty() ? join(join(dir, stem), std::string("init.") + text->source_extension(stage))
+                                               : join(dir, stem + "." + text->source_extension(stage));
+            }
+            extra.bytes = held;
+            files.extras.push_back(std::move(extra));
         }
         files.parent = world.guid(world.parent(id));
     };
@@ -3978,6 +4207,16 @@ bool Project::plan_changed(const AuthoredDirty& dirty, PendingSave& save) const 
             if (entry.base.props_path != entry.planned.props_path ||
                 entry.base.source_path != entry.planned.source_path) {
                 moved.push_back(id);
+            } else {
+                // An extra stage file somewhere else than the base's moves it too.
+                for (std::size_t i = 0; i < std::min(entry.base.extras.size(), entry.planned.extras.size()); ++i) {
+                    const std::string& was = entry.base.extras[i].path;
+                    const std::string& now = entry.planned.extras[i].path;
+                    if (!was.empty() && !now.empty() && was != now) {
+                        moved.push_back(id);
+                        break;
+                    }
+                }
             }
         }
         save.ids.emplace_back(id, node.guid);
@@ -4364,6 +4603,23 @@ void Project::write_save(PendingSave& save) {
         if (files.has_source) {
             bytes_at.emplace(files.source_path, &files.source_bytes.str());
         }
+        for (const Files::Extra& extra : files.extras) {
+            if (!extra.path.empty()) {
+                bytes_at.emplace(extra.path, &extra.bytes.str());
+            }
+        }
+    }
+    // An extra stage file a kept instance no longer has (its text emptied).
+    for (const PendingSave::Entry& entry : save.entries) {
+        if (!entry.had) {
+            continue;
+        }
+        for (std::size_t i = 0; i < entry.base.extras.size(); ++i) {
+            const Files::Extra& extra = entry.base.extras[i];
+            if (!extra.path.empty() && (i >= entry.planned.extras.size() || entry.planned.extras[i].path.empty())) {
+                bytes_at.emplace(extra.path, &extra.bytes.str());
+            }
+        }
     }
     auto place = [&](const std::string& old_path, const std::string& old_bytes, bool had, const std::string& path,
                      const std::string& bytes) {
@@ -4449,6 +4705,25 @@ void Project::write_save(PendingSave& save) {
                           files.source_bytes);
                 }
             }
+            // Each extra stage: placed while it has text, removed once it has none.
+            const std::size_t stages = std::max(files.extras.size(), had ? old.extras.size() : 0);
+            for (std::size_t i = 0; i < stages; ++i) {
+                static const Files::Extra kNone;
+                const Files::Extra& planned_extra = i < files.extras.size() ? files.extras[i] : kNone;
+                const Files::Extra& old_extra = had && i < old.extras.size() ? old.extras[i] : kNone;
+                const bool had_extra = had && !old_extra.path.empty();
+                if (planned_extra.path.empty()) {
+                    if (had_extra && fs::exists(disk_path(root, old_extra.path), error)) {
+                        remove_path(old_extra.path);
+                    }
+                    continue;
+                }
+                const bool settled = save.in_sync && had_extra && old_extra == planned_extra;
+                if (!settled) {
+                    place(had_extra ? old_extra.path : std::string(), had_extra ? old_extra.bytes.str() : std::string(),
+                          had_extra, planned_extra.path, planned_extra.bytes);
+                }
+            }
         }
         // Overwrite: a GUID the save wrote over a conflict keeps only the files it
         // wrote. Any other file claiming it, as one moved outside, would load as a
@@ -4473,7 +4748,11 @@ void Project::write_save(PendingSave& save) {
                     const fs::path target = disk_path(root, path);
                     if (planned != planned_of.end() &&
                         (path == planned->second->props_path || path == planned->second->source_path ||
-                         wrote(target, planned->second->props_path) || wrote(target, planned->second->source_path))) {
+                         wrote(target, planned->second->props_path) || wrote(target, planned->second->source_path) ||
+                         std::any_of(planned->second->extras.begin(), planned->second->extras.end(),
+                                     [&](const Files::Extra& extra) {
+                                         return !extra.path.empty() && (path == extra.path || wrote(target, extra.path));
+                                     }))) {
                         continue;
                     }
                     if (fs::exists(target, error)) {
@@ -4483,7 +4762,11 @@ void Project::write_save(PendingSave& save) {
             }
         }
         for (const Files& files : save.removed) {
-            for (const std::string* path : {&files.props_path, &files.source_path}) {
+            std::vector<const std::string*> own{&files.props_path, &files.source_path};
+            for (const Files::Extra& extra : files.extras) {
+                own.push_back(&extra.path);
+            }
+            for (const std::string* path : own) {
                 if (path->empty()) {
                     continue;
                 }

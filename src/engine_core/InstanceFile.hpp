@@ -24,6 +24,8 @@ struct CopiedNode {
     PropertyBag properties;
     bool has_source = false;
     std::string source;
+    // Stages past the first, in order (SourceText::stage_count).
+    std::vector<std::string> extra_sources;
     std::vector<CopiedNode> children;
 };
 

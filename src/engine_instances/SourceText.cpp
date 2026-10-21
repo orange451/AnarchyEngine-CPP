@@ -2,6 +2,7 @@
 
 #include "Contract.hpp"
 
+#include <algorithm>
 #include <cstdint>
 #include <cstring>
 
@@ -20,43 +21,70 @@ bool SourceText::load_property(const std::string& key, const JsonValue& value, s
     return DataModel::load_property(key, value, error);
 }
 
-void SourceText::set_source(std::string source) {
+std::string& SourceText::stage_text(int stage) const {
+    if (stage <= 0) {
+        return const_cast<std::string&>(source_);
+    }
+    const auto at = static_cast<std::size_t>(stage - 1);
+    if (extras_.size() <= at) {
+        extras_.resize(static_cast<std::size_t>(std::max(stage_count() - 1, stage)));
+    }
+    return extras_[at];
+}
+
+const std::string& SourceText::source(int stage) const { return stage_text(stage); }
+
+void SourceText::set_source(int stage, std::string source) {
     if (!on_gameplay_thread()) {
         contract_fail("set_source runs on SimulationThread");
     }
-    if (source_ == source) {
+    if (stage < 0 || stage >= stage_count()) {
         return;
     }
-    const std::string previous = source_;
-    source_ = std::move(source);
+    std::string& text = stage_text(stage);
+    if (text == source) {
+        return;
+    }
+    const std::string previous = text;
+    text = std::move(source);
     ++source_version_;
-    record_string(id(), Field::Source, previous, source_);
-    emit_own(Field::Source);
-    on_source_changed();
+    const Field field = stage == 0 ? Field::Source : Field::VertexSource;
+    record_string(id(), field, previous, text);
+    emit_own(field);
+    on_source_changed(stage);
 }
 
 void SourceText::write_place(std::vector<std::byte>& out) const {
-    const std::uint32_t length = static_cast<std::uint32_t>(source_.size());
-    const auto* bytes = reinterpret_cast<const std::byte*>(&length);
-    out.insert(out.end(), bytes, bytes + sizeof(length));
-    const auto* text = reinterpret_cast<const std::byte*>(source_.data());
-    out.insert(out.end(), text, text + source_.size());
+    for (int stage = 0; stage < stage_count(); ++stage) {
+        const std::string& text = source(stage);
+        const std::uint32_t length = static_cast<std::uint32_t>(text.size());
+        const auto* bytes = reinterpret_cast<const std::byte*>(&length);
+        out.insert(out.end(), bytes, bytes + sizeof(length));
+        const auto* chars = reinterpret_cast<const std::byte*>(text.data());
+        out.insert(out.end(), chars, chars + text.size());
+    }
 }
 
 void SourceText::read_place(const std::byte* data, std::size_t size) {
-    const std::string previous = source_;
-    source_.clear();
-    if (data != nullptr && size >= sizeof(std::uint32_t)) {
-        std::uint32_t length = 0;
-        std::memcpy(&length, data, sizeof(length));
-        if (sizeof(std::uint32_t) + static_cast<std::size_t>(length) <= size) {
-            source_.assign(reinterpret_cast<const char*>(data + sizeof(std::uint32_t)), length);
+    std::size_t at = 0;
+    for (int stage = 0; stage < stage_count(); ++stage) {
+        std::string& text = stage_text(stage);
+        const std::string previous = text;
+        text.clear();
+        if (data != nullptr && at + sizeof(std::uint32_t) <= size) {
+            std::uint32_t length = 0;
+            std::memcpy(&length, data + at, sizeof(length));
+            at += sizeof(std::uint32_t);
+            if (at + static_cast<std::size_t>(length) <= size) {
+                text.assign(reinterpret_cast<const char*>(data + at), length);
+                at += length;
+            }
         }
-    }
-    // Stop restores authored source through here, not through set_source.
-    if (source_ != previous) {
-        ++source_version_;
-        on_source_changed();
+        // Stop restores authored source through here, not through set_source.
+        if (text != previous) {
+            ++source_version_;
+            on_source_changed(stage);
+        }
     }
 }
 

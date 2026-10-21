@@ -6,6 +6,7 @@
 #include "SourceText.hpp"
 #include "PropertyReflection.hpp"
 
+#include <algorithm>
 #include <optional>
 #include <system_error>
 #include <utility>
@@ -42,6 +43,9 @@ InstanceId build_copy(DataModel& world, const CopiedNode& node, InstanceId paren
     if (node.has_source) {
         if (auto* lua = dynamic_cast<SourceText*>(made)) {
             lua->set_source(node.source);
+            for (std::size_t i = 0; i < node.extra_sources.size(); ++i) {
+                lua->set_source(static_cast<int>(i) + 1, node.extra_sources[i]);
+            }
         }
     }
     if (!world.rename_error(id, node.name)) {
@@ -78,6 +82,14 @@ JsonValue node_json(const CopiedNode& node) {
     }
     if (node.has_source) {
         out.set("source", JsonValue::string(node.source));
+        if (std::any_of(node.extra_sources.begin(), node.extra_sources.end(),
+                        [](const std::string& text) { return !text.empty(); })) {
+            std::vector<JsonValue> extras;
+            for (const std::string& text : node.extra_sources) {
+                extras.push_back(JsonValue::string(text));
+            }
+            out.set("sources", JsonValue::array(std::move(extras)));
+        }
     }
     if (!node.children.empty()) {
         std::vector<JsonValue> children;
@@ -135,6 +147,19 @@ bool read_node(const JsonValue& json, const std::string& where, CopiedNode& out,
         out.has_source = true;
         out.source = source->as_string();
     }
+    if (const JsonValue* sources = json.find("sources")) {
+        if (!sources->is_array()) {
+            error = where + ".sources must be an array";
+            return false;
+        }
+        for (const JsonValue& text : sources->items()) {
+            if (!text.is_string()) {
+                error = where + ".sources must hold strings";
+                return false;
+            }
+            out.extra_sources.push_back(text.as_string());
+        }
+    }
     if (const JsonValue* children = json.find("children")) {
         if (!children->is_array()) {
             error = where + ".children must be an array";
@@ -171,6 +196,9 @@ CopiedNode copy_tree(const DataModel& game, InstanceId id) {
     if (const auto* lua = dynamic_cast<const SourceText*>(object)) {
         node.has_source = true;
         node.source = lua->source();
+        for (int stage = 1; stage < lua->stage_count(); ++stage) {
+            node.extra_sources.push_back(lua->source(stage));
+        }
     }
     for (InstanceId child = game.first_child(id); child != 0; child = game.next_sibling(child)) {
         node.children.push_back(copy_tree(game, child));

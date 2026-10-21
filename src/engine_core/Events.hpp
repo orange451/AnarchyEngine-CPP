@@ -27,6 +27,8 @@ enum class Field : std::uint8_t {
     Parent,
     Name,
     Source,
+    // A SourceText's second stage (a Shader's vertex text).
+    VertexSource,
     Enabled,
     // A property from the class registry, such as Lighting.Exposure. The
     // event's payload is its lua_property_id.

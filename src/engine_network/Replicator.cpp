@@ -33,6 +33,7 @@ std::string property_of(const engine_core::TreeChange& change) {
     switch (change.field) {
         case Field::Transform: return "Transform";
         case Field::Source: return "Source";
+        case Field::VertexSource: return "VertexSource";
         case Field::Enabled: return "Enabled";
         case Field::Simulated: return "Simulated";
         case Field::VisualOnly: return "VisualOnly";
@@ -129,10 +130,15 @@ void Replicator::write_record(OpWriter& writer, InstanceId id) const {
     if (const auto* connection = dynamic_cast<const engine_core::ConnectionInstance*>(&object)) {
         engine_core::bag_set(properties, "Id", engine_core::JsonValue::string(connection->connection_id()));
     }
-    const bool has_source = dynamic_cast<const engine_core::SourceText*>(&object) != nullptr;
+    const auto* text = dynamic_cast<const engine_core::SourceText*>(&object);
+    const bool has_source = text != nullptr;
     const std::string source = has_source ? client_source(object) : std::string();
+    std::vector<std::string> extras;
+    for (int stage = 1; has_source && stage < text->stage_count(); ++stage) {
+        extras.push_back(text->source(stage));
+    }
     writer.create(id, parent, object.class_name(), game_.guid(id), game_.name(id), properties,
-                  has_source ? &source : nullptr);
+                  has_source ? &source : nullptr, has_source ? &extras : nullptr);
 }
 
 void Replicator::snapshot_messages(InstanceId local_connection, std::vector<std::vector<std::uint8_t>>& out) {
@@ -381,6 +387,12 @@ bool Replicator::end_tick(std::vector<std::uint8_t>& message) {
             continue;
         }
         const DataModel& object = *game_.instance(id);
+        if (name == "VertexSource") {
+            if (const auto* text = dynamic_cast<const engine_core::SourceText*>(&object)) {
+                writer.source(id, text->source(1), 1);
+            }
+            continue;
+        }
         if (name == "Source") {
             if (dynamic_cast<const engine_core::SourceText*>(&object) == nullptr) {
                 continue;

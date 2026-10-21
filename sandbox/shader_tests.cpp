@@ -620,3 +620,147 @@ TEST_CASE("SHA19 a compile error shows on Error for its version only", "[shader]
     shader.set_compile_error(shader.source_version(), "2: driver");
     REQUIRE(shader.error() == "4: unknown hint glow");
 }
+
+namespace {
+
+constexpr const char* kLift = "void vertex() {\n    VERTEX.y += 1.0;\n}\n";
+
+}  // namespace
+
+TEST_CASE("SHA20 a Shader's vertex text is a second stage with its own version and Changed", "[shader]") {
+    SimRole role;
+    engine_core::Game game;
+    Shader& shader = add_shader(game, "Look");
+    REQUIRE(shader.stage_count() == 2);
+    REQUIRE(std::string(shader.source_extension(Shader::kFragmentStage)) == "glsl");
+    REQUIRE(std::string(shader.source_extension(Shader::kVertexStage)) == "vert.glsl");
+    REQUIRE(!shader.has_vertex_stage());
+    std::vector<engine_core::Field> fields;
+    game.changed(shader.id()).connect([&](InstanceId, engine_core::Field field) { fields.push_back(field); });
+    const std::uint64_t version = shader.source_version();
+    game.history().reset_waypoints();
+    begin_step(game);
+    shader.set_vertex_source(kLift);
+    end_step(game);
+    game.events().drain();
+    REQUIRE(shader.vertex_source() == kLift);
+    REQUIRE(shader.source(Shader::kVertexStage) == kLift);
+    REQUIRE(shader.has_vertex_stage());
+    REQUIRE(shader.source_version() > version);
+    REQUIRE(fields == std::vector<engine_core::Field>{engine_core::Field::VertexSource});
+    // Undo puts it back, and redo brings it again.
+    game.history().undo();
+    REQUIRE(!shader.has_vertex_stage());
+    game.history().redo();
+    REQUIRE(shader.vertex_source() == kLift);
+    // A Script keeps one stage.
+    engine_core::Script& script = game.create<engine_core::Script>();
+    REQUIRE(script.stage_count() == 1);
+}
+
+TEST_CASE("SHA21 the vertex stage saves as <Name>.<guid>.vert.glsl beside the .glsl, only when it has text", "[shader][project]") {
+    SimRole role;
+    TempDir dir;
+    std::string guid;
+    {
+        engine_core::Game game;
+        Project project = Project::create(dir.path, game);
+        Shader& shader = add_shader(game, "Ocean");
+        shader.set_source(kVignette);
+        guid = game.guid(shader.id());
+        project.save();
+        REQUIRE(!std::filesystem::exists(dir.path / leaf(game, shader.id(), ".vert.glsl")));
+        shader.set_vertex_source(kLift);
+        project.save();
+        const std::filesystem::path vert = dir.path / leaf(game, shader.id(), ".vert.glsl");
+        REQUIRE(std::filesystem::exists(vert));
+        REQUIRE(read_text(vert) == kLift);
+        REQUIRE(read_text(dir.path / leaf(game, shader.id(), ".glsl")) == kVignette);
+        // A rename moves both.
+        game.set_name(shader.id(), "Sea");
+        project.save();
+        REQUIRE(!std::filesystem::exists(vert));
+        REQUIRE(std::filesystem::exists(dir.path / leaf(game, shader.id(), ".vert.glsl")));
+    }
+    {
+        engine_core::Game game;
+        Project read = Project::load(dir.path, game);
+        auto* shader = dynamic_cast<Shader*>(game.instance(*game.find_guid(guid)));
+        REQUIRE(shader != nullptr);
+        REQUIRE(shader->source() == kVignette);
+        REQUIRE(shader->vertex_source() == kLift);
+        // Emptied, the file goes.
+        shader->set_vertex_source("");
+        read.save();
+        REQUIRE(!std::filesystem::exists(dir.path / leaf(game, shader->id(), ".vert.glsl")));
+        REQUIRE(std::filesystem::exists(dir.path / leaf(game, shader->id(), ".glsl")));
+    }
+}
+
+TEST_CASE("SHA22 a phase 1 project, leaf or folder form, loads with no vertex stage and is not rewritten", "[shader][project]") {
+    SimRole role;
+    TempDir dir;
+    std::string leaf_guid;
+    std::string folder_guid;
+    std::filesystem::path glsl;
+    std::filesystem::path init_glsl;
+    {
+        engine_core::Game game;
+        Project project = Project::create(dir.path, game);
+        Shader& one = add_shader(game, "One");
+        one.set_source(kVignette);
+        Shader& two = add_shader(game, "Two");
+        two.set_source(kVignette);
+        leaf_guid = game.guid(one.id());
+        folder_guid = game.guid(two.id());
+        project.save();
+        glsl = dir.path / leaf(game, one.id(), ".glsl");
+        const std::filesystem::path folder = dir.path / leaf(game, two.id(), "");
+        std::filesystem::create_directories(folder);
+        std::filesystem::rename(dir.path / leaf(game, two.id(), ".glsl"), folder / "init.glsl");
+        std::filesystem::rename(dir.path / leaf(game, two.id(), ".meta.json"), folder / "init.meta.json");
+        init_glsl = folder / "init.glsl";
+    }
+    const auto written = std::filesystem::last_write_time(glsl);
+    engine_core::Game game;
+    Project read = Project::load(dir.path, game);
+    const auto* one = dynamic_cast<const Shader*>(game.instance(*game.find_guid(leaf_guid)));
+    const auto* two = dynamic_cast<const Shader*>(game.instance(*game.find_guid(folder_guid)));
+    REQUIRE(one != nullptr);
+    REQUIRE(two != nullptr);
+    REQUIRE(one->source() == kVignette);
+    REQUIRE(!one->has_vertex_stage());
+    REQUIRE(two->source() == kVignette);
+    REQUIRE(!two->has_vertex_stage());
+    read.save();
+    REQUIRE(std::filesystem::last_write_time(glsl) == written);
+    // A save never keeps the folder form (SHA9): Two becomes a leaf, with no vertex file.
+    REQUIRE(!std::filesystem::exists(init_glsl.parent_path() / "init.vert.glsl"));
+    REQUIRE(read_text(dir.path / leaf(game, two->id(), ".glsl")) == kVignette);
+    REQUIRE(!std::filesystem::exists(dir.path / leaf(game, two->id(), ".vert.glsl")));
+}
+
+TEST_CASE("SHA23 copy, paste, clone, and instance files keep both stages", "[shader][copy]") {
+    SimRole role;
+    engine_core::Game game;
+    Shader& shader = add_shader(game, "Look");
+    shader.set_source(kVignette);
+    shader.set_vertex_source(kLift);
+    const InstanceId clone = engine_core::clone_tree(game, shader.id());
+    REQUIRE(dynamic_cast<const Shader*>(game.instance(clone))->vertex_source() == kLift);
+    const engine_core::JsonValue file = engine_core::write_instance_file({engine_core::copy_tree(game, shader.id())});
+    std::vector<engine_core::CopiedNode> roots;
+    std::string error;
+    REQUIRE(engine_core::read_instance_file(file, roots, error));
+    std::vector<InstanceId> made;
+    REQUIRE(engine_core::paste_copies(game, roots, game.service("Shaders"), &made));
+    REQUIRE(made.size() == 1);
+    REQUIRE(dynamic_cast<const Shader*>(game.instance(made[0]))->vertex_source() == kLift);
+    REQUIRE(dynamic_cast<const Shader*>(game.instance(made[0]))->source() == kVignette);
+    // Deleted and undone, it comes back with both.
+    game.history().reset_waypoints();
+    game.destroy(shader.id());
+    game.history().undo();
+    const auto* back = dynamic_cast<const Shader*>(game.instance(*game.find_guid(game.guid(made[0]))));
+    REQUIRE(back != nullptr);
+}

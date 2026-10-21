@@ -43,6 +43,8 @@ HistoryProp history_prop(Field field) {
         return HistoryProp::Name;
     case Field::Source:
         return HistoryProp::Source;
+    case Field::VertexSource:
+        return HistoryProp::VertexSource;
     case Field::Enabled:
         return HistoryProp::Enabled;
     case Field::LinearVelocity:
@@ -89,7 +91,7 @@ void DataModel::record_bool(InstanceId id, Field field, bool before, bool after)
 }
 
 void DataModel::record_string(InstanceId id, Field field, const std::string& before, const std::string& after) {
-    if (field != Field::Name && field != Field::Source) {
+    if (field != Field::Name && field != Field::Source && field != Field::VertexSource) {
         return;
     }
     mark_authored_dirty(id);
@@ -275,6 +277,9 @@ AuthoredRecord DataModel::capture_record(InstanceId id, bool subtree) const {
     if (const SourceText* source = dynamic_cast<const SourceText*>(object)) {
         record.has_source = true;
         record.source = source->source();
+        for (int stage = 1; stage < source->stage_count(); ++stage) {
+            record.extra_sources.push_back(source->source(stage));
+        }
     }
     if (const Script* script = dynamic_cast<const Script*>(object)) {
         record.enabled = script->enabled();
@@ -316,6 +321,9 @@ void DataModel::apply_record_fields(const AuthoredRecord& record) {
     if (record.has_source) {
         if (auto* source = dynamic_cast<SourceText*>(instance(record.id))) {
             source->set_source(record.source);
+            for (std::size_t i = 0; i < record.extra_sources.size(); ++i) {
+                source->set_source(static_cast<int>(i) + 1, record.extra_sources[i]);
+            }
         }
         if (auto* script = dynamic_cast<Script*>(instance(record.id))) {
             script->set_enabled(record.enabled);
@@ -453,6 +461,11 @@ void DataModel::apply_property(InstanceId id, const PropertyValue& value) {
     case HistoryProp::Source:
         if (auto* source = dynamic_cast<SourceText*>(instance(id))) {
             source->set_source(value.text);
+        }
+        break;
+    case HistoryProp::VertexSource:
+        if (auto* source = dynamic_cast<SourceText*>(instance(id))) {
+            source->set_source(1, value.text);
         }
         break;
     case HistoryProp::Enabled:

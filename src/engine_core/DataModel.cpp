@@ -1654,7 +1654,7 @@ void DataModel::emit_change(InstanceId id, Field field, WriteOrigin origin, std:
         change.payload = payload;
         state_->change_sink(change);
     }
-    if (field == Field::Source) {
+    if (field == Field::Source || field == Field::VertexSource) {
         state_->source_revision.fetch_add(1, std::memory_order_relaxed);
     }
     notify_watchers(id);

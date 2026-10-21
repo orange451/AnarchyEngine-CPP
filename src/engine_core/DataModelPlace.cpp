@@ -152,6 +152,9 @@ void DataModel::capture_place_unlocked() {
             record.has_source = true;
             record.source_extension = lua->source_extension();
             record.source = lua->source();
+            for (int stage = 1; stage < lua->stage_count(); ++stage) {
+                record.extra_sources.push_back(ExtraSource{lua->source_extension(stage), lua->source(stage)});
+            }
         }
         shot.instances.push_back(std::move(record));
     }
@@ -467,6 +470,9 @@ AuthoredNode DataModel::authored_node(InstanceId id) const {
             node.has_source = true;
             node.source_extension = lua->source_extension();
             node.source = lua->source();
+            for (int stage = 1; stage < lua->stage_count(); ++stage) {
+                node.extra_sources.push_back(ExtraSource{lua->source_extension(stage), lua->source(stage)});
+            }
         }
     }
     return node;
@@ -514,6 +520,9 @@ std::vector<AuthoredNode> DataModel::authored_tree(const std::function<bool(Inst
                     node.properties = merged_properties(*object);
                     if (lua != nullptr) {
                         node.source = lua->source();
+                        for (int stage = 1; stage < lua->stage_count(); ++stage) {
+                            node.extra_sources.push_back(ExtraSource{lua->source_extension(stage), lua->source(stage)});
+                        }
                     }
                 }
                 out[at].children.push_back(out.size());
@@ -558,6 +567,7 @@ std::vector<AuthoredNode> DataModel::authored_tree(const std::function<bool(Inst
             node.has_source = record.has_source;
             node.source_extension = record.source_extension;
             node.source = record.source;
+            node.extra_sources = record.extra_sources;
             out[at].children.push_back(out.size());
             out.push_back(std::move(node));
             kids.push_back(&record.children);

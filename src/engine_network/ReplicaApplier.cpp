@@ -246,7 +246,7 @@ bool ReplicaApplier::apply(const Op& op) {
                 ++skipped_;
                 return true;
             }
-            lua->set_source(op.text);
+            lua->set_source(op.stage, op.text);
             return true;
         }
         default:
@@ -295,6 +295,9 @@ bool ReplicaApplier::apply_create(const Op& op) {
     if (op.has_source) {
         if (auto* lua = dynamic_cast<engine_core::SourceText*>(made)) {
             lua->set_source(op.source);
+            for (std::size_t i = 0; i < op.extra_sources.size(); ++i) {
+                lua->set_source(static_cast<int>(i) + 1, op.extra_sources[i]);
+            }
         }
     }
     // Parent last, so a Script starts with its Source and RunContext in place.

@@ -47,6 +47,12 @@ struct ContextAction {
     bool primary = false;
 };
 
+// A SourceText stage past its first: its file extension ("vert.glsl") and text.
+struct ExtraSource {
+    const char* extension = nullptr;
+    std::string text;
+};
+
 // One instance of the authored tree, for a project save. Children index the
 // same vector in sibling order. The root is element 0 and has id 0.
 struct AuthoredNode {
@@ -64,6 +70,8 @@ struct AuthoredNode {
     // Its SourceText::source_extension, as "luau" or "glsl"; null without source.
     const char* source_extension = nullptr;
     std::string source;
+    // Its stages past the first (a Shader's vertex text), filled with source.
+    std::vector<ExtraSource> extra_sources;
     std::vector<std::size_t> children;
 };
 
@@ -829,6 +837,7 @@ private:
         bool has_source = false;
         const char* source_extension = nullptr;
         std::string source;
+        std::vector<ExtraSource> extra_sources;
         bool simulated = false;
         bool visual_only = false;
         bool archivable = true;

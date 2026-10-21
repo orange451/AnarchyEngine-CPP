@@ -30,7 +30,10 @@ void Shader::set_compile_error(std::uint64_t version, std::string error) {
     }
 }
 
-void Shader::on_source_changed() {
+void Shader::on_source_changed(int stage) {
+    if (stage != kFragmentStage) {
+        return;
+    }
     const ShaderKind kind = parse_->kind;
     const std::string error = this->error();
     compile_error_.clear();
@@ -72,6 +75,25 @@ bool write_source(DataModel&, DataModel& object, LuaSlot& in) {
     return true;
 }
 
+bool read_vertex_source(DataModel&, DataModel& object, LuaSlot& out) {
+    const Shader* shader = shader_of(object);
+    if (shader == nullptr) {
+        return false;
+    }
+    out.kind = LuaSlot::Kind::String;
+    out.text = shader->vertex_source();
+    return true;
+}
+
+bool write_vertex_source(DataModel&, DataModel& object, LuaSlot& in) {
+    Shader* shader = shader_of(object);
+    if (shader == nullptr) {
+        return false;
+    }
+    shader->set_vertex_source(in.text);
+    return true;
+}
+
 bool read_kind(DataModel&, DataModel& object, LuaSlot& out) {
     const Shader* shader = shader_of(object);
     if (shader == nullptr) {
@@ -98,6 +120,8 @@ ANARCHY_LUA_REGISTER(register_shader_lua) {
     kind.enum_type = &shader_kind_enum();
     const LuaField fields[] = {
         lua_property("Source", "string", true, read_source, write_source),
+        lua_property("FragmentSource", "string", true, read_source, write_source),
+        lua_property("VertexSource", "string", true, read_vertex_source, write_vertex_source),
         kind,
         lua_property("Error", "string", false, read_error, nullptr),
     };

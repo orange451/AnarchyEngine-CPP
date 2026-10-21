@@ -145,6 +145,8 @@ inline const char* field_name(Field field) {
         return "Name";
     case Field::Source:
         return "Source";
+    case Field::VertexSource:
+        return "VertexSource";
     case Field::Enabled:
         return "Enabled";
     case Field::Reflected:

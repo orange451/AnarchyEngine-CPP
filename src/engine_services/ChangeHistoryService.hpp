@@ -32,6 +32,7 @@ enum class HistoryProp : std::uint8_t {
     VisualOnly,
     Name,
     Source,
+    VertexSource,
     Enabled,
     // A property from the class registry, named by PropertyValue::property and
     // put back through that property's own write.
@@ -76,6 +77,8 @@ struct AuthoredRecord {
     Matrix4 transform = matrix4_identity();
     bool has_source = false;
     std::string source;
+    // Stages past the first, in order (SourceText::stage_count).
+    std::vector<std::string> extra_sources;
     bool enabled = true;
     // Place bytes for types other than LuaSource: a class's own bytes, such as
     // a GameObject's Transform, and its saved registry properties. Restored through read_place.

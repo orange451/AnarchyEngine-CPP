@@ -325,6 +325,15 @@ private:
         bool has_source = false;
         std::string source_path;
         SharedText source_bytes;
+        // Stages past the first (a Shader's vertex text), stage 1 first: each
+        // its path and bytes; one with no text has an empty path and no file.
+        struct Extra {
+            std::string path;
+            SharedText bytes;
+            friend bool operator==(const Extra& a, const Extra& b) { return a.path == b.path && a.bytes == b.bytes; }
+            friend bool operator!=(const Extra& a, const Extra& b) { return !(a == b); }
+        };
+        std::vector<Extra> extras;
         // The properties file parsed: the base each key is compared against. A
         // key settled for the studio's side is patched here, and props_bytes
         // rewritten to match.

@@ -8,12 +8,12 @@
 //   Bind     u32 netid, string guid
 //   Create   u32 netid, u32 parent, varuint class, string guid, string name,
 //            varuint count, count x (varuint property, json value),
-//            u8 has_source, [string source]
+//            u8 has_source, [string source, varuint extras, extras x string]
 //   Destroy  u32 netid
 //   Parent   u32 netid, u32 parent
 //   Rename   u32 netid, string name
 //   Set      u32 netid, varuint property, json value
-//   Source   u32 netid, string source
+//   Source   u32 netid, u8 stage, string source
 // A property value is a JSON value as JsonWire writes it: a tag byte, then a
 // number as an f32 when a float holds it exactly, otherwise an f64.
 
@@ -32,7 +32,8 @@ namespace engine_network {
 
 // 2: a number a float holds exactly travels as a Float32 tag (JsonWire), and a
 // snapshot part names the version in its header.
-constexpr std::uint8_t kCodecVersion = 2;
+// 3: a Create carries a SourceText's extra stages, and a Source op names its stage.
+constexpr std::uint8_t kCodecVersion = 3;
 
 // Remote: a RemoteEvent's message (RemoteCodec.hpp).
 enum class MessageType : std::uint8_t { SnapshotPart = 1, Changes = 2, Remote = 3 };
@@ -49,6 +50,8 @@ struct Op {
     engine_core::PropertyBag properties;  // Create: name -> value; Set: exactly one
     bool has_source = false;              // Create
     std::string source;                   // Create
+    std::vector<std::string> extra_sources;  // Create: stages past the first
+    std::uint8_t stage = 0;               // Source
 };
 
 // Class and property names: the server keeps one table for every client, and
@@ -77,12 +80,13 @@ public:
     void define_all();
     void bind(std::uint32_t netid, std::string_view guid);
     void create(std::uint32_t netid, std::uint32_t parent, std::string_view class_name, std::string_view guid,
-                std::string_view name, const engine_core::PropertyBag& properties, const std::string* source);
+                std::string_view name, const engine_core::PropertyBag& properties, const std::string* source,
+                const std::vector<std::string>* extra_sources = nullptr);
     void destroy(std::uint32_t netid);
     void parent(std::uint32_t netid, std::uint32_t parent);
     void rename(std::uint32_t netid, std::string_view name);
     void set(std::uint32_t netid, std::string_view property, const engine_core::JsonValue& value);
-    void source(std::uint32_t netid, std::string_view source);
+    void source(std::uint32_t netid, std::string_view source, std::uint8_t stage = 0);
     // How many ops (not counting Defines) this writer has written.
     std::size_t ops() const { return ops_; }
 

@@ -1212,6 +1212,7 @@ add_executable(sandbox
     sandbox/project_bench_tests.cpp
     sandbox/prefab_render_tests.cpp
     sandbox/mesh_shapes_tests.cpp
+    sandbox/ocean_demo.cpp
     sandbox/mesh_editor_tests.cpp
     sandbox/mesh_editors_tests.cpp
     sandbox/mesh_editor_lua_tests.cpp

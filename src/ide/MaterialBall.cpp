@@ -67,7 +67,8 @@ bool MaterialBall::ensureGraphics() {
     engine_core::add_box(box, engine_core::Vec3{1.25f, 1.25f, 1.25f}, engine_core::Vec3{0.f, 0.f, 0.f});
     cube_.upload(box);
     anarchy::amesh::Data plane;
-    engine_core::add_plane(plane, 2.f, 2.f, engine_core::Vec3{0.f, 0.f, 0.f});
+    // A grid, so a vertex stage has vertices to move.
+    engine_core::add_plane(plane, 2.f, 2.f, engine_core::Vec3{0.f, 0.f, 0.f}, 64);
     plane_.upload(plane);
 
     runner::GLint previous = 0;

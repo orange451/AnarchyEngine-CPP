@@ -1693,8 +1693,11 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
         "{number}", false,
         {P("radius", "number"), P("height", "number"), P("segments", "number?"), P("capped", "boolean?"),
          P("position", "Vector3?")});
-    add("MeshEditor", "AddPlane", "Adds a flat rectangle facing up, centered on position, and returns its vertices' ids.",
-        "{number}", false, {P("width", "number"), P("depth", "number"), P("position", "Vector3?")});
+    add("MeshEditor", "AddPlane",
+        "Adds a flat rectangle facing up, centered on position, as a grid of segments by segments quads (1 by "
+        "default, up to 256), and returns its vertices' ids.",
+        "{number}", false,
+        {P("width", "number"), P("depth", "number"), P("position", "Vector3?"), P("segments", "number?")});
     add("MeshEditor", "AddTeapot",
         "Adds a teapot size tall, standing on position, its spout toward +X, and returns its vertices' ids.",
         "{number}", false, {P("size", "number"), P("position", "Vector3?")});

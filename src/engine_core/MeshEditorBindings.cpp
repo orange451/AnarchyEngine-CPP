@@ -342,7 +342,8 @@ int add_plane_shape(lua_State* s) {
         const float width = shape_size(s, 2, "width");
         const float depth = shape_size(s, 3, "depth");
         const Vec3 at = shape_position(s, 4);
-        return add_shape(s, e, [&](anarchy::amesh::Data& data) { add_plane(data, width, depth, at); });
+        const int segments = shape_segments(s, 5, 1);
+        return add_shape(s, e, [&](anarchy::amesh::Data& data) { add_plane(data, width, depth, at, segments); });
     });
 }
 

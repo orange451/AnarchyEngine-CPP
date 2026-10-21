@@ -235,16 +235,27 @@ void add_cone(Data& data, float radius, float height, int segments, bool capped,
     }
 }
 
-void add_plane(Data& data, float width, float depth, Vec3 at) {
+void add_plane(Data& data, float width, float depth, Vec3 at, int segments) {
+    segments = std::clamp(segments, 1, kMaxShapeSegments);
     const V3 center = to_v3(at);
     const V3 up{0.f, 1.f, 0.f};
-    const float x = width * 0.5f;
-    const float z = depth * 0.5f;
-    const std::uint32_t a = push(data, center + V3{-x, 0.f, z}, up, 0.f, 0.f);
-    const std::uint32_t b = push(data, center + V3{x, 0.f, z}, up, 1.f, 0.f);
-    const std::uint32_t c = push(data, center + V3{x, 0.f, -z}, up, 1.f, 1.f);
-    const std::uint32_t d = push(data, center + V3{-x, 0.f, -z}, up, 0.f, 1.f);
-    quad(data, a, b, c, d);
+    // Row by row from +Z (v 0) to -Z (v 1), each from -X (u 0) to +X (u 1).
+    const auto first = static_cast<std::uint32_t>(data.vertices.size());
+    const int side = segments + 1;
+    for (int row = 0; row < side; ++row) {
+        const float v = static_cast<float>(row) / segments;
+        for (int column = 0; column < side; ++column) {
+            const float u = static_cast<float>(column) / segments;
+            push(data, center + V3{(u - 0.5f) * width, 0.f, (0.5f - v) * depth}, up, u, v);
+        }
+    }
+    for (int row = 0; row < segments; ++row) {
+        for (int column = 0; column < segments; ++column) {
+            const std::uint32_t a = first + static_cast<std::uint32_t>(row * side + column);
+            const std::uint32_t d = a + static_cast<std::uint32_t>(side);
+            quad(data, a, a + 1, d + 1, d);
+        }
+    }
 }
 
 void add_teapot(Data& data, float size, Vec3 at) {

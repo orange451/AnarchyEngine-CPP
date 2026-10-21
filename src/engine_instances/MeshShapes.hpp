@@ -20,8 +20,9 @@ void add_sphere(anarchy::amesh::Data& data, float radius, int segments, Vec3 at)
 void add_cylinder(anarchy::amesh::Data& data, float radius, float height, int segments, bool capped, Vec3 at);
 // Along Y: the base at the bottom, the point at the top. capped closes the base.
 void add_cone(anarchy::amesh::Data& data, float radius, float height, int segments, bool capped, Vec3 at);
-// Flat on XZ, facing +Y.
-void add_plane(anarchy::amesh::Data& data, float width, float depth, Vec3 at);
+// Flat on XZ, facing +Y: a grid of segments by segments quads (1 to 256),
+// its UVs 0 to 1 across. A vertex stage moves a fine one, as the Ocean does.
+void add_plane(anarchy::amesh::Data& data, float width, float depth, Vec3 at, int segments = 1);
 // A teapot size tall, standing on at, its spout toward +X. Built from turned
 // outlines and swept tubes in the proportions of Newell's Utah teapot, not
 // from its Bezier patches.

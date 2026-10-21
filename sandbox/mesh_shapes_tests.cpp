@@ -617,3 +617,38 @@ TEST_CASE("M5 storing pieces keeps a file's LODs", "[shapes]") {
     REQUIRE(file.lods.size() == 2);
     REQUIRE(file.pieces.size() == 2);
 }
+
+TEST_CASE("a plane takes segments: a grid of quads, its UVs 0 to 1 across", "[shapes]") {
+    Data grid;
+    engine_core::add_plane(grid, 2.f, 2.f, Vec3{}, 4);
+    REQUIRE(grid.vertices.size() == 25);
+    REQUIRE(grid.indices.size() / 3 == 32);
+    float low_u = 1.f;
+    float high_u = 0.f;
+    for (const auto& vertex : grid.vertices) {
+        low_u = std::min(low_u, vertex.uv[0]);
+        high_u = std::max(high_u, vertex.uv[0]);
+        REQUIRE(near(vertex.n[1], 1.f));
+    }
+    REQUIRE(near(low_u, 0.f));
+    REQUIRE(near(high_u, 1.f));
+    REQUIRE(near(bounds(grid).lo[0], -1.f));
+    REQUIRE(near(bounds(grid).hi[2], 1.f));
+    // One segment is the four-corner plane it always was; past 256 is held to 256.
+    Data one;
+    engine_core::add_plane(one, 1.f, 1.f, Vec3{});
+    REQUIRE(one.vertices.size() == 4);
+    Data most;
+    engine_core::add_plane(most, 1.f, 1.f, Vec3{}, 9999);
+    REQUIRE(most.vertices.size() == 257u * 257u);
+}
+
+TEST_CASE("AddPlane's segments make a grid from Lua", "[shapes]") {
+    ShapeRig rig;
+    rig.mesh("Cube");
+    const std::string printed = rig.run(R"(
+        local e = game.Assets.Meshes.Cube:Edit()
+        print(#e:AddPlane(2, 2, nil, 4), #e:AddPlane(2, 2))
+    )");
+    REQUIRE(printed == "25\t4\n");
+}

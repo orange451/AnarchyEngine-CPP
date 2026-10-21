@@ -2670,6 +2670,7 @@ void CheckPostEffects(const GpuMesh* cube, int size, int fbWidth, int fbHeight) 
     const Pixel plain = ReadPixel(midX, midY);
     const std::vector<unsigned char> plainFrame = snap();
     Expect(!IsClear(plain), "post effects: the cube draws plain first (" + Text(plain) + ")");
+    Expect(!renderer.effectTargetsMade(), "post effects: a place with no effects makes no effect targets");
     // The cube's right edge along the middle row, and a pixel just past it, from the frame without bloom.
     int edge = midX;
     while (edge < fbWidth - 1 && !IsClear(ReadPixel(edge + 1, midY))) {
@@ -2688,6 +2689,7 @@ void CheckPostEffects(const GpuMesh* cube, int size, int fbWidth, int fbHeight) 
                                static_cast<unsigned char>(255 - plain.b)},
                 4),
            "post effects: an LDR effect inverts the pane (" + Text(flipped) + " from " + Text(plain) + ")");
+    Expect(renderer.effectTargetsMade(), "post effects: the first effect makes its targets");
     runner::SceneLighting invertedFxaa = inverted;
     invertedFxaa.antialiasing = runner::SceneAntialiasing::FXAA;
     renderer.setLighting(invertedFxaa);
@@ -2766,6 +2768,24 @@ void CheckPostEffects(const GpuMesh* cube, int size, int fbWidth, int fbHeight) 
     Expect(IsClear(ReadPixel(outside, midY)) && Sum(ReadPixel(midX, midY)) < 12,
            "post effects: an Hdr effect runs before bloom, so a blacked merge blooms nothing (" +
                Text(ReadPixel(outside, midY)) + ", " + Text(ReadPixel(midX, midY)) + ")");
+    // An Hdr effect writing past half float's range, or NaN, is held: the pixel
+    // is white or black, and nothing spreads to the pane around it.
+    const auto blinding = PostFor(9409, 1, "void post() {\n    COLOR.rgb = vec3(1.0e30) * COLOR.a;\n}\n", {}, true);
+    runner::SceneLighting blindingHdr = haze;
+    blindingHdr.effects = {effect(blinding)};
+    renderer.setLighting(blindingHdr);
+    drawTwice(bright);
+    Expect(Sum(ReadPixel(midX, midY)) > 600,
+           "post effects: an Hdr effect past half float's range reads white, not NaN (" + Text(ReadPixel(midX, midY)) + ")");
+    const auto nan = PostFor(9410, 1, "void post() {\n    COLOR.rgb = vec3(0.0 / 0.0);\n}\n", {}, true);
+    runner::SceneLighting nanHdr = haze;
+    nanHdr.effects = {effect(nan)};
+    renderer.setLighting(nanHdr);
+    drawTwice(bright);
+    Expect(Sum(ReadPixel(midX, midY)) < 12 && IsClear(ReadPixel(2, 2)),
+           "post effects: an Hdr effect writing NaN reads black and spreads nowhere (" + Text(ReadPixel(midX, midY)) +
+               ", " + Text(ReadPixel(2, 2)) + ")");
+
     // The same Shader as an LDR effect leaves the halo: bloom came first.
     const auto blackLdr = PostFor(9408, 1, "void post() {\n    COLOR.rgb = vec3(0.0);\n}\n");
     runner::SceneLighting blackAfter = haze;

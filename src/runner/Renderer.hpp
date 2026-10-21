@@ -497,6 +497,8 @@ public:
     void setSkyCacheSize(int images) { environment_.setImageCacheSize(images); }
     // For checks: how many times draw made a size's buffers, and filtered a sky image.
     int targetsMade() const { return targetsMade_; }
+    // Whether a ShaderEffect stage has made its twin target yet, for tests.
+    bool effectTargetsMade() const { return mergePingTexture_ != 0 || ldrPingTexture_ != 0; }
     int skyBuilds() const { return environment_.imageBuilds(); }
     // The last draw's counts. Zero for a draw that drew no meshes.
     const RenderStats& stats() const { return stats_; }
@@ -677,6 +679,9 @@ private:
                       const float* inverseProjection);
     // Whether any enabled ShaderEffect of the stage has a binding this frame.
     bool hasEffects(bool hdr) const;
+    // Makes the stage's twin target, the pane's size, if it is not made. False,
+    // with nothing made, when the driver will not render into it.
+    bool ensureEffectTarget(bool hdr);
     // Makes the chain for a width by height pane, if it is not made. False,
     // with nothing made, when the driver will not render into it.
     bool ensureBloomChain(int width, int height);
@@ -911,7 +916,9 @@ private:
     // The linear image the tone map reads.
     unsigned mergeFbo_ = 0;
     unsigned mergeTexture_ = 0;
-    // The merge image's twin, which Hdr ShaderEffects ping-pong with.
+    // The merge image's twin, which Hdr ShaderEffects ping-pong with. Made on
+    // the first frame with one (ensureEffectTarget), so a place with no
+    // effects pays nothing; resized and parked with the other buffers.
     unsigned mergePingFbo_ = 0;
     unsigned mergePingTexture_ = 0;
     // Whether the driver refused a size, so the refusal is reported once.
@@ -931,7 +938,7 @@ private:
     // filtering. Made and resized with the other buffers.
     unsigned ldrFbo_ = 0;
     unsigned ldrTexture_ = 0;
-    // Its twin, which LDR ShaderEffects ping-pong with.
+    // Its twin, which LDR ShaderEffects ping-pong with, made as the merge's is.
     unsigned ldrPingFbo_ = 0;
     unsigned ldrPingTexture_ = 0;
     // Whether fxaa_ has passed validation since the programs or buffers were

@@ -804,9 +804,6 @@ bool Renderer::ensureTargets(int width, int height) {
     mergeTexture_ = MakeTarget(RT_GL_RGBA16F, GL_RGBA, RT_GL_HALF_FLOAT, width, height, GL_LINEAR);
     // FXAA reads between texels.
     ldrTexture_ = MakeTarget(GL_RGBA8, GL_RGBA, GL_UNSIGNED_BYTE, width, height, GL_LINEAR);
-    // The twins ShaderEffects ping-pong with, read as their originals are.
-    mergePingTexture_ = MakeTarget(RT_GL_RGBA16F, GL_RGBA, RT_GL_HALF_FLOAT, width, height, GL_LINEAR);
-    ldrPingTexture_ = MakeTarget(GL_RGBA8, GL_RGBA, GL_UNSIGNED_BYTE, width, height, GL_LINEAR);
     glBindTexture(GL_TEXTURE_2D, 0);
 
     bool complete = true;
@@ -825,12 +822,6 @@ bool Renderer::ensureTargets(int width, int height) {
     glGenFramebuffers(1, &ldrFbo_);
     glBindFramebuffer(RT_GL_FRAMEBUFFER, ldrFbo_);
     complete = Attach({ldrTexture_}, 0) && complete;
-    glGenFramebuffers(1, &mergePingFbo_);
-    glBindFramebuffer(RT_GL_FRAMEBUFFER, mergePingFbo_);
-    complete = Attach({mergePingTexture_}, 0) && complete;
-    glGenFramebuffers(1, &ldrPingFbo_);
-    glBindFramebuffer(RT_GL_FRAMEBUFFER, ldrPingFbo_);
-    complete = Attach({ldrPingTexture_}, 0) && complete;
     if (!complete) {
         if (!targetsRefused_) {
             std::fprintf(stderr, "The Scene View's %d by %d render buffers are not supported.\n", width, height);
@@ -3501,13 +3492,37 @@ bool Renderer::hasEffects(bool hdr) const {
     return false;
 }
 
+bool Renderer::ensureEffectTarget(bool hdr) {
+    unsigned& texture = hdr ? mergePingTexture_ : ldrPingTexture_;
+    unsigned& fbo = hdr ? mergePingFbo_ : ldrPingFbo_;
+    if (texture != 0) {
+        return true;
+    }
+    if (targetWidth_ <= 0 || targetHeight_ <= 0) {
+        return false;
+    }
+    // Read as its original is: between texels, by bloom or FXAA.
+    texture = hdr ? MakeTarget(RT_GL_RGBA16F, GL_RGBA, RT_GL_HALF_FLOAT, targetWidth_, targetHeight_, GL_LINEAR)
+                  : MakeTarget(GL_RGBA8, GL_RGBA, GL_UNSIGNED_BYTE, targetWidth_, targetHeight_, GL_LINEAR);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    glGenFramebuffers(1, &fbo);
+    glBindFramebuffer(RT_GL_FRAMEBUFFER, fbo);
+    if (!Attach({texture}, 0)) {
+        glDeleteFramebuffers(1, &fbo);
+        fbo = 0;
+        DeleteTexture(texture);
+        return false;
+    }
+    return true;
+}
+
 unsigned Renderer::postPass(bool hdr, unsigned image, int width, int height, const float* projection,
                             const float* inverseProjection) {
-    const unsigned pingTexture = hdr ? mergePingTexture_ : ldrPingTexture_;
-    const unsigned fbos[2] = {hdr ? mergeFbo_ : ldrFbo_, hdr ? mergePingFbo_ : ldrPingFbo_};
-    if (pingTexture == 0 || !hasEffects(hdr)) {
+    if (!hasEffects(hdr) || !ensureEffectTarget(hdr)) {
         return image;
     }
+    const unsigned pingTexture = hdr ? mergePingTexture_ : ldrPingTexture_;
+    const unsigned fbos[2] = {hdr ? mergeFbo_ : ldrFbo_, hdr ? mergePingFbo_ : ldrPingFbo_};
     RENDER_PASS("Post effects");
     const engine_core::Matrix4 inverseView = engine_core::matrix4_inverse(view_);
     unsigned current = image;

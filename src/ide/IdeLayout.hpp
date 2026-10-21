@@ -273,6 +273,8 @@ public:
     void close_place_editors_for_tests() { close_script_editors(); }
     // Edit on id, as a double-click in Assets or the Explorer does.
     void edit_for_tests(std::uint32_t id) { edit(id); }
+    // The host the studio gives its Shader Editors, so a test writes through it.
+    ShaderEditorHost shader_editor_host_for_tests();
     const void* dock_of_for_tests(IdePane* page) const { return dockContaining(page); }
     std::size_t dock_count_for_tests() const { return docks_.size(); }
     // Moves page as a tab into beside's dock (side 0), or into a new dock left, right,

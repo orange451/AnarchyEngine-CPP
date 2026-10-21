@@ -63,9 +63,10 @@ vec4 runPostShader(vec2 uv) {
     CAMERA_POSITION = uInverseView[3].xyz;
     COLOR = texture(uScene, uv);
     post();
-    // Nothing below black, and a coverage the blend can take: a NaN here would
-    // spread through bloom and the tone map.
-    vec3 rgb = max(COLOR.rgb, vec3(0.0));
-    float a = clamp(COLOR.a, 0.0, 1.0);
-    return vec4(rgb == rgb ? rgb : vec3(0.0), a == a ? a : 1.0);
+    // Nothing below black or past half float's range (infinity would turn to
+    // NaN in the tone map), and a coverage the blend can take: a NaN here would
+    // spread through bloom and the tone map, as bloom_down.frag guards too.
+    vec3 rgb = any(isnan(COLOR.rgb)) ? vec3(0.0) : clamp(COLOR.rgb, 0.0, 65000.0);
+    float a = isnan(COLOR.a) ? 1.0 : clamp(COLOR.a, 0.0, 1.0);
+    return vec4(rgb, a);
 }

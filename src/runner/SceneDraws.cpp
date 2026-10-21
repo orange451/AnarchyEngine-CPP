@@ -43,6 +43,7 @@ void ApplySurface(const engine_core::VisualMesh& source, TextureCache& textures,
     ResolveShaderTextures(*draw.surface, textures, draw.surfaceTextures, std::size(draw.surfaceTextures));
 }
 
+// draw drawn with source's Material: its textures, loaded through textures, and its numbers.
 void ApplyMaterial(const engine_core::VisualMesh& source, TextureCache& textures, MeshDraw& draw) {
     draw.texture = textures.get(source.diffuse_texture, Usage::Color, source.diffuse_flip_y, source.diffuse_always_loaded,
                                 &draw.cutout);

@@ -829,7 +829,13 @@ ShaderEditorHost IdeLayout::shader_editor_host() {
             if (name == "TwoSided") {
                 return shader.set_two_sided(on);
             }
-            return shader.set_casts_shadow(on);
+            if (name == "Hdr") {
+                return shader.set_hdr(on);
+            }
+            if (name == "CastsShadow") {
+                return shader.set_casts_shadow(on);
+            }
+            return std::string("no mode named ") + name;
         });
     };
     host.set_margin = [write](engine_core::InstanceId id, double units) {
@@ -1368,5 +1374,11 @@ void IdeLayout::quick_open_chosen(std::uint32_t id) {
         game.selection().set({id});
     }
 }
+
+}  // namespace ide
+
+namespace ide {
+
+ShaderEditorHost IdeLayout::shader_editor_host_for_tests() { return shader_editor_host(); }
 
 }  // namespace ide

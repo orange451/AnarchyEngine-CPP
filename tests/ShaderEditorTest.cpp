@@ -686,6 +686,54 @@ void TestStageTabs(ide::IdeLayout& layout, jadefx::Scene& scene) {
 }
 
 // A vertex stage's problem opens the vertex tab at its line.
+// The Shader Editor's Hdr toggle, through the studio's own host, sets Hdr and nothing else.
+void TestHdrToggle(ide::IdeLayout& layout, jadefx::Scene& scene) {
+    engine_core::Engine& engine = layout.simulation();
+    double time = 160.0;
+    auto frame = [&] {
+        scene.layout(1280, 800, time);
+        time += 0.05;
+    };
+    engine_core::InstanceId id = 0;
+    engine.on_simulation([&](engine_core::DataModel& game) {
+        engine_core::Shader& shader = game.create<engine_core::Shader>();
+        game.set_name(shader.id(), "Fade");
+        game.set_parent(shader.id(), game.service("Shaders"));
+        shader.set_kind(engine_core::ShaderKind::Post);
+        shader.set_source("void post() {}\n");
+        id = shader.id();
+    });
+    layout.edit_for_tests(id);
+    frame();
+    frame();
+    ide::IdeShaderEditor* pane = PaneFor(scene, id);
+    jadefx::CheckBox* hdr = pane != nullptr ? pane->modeToggle("Hdr") : nullptr;
+    Expect(hdr != nullptr && hdr->isVisible(), "a post Shader's editor shows the Hdr toggle");
+    if (hdr == nullptr) {
+        return;
+    }
+    // Through the studio's own host, as the toggle's action calls it (the pane test pins that call).
+    layout.shader_editor_host_for_tests().set_mode(id, "Hdr", true);
+    frame();
+    frame();
+    frame();
+    bool is_hdr = false;
+    bool casts = false;
+    engine.on_simulation([&](engine_core::DataModel& game) {
+        const auto* shader = dynamic_cast<const engine_core::Shader*>(game.instance(id));
+        is_hdr = shader != nullptr && shader->hdr();
+        casts = shader != nullptr && shader->casts_shadow();
+    });
+    frame();
+    Expect(is_hdr, "the host's Hdr mode sets the Shader's Hdr");
+    Expect(casts, "and leaves CastsShadow alone");
+    Expect(hdr->isSelected(), "and the toggle follows");
+    layout.close_page_for_tests(pane);
+    frame();
+    engine.on_simulation([&](engine_core::DataModel& game) { game.destroy(id); });
+    frame();
+}
+
 void TestProblemOpensVertexStage(ide::IdeLayout& layout, jadefx::Scene& scene) {
     engine_core::Engine& engine = layout.simulation();
     double time = 120.0;
@@ -751,6 +799,7 @@ int RunShaderEditorTests(ide::IdeLayout& layout, jadefx::Scene& scene) {
     TestCompileErrorReachesShader(layout, scene);
     TestStageTabs(layout, scene);
     TestProblemOpensVertexStage(layout, scene);
+    TestHdrToggle(layout, scene);
     if (gFailures == 0) {
         std::printf("shader editor tests passed\n");
     }

@@ -103,7 +103,7 @@ TEST_CASE("SH3 a shader starts with its header", "[shader]") {
 TEST_CASE("SH4 render_mode takes the kind's words", "[shader]") {
     const ShaderParse parse = parse_shader("shader surface;\nrender_mode transparent, two_sided;\nvoid surface() {}\n");
     REQUIRE(!parse.error);
-    REQUIRE(parse.modes == std::vector<std::string>{"transparent", "two_sided"});
+    REQUIRE(parse.header_modes == std::vector<std::string>{"transparent", "two_sided"});
     REQUIRE(error_of("shader surface;\nrender_mode hdr;\nvoid surface() {}\n") ==
             "2: unknown render_mode hdr; a surface shader has transparent, two_sided, no_shadow");
     REQUIRE(error_of("shader post;\nrender_mode bogus;\nvoid post() {}\n") ==
@@ -254,4 +254,81 @@ TEST_CASE("SH-T the parse says whether the code names TIME and cuts holes, comme
     const ShaderParse near = parse_shader("shader surface;\nfloat ALPHAS = 1.0;\nfloat MYTIME = 2.0;\nvoid surface() {}\n");
     REQUIRE_FALSE(near.cuts);
     REQUIRE_FALSE(near.reads_time);
+}
+
+TEST_CASE("SH12 under a given kind the header is optional and, present, is recorded and blanked", "[shader]") {
+    using engine_core::ShaderStage;
+    const ShaderParse bare = parse_shader("uniform float A = 1.0;\nvoid surface() {}\n", ShaderStage::Fragment, ShaderKind::Surface);
+    REQUIRE(!bare.error);
+    REQUIRE(bare.kind == ShaderKind::Surface);
+    REQUIRE(!bare.header_kind.has_value());
+    REQUIRE(!bare.header_modes.has_value());
+    REQUIRE(bare.params.size() == 1);
+    const ShaderParse headed = parse_shader("shader post;\nvoid post() {}\n", ShaderStage::Fragment, ShaderKind::Surface);
+    REQUIRE(!headed.error);
+    REQUIRE(headed.header_kind == ShaderKind::Post);
+    REQUIRE(headed.kind == ShaderKind::Post);
+    REQUIRE(headed.glsl.find("shader post") == std::string::npos);
+    // The nullopt overload keeps phase 1's rule.
+    REQUIRE(error_of("void surface() {}\n").find("starts with") != std::string::npos);
+}
+
+TEST_CASE("SH13 render_mode is recorded as the header modes, an empty one too", "[shader]") {
+    using engine_core::ShaderStage;
+    const ShaderParse modes = parse_shader("render_mode two_sided;\nvoid surface() {}\n", ShaderStage::Fragment, ShaderKind::Surface);
+    REQUIRE(!modes.error);
+    REQUIRE(modes.header_modes.has_value());
+    REQUIRE(*modes.header_modes == std::vector<std::string>{"two_sided"});
+    const ShaderParse none = parse_shader("render_mode;\nvoid surface() {}\n", ShaderStage::Fragment, ShaderKind::Surface);
+    REQUIRE(!none.error);
+    REQUIRE(none.header_modes.has_value());
+    REQUIRE(none.header_modes->empty());
+}
+
+TEST_CASE("SH14 a vertex stage needs vertex() and takes no render_mode", "[shader]") {
+    using engine_core::ShaderStage;
+    const ShaderParse missing = parse_shader("uniform float A;\n", ShaderStage::Vertex, ShaderKind::Surface);
+    REQUIRE(missing.error);
+    REQUIRE(missing.error->line == 1);
+    REQUIRE(missing.error->message == "a vertex stage needs void vertex()");
+    REQUIRE(missing.stage == ShaderStage::Vertex);
+    const ShaderParse good = parse_shader("uniform float A;\nvoid vertex() {\n    VERTEX.y += A * sin(TIME);\n}\n",
+                                          ShaderStage::Vertex, ShaderKind::Surface);
+    REQUIRE(!good.error);
+    REQUIRE(good.reads_time);
+    REQUIRE(!good.cuts);
+    const ShaderParse mode = parse_shader("render_mode two_sided;\nvoid vertex() {}\n", ShaderStage::Vertex, ShaderKind::Surface);
+    REQUIRE(mode.error);
+    REQUIRE(mode.error->message == "render_mode belongs in the fragment stage");
+}
+
+TEST_CASE("SH15 VERTEX is the engine's name", "[shader]") {
+    REQUIRE(error_of(surface("uniform float VERTEX;")) == "2: VERTEX is the engine's name");
+    REQUIRE(engine_core::shader_reserved_name("VERTEX"));
+}
+
+TEST_CASE("SH16 the two stages' uniforms merge, and a mismatch errors in both", "[shader]") {
+    using engine_core::merge_shader_params;
+    using engine_core::ShaderStage;
+    const ShaderParse fragment = parse_shader("uniform float A = 1.0;\nuniform vec3 Tint : color;\nvoid surface() {}\n",
+                                              ShaderStage::Fragment, ShaderKind::Surface);
+    const ShaderParse same = parse_shader("uniform float A = 1.0;\nuniform float B;\nvoid vertex() {}\n",
+                                          ShaderStage::Vertex, ShaderKind::Surface);
+    const engine_core::MergedParams merged = merge_shader_params(fragment, &same);
+    REQUIRE(!merged.fragment_error);
+    REQUIRE(!merged.vertex_error);
+    REQUIRE(merged.params.size() == 3);
+    REQUIRE(merged.params[0].name == "A");
+    REQUIRE(merged.params[1].name == "Tint");
+    REQUIRE(merged.params[2].name == "B");
+    const ShaderParse other = parse_shader("void vertex() {}\nuniform float A = 2.0;\n", ShaderStage::Vertex, ShaderKind::Surface);
+    const engine_core::MergedParams clash = merge_shader_params(fragment, &other);
+    REQUIRE(clash.fragment_error);
+    REQUIRE(clash.fragment_error->line == 1);
+    REQUIRE(clash.fragment_error->message == "A is declared differently in the vertex stage");
+    REQUIRE(clash.vertex_error);
+    REQUIRE(clash.vertex_error->line == 2);
+    REQUIRE(clash.vertex_error->message == "A is declared differently in the fragment stage");
+    // No vertex stage: the fragment's list as it is.
+    REQUIRE(merge_shader_params(fragment, nullptr).params.size() == 2);
 }

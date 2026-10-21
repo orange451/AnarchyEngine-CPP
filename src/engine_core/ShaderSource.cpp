@@ -22,7 +22,7 @@ constexpr std::string_view kReserved[] = {
     "WORLD_NORMAL",    "SCREEN_UV",      "SCREEN_SIZE",     "TEXEL",             "FRONT_FACING",      "TIME",
     "CAMERA_POSITION", "VIEW",           "PROJECTION",      "INV_VIEW",          "INV_PROJECTION",    "SCREEN",
     "DEPTH",           "NORMALS",        "MATERIAL",        "TEXTURE_DIFFUSE",   "TEXTURE_NORMAL",    "TEXTURE_ROUGHNESS",
-    "TEXTURE_METALNESS", "TEXTURE_EMISSIVE",
+    "TEXTURE_METALNESS", "TEXTURE_EMISSIVE", "VERTEX",
 };
 
 bool space(char c) { return c == ' ' || c == '\t' || c == '\r' || c == '\n' || c == '\f' || c == '\v'; }
@@ -224,7 +224,10 @@ const char* type_word(ShaderParamType type) {
 
 class Parser {
 public:
-    explicit Parser(std::string_view source) : source_(source), masked_(mask(source)) {
+    Parser(std::string_view source, ShaderStage stage, std::optional<ShaderKind> kind)
+        : source_(source), masked_(mask(source)), header_required_(!kind.has_value()) {
+        out_.stage = stage;
+        out_.kind = kind.value_or(ShaderKind::Surface);
         out_.glsl.assign(source.data(), source.size());
         for (std::size_t i = 0; i < source.size(); ++i) {
             if (source[i] == '\n') {
@@ -235,13 +238,20 @@ public:
 
     ShaderParse run() {
         const std::vector<Statement> all = statements(masked_);
-        if (all.empty() || !header(all.front())) {
+        const bool headed = !all.empty() && header(all.front());
+        if (header_required_ && !headed) {
             return fail(all.empty() ? 1 : line_of(all.front().begin), std::string(kHeaderMessage));
         }
-        for (std::size_t index = 1; index < all.size(); ++index) {
+        for (std::size_t index = headed ? 1 : 0; index < all.size(); ++index) {
             if (!statement(all[index])) {
                 return std::move(out_);
             }
+        }
+        if (out_.stage == ShaderStage::Vertex) {
+            if (!has_function("vertex")) {
+                return fail(last_line(), "a vertex stage needs void vertex()");
+            }
+            return std::move(out_);
         }
         const char* function = out_.kind == ShaderKind::Surface ? "surface" : "post";
         if (!has_function(function)) {
@@ -298,6 +308,7 @@ private:
             return false;
         }
         out_.kind = kind == "surface" ? ShaderKind::Surface : ShaderKind::Post;
+        out_.header_kind = out_.kind;
         blank(at.begin, at.end + 1);
         return true;
     }
@@ -322,8 +333,15 @@ private:
     }
 
     bool render_mode(const Statement& at, std::string_view rest) {
+        if (out_.stage == ShaderStage::Vertex) {
+            return fail_at(at, "render_mode belongs in the fragment stage");
+        }
         const bool surface = out_.kind == ShaderKind::Surface;
+        std::vector<std::string> modes;
         for (const std::string_view mode : split_commas(rest)) {
+            if (trim(mode).empty()) {
+                continue;
+            }
             const bool known = surface ? (mode == "transparent" || mode == "two_sided" || mode == "no_shadow")
                                        : mode == "hdr";
             if (!known) {
@@ -331,8 +349,9 @@ private:
                                        (surface ? "; a surface shader has transparent, two_sided, no_shadow"
                                                 : "; a post shader has hdr"));
             }
-            out_.modes.emplace_back(mode);
+            modes.emplace_back(mode);
         }
+        out_.header_modes = std::move(modes);
         blank(at.begin, at.end + 1);
         return true;
     }
@@ -549,10 +568,21 @@ private:
     std::string_view source_;
     std::string masked_;
     std::vector<std::size_t> line_starts_;
+    bool header_required_ = true;
     ShaderParse out_;
     std::string group_;
     int samplers_ = 0;
 };
+
+bool same_param(const ShaderParam& a, const ShaderParam& b) {
+    const LuaSlot& x = a.fallback;
+    const LuaSlot& y = b.fallback;
+    return a.type == b.type && a.group == b.group && a.ranged == b.ranged && a.min == b.min && a.max == b.max &&
+           a.hidden == b.hidden && a.srgb == b.srgb && a.normal == b.normal && a.black == b.black &&
+           a.clamp == b.clamp && a.nearest == b.nearest && x.kind == y.kind && x.number == y.number &&
+           x.flag == y.flag && x.vec.x == y.vec.x && x.vec.y == y.vec.y && x.vec.z == y.vec.z &&
+           x.color.r == y.color.r && x.color.g == y.color.g && x.color.b == y.color.b;
+}
 
 }  // namespace
 
@@ -591,10 +621,35 @@ bool names_token(std::string_view text, std::string_view token) {
 
 }  // namespace
 
-ShaderParse parse_shader(std::string_view source) {
-    ShaderParse out = Parser(source).run();
+ShaderParse parse_shader(std::string_view source, ShaderStage stage, std::optional<ShaderKind> kind) {
+    ShaderParse out = Parser(source, stage, kind).run();
     out.reads_time = names_token(out.glsl, "TIME");
-    out.cuts = names_token(out.glsl, "discard") || names_token(out.glsl, "ALPHA");
+    out.cuts = stage == ShaderStage::Fragment && (names_token(out.glsl, "discard") || names_token(out.glsl, "ALPHA"));
+    return out;
+}
+
+MergedParams merge_shader_params(const ShaderParse& fragment, const ShaderParse* vertex) {
+    MergedParams out;
+    out.params = fragment.params;
+    if (vertex == nullptr) {
+        return out;
+    }
+    for (const ShaderParam& param : vertex->params) {
+        const auto found = std::find_if(out.params.begin(), out.params.end(),
+                                        [&](const ShaderParam& have) { return have.name == param.name; });
+        if (found == out.params.end()) {
+            out.params.push_back(param);
+            continue;
+        }
+        if (!same_param(*found, param)) {
+            if (!out.fragment_error) {
+                out.fragment_error = ShaderError{found->line, param.name + " is declared differently in the vertex stage"};
+            }
+            if (!out.vertex_error) {
+                out.vertex_error = ShaderError{param.line, param.name + " is declared differently in the fragment stage"};
+            }
+        }
+    }
     return out;
 }
 

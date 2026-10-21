@@ -81,7 +81,7 @@ bool same_binding(const SurfaceBinding& a, const SurfaceBinding& b) {
 
 SurfaceModes surface_modes(const ShaderParse& parse) {
     SurfaceModes modes;
-    for (const std::string& mode : parse.modes) {
+    for (const std::string& mode : parse.header_modes.value_or(std::vector<std::string>{})) {
         modes.transparent = modes.transparent || mode == "transparent";
         modes.two_sided = modes.two_sided || mode == "two_sided";
         modes.no_shadow = modes.no_shadow || mode == "no_shadow";

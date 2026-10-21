@@ -6177,6 +6177,45 @@ int main(int argc, char** argv) {
         Expect(runner::rt_glGetError() == runner::GL_NO_ERROR, "the ball leaves no GL error");
     }
 
+    // A ball released while another window's context is current, as a floating
+    // window's close hook releases its preview: it deletes its own objects in
+    // its own context, and the other context's objects of the same names stay.
+    {
+        GLFWwindow* home = glfwCreateWindow(64, 64, "ball home", nullptr, nullptr);
+        GLFWwindow* elsewhere = glfwCreateWindow(64, 64, "elsewhere", nullptr, nullptr);
+        Expect(home != nullptr && elsewhere != nullptr, "two more contexts open");
+        if (home != nullptr && elsewhere != nullptr) {
+            glfwMakeContextCurrent(elsewhere);
+            unsigned textures[32] = {};
+            glGenTextures(32, textures);
+            for (unsigned texture : textures) {
+                glBindTexture(runner::GL_TEXTURE_2D, texture);
+            }
+            glfwMakeContextCurrent(home);
+            ide::MaterialBall ball(64, 32);
+            ide::MaterialLook red;
+            red.color = {1.f, 0.f, 0.f, 1.f};
+            runner::ViewPixels pixels;
+            Expect(ball.draw(red, pixels), "a ball draws in a context of its own");
+            glfwMakeContextCurrent(elsewhere);
+            ball.release();
+            Expect(glfwGetCurrentContext() == elsewhere, "release leaves the other context current");
+            int kept = 0;
+            for (unsigned texture : textures) {
+                kept += glIsTexture(texture) ? 1 : 0;
+            }
+            Expect(kept == 32, "release deletes nothing of another context (" + std::to_string(kept) + " of 32 kept)");
+            glDeleteTextures(32, textures);
+        }
+        glfwMakeContextCurrent(window);
+        if (home != nullptr) {
+            glfwDestroyWindow(home);
+        }
+        if (elsewhere != nullptr) {
+            glfwDestroyWindow(elsewhere);
+        }
+    }
+
     {
         // RD2: a Dragger's handles at (0, 0, -10), seen from the origin down -Z
         // with a 90 degree view: the X shaft runs right of the middle, the Y

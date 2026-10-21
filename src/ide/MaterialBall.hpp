@@ -10,6 +10,8 @@
 #include <filesystem>
 #include <string>
 
+struct GLFWwindow;
+
 namespace ide {
 
 // What drawView draws the look on: a ball, a cube, a plane facing the
@@ -19,8 +21,8 @@ enum class PreviewMesh { Sphere, Cube, Plane, Mesh };
 // A Material's look on a ball, as the Scene View's Renderer draws it, off
 // screen: a fixed camera and studio lights, a warm key light from the upper
 // left and a cool fill from the right, so a preview looks the same in every
-// place. Every call but the destructor needs a GL context current, the same
-// one each time until release.
+// place. Every call but the destructor and release needs a GL context
+// current, the same one each time until release.
 class MaterialBall {
 public:
     // Draws render_size pixels square, then shrinks to size, which smooths
@@ -55,7 +57,9 @@ public:
         yaw_ = yaw;
         pitch_ = pitch;
     }
-    // Deletes the GL objects. The next draw makes them again, in whatever context is current then.
+    // Deletes the GL objects in the context that made them, whichever is
+    // current, which must still be open. The next draw makes them again, in
+    // whatever context is current then.
     void release();
 
 private:
@@ -81,6 +85,8 @@ private:
     unsigned color_ = 0;
     bool attempted_ = false;
     bool ready_ = false;
+    // The context the GL objects were made in.
+    GLFWwindow* context_ = nullptr;
 };
 
 }  // namespace ide

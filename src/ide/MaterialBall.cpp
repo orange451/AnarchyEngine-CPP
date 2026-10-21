@@ -50,6 +50,7 @@ bool MaterialBall::ensureGraphics() {
         return ready_;
     }
     attempted_ = true;
+    context_ = glfwGetCurrentContext();
     const bool loaded = runner::LoadGl([](const char* name) -> void* {
         return reinterpret_cast<void*>(glfwGetProcAddress(name));
     });
@@ -229,6 +230,13 @@ bool MaterialBall::render(const MaterialLook& look, const anarchy::amesh::GpuMes
 }
 
 void MaterialBall::release() {
+    // In the context that made the objects: names are per context, so under
+    // another one they would be that context's objects.
+    GLFWwindow* const was = context_ != nullptr ? glfwGetCurrentContext() : nullptr;
+    const bool away = context_ != nullptr && was != context_;
+    if (away) {
+        glfwMakeContextCurrent(context_);
+    }
     renderer_.shutdown();
     textures_.clear();
     sphere_.destroy();
@@ -245,6 +253,10 @@ void MaterialBall::release() {
     }
     attempted_ = false;
     ready_ = false;
+    context_ = nullptr;
+    if (away) {
+        glfwMakeContextCurrent(was);
+    }
 }
 
 }  // namespace ide

@@ -531,7 +531,10 @@ void IdeShaderEditor::renderContent(jadefx::UiRenderer& renderer, float opacity)
 
 void IdeShaderEditor::sceneChanged(jadefx::Scene* previous) {
     IdePane::sceneChanged(previous);
-    // As the Assets pane does: release the GL objects while the context that made them is current.
+    // As the Assets pane does: leaving a live scene releases the preview's GL
+    // objects, which the ball deletes in the context that made them, even
+    // when a floating window's close hook runs under another. A scene tearing
+    // down has lost its context, and the objects went with it.
     if (previous == nullptr || previous->isTearingDown() || getScene() == previous) {
         return;
     }

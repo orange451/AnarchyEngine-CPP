@@ -13,6 +13,7 @@
 #include "SnapshotPump.hpp"
 #include "SurfaceBinding.hpp"
 #include "GameObject.hpp"
+#include "Folder.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -878,4 +879,65 @@ TEST_CASE("SHA27 the merged parse holds a uniform declared only in the vertex st
     // A broken vertex stage is no vertex stage to draw.
     shader.set_vertex_source("uniform float A;\n");
     REQUIRE(!engine_core::make_surface_binding(game, brick)->has_vertex);
+}
+
+TEST_CASE("SHA28 a Shader with no vertex text, saved, reads as in sync with the disk", "[shader][project][disk]") {
+    SimRole role;
+    TempDir dir;
+    engine_core::Game game;
+    Project project = Project::create(dir.path, game);
+    Shader& shader = add_shader(game, "Plain");
+    shader.set_source(kVignette);
+    Shader& other = add_shader(game, "Other");
+    other.set_source(kVignette);
+    project.save();
+    // Another file changes outside the studio: the scan compares the whole tree.
+    std::ofstream(dir.path / leaf(game, other.id(), ".glsl"), std::ios::binary | std::ios::trunc)
+        << "void surface() {}\n";
+    const engine_core::DiskScan scan = project.scan_disk();
+    REQUIRE(scan.conflicts.empty());
+    REQUIRE(scan.has_disk_changes);
+    const engine_core::DiskScan applied = project.apply_disk();
+    REQUIRE(applied.loaded == std::vector<std::string>{"Other"});
+    // Loaded, nothing is left to load: Plain's missing vertex file is its empty stage.
+    const engine_core::DiskScan again = project.scan_disk();
+    REQUIRE(again.conflicts.empty());
+    REQUIRE_FALSE(again.has_disk_changes);
+}
+
+TEST_CASE("SHA29 renaming a Folder of a Shader with a vertex stage moves its vertex file, out of sync or not", "[shader][project][disk]") {
+    SimRole role;
+    TempDir dir;
+    std::string guid;
+    std::filesystem::path old_folder;
+    {
+        engine_core::Game game;
+        Project project = Project::create(dir.path, game);
+        engine_core::Folder& water = game.create<engine_core::Folder>();
+        game.set_name(water.id(), "Water");
+        game.set_parent(water.id(), game.service("Shaders"));
+        Shader& shader = game.create<Shader>();
+        game.set_name(shader.id(), "Ocean");
+        game.set_parent(shader.id(), water.id());
+        shader.set_source(kVignette);
+        shader.set_vertex_source(kLift);
+        Shader& other = add_shader(game, "Other");
+        other.set_source(kVignette);
+        guid = game.guid(shader.id());
+        project.save();
+        old_folder = dir.path / leaf(game, water.id(), "");
+        REQUIRE(std::filesystem::exists(dir.path / leaf(game, shader.id(), ".vert.glsl")));
+        // Something else changes outside the studio, so the next save plans the whole tree.
+        std::ofstream(dir.path / leaf(game, other.id(), ".glsl"), std::ios::binary | std::ios::trunc)
+            << "void surface() {}\n";
+        game.set_name(water.id(), "Sea");
+        project.save();
+        REQUIRE(std::filesystem::exists(dir.path / leaf(game, shader.id(), ".vert.glsl")));
+    }
+    REQUIRE_FALSE(std::filesystem::exists(old_folder));
+    engine_core::Game game;
+    Project read = Project::load(dir.path, game);
+    const auto* shader = dynamic_cast<const Shader*>(game.instance(*game.find_guid(guid)));
+    REQUIRE(shader != nullptr);
+    REQUIRE(shader->vertex_source() == kLift);
 }

@@ -152,6 +152,19 @@ std::string extra_extension_of(const std::string& path) {
     return suffix != nullptr ? std::string(suffix + 1) : std::string();
 }
 
+// Whether two lists of extra stage files are the same: a stage with no file
+// and no text is the same as no entry, as a load from disk lists none.
+template <typename Extra>
+bool same_extras(const std::vector<Extra>& a, const std::vector<Extra>& b) {
+    const Extra none{};
+    for (std::size_t i = 0; i < std::max(a.size(), b.size()); ++i) {
+        if ((i < a.size() ? a[i] : none) != (i < b.size() ? b[i] : none)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 // The extension of path's file, without the dot: "glsl" for ".../X.guid.glsl".
 std::string extension_of(const std::string& path) {
     const std::size_t dot = path.rfind('.');
@@ -1322,7 +1335,8 @@ JsonValue compared_json(JsonValue props, const std::string& parent, bool root, b
     }
     if (has_source) {
         props.set("Source", JsonValue::string(source));
-        if (!extras.empty()) {
+        // An empty stage has no file, so a disk read has no key either.
+        if (!extras.empty() && !extras.front().empty()) {
             props.set("VertexSource", JsonValue::string(extras.front()));
         }
     }
@@ -2211,6 +2225,8 @@ std::map<std::string, Project::Files> Project::plan_files(const std::vector<Auth
     for (std::size_t index = 0; index < tree.size(); ++index) {
         const AuthoredNode& node = tree[index];
         Files files;
+        // Where this node's extra stage file of an extension goes; the root has none.
+        std::function<std::string(const std::string&)> extra_path;
         if (index == 0) {
             files.props_path = join(src, "init.json");
             for (std::size_t child : node.children) {
@@ -2234,13 +2250,15 @@ std::map<std::string, Project::Files> Project::plan_files(const std::vector<Auth
                 files.props_path = join(dir, stem + (node.has_source ? ".meta.json" : ".json"));
                 files.source_path = node.has_source ? join(dir, stem + "." + source_extension) : std::string();
             }
+            extra_path = [dir, stem, folder](const std::string& extension) {
+                return folder ? join(join(dir, stem), "init." + extension) : join(dir, stem + "." + extension);
+            };
             // An extra stage with text gets its file beside the source; one without has none.
             if (node.has_properties) {
                 for (const ExtraSource& extra : node.extra_sources) {
                     Files::Extra own;
                     if (!extra.text.empty()) {
-                        own.path = folder ? join(join(dir, stem), std::string("init.") + extra.extension)
-                                          : join(dir, stem + "." + extra.extension);
+                        own.path = extra_path(extra.extension);
                     }
                     own.bytes = extra.text;
                     files.extras.push_back(std::move(own));
@@ -2257,7 +2275,13 @@ std::map<std::string, Project::Files> Project::plan_files(const std::vector<Auth
             files.props = known.props;
             files.props_bytes = known.props_bytes;
             files.source_bytes = known.source_bytes;
+            // Its bytes as they were, at the path its parent's folder gives it now.
             files.extras = known.extras;
+            for (Files::Extra& extra : files.extras) {
+                if (!extra.path.empty()) {
+                    extra.path = extra_path(extra_extension_of(extra.path));
+                }
+            }
         }
         next.emplace(node.guid, std::move(files));
     }
@@ -2388,7 +2412,7 @@ std::vector<SaveConflict> Project::outside_changes(const std::vector<AuthoredNod
                             planned.has_source != base->second.has_source ||
                             planned.props_bytes != base->second.props_bytes ||
                             planned.source_bytes != base->second.source_bytes ||
-                            planned.extras != base->second.extras;
+                            !same_extras(planned.extras, base->second.extras);
         for (std::size_t up = parent[index]; places; up = parent[up]) {
             if (!holds.insert(tree[up].guid).second || up == 0) {
                 break;
@@ -2447,7 +2471,7 @@ std::vector<SaveConflict> Project::outside_changes(const std::vector<AuthoredNod
         const bool touched = removed || holds.count(guid) != 0 || planned->second.props_path != base.props_path ||
                              planned->second.source_path != base.source_path ||
                              planned->second.has_source != base.has_source ||
-                             planned->second.extras != base.extras ||
+                             !same_extras(planned->second.extras, base.extras) ||
                              std::any_of(own.begin(), own.end(), [](const Own& file) { return file.rewritten; });
 
         const std::string* gone = nullptr;
@@ -4471,7 +4495,7 @@ void Project::check_quick_save(const PendingSave& save, const AuthoredDirty& dir
     auto same = [](const Files& a, const Files& b) {
         return a.props_path == b.props_path && a.props_bytes == b.props_bytes && a.has_source == b.has_source &&
                a.source_path == b.source_path && (!a.has_source || a.source_bytes == b.source_bytes) &&
-               a.parent == b.parent;
+               a.parent == b.parent && same_extras(a.extras, b.extras);
     };
     const std::set<std::string> removed(save.removed_guids.begin(), save.removed_guids.end());
     for (const auto& [guid, files] : next) {

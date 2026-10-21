@@ -210,13 +210,15 @@ void gather(const engine_core::DataModel& game, engine_core::InstanceId parent, 
     }
 }
 
-// A Shader under parent, with its Error and where it is.
+// A Shader under parent, with one stage's Error and where it is.
 struct ShaderEntry {
     std::uint32_t id = 0;
     std::string name;
     std::string path;
     std::string error;
     std::string source;
+    // The stage the error is in: "Shader" (the fragment) or "Vertex".
+    const char* code = "Shader";
 };
 
 // Every Shader under Assets.Shaders, the only place one can be, in tree order.
@@ -226,11 +228,16 @@ void gather_shaders(const engine_core::DataModel& game, engine_core::InstanceId 
     for (engine_core::InstanceId child = game.first_child(parent); child != 0; child = game.next_sibling(child)) {
         const std::string name = game.name(child);
         if (const auto* shader = dynamic_cast<const engine_core::Shader*>(game.instance(child))) {
-            ShaderEntry entry{child, name, path, shader->error(), std::string()};
+            ShaderEntry entry{child, name, path, shader->fragment_error(), std::string()};
             if (!entry.error.empty()) {
                 entry.source = shader->source();
             }
             out.push_back(std::move(entry));
+            if (!shader->vertex_error().empty()) {
+                ShaderEntry vertex{child, name, path, shader->vertex_error(), shader->vertex_source()};
+                vertex.code = "Vertex";
+                out.push_back(std::move(vertex));
+            }
         }
         if (depth < 64) {
             gather_shaders(game, child, path + "." + name, out, depth + 1);
@@ -248,10 +255,10 @@ std::vector<ShaderEntry> shaders_of(const engine_core::DataModel& game) {
 }
 
 // A Shader's Error, "<line>: <message>", as one problem across that line of source.
-Problem shader_problem(const std::string& error, const std::string& source) {
+Problem shader_problem(const std::string& error, const std::string& source, const char* code = "Shader") {
     Problem problem;
     problem.severity = engine_core::Severity::Error;
-    problem.code = "Shader";
+    problem.code = code;
     const std::size_t colon = error.find(": ");
     problem.line = colon == std::string::npos ? 1 : std::max(1, std::atoi(error.substr(0, colon).c_str()));
     problem.message = colon == std::string::npos ? error : error.substr(colon + 2);

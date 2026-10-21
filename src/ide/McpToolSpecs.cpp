@@ -68,9 +68,11 @@ constexpr SpecText kSpecs[] = {
          "files":{"type":"array","minItems":1,"maxItems":64,"items":{"type":"string"},"description":"Absolute paths of image, sound, and model files."}}})"},
     {"read_script",
      "The Source of a Script, ModuleScript, or Shader, and how many lines it has. first_line and last_line "
-     "return only those lines, counting from 1.",
+     "return only those lines, counting from 1. A Shader has two stages: stage \"vertex\" reads its "
+     "VertexSource; \"fragment\", the default, its Source.",
      R"({"type":"object","required":["instance"],"properties":{
          "instance":{"type":["string","number"],"description":"Id or path."},
+         "stage":{"type":"string","enum":["fragment","vertex"],"description":"A Shader's stage. Default fragment."},
          "first_line":{"type":"integer","minimum":1,"description":"Default 1."},
          "last_line":{"type":"integer","minimum":1,"description":"Default: the last line."}}})"},
     {"write_script",
@@ -79,9 +81,11 @@ constexpr SpecText kSpecs[] = {
      "the studio's analysis finds in the new source, lines from 1, or analysis \"pending\" when it "
      "has not finished, or \"not checked\" for a script analysis does not check: one outside the "
      "place, or one added during a playtest (see get_diagnostics). For a Shader, the problem is its "
-     "Error, at its line. To change part of a long script, edit_script sends less.",
+     "Error, at its line. To change part of a long script, edit_script sends less. A Shader's stage "
+     "\"vertex\" writes its VertexSource; \"fragment\", the default, its Source.",
      R"({"type":"object","required":["instance","source"],"properties":{
          "instance":{"type":["string","number"],"description":"Id or path."},
+         "stage":{"type":"string","enum":["fragment","vertex"],"description":"A Shader's stage. Default fragment."},
          "source":{"type":"string"}}})"},
     {"edit_script",
      "Replaces text in a Script, ModuleScript, or Shader's Source without sending all of it. Each edit's "
@@ -90,6 +94,7 @@ constexpr SpecText kSpecs[] = {
      "problems analysis finds, as write_script does.",
      R"({"type":"object","required":["instance","edits"],"properties":{
          "instance":{"type":["string","number"],"description":"Id or path."},
+         "stage":{"type":"string","enum":["fragment","vertex"],"description":"A Shader's stage. Default fragment."},
          "edits":{"type":"array","minItems":1,"items":{"type":"object","required":["old_text","new_text"],"properties":{
              "old_text":{"type":"string"},
              "new_text":{"type":"string"},

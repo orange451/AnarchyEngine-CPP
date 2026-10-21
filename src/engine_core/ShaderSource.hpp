@@ -6,6 +6,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace engine_core {
@@ -60,6 +61,9 @@ struct ShaderParse {
     std::optional<ShaderKind> header_kind;
     // A `render_mode` line was present, with these words (none for `render_mode;`).
     std::optional<std::vector<std::string>> header_modes;
+    // Where the header and render_mode statements were in the source, as
+    // [begin, end) byte ranges, so a holder can take them out of its text.
+    std::vector<std::pair<std::size_t, std::size_t>> header_spans;
     // In declaration order. Only those before the error when there is one.
     std::vector<ShaderParam> params;
     // The first problem, or none.

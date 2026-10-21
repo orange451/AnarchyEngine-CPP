@@ -41,6 +41,7 @@ void SourceText::set_source(int stage, std::string source) {
     if (stage < 0 || stage >= stage_count()) {
         return;
     }
+    source = prepare_source(stage, std::move(source));
     std::string& text = stage_text(stage);
     if (text == source) {
         return;

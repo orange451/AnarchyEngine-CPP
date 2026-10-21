@@ -309,6 +309,7 @@ private:
         }
         out_.kind = kind == "surface" ? ShaderKind::Surface : ShaderKind::Post;
         out_.header_kind = out_.kind;
+        out_.header_spans.emplace_back(at.begin, at.end + 1);
         blank(at.begin, at.end + 1);
         return true;
     }
@@ -352,6 +353,7 @@ private:
             modes.emplace_back(mode);
         }
         out_.header_modes = std::move(modes);
+        out_.header_spans.emplace_back(at.begin, at.end + 1);
         blank(at.begin, at.end + 1);
         return true;
     }

@@ -161,7 +161,11 @@ void TestShaderTab(ide::IdeLayout& layout, jadefx::Scene& scene) {
     editor->flush();
     frame();
     frame();
-    Expect(SourceOf(engine, id) == kBadHint, "a flush writes Source");
+    // The header line is a property now, taken out of the text as spaces.
+    const std::string written = SourceOf(engine, id);
+    Expect(written.find("shader surface") == std::string::npos &&
+               written.find("\n\n// glow is not a hint\nuniform float Shine : glow;") != std::string::npos,
+           "a flush writes Source, less the header line");
     Expect(editor->errorLine() == 4, "the error's line is marked");
     // Text added above the error leaves Error's text the same; the mark still follows its line.
     const std::string padded =
@@ -442,7 +446,8 @@ void TestCompileErrorReachesShader(ide::IdeLayout& layout, jadefx::Scene& scene)
             error = shader->error();
         }
     });
-    Expect(error == "4: 'wobble' : no matching overloaded function found", "the Scene View's error reaches Shader.Error");
+    Expect(error == "fragment 4: 'wobble' : no matching overloaded function found",
+           "the Scene View's error reaches Shader.Error");
     // Listed in Problems, whose row opens the editor at it.
     layout.show_problems();
     for (int i = 0; i < 8; ++i) {

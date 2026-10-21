@@ -1582,12 +1582,30 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
         "How much of the cone, from 0 to 1, is at full brightness. The light fades from there to the cone's edge.",
         "number", false, {});
     add("Shader", "Source",
-        "The GLSL: `shader surface;` or `shader post;`, then uniforms, then void surface() or void post(). It is "
-        "the .glsl file beside the Shader's .meta.json.",
+        "The fragment stage's GLSL: uniforms, then void surface() or void post(). It is the .glsl file beside the "
+        "Shader's .meta.json. FragmentSource is the same text.",
         "string", false, {});
-    add("Shader", "Kind", "What the shader draws: Surface, a Material's surface, or Post, the finished frame. "
-        "Read from the source's first line.", "EnumItem", false, {});
-    add("Shader", "Error", "The first problem in the source, as \"<line>: <message>\", or empty.", "string", false, {});
+    add("Shader", "FragmentSource", "The fragment stage's GLSL, the same text as Source.", "string", false, {});
+    add("Shader", "VertexSource",
+        "The vertex stage's GLSL, void vertex(), which moves VERTEX and NORMAL in world space each frame; empty for "
+        "none. It is the .vert.glsl file beside the Shader's .meta.json.",
+        "string", false, {});
+    add("Shader", "Kind", "What the shader draws: Surface, a Material's surface, or Post, the finished frame.",
+        "EnumItem", false, {});
+    add("Shader", "Transparent", "A surface shader drawn in the see-through pass whatever the Transparency, ALPHA as "
+        "its coverage.", "boolean", false, {});
+    add("Shader", "TwoSided", "A surface shader drawn with back faces too.", "boolean", false, {});
+    add("Shader", "CastsShadow", "Whether what a surface shader draws casts shadows. True by default.", "boolean",
+        false, {});
+    add("Shader", "DisplacementMargin",
+        "How far the vertex stage may move a vertex, in units: culling allows for it. 1 by default.", "number", false,
+        {});
+    add("Shader", "Error", "The first problem of either stage, as \"<stage> <line>: <message>\", or empty.", "string",
+        false, {});
+    add("Shader", "VertexError", "The vertex stage's first problem, as \"<line>: <message>\", or empty.", "string",
+        false, {});
+    add("Shader", "FragmentError", "The fragment stage's first problem, as \"<line>: <message>\", or empty.",
+        "string", false, {});
     add("Material", "Shader",
         "A surface Shader the material draws through, or nil. Its uniforms are the material's attributes; a post shader "
         "is refused.",

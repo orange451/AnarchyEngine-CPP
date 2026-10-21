@@ -46,6 +46,16 @@ uniform float Shine : glow;
 void surface() {}
 )";
 
+// text as a Shader stores it: its `shader X;` first line turned to spaces.
+std::string stored(const char* text) {
+    std::string out = text;
+    const std::size_t end = out.find(';');
+    if (out.rfind("shader ", 0) == 0 && end != std::string::npos) {
+        out.replace(0, end + 1, std::string(end + 1, ' '));
+    }
+    return out;
+}
+
 Shader& add_shader(engine_core::DataModel& game, const char* name) {
     Shader& shader = game.create<Shader>();
     game.set_name(shader.id(), name);
@@ -94,13 +104,13 @@ TEST_CASE("SHA2 Source sets Kind and Error, and each fires Changed once", "[shad
     game.events().drain();
     REQUIRE(shader.kind() == ShaderKind::Post);
     REQUIRE(shader.error().empty());
-    REQUIRE(changed == std::vector<std::string>{"Source", "Kind"});
+    REQUIRE(changed == std::vector<std::string>{"Kind", "Source"});
     changed.clear();
     shader.set_source(kBadHint);
     game.events().drain();
     REQUIRE(shader.kind() == ShaderKind::Surface);
-    REQUIRE(shader.error() == "4: unknown hint glow");
-    REQUIRE(changed == std::vector<std::string>{"Source", "Kind", "Error"});
+    REQUIRE(shader.error() == "fragment 4: unknown hint glow");
+    REQUIRE(changed == std::vector<std::string>{"Kind", "Source", "Error", "FragmentError"});
 }
 
 TEST_CASE("SHA3 a Shader lives in Assets.Shaders and nowhere else", "[shader]") {
@@ -125,7 +135,7 @@ TEST_CASE("SHA4 undo puts Source, Kind, and Error back", "[shader]") {
     REQUIRE(shader.source() == engine_core::kShaderStarterSource);
     REQUIRE(shader.error().empty());
     game.history().redo();
-    REQUIRE(shader.error() == "4: unknown hint glow");
+    REQUIRE(shader.error() == "fragment 4: unknown hint glow");
 }
 
 TEST_CASE("SHA5 Stop puts Source, Kind, and Error back", "[shader]") {
@@ -138,7 +148,7 @@ TEST_CASE("SHA5 Stop puts Source, Kind, and Error back", "[shader]") {
     shader.set_source(kBadHint);
     REQUIRE(shader.kind() == ShaderKind::Surface);
     game.stop_simulation();
-    REQUIRE(shader.source() == kVignette);
+    REQUIRE(shader.source() == stored(kVignette));
     REQUIRE(shader.kind() == ShaderKind::Post);
     REQUIRE(shader.error().empty());
 }
@@ -160,8 +170,8 @@ TEST_CASE("SHA6 scripts make a Shader and read its Kind and Error", "[shader][lu
     INFO(rig.runtime.last_error());
     REQUIRE(out.size() == 4);
     REQUIRE(out[0] == "Enum.ShaderKind.Post\ttrue\ttrue\n");
-    REQUIRE(out[1] == "1: a post shader needs void post()\n");
-    REQUIRE(out[2].rfind("kind\tfalse\t", 0) == 0);
+    REQUIRE(out[1] == "fragment 1: a post shader needs void post()\n");
+    REQUIRE(out[2] == "kind\ttrue\n");
     REQUIRE(out[3].rfind("error\tfalse\t", 0) == 0);
 }
 
@@ -209,7 +219,7 @@ TEST_CASE("SHA7 a Shader saves as a .glsl file beside its .meta.json", "[shader]
         const std::filesystem::path glsl = dir.path / leaf(game, shader.id(), ".glsl");
         const std::filesystem::path meta = dir.path / leaf(game, shader.id(), ".meta.json");
         REQUIRE(std::filesystem::exists(glsl));
-        REQUIRE(read_text(glsl) == kVignette);
+        REQUIRE(read_text(glsl) == stored(kVignette));
         REQUIRE(std::filesystem::exists(meta));
         REQUIRE(read_text(meta).find("Source") == std::string::npos);
         REQUIRE(!std::filesystem::exists(dir.path / leaf(game, shader.id(), ".luau")));
@@ -221,7 +231,7 @@ TEST_CASE("SHA7 a Shader saves as a .glsl file beside its .meta.json", "[shader]
     REQUIRE(id.has_value());
     const auto* shader = dynamic_cast<const Shader*>(game.instance(*id));
     REQUIRE(shader != nullptr);
-    REQUIRE(shader->source() == kVignette);
+    REQUIRE(shader->source() == stored(kVignette));
     REQUIRE(shader->kind() == ShaderKind::Post);
 }
 
@@ -267,7 +277,7 @@ TEST_CASE("SHA9 a Shader in the folder form, init.glsl with init.meta.json, load
     Project read = Project::load(dir.path, game);
     const auto* shader = dynamic_cast<const Shader*>(game.instance(*game.find_guid(guid)));
     REQUIRE(shader != nullptr);
-    REQUIRE(shader->source() == kVignette);
+    REQUIRE(shader->source() == stored(kVignette));
 }
 
 TEST_CASE("SHA10 a source file with the other class's extension fails the load", "[shader][project]") {
@@ -311,7 +321,7 @@ TEST_CASE("SHA12 copy, paste, clone, and instance files keep a Shader's source",
     shader.set_source(kVignette);
     const InstanceId clone = engine_core::clone_tree(game, shader.id());
     REQUIRE(clone != 0);
-    REQUIRE(dynamic_cast<const Shader*>(game.instance(clone))->source() == kVignette);
+    REQUIRE(dynamic_cast<const Shader*>(game.instance(clone))->source() == stored(kVignette));
     REQUIRE(dynamic_cast<const Shader*>(game.instance(clone))->kind() == ShaderKind::Post);
     const engine_core::JsonValue file = engine_core::write_instance_file({engine_core::copy_tree(game, shader.id())});
     std::vector<engine_core::CopiedNode> roots;
@@ -320,7 +330,7 @@ TEST_CASE("SHA12 copy, paste, clone, and instance files keep a Shader's source",
     std::vector<InstanceId> made;
     REQUIRE(engine_core::paste_copies(game, roots, game.service("Shaders"), &made));
     REQUIRE(made.size() == 1);
-    REQUIRE(dynamic_cast<const Shader*>(game.instance(made[0]))->source() == kVignette);
+    REQUIRE(dynamic_cast<const Shader*>(game.instance(made[0]))->source() == stored(kVignette));
 }
 
 TEST_CASE("SHA13 a Material takes a surface Shader and refuses a post one", "[shader][lua]") {
@@ -368,7 +378,7 @@ TEST_CASE("SHA14 Material::shader is the live surface Shader, or null", "[shader
     // A post shader named by a file (a GUID, unchecked) is not a surface shader.
     look.set_source(kVignette);
     REQUIRE(brick.shader(game) == nullptr);
-    look.set_source(engine_core::kShaderStarterSource);
+    look.set_source(std::string("shader surface;\n") + engine_core::kShaderStarterSource);
     REQUIRE(brick.shader(game) == &look);
     game.destroy(look.id());
     REQUIRE(brick.shader(game) == nullptr);
@@ -594,13 +604,14 @@ TEST_CASE("SHA19 a compile error shows on Error for its version only", "[shader]
         changed.push_back(name != nullptr ? name : "");
     });
     const std::uint64_t version = shader.source_version();
-    shader.set_compile_error(version, "3: 'wobble' : no matching overloaded function found");
+    shader.set_compile_error(version, engine_core::ShaderStage::Fragment, "3: 'wobble' : no matching overloaded function found");
     game.events().drain();
-    REQUIRE(shader.error() == "3: 'wobble' : no matching overloaded function found");
-    REQUIRE(changed == std::vector<std::string>{"Error"});
+    REQUIRE(shader.error() == "fragment 3: 'wobble' : no matching overloaded function found");
+    REQUIRE(shader.fragment_error() == "3: 'wobble' : no matching overloaded function found");
+    REQUIRE(changed == std::vector<std::string>{"Error", "FragmentError"});
     // The same again changes nothing.
     changed.clear();
-    shader.set_compile_error(version, "3: 'wobble' : no matching overloaded function found");
+    shader.set_compile_error(version, engine_core::ShaderStage::Fragment, "3: 'wobble' : no matching overloaded function found");
     game.events().drain();
     REQUIRE(changed.empty());
 
@@ -609,16 +620,16 @@ TEST_CASE("SHA19 a compile error shows on Error for its version only", "[shader]
     game.events().drain();
     REQUIRE(shader.error().empty());
     changed.clear();
-    shader.set_compile_error(version, "3: stale");
+    shader.set_compile_error(version, engine_core::ShaderStage::Fragment, "3: stale");
     game.events().drain();
     REQUIRE(shader.error().empty());
     REQUIRE(changed.empty());
 
     // A parse error wins over a compile error.
-    shader.set_compile_error(shader.source_version(), "5: late");
+    shader.set_compile_error(shader.source_version(), engine_core::ShaderStage::Fragment, "5: late");
     shader.set_source(kBadHint);
-    shader.set_compile_error(shader.source_version(), "2: driver");
-    REQUIRE(shader.error() == "4: unknown hint glow");
+    shader.set_compile_error(shader.source_version(), engine_core::ShaderStage::Fragment, "2: driver");
+    REQUIRE(shader.error() == "fragment 4: unknown hint glow");
 }
 
 namespace {
@@ -675,7 +686,7 @@ TEST_CASE("SHA21 the vertex stage saves as <Name>.<guid>.vert.glsl beside the .g
         const std::filesystem::path vert = dir.path / leaf(game, shader.id(), ".vert.glsl");
         REQUIRE(std::filesystem::exists(vert));
         REQUIRE(read_text(vert) == kLift);
-        REQUIRE(read_text(dir.path / leaf(game, shader.id(), ".glsl")) == kVignette);
+        REQUIRE(read_text(dir.path / leaf(game, shader.id(), ".glsl")) == stored(kVignette));
         // A rename moves both.
         game.set_name(shader.id(), "Sea");
         project.save();
@@ -687,7 +698,7 @@ TEST_CASE("SHA21 the vertex stage saves as <Name>.<guid>.vert.glsl beside the .g
         Project read = Project::load(dir.path, game);
         auto* shader = dynamic_cast<Shader*>(game.instance(*game.find_guid(guid)));
         REQUIRE(shader != nullptr);
-        REQUIRE(shader->source() == kVignette);
+        REQUIRE(shader->source() == stored(kVignette));
         REQUIRE(shader->vertex_source() == kLift);
         // Emptied, the file goes.
         shader->set_vertex_source("");
@@ -728,15 +739,15 @@ TEST_CASE("SHA22 a phase 1 project, leaf or folder form, loads with no vertex st
     const auto* two = dynamic_cast<const Shader*>(game.instance(*game.find_guid(folder_guid)));
     REQUIRE(one != nullptr);
     REQUIRE(two != nullptr);
-    REQUIRE(one->source() == kVignette);
+    REQUIRE(one->source() == stored(kVignette));
     REQUIRE(!one->has_vertex_stage());
-    REQUIRE(two->source() == kVignette);
+    REQUIRE(two->source() == stored(kVignette));
     REQUIRE(!two->has_vertex_stage());
     read.save();
     REQUIRE(std::filesystem::last_write_time(glsl) == written);
     // A save never keeps the folder form (SHA9): Two becomes a leaf, with no vertex file.
     REQUIRE(!std::filesystem::exists(init_glsl.parent_path() / "init.vert.glsl"));
-    REQUIRE(read_text(dir.path / leaf(game, two->id(), ".glsl")) == kVignette);
+    REQUIRE(read_text(dir.path / leaf(game, two->id(), ".glsl")) == stored(kVignette));
     REQUIRE(!std::filesystem::exists(dir.path / leaf(game, two->id(), ".vert.glsl")));
 }
 
@@ -756,11 +767,115 @@ TEST_CASE("SHA23 copy, paste, clone, and instance files keep both stages", "[sha
     REQUIRE(engine_core::paste_copies(game, roots, game.service("Shaders"), &made));
     REQUIRE(made.size() == 1);
     REQUIRE(dynamic_cast<const Shader*>(game.instance(made[0]))->vertex_source() == kLift);
-    REQUIRE(dynamic_cast<const Shader*>(game.instance(made[0]))->source() == kVignette);
+    REQUIRE(dynamic_cast<const Shader*>(game.instance(made[0]))->source() == stored(kVignette));
     // Deleted and undone, it comes back with both.
     game.history().reset_waypoints();
     game.destroy(shader.id());
     game.history().undo();
     const auto* back = dynamic_cast<const Shader*>(game.instance(*game.find_guid(game.guid(made[0]))));
     REQUIRE(back != nullptr);
+}
+
+TEST_CASE("SHA24 a Source with phase 1's header lines sets Kind and reads back without them, as one step", "[shader]") {
+    SimRole role;
+    engine_core::Game game;
+    Shader& shader = add_shader(game, "Look");
+    REQUIRE(shader.kind() == ShaderKind::Surface);
+    REQUIRE(std::string(engine_core::kShaderStarterSource).find("shader surface") == std::string::npos);
+    game.history().reset_waypoints();
+    begin_step(game);
+    shader.set_source("shader post;\nrender_mode hdr;\nvoid post() {\n}\n");
+    end_step(game);
+    REQUIRE(shader.kind() == ShaderKind::Post);
+    REQUIRE(shader.source() == "            \n                \nvoid post() {\n}\n");
+    REQUIRE(shader.error().empty());
+    game.history().undo();
+    REQUIRE(shader.kind() == ShaderKind::Surface);
+    REQUIRE(shader.source() == engine_core::kShaderStarterSource);
+    game.history().redo();
+    REQUIRE(shader.kind() == ShaderKind::Post);
+    REQUIRE(shader.source().find("void post()") != std::string::npos);
+}
+
+TEST_CASE("SHA25 render_mode sets the booleans it names and leaves them alone when absent", "[shader]") {
+    SimRole role;
+    engine_core::Game game;
+    Shader& shader = add_shader(game, "Look");
+    REQUIRE(!shader.transparent());
+    REQUIRE(!shader.two_sided());
+    REQUIRE(shader.casts_shadow());
+    shader.set_source("render_mode two_sided;\nvoid surface() {}\n");
+    REQUIRE(shader.two_sided());
+    REQUIRE(!shader.transparent());
+    REQUIRE(shader.casts_shadow());
+    REQUIRE_FALSE(shader.set_transparent(true));
+    shader.set_source("void surface() { ALBEDO *= 0.5; }\n");
+    REQUIRE(shader.transparent());
+    REQUIRE(shader.two_sided());
+    // Named again without two_sided: off.
+    shader.set_source("render_mode no_shadow;\nvoid surface() {}\n");
+    REQUIRE(!shader.two_sided());
+    REQUIRE(!shader.transparent());
+    REQUIRE(!shader.casts_shadow());
+    REQUIRE(shader.set_displacement_margin(-1) == "DisplacementMargin must not be negative");
+    REQUIRE(shader.displacement_margin() == 1.0);
+    REQUIRE_FALSE(shader.set_displacement_margin(2.5));
+    REQUIRE(shader.displacement_margin() == 2.5);
+    // A post Shader has no vertex stage to speak of, and a Material refuses it.
+    REQUIRE_FALSE(shader.set_kind(ShaderKind::Post));
+    REQUIRE(shader.kind() == ShaderKind::Post);
+    REQUIRE(shader.error() == "fragment 2: a post shader needs void post()");
+}
+
+TEST_CASE("SHA26 Error names the stage, and each stage keeps its own", "[shader]") {
+    SimRole role;
+    engine_core::Game game;
+    Shader& shader = add_shader(game, "Look");
+    shader.set_vertex_source("void vertex() {\n    VERTEX.y += 1.0\n}\n");
+    REQUIRE(shader.vertex_error().empty());
+    REQUIRE(shader.error().empty());
+    shader.set_compile_error(shader.source_version(), engine_core::ShaderStage::Vertex, "3: syntax error");
+    REQUIRE(shader.vertex_error() == "3: syntax error");
+    REQUIRE(shader.fragment_error().empty());
+    REQUIRE(shader.error() == "vertex 3: syntax error");
+    // A vertex stage with no vertex() is the vertex stage's parse error.
+    shader.set_vertex_source("uniform float A;\n");
+    REQUIRE(shader.vertex_error() == "1: a vertex stage needs void vertex()");
+    REQUIRE(shader.error() == "vertex 1: a vertex stage needs void vertex()");
+    shader.set_vertex_source("");
+    REQUIRE(shader.error().empty());
+    // A uniform declared differently in the two stages errors in both.
+    shader.set_source("uniform float A = 1.0;\nvoid surface() {}\n");
+    shader.set_vertex_source("uniform float A = 2.0;\nvoid vertex() {}\n");
+    REQUIRE(shader.fragment_error() == "1: A is declared differently in the vertex stage");
+    REQUIRE(shader.vertex_error() == "1: A is declared differently in the fragment stage");
+}
+
+TEST_CASE("SHA27 the merged parse holds a uniform declared only in the vertex stage, and the binding knows the stage", "[shader]") {
+    SimRole role;
+    engine_core::Game game;
+    Shader& shader = add_shader(game, "Look");
+    shader.set_source("uniform float A = 1.0;\nvoid surface() {}\n");
+    shader.set_vertex_source("uniform float Speed = 2.0;\nvoid vertex() {\n    VERTEX.y += sin(TIME * Speed);\n}\n");
+    REQUIRE(shader.parse()->params.size() == 2);
+    REQUIRE(shader.parse()->params[1].name == "Speed");
+    REQUIRE(shader.stage_parse(engine_core::ShaderStage::Vertex)->reads_time);
+    engine_core::Material& brick = add_material(game, "Brick", shader.id());
+    REQUIRE_FALSE(shader.set_two_sided(true));
+    REQUIRE_FALSE(shader.set_displacement_margin(3));
+    auto binding = engine_core::make_surface_binding(game, brick);
+    REQUIRE(binding->has_vertex);
+    REQUIRE(binding->vertex_reads_time);
+    REQUIRE(binding->vertex_glsl.find("void vertex()") != std::string::npos);
+    REQUIRE(binding->displacement_margin == 3.0f);
+    REQUIRE(binding->modes.two_sided);
+    REQUIRE(!binding->modes.no_shadow);
+    REQUIRE(binding->values()->slots.size() == 2);
+    // A Kind or mode change is a new version, so programs build again.
+    const std::uint64_t version = shader.source_version();
+    REQUIRE_FALSE(shader.set_transparent(true));
+    REQUIRE(shader.source_version() > version);
+    // A broken vertex stage is no vertex stage to draw.
+    shader.set_vertex_source("uniform float A;\n");
+    REQUIRE(!engine_core::make_surface_binding(game, brick)->has_vertex);
 }

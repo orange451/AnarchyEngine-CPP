@@ -65,7 +65,7 @@ bool same_values(const SurfaceValues& a, const SurfaceValues& b) {
 // The same Shader, version, and textures: all but the values.
 bool same_binding(const SurfaceBinding& a, const SurfaceBinding& b) {
     if (a.shader != b.shader || a.version != b.version || a.parse != b.parse ||
-        a.samplers.size() != b.samplers.size()) {
+        a.samplers.size() != b.samplers.size() || a.displacement_margin != b.displacement_margin) {
         return false;
     }
     for (std::size_t i = 0; i < a.samplers.size(); ++i) {
@@ -163,6 +163,17 @@ std::shared_ptr<const SurfaceBinding> make_surface_binding(const DataModel& worl
         slots.push_back(std::move(kept));
     }
     describe_surface(*binding);
+    // The modes are the Shader's properties, not lines in its text.
+    binding->modes.transparent = shader->transparent();
+    binding->modes.two_sided = shader->two_sided();
+    binding->modes.no_shadow = !shader->casts_shadow();
+    binding->displacement_margin = static_cast<float>(shader->displacement_margin());
+    const std::shared_ptr<const ShaderParse> vertex = shader->stage_parse(ShaderStage::Vertex);
+    if (shader->has_vertex_stage() && vertex != nullptr && !vertex->error) {
+        binding->has_vertex = true;
+        binding->vertex_glsl = vertex->glsl;
+        binding->vertex_reads_time = vertex->reads_time;
+    }
     binding->set_values(std::move(slots));
     return binding;
 }

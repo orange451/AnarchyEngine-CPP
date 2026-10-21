@@ -562,6 +562,22 @@ engine_core::SourceText& ScriptAt(DataModel& world, InstanceId id) {
     return *source;
 }
 
+// The stage the tool's "stage" names of text: 0 (the fragment, the default)
+// or 1 ("vertex", a Shader's vertex stage).
+int StageOf(const JsonValue& arguments, DataModel& world, InstanceId id, const engine_core::SourceText& text) {
+    const JsonValue* stage = arguments.find("stage");
+    if (stage == nullptr || !stage->is_string() || stage->as_string() == "fragment") {
+        return 0;
+    }
+    if (stage->as_string() != "vertex") {
+        throw std::runtime_error("stage must be \"vertex\" or \"fragment\".");
+    }
+    if (text.stage_count() < 2) {
+        throw std::runtime_error(PathOf(world, id) + " is a " + ClassOf(world, id) + ", which has no vertex stage.");
+    }
+    return 1;
+}
+
 const char* OutputKindName(engine_core::ScriptRuntime::OutputKind kind) {
     switch (kind) {
         case engine_core::ScriptRuntime::OutputKind::Print:
@@ -729,22 +745,23 @@ void AddProblems(engine_core::Engine& engine, InstanceId id, JsonValue& out) {
 // does: one undo step. Open editors write their typing first and show the
 // new Source after. Returns the script, with what analysis finds in it.
 JsonValue WriteSource(engine_core::Engine& engine, const McpStudio& studio, const JsonValue& instance,
-                      std::function<std::string(const std::string&)> change) {
+                      const JsonValue& arguments, std::function<std::string(const std::string&)> change) {
     if (studio.flush_scripts) {
         studio.flush_scripts();
     }
-    JsonValue out = RunEdit(engine, [instance, change = std::move(change)](DataModel& world) {
+    JsonValue out = RunEdit(engine, [instance, arguments, change = std::move(change)](DataModel& world) {
         const InstanceId id = Resolve(world, &instance);
         engine_core::SourceText& script = ScriptAt(world, id);
-        const std::string source = change(script.source());
-        if (script.source() != source) {
+        const int stage = StageOf(arguments, world, id, script);
+        const std::string source = change(script.source(stage));
+        if (script.source(stage) != source) {
             // The same waypoint an editor's typing makes.
             std::optional<std::string> recording;
             if (!world.simulation_running()) {
                 recording = world.history().try_begin_recording(
                     dynamic_cast<const engine_core::Shader*>(&script) != nullptr ? "Edit Shader" : "Edit Script");
             }
-            script.set_source(source);
+            script.set_source(stage, source);
             if (recording) {
                 world.history().finish_recording(*recording, engine_core::FinishRecordingOperation::Commit);
             }
@@ -753,18 +770,24 @@ JsonValue WriteSource(engine_core::Engine& engine, const McpStudio& studio, cons
             }
         }
         JsonValue brief = Brief(world, id);
-        // A Shader's problem is its Error, parsed as Source was set; analysis checks only Luau.
+        // A Shader's problems are each stage's Error, parsed as its text was set; analysis checks only Luau.
         if (const auto* shader = dynamic_cast<const engine_core::Shader*>(&script)) {
             JsonValue problems = JsonValue::array();
-            if (const auto& error = shader->parse()->error) {
+            const auto add = [&](const std::string& error, const char* code) {
+                const std::size_t colon = error.find(": ");
+                if (error.empty() || colon == std::string::npos) {
+                    return;
+                }
                 JsonValue entry = JsonValue::object();
-                entry.set("line", JsonValue::number(error->line));
+                entry.set("line", JsonValue::number(std::max(1, std::atoi(error.substr(0, colon).c_str()))));
                 entry.set("column", JsonValue::number(1));
                 entry.set("severity", JsonValue::string("error"));
-                entry.set("code", JsonValue::string("Shader"));
-                entry.set("message", JsonValue::string(error->message));
+                entry.set("code", JsonValue::string(code));
+                entry.set("message", JsonValue::string(error.substr(colon + 2)));
                 problems.items().push_back(std::move(entry));
-            }
+            };
+            add(shader->fragment_error(), "Shader");
+            add(shader->vertex_error(), "Vertex");
             brief.set("problems", std::move(problems));
         }
         return brief;
@@ -1184,7 +1207,8 @@ JsonValue ReadScript(const ToolContext& context, const JsonValue& arguments) {
         ReadLock lock(world);
         const InstanceId id = Resolve(world, arguments.find("instance"));
         out = Brief(world, id);
-        source = ScriptAt(world, id).source();
+        const engine_core::SourceText& text = ScriptAt(world, id);
+        source = text.source(StageOf(arguments, world, id, text));
     }
     const int lines = LineAt(source, source.size());
     out.set("line_count", JsonValue::number(lines));
@@ -1225,14 +1249,15 @@ JsonValue ReadScript(const ToolContext& context, const JsonValue& arguments) {
 JsonValue WriteScript(const ToolContext& context, const JsonValue& arguments) {
     const JsonValue instance = ValueArg(arguments, "instance");
     const std::string source = StringArg(arguments, "source");
-    return WriteSource(context.engine, context.studio, instance, [source](const std::string&) { return source; });
+    return WriteSource(context.engine, context.studio, instance, arguments,
+                       [source](const std::string&) { return source; });
 }
 
 JsonValue EditScript(const ToolContext& context, const JsonValue& arguments) {
     const JsonValue instance = ValueArg(arguments, "instance");
     const JsonValue edits = ValueArg(arguments, "edits");
     auto replaced = std::make_shared<int>(0);
-    JsonValue out = WriteSource(context.engine, context.studio, instance, [edits, replaced](const std::string& source) {
+    JsonValue out = WriteSource(context.engine, context.studio, instance, arguments, [edits, replaced](const std::string& source) {
         *replaced = 0;
         return ApplyEdits(source, &edits, *replaced);
     });

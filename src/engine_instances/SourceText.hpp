@@ -40,6 +40,12 @@ public:
     bool load_property(const std::string& key, const JsonValue& value, std::string& error) override;
 
 protected:
+    // What set_source stores for stage: text as it is, unless the class takes
+    // something out of it (a Shader's phase 1 header lines).
+    virtual std::string prepare_source(int stage, std::string text) {
+        (void)stage;
+        return text;
+    }
     // After a stage's text changed, by set_source or a Stop's read_place. The
     // stage one calls the plain one for stage 0.
     virtual void on_source_changed() {}

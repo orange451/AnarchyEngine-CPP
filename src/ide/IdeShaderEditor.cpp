@@ -265,7 +265,7 @@ bool IdeShaderEditor::readSource(std::string& text, std::string& name, std::stri
     }
     alive = true;
     text = shader->source();
-    error = shader->error();
+    error = shader->fragment_error();
     name = game.name(id_);
     if (world != nullptr) {
         *world = game.world_generation();

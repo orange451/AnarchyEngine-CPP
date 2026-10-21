@@ -224,7 +224,7 @@ void GameView::postSurfaceErrors(
     engine_->on_simulation([errors = std::move(errors)](engine_core::DataModel& game) {
         for (const auto& [id, version, text] : errors) {
             if (auto* shader = dynamic_cast<engine_core::Shader*>(game.instance(id))) {
-                shader->set_compile_error(version, text);
+                shader->set_compile_error(version, engine_core::ShaderStage::Fragment, text);
             }
         }
     });

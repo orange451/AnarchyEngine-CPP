@@ -438,6 +438,34 @@ bool HasProblem(const JsonValue& problems, const std::string& code, int line) {
 }
 
 // Scripts are checked, edited in part, searched, and undone.
+// A Shader's stages: write_script and read_script with stage "vertex" use VertexSource.
+void TestShaderStages() {
+    engine_core::Engine engine;
+    engine_core::DataModel& game = engine.datamodel();
+    ide::McpServer server;
+    ide::add_engine_tools(server, engine, {});
+    engine_core::Shader& shader = game.create<engine_core::Shader>();
+    game.set_name(shader.id(), "Wave");
+    game.set_parent(shader.id(), game.service("Shaders"));
+    const JsonValue wrote = Call(server, "write_script",
+                                 R"j({"instance":"Assets.Shaders.Wave","stage":"vertex","source":"void vertex() {\n    VERTEX.y += 1.0;\n}\n"})j");
+    Expect(shader.vertex_source() == "void vertex() {\n    VERTEX.y += 1.0;\n}\n", "write_script with stage vertex writes VertexSource");
+    Expect(shader.source() == engine_core::kShaderStarterSource, "and leaves the fragment stage alone");
+    const JsonValue read = Call(server, "read_script", R"({"instance":"Assets.Shaders.Wave","stage":"vertex"})");
+    Expect(read.find("source") != nullptr && Member(read, "source").as_string() == shader.vertex_source(),
+           "read_script with stage vertex reads VertexSource");
+    const JsonValue fragment = Call(server, "read_script", R"({"instance":"Assets.Shaders.Wave"})");
+    Expect(fragment.find("source") != nullptr && Member(fragment, "source").as_string() == shader.source(),
+           "read_script without a stage reads the fragment");
+    const JsonValue bad = Call(server, "write_script",
+                               R"j({"instance":"Assets.Shaders.Wave","stage":"vertex","source":"uniform float A;\n"})j");
+    const JsonValue* problems = bad.find("problems");
+    Expect(problems != nullptr && problems->items().size() == 1 &&
+               Member(Item(*problems, 0), "code").as_string() == "Vertex" &&
+               Member(Item(*problems, 0), "line").as_number() == 1,
+           "a vertex stage's error is its problem: " + ide::compact_json(bad));
+}
+
 // read_script and write_script take a Shader: its source, and its Error as the problem.
 void TestShaderSource() {
     engine_core::Engine engine;
@@ -460,7 +488,7 @@ void TestShaderSource() {
                Member(Item(*problems, 0), "message").as_string() == "unknown hint glow" &&
                Member(Item(*problems, 0), "code").as_string() == "Shader",
            "write_script returns a Shader's error as its problem: " + ide::compact_json(bad));
-    Expect(shader.error() == "3: unknown hint glow", "and the source is written");
+    Expect(shader.error() == "fragment 3: unknown hint glow", "and the source is written");
     const JsonValue clean = Call(server, "write_script",
                                  R"j({"instance":"Assets.Shaders.Tint","source":"shader post;\nvoid post() {}\n"})j");
     Expect(clean.find("problems") != nullptr && Member(clean, "problems").items().empty(),
@@ -1478,6 +1506,7 @@ int main() {
     TestEngineTools();
     TestScriptTools();
     TestShaderSource();
+    TestShaderStages();
     TestPlaytestRun();
     TestDiagnosticsDuringPlay();
     TestPrintSource();

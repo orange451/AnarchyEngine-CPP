@@ -56,6 +56,14 @@ struct SurfaceBinding {
     // One per sampler param, in order: the Texture the attribute names; an
     // empty path for none.
     std::vector<Sampler> samplers;
+    // The Shader has a vertex stage that parses: its GLSL, and whether it
+    // names TIME (its shadows then redraw each frame too).
+    bool has_vertex = false;
+    std::string vertex_glsl;
+    bool vertex_reads_time = false;
+    // How far the vertex stage may move a vertex, in units (culling grows a
+    // draw's box by it).
+    float displacement_margin = 1.f;
     // The glsl names TIME, so its shadows redraw each frame.
     bool reads_time = false;
     // The glsl names discard or ALPHA, so it can cut holes, and its shadows

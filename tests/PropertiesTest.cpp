@@ -2580,6 +2580,14 @@ void TestShaderParamRows() {
                noise->value.nil_ref(),
            "Noise picks a Texture");
     Expect(row_named(sheet, "Secret") == nullptr, "a hidden uniform has no row");
+    // A uniform only the vertex stage declares is a row too, at its default.
+    shader.set_vertex_source("uniform float Speed = 2.0;\nvoid vertex() {}\n");
+    sheet = ide::read_sheet(rig.game, {material->id()});
+    const ide::PropertyRow* speed = row_named(sheet, "Speed");
+    Expect(speed != nullptr && speed->kind == ide::PropertyKind::Number && speed->defaulted && speed->value.number == 2,
+           "a vertex-stage uniform has its row");
+    shader.set_vertex_source("");
+    sheet = ide::read_sheet(rig.game, {material->id()});
     // The Shader's rows come after the Material's own and before Attributes.
     std::size_t last_class = 0;
     std::size_t first_param = sheet.rows.size();

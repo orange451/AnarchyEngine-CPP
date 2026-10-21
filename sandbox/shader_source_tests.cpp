@@ -332,3 +332,19 @@ TEST_CASE("SH16 the two stages' uniforms merge, and a mismatch errors in both", 
     // No vertex stage: the fragment's list as it is.
     REQUIRE(merge_shader_params(fragment, nullptr).params.size() == 2);
 }
+
+TEST_CASE("SH40 the post stage's function names are the engine's, and hdr is a post mode", "[shader]") {
+    using engine_core::ShaderStage;
+    REQUIRE(engine_core::shader_reserved_name("depthAt"));
+    REQUIRE(engine_core::shader_reserved_name("viewPositionAt"));
+    REQUIRE(engine_core::shader_reserved_name("worldPositionAt"));
+    REQUIRE(engine_core::shader_reserved_name("normalAt"));
+    REQUIRE(engine_core::shader_reserved_name("SCREEN"));
+    REQUIRE(error_of(surface("uniform float depthAt;")) == "2: depthAt is the engine's name");
+    const ShaderParse hdr = parse_shader("render_mode hdr;\nvoid post() {}\n", ShaderStage::Fragment, ShaderKind::Post);
+    REQUIRE(!hdr.error);
+    REQUIRE(hdr.header_modes == std::vector<std::string>{"hdr"});
+    const ShaderParse wrong = parse_shader("render_mode hdr;\nvoid surface() {}\n", ShaderStage::Fragment, ShaderKind::Surface);
+    REQUIRE(wrong.error);
+    REQUIRE(wrong.error->message == "unknown render_mode hdr; a surface shader has transparent, two_sided, no_shadow");
+}

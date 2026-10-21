@@ -35,7 +35,7 @@ void vertex() {
 // (surface() or post()), and the vertex stage, VertexSource, a .vert.glsl
 // file written while it has text (vertex(); surface shaders only). Each
 // change of a stage parses it (parse_shader) under Kind; the uniforms of both
-// are one list (parse()). Kind, Transparent, TwoSided, CastsShadow, and
+// are one list (parse()). Kind, Transparent, TwoSided, CastsShadow, Hdr, and
 // DisplacementMargin are saved properties; a text written with phase 1's
 // `shader X;` or `render_mode` lines sets them and loses the lines. Error is
 // the first problem of either stage, "<stage> <line>: <message>".
@@ -64,6 +64,10 @@ public:
     std::optional<std::string> set_two_sided(bool on);
     bool casts_shadow() const { return casts_shadow_; }
     std::optional<std::string> set_casts_shadow(bool on);
+    // A post Shader's stage: before bloom and the tone map, on linear light,
+    // instead of after the tone map. Kept, and ignored, on a surface Shader.
+    bool hdr() const { return hdr_; }
+    std::optional<std::string> set_hdr(bool on);
     // How far the vertex stage may move a vertex, in units: culling grows a
     // draw's box by it.
     double displacement_margin() const { return displacement_margin_; }
@@ -108,6 +112,7 @@ private:
     bool transparent_ = false;
     bool two_sided_ = false;
     bool casts_shadow_ = true;
+    bool hdr_ = false;
     double displacement_margin_ = 1.0;
     std::shared_ptr<const ShaderParse> fragment_parse_;
     std::shared_ptr<const ShaderParse> vertex_parse_;

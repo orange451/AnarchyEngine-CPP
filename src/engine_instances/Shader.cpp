@@ -154,6 +154,8 @@ std::optional<std::string> Shader::set_kind(ShaderKind kind) {
 
 std::optional<std::string> Shader::set_transparent(bool on) { return set_mode("Transparent", transparent_, on, true); }
 
+std::optional<std::string> Shader::set_hdr(bool on) { return set_mode("Hdr", hdr_, on, true); }
+
 std::optional<std::string> Shader::set_two_sided(bool on) { return set_mode("TwoSided", two_sided_, on, true); }
 
 std::optional<std::string> Shader::set_casts_shadow(bool on) { return set_mode("CastsShadow", casts_shadow_, on, true); }
@@ -193,7 +195,13 @@ std::string Shader::prepare_source(int stage, std::string text) {
         set_mode("Kind", kind_, *peek.header_kind, true);
         kind_changed = true;
     }
-    if (peek.header_modes) {
+    if (peek.header_modes && kind_ == ShaderKind::Post) {
+        bool hdr = false;
+        for (const std::string& mode : *peek.header_modes) {
+            hdr = hdr || mode == "hdr";
+        }
+        set_hdr(hdr);
+    } else if (peek.header_modes) {
         bool transparent = false;
         bool two_sided = false;
         bool casts_shadow = true;
@@ -231,7 +239,8 @@ void Shader::on_source_changed(int stage) {
 
 void Shader::write_place(std::vector<std::byte>& out) const {
     const std::uint8_t kind = static_cast<std::uint8_t>(kind_);
-    const std::uint8_t flags = static_cast<std::uint8_t>((transparent_ ? 1 : 0) | (two_sided_ ? 2 : 0) | (casts_shadow_ ? 4 : 0));
+    const std::uint8_t flags = static_cast<std::uint8_t>((transparent_ ? 1 : 0) | (two_sided_ ? 2 : 0) |
+                                                         (casts_shadow_ ? 4 : 0) | (hdr_ ? 8 : 0));
     out.push_back(static_cast<std::byte>(kind));
     out.push_back(static_cast<std::byte>(flags));
     const auto* margin = reinterpret_cast<const std::byte*>(&displacement_margin_);
@@ -248,6 +257,7 @@ void Shader::read_place(const std::byte* data, std::size_t size) {
         transparent_ = (flags & 1) != 0;
         two_sided_ = (flags & 2) != 0;
         casts_shadow_ = (flags & 4) != 0;
+        hdr_ = (flags & 8) != 0;
         std::memcpy(&displacement_margin_, data + 2, sizeof(displacement_margin_));
         SourceText::read_place(data + kHead, size - kHead);
     } else {
@@ -270,6 +280,7 @@ void Shader::on_reuse() {
     transparent_ = false;
     two_sided_ = false;
     casts_shadow_ = true;
+    hdr_ = false;
     displacement_margin_ = 1.0;
     fragment_compile_error_.clear();
     vertex_compile_error_.clear();
@@ -406,6 +417,8 @@ ANARCHY_LUA_REGISTER(register_shader_lua) {
                            write_flag<&Shader::two_sided, &Shader::set_two_sided>, "false"),
         lua_saved_property("CastsShadow", "boolean", read_flag<&Shader::casts_shadow, &Shader::set_casts_shadow>,
                            write_flag<&Shader::casts_shadow, &Shader::set_casts_shadow>, "true"),
+        lua_saved_property("Hdr", "boolean", read_flag<&Shader::hdr, &Shader::set_hdr>,
+                           write_flag<&Shader::hdr, &Shader::set_hdr>, "false"),
         lua_saved_property("DisplacementMargin", "number", read_margin, write_margin, "1"),
         lua_property("Error", "string", false, read_text<&Shader::error>, nullptr),
         lua_property("VertexError", "string", false, read_text<&Shader::vertex_error>, nullptr),

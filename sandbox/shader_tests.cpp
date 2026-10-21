@@ -1066,3 +1066,61 @@ TEST_CASE("SHA35 a phase 1 Shader file, header lines and no Kind in its json, lo
     REQUIRE(!fade->has_vertex_stage());
     REQUIRE(fade->error().empty());
 }
+
+TEST_CASE("SHA36 Hdr is a post Shader's saved mode, set by a render_mode line as the surface modes are", "[shader]") {
+    SimRole role;
+    engine_core::Game game;
+    Shader& shader = add_shader(game, "Fade");
+    REQUIRE_FALSE(shader.set_kind(ShaderKind::Post));
+    REQUIRE(!shader.hdr());
+    shader.set_source("render_mode hdr;\nvoid post() {}\n");
+    REQUIRE(shader.hdr());
+    REQUIRE(shader.source().rfind("                \nvoid post() {}\n", 0) == 0);
+    REQUIRE(shader.error().empty());
+    shader.set_source("render_mode;\nvoid post() {}\n");
+    REQUIRE(!shader.hdr());
+    // A property of its own: a version, Changed, undo as one step, and the place bytes.
+    std::vector<std::string> changed;
+    game.changed(shader.id()).connect([&](InstanceId, engine_core::Field) {
+        const char* name = engine_core::lua_property_name(static_cast<std::uint32_t>(game.events().payload()));
+        changed.push_back(name != nullptr ? name : "");
+    });
+    const std::uint64_t version = shader.source_version();
+    game.history().reset_waypoints();
+    begin_step(game);
+    REQUIRE_FALSE(shader.set_hdr(true));
+    end_step(game);
+    game.events().drain();
+    REQUIRE(shader.source_version() > version);
+    REQUIRE(changed == std::vector<std::string>{"Hdr"});
+    game.history().undo();
+    REQUIRE(!shader.hdr());
+    game.history().redo();
+    REQUIRE(shader.hdr());
+    game.capture_place();
+    game.start_simulation();
+    REQUIRE_FALSE(shader.set_hdr(false));
+    game.stop_simulation();
+    REQUIRE(shader.hdr());
+    // On a surface Shader the line stays an error, and the property is kept but ignored.
+    REQUIRE_FALSE(shader.set_kind(ShaderKind::Surface));
+    REQUIRE(shader.hdr());
+    shader.set_source("render_mode hdr;\nvoid surface() {}\n");
+    REQUIRE(shader.error() == "fragment 1: unknown render_mode hdr; a surface shader has transparent, two_sided, no_shadow");
+}
+
+TEST_CASE("SHA36b scripts read and write Hdr", "[shader][lua]") {
+    ScriptRig rig;
+    rig.runtime.run_chunk(R"(
+        local s = Instance.new("Shader")
+        s.Kind = Enum.ShaderKind.Post
+        s.Source = "void post() {}\n"
+        s.Parent = game.Assets.Shaders
+        print(s.Hdr)
+        s.Hdr = true
+        print(s.Hdr)
+    )");
+    const std::vector<std::string> out = printed(rig.runtime.drain_output());
+    INFO(rig.runtime.last_error());
+    REQUIRE(out == std::vector<std::string>{"false\n", "true\n"});
+}

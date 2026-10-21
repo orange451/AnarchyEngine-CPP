@@ -23,6 +23,8 @@ constexpr std::string_view kReserved[] = {
     "CAMERA_POSITION", "VIEW",           "PROJECTION",      "INV_VIEW",          "INV_PROJECTION",    "SCREEN",
     "DEPTH",           "NORMALS",        "MATERIAL",        "TEXTURE_DIFFUSE",   "TEXTURE_NORMAL",    "TEXTURE_ROUGHNESS",
     "TEXTURE_METALNESS", "TEXTURE_EMISSIVE", "VERTEX",
+    // The post stage's functions.
+    "depthAt",         "viewPositionAt", "worldPositionAt", "normalAt",
 };
 
 bool space(char c) { return c == ' ' || c == '\t' || c == '\r' || c == '\n' || c == '\f' || c == '\v'; }

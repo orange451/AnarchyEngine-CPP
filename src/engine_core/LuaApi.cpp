@@ -1597,6 +1597,9 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
     add("Shader", "TwoSided", "A surface shader drawn with back faces too.", "boolean", false, {});
     add("Shader", "CastsShadow", "Whether what a surface shader draws casts shadows. True by default.", "boolean",
         false, {});
+    add("Shader", "Hdr",
+        "A post shader run before bloom and the tone map, on linear light, instead of after the tone map on display "
+        "colors.", "boolean", false, {});
     add("Shader", "DisplacementMargin",
         "How far the vertex stage may move a vertex, in units: culling allows for it. 1 by default.", "number", false,
         {});

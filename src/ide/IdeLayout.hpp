@@ -54,6 +54,8 @@ class IdePrefabEditor;
 class IdeTerrainEditor;
 class IdeCssEditor;
 class IdeShaderText;
+class IdeShaderEditor;
+struct ShaderEditorHost;
 }  // namespace ide
 
 namespace engine_core {
@@ -205,6 +207,8 @@ public:
     void show_conflicts();
     // Opens the Problems window, or brings it forward.
     void show_problems();
+    // The Shader Editor showing a Shader, or null.
+    std::shared_ptr<IdeShaderEditor> open_shader_editor(std::uint32_t id) const;
     // The text editor showing a Shader's stage, or null.
     std::shared_ptr<IdeShaderText> open_shader_text(std::uint32_t id, engine_core::ShaderStage stage) const;
     // Docks a text editor for a Shader's stage beside the scene view, or brings
@@ -323,6 +327,7 @@ private:
     std::shared_ptr<IdePrefabEditor> open_prefab_editor(std::uint32_t prefab) const;
     // A Prefab editor's writes, each one undo step on the simulation thread.
     PrefabEditorHost prefab_editor_host();
+    ShaderEditorHost shader_editor_host();
     // Docks a Configure Terrain tab for terrain on the scene view's tab strip,
     // or brings the one already open forward. home is where a new one docks.
     void edit_terrain(std::uint32_t terrain, IdeDock& home);
@@ -659,6 +664,8 @@ private:
     std::unordered_map<std::uint32_t, std::weak_ptr<IdeScriptEditor>> open_scripts_;
     // The open Prefab editors, by Prefab id.
     std::unordered_map<std::uint32_t, std::weak_ptr<IdePrefabEditor>> open_prefabs_;
+    // The Shader Editors, by Shader id.
+    std::unordered_map<std::uint32_t, std::weak_ptr<IdeShaderEditor>> open_shader_panes_;
     // The open Configure Terrain tabs, by Terrain id.
     std::unordered_map<std::uint32_t, std::weak_ptr<IdeTerrainEditor>> open_terrains_;
     std::unordered_map<std::uint32_t, std::weak_ptr<IdeCssEditor>> open_css_;

@@ -20,7 +20,8 @@ namespace ide {
 
 struct ProblemsHost {
     // Opens the script and selects code points [column, column_end) of the
-    // 1-based line; stage is a Shader's (0 the fragment, 1 the vertex stage).
+    // 1-based line; stage is a Shader's (0 the fragment, 1 the vertex stage),
+    // or -1 for a script.
     std::function<void(std::uint32_t id, int line, int column, int column_end, int stage)> open;
 };
 
@@ -89,7 +90,8 @@ private:
         int line = 0;
         int column = 0;
         int column_end = 0;
-        int stage = 0;
+        // A Shader's stage (0 fragment, 1 vertex), or -1 for a script.
+        int stage = -1;
     };
 
     ProblemFilter filter() const;

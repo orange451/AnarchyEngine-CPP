@@ -254,6 +254,12 @@ std::vector<ShaderEntry> shaders_of(const engine_core::DataModel& game) {
     return out;
 }
 
+// A Shader's stage a problem is in, 0 the fragment and 1 the vertex stage,
+// or -1 for a script's.
+int shader_stage_of(const Problem& problem) {
+    return problem.code == "Vertex" ? 1 : problem.code == "Fragment" ? 0 : -1;
+}
+
 // A Shader's Error, "<line>: <message>", as one problem across that line of source.
 Problem shader_problem(const std::string& error, const std::string& source, const char* code = "Fragment") {
     Problem problem;
@@ -573,14 +579,13 @@ void IdeProblems::rebuild() {
             show_problems(item, problems);
         });
         const Problem& first = script.problems.front();
-        targets_[row.get()] = Target{id, 0, first.column, first.column_end, first.code == "Vertex" ? 1 : 0};
+        targets_[row.get()] = Target{id, 0, first.column, first.column_end, shader_stage_of(first)};
         if (selected && selected->id == id && selected->line == 0) {
             reselect = row.get();
         }
         for (const Problem& problem : script.problems) {
             auto child = jadefx::make<jadefx::TreeItem>("", nullptr);
-            targets_[child.get()] =
-                Target{id, problem.line, problem.column, problem.column_end, problem.code == "Vertex" ? 1 : 0};
+            targets_[child.get()] = Target{id, problem.line, problem.column, problem.column_end, shader_stage_of(problem)};
             if (selected && selected->id == id && selected->line == problem.line &&
                 selected->column == problem.column) {
                 reselect = child.get();

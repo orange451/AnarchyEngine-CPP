@@ -4,6 +4,7 @@
 
 #include "IdeLayoutInternal.hpp"
 #include "IdeCssEditor.hpp"
+#include "IdeShaderEditor.hpp"
 #include "IdeShaderText.hpp"
 #include "IdeCollisionGroups.hpp"
 #include "IdeTerrainEditor.hpp"
@@ -181,10 +182,12 @@ std::shared_ptr<IdePane> IdeLayout::make_problems() {
     ProblemsHost host;
     // As Search opens a match.
     host.open = [this](std::uint32_t id, int line, int column, int column_end, int stage) {
-        if (stage > 0) {
-            // A Shader's vertex stage.
-            edit_shader_text(id, engine_core::ShaderStage::Vertex);
-            if (const std::shared_ptr<IdeShaderText> shader = open_shader_text(id, engine_core::ShaderStage::Vertex)) {
+        if (stage >= 0) {
+            // A Shader's stage: straight to its text.
+            const engine_core::ShaderStage which =
+                stage > 0 ? engine_core::ShaderStage::Vertex : engine_core::ShaderStage::Fragment;
+            edit_shader_text(id, which);
+            if (const std::shared_ptr<IdeShaderText> shader = open_shader_text(id, which)) {
                 shader->showLine(line);
             }
             return;
@@ -192,9 +195,6 @@ std::shared_ptr<IdePane> IdeLayout::make_problems() {
         edit(id);
         if (const std::shared_ptr<IdeScriptEditor> editor = open_editor(id)) {
             editor->showRange(line, column, column_end);
-        } else if (const std::shared_ptr<IdeShaderText> shader =
-                       open_shader_text(id, engine_core::ShaderStage::Fragment)) {
-            shader->showLine(line);
         }
     };
     return jadefx::make<IdeProblems>(runner_.simulation(), std::move(host));
@@ -776,7 +776,81 @@ std::uint64_t shader_text_key(std::uint32_t id, engine_core::ShaderStage stage) 
 }  // namespace
 
 void IdeLayout::edit_shader(std::uint32_t shader, IdeDock& home) {
-    open_shader_text_at(shader, engine_core::ShaderStage::Fragment, home);
+    // The Shader Editor: one a Shader, brought forward when open.
+    const auto found = open_shader_panes_.find(shader);
+    if (found != open_shader_panes_.end()) {
+        if (const std::shared_ptr<IdeShaderEditor> existing = found->second.lock()) {
+            if (dockContaining(existing.get()) != nullptr) {
+                reveal_window(existing.get());
+                return;
+            }
+        }
+    }
+    auto pane = jadefx::make<IdeShaderEditor>(runner_.simulation().datamodel(), shader, shader_editor_host());
+    add_select_to_tab_menu(*pane, shader);
+    std::shared_ptr<jadefx::Tab> tab = home.dock(pane);
+    if (tab) {
+        tab->setOnClosed([this, shader] { open_shader_panes_.erase(shader); });
+    }
+    open_shader_panes_[shader] = pane;
+}
+
+std::shared_ptr<IdeShaderEditor> IdeLayout::open_shader_editor(std::uint32_t id) const {
+    const auto found = open_shader_panes_.find(id);
+    return found != open_shader_panes_.end() ? found->second.lock() : nullptr;
+}
+
+ShaderEditorHost IdeLayout::shader_editor_host() {
+    ShaderEditorHost host;
+    // Each write is one undo step, named for the property.
+    const auto write = [this](engine_core::InstanceId id, std::string step,
+                              std::function<std::optional<std::string>(engine_core::Shader&)> change) {
+        runner_.simulation().on_simulation([this, alive = std::weak_ptr<int>(alive_), id, step = std::move(step),
+                                            change = std::move(change)](engine_core::DataModel& world) {
+            auto* shader = dynamic_cast<engine_core::Shader*>(world.instance(id));
+            if (shader == nullptr) {
+                return;
+            }
+            ScopedRecording recording(world, step);
+            if (std::optional<std::string> error = change(*shader)) {
+                toast_later(this, alive, std::move(*error));
+            }
+        });
+    };
+    host.set_kind = [write](engine_core::InstanceId id, engine_core::ShaderKind kind) {
+        write(id, "Set Kind", [kind](engine_core::Shader& shader) { return shader.set_kind(kind); });
+    };
+    host.set_mode = [write](engine_core::InstanceId id, const char* property, bool on) {
+        const std::string name = property;
+        write(id, "Set " + name, [name, on](engine_core::Shader& shader) -> std::optional<std::string> {
+            if (name == "Transparent") {
+                return shader.set_transparent(on);
+            }
+            if (name == "TwoSided") {
+                return shader.set_two_sided(on);
+            }
+            return shader.set_casts_shadow(on);
+        });
+    };
+    host.set_margin = [write](engine_core::InstanceId id, double units) {
+        write(id, "Set DisplacementMargin",
+              [units](engine_core::Shader& shader) { return shader.set_displacement_margin(units); });
+    };
+    host.edit_stage = [this](engine_core::InstanceId id, engine_core::ShaderStage stage) { edit_shader_text(id, stage); };
+    host.add_vertex_stage = [this, write](engine_core::InstanceId id) {
+        write(id, "Add Vertex Stage", [](engine_core::Shader& shader) -> std::optional<std::string> {
+            if (!shader.has_vertex_stage()) {
+                shader.set_vertex_source(engine_core::kShaderVertexStarterSource);
+            }
+            return std::nullopt;
+        });
+        edit_shader_text(id, engine_core::ShaderStage::Vertex);
+    };
+    host.select = [this](engine_core::InstanceId material) {
+        runner_.simulation().on_simulation(
+            [material](engine_core::DataModel& world) { world.selection().set({material}); });
+    };
+    return host;
 }
 
 void IdeLayout::edit_shader_text(std::uint32_t shader, engine_core::ShaderStage stage) {

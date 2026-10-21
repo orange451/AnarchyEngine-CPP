@@ -5,6 +5,7 @@
 #include "ide/IdeAssets.hpp"
 #include "ide/IdeLayout.hpp"
 #include "ide/IdeProblems.hpp"
+#include "ide/IdeShaderEditor.hpp"
 #include "ide/IdeShaderText.hpp"
 
 #include "DataModel.hpp"
@@ -42,6 +43,44 @@ ide::IdeShaderText* EditorFor(jadefx::Scene& scene, engine_core::InstanceId id,
         }
     }
     return nullptr;
+}
+
+// The Shader Editor showing id, if one is in the scene.
+ide::IdeShaderEditor* PaneFor(jadefx::Scene& scene, engine_core::InstanceId id) {
+    for (jadefx::Node* node : scene.getElementsByClassName("shader-editor")) {
+        auto* pane = dynamic_cast<ide::IdeShaderEditor*>(node);
+        if (pane != nullptr && pane->shader() == id) {
+            return pane;
+        }
+    }
+    return nullptr;
+}
+
+// Presses a stage's Edit button in the Shader Editor showing id.
+void EditStageFromPane(jadefx::Scene& scene, engine_core::InstanceId id, engine_core::ShaderStage stage) {
+    ide::IdeShaderEditor* pane = PaneFor(scene, id);
+    auto* button = pane != nullptr ? dynamic_cast<jadefx::Button*>(pane->stageButton(stage)) : nullptr;
+    if (button != nullptr) {
+        button->fire();
+    }
+}
+
+// Closes page's tab, so the Scene View's tab is in front for the tests after.
+void ClosePage(jadefx::Node* page) {
+    for (jadefx::Node* node = page; node != nullptr; node = node->getParent()) {
+        if (auto* dock = dynamic_cast<ide::IdeDock*>(node)) {
+            std::shared_ptr<jadefx::Tab> found;
+            for (const std::shared_ptr<jadefx::Tab>& tab : dock->tabs()->getTabs().items()) {
+                if (tab && tab->getContent() == page) {
+                    found = tab;
+                }
+            }
+            if (found) {
+                dock->tabs()->close(found);
+            }
+            break;
+        }
+    }
 }
 
 // Closes editor's tab, so the Scene View's tab is in front for the tests after.
@@ -157,16 +196,40 @@ void TestShaderTab(ide::IdeLayout& layout, jadefx::Scene& scene) {
         frame();
     };
     edit();
+    ide::IdeShaderEditor* pane = PaneFor(scene, id);
+    Expect(pane != nullptr, "a double-click docks the Shader Editor");
+    Expect(EditorFor(scene, id) == nullptr, "not a text tab");
+    if (pane == nullptr) {
+        return;
+    }
+    Expect(pane->title() == "Look", "the Shader Editor's tab is the Shader's name");
+    EditStageFromPane(scene, id, engine_core::ShaderStage::Fragment);
+    frame();
+    frame();
     ide::IdeShaderText* editor = EditorFor(scene, id);
-    Expect(editor != nullptr, "Edit opens a shader editor");
+    Expect(editor != nullptr, "its Edit fragment opens the text editor");
     if (editor == nullptr) {
         return;
     }
     Expect(editor->title() == "Look.glsl", "the tab is titled <Name>.glsl");
     Expect(editor->text() == engine_core::kShaderStarterSource, "it shows the source");
     Expect(editor->errorLine() == 0, "the starter source has no error");
+    // A second double-click opens no second Shader Editor.
     edit();
-    Expect(CountEditors(scene, id) == 1, "Edit again shows the same tab");
+    Expect(layout.open_shader_editor(id).get() == pane, "Edit again keeps the one Shader Editor");
+    // Closing it leaves the text tab working.
+    layout.close_page_for_tests(pane);
+    frame();
+    frame();
+    EditStageFromPane(scene, id, engine_core::ShaderStage::Fragment);
+    layout.edit_shader_text(id, engine_core::ShaderStage::Fragment);
+    frame();
+    frame();
+    editor = EditorFor(scene, id);
+    Expect(editor != nullptr && editor->title() == "Look.glsl", "the text tab outlives the Shader Editor");
+    if (editor == nullptr) {
+        return;
+    }
 
     engine.on_simulation([&](engine_core::DataModel& game) { game.set_name(id, "Glow"); });
     frame();
@@ -373,6 +436,11 @@ void TestFindReplace(ide::IdeLayout& layout, jadefx::Scene& scene) {
     }
     frame();
     frame();
+    // The double-click docks the Shader Editor; its Edit fragment opens the text.
+    ide::IdeShaderEditor* shader_pane = PaneFor(scene, id);
+    EditStageFromPane(scene, id, engine_core::ShaderStage::Fragment);
+    frame();
+    frame();
     ide::IdeShaderText* editor = EditorFor(scene, id);
     Expect(editor != nullptr, "the shader opens for find");
     if (editor == nullptr) {
@@ -429,6 +497,9 @@ void TestFindReplace(ide::IdeLayout& layout, jadefx::Scene& scene) {
             }
             break;
         }
+    }
+    if (shader_pane != nullptr) {
+        layout.close_page_for_tests(shader_pane);
     }
     if (assets_dock != nullptr && was_front != nullptr) {
         assets_dock->tabs()->select(was_front);

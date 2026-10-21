@@ -125,6 +125,7 @@ set(STUDIO_SOURCES
     src/ide/IdeConsole.cpp
     src/ide/IdeCssEditor.cpp
     src/ide/IdeShaderText.cpp
+    src/ide/IdeShaderEditor.cpp
     src/ide/IdeTerminal.cpp
     src/ide/TerminalView.cpp
     src/ide/ConsoleLog.cpp
@@ -935,6 +936,12 @@ add_executable(prefab-editor-tests
 )
 target_link_libraries(prefab-editor-tests PRIVATE studio)
 
+# The Shader Editor: its header, stages, modes, uniforms, and the Materials using it.
+add_executable(shader-editor-tests
+    tests/ShaderEditorPaneTest.cpp
+)
+target_link_libraries(shader-editor-tests PRIVATE studio)
+
 # The Configure Terrain tab: its cards, pickers, and remove flow, and the data behind them.
 add_executable(terrain-editor-tests
     tests/TerrainEditorTest.cpp
@@ -1343,7 +1350,7 @@ function(anarchy_warnings target)
     endif()
 endfunction()
 foreach(target IN ITEMS studio_core studio AnarchyStudio AnarchyPlayer AnarchyServer engine-tests shell-tests properties-tests console-tests
-                        studio-tests mcp-tests explorer-tests assets-tests prefab-editor-tests terrain-editor-tests assets-demo billboard-demo viewport-demo prefab-demo terminal-tests terminal-probe anarchy-mcp
+                        studio-tests mcp-tests explorer-tests assets-tests prefab-editor-tests shader-editor-tests terrain-editor-tests assets-demo billboard-demo viewport-demo prefab-demo terminal-tests terminal-probe anarchy-mcp
                         engine_network sandbox amesh aanim amesh-tests amesh-gl-check scene-render-check gpu-timer-check grid-check profiler-demo profiler profiler-tests ${ENGINE_PACKAGES})
     anarchy_warnings(${target})
 endforeach()
@@ -1434,7 +1441,7 @@ endif()
 # runs from the source folder, where resources/ is.
 enable_testing()
 foreach(suite engine-tests properties-tests console-tests studio-tests mcp-tests mcp-setup-tests sandbox shell-tests explorer-tests assets-tests
-              prefab-editor-tests terrain-editor-tests collision-groups-tests terminal-tests amesh-tests profiler-tests)
+              prefab-editor-tests shader-editor-tests terrain-editor-tests collision-groups-tests terminal-tests amesh-tests profiler-tests)
     if(TARGET ${suite})
         add_test(NAME ${suite} COMMAND ${suite} WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
     endif()
@@ -1460,7 +1467,7 @@ endforeach()
 # target (cmake --build build --config Release --target tests), then run ctest.
 option(ANARCHY_TESTS_IN_ALL "Build every test and demo program in a plain build" OFF)
 set(ANARCHY_TEST_PROGRAMS
-    shell-tests explorer-tests assets-tests prefab-editor-tests terrain-editor-tests
+    shell-tests explorer-tests assets-tests prefab-editor-tests shader-editor-tests terrain-editor-tests
     console-tests properties-tests studio-tests mcp-tests profiler-tests mcp-setup-tests
     engine-tests terminal-tests terminal-probe terminal-demo assets-demo billboard-demo viewport-demo
     prefab-demo amesh-tests amesh-gl-check profiler-demo grid-check gpu-timer-check

@@ -8,6 +8,7 @@
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
 
+#include <algorithm>
 #include <cmath>
 
 namespace ide {
@@ -35,9 +36,14 @@ MaterialBall::MaterialBall(int render_size, int size) : render_size_(render_size
 MaterialBall::~MaterialBall() {
     // Without GL: the renderer's and the framebuffer's names go with their context.
     sphere_.forget();
+    cube_.forget();
+    plane_.forget();
 }
 
-void MaterialBall::setRoot(const std::filesystem::path& root) { textures_.setRoot(root); }
+void MaterialBall::setRoot(const std::filesystem::path& root) {
+    textures_.setRoot(root);
+    meshes_.setRoot(root);
+}
 
 bool MaterialBall::ensureGraphics() {
     if (attempted_) {
@@ -57,6 +63,12 @@ bool MaterialBall::ensureGraphics() {
     anarchy::amesh::Data data;
     engine_core::add_sphere(data, 1.f, kSegments, engine_core::Vec3{0.f, 0.f, 0.f});
     sphere_.upload(data);
+    anarchy::amesh::Data box;
+    engine_core::add_box(box, engine_core::Vec3{1.25f, 1.25f, 1.25f}, engine_core::Vec3{0.f, 0.f, 0.f});
+    cube_.upload(box);
+    anarchy::amesh::Data plane;
+    engine_core::add_plane(plane, 2.f, 2.f, engine_core::Vec3{0.f, 0.f, 0.f});
+    plane_.upload(plane);
 
     runner::GLint previous = 0;
     glGetIntegerv(runner::RT_GL_FRAMEBUFFER_BINDING, &previous);
@@ -81,11 +93,63 @@ bool MaterialBall::draw(const MaterialLook& look, runner::ViewPixels& out) {
     if (!ensureGraphics()) {
         return true;
     }
+    runner::ViewPixels picture;
+    if (!render(look, sphere_, engine_core::matrix4_identity(), picture)) {
+        return false;
+    }
+    // Just inside the true circle: the sphere's facets stop short of it by a sliver.
+    out = cut_ball(picture, kFill * std::cos(kPi / kSegments), size_);
+    return true;
+}
+
+bool MaterialBall::drawView(const MaterialLook& look, runner::ViewPixels& out) {
+    out = runner::ViewPixels{};
+    if (!ensureGraphics()) {
+        return true;
+    }
+    const anarchy::amesh::GpuMesh* mesh = &sphere_;
+    engine_core::Matrix4 base = engine_core::matrix4_identity();
+    if (mesh_ == PreviewMesh::Cube) {
+        mesh = &cube_;
+    } else if (mesh_ == PreviewMesh::Plane) {
+        // Facing up as built: stood up to face the camera.
+        mesh = &plane_;
+        base = engine_core::matrix4_axis_angle(engine_core::Vec3{1.f, 0.f, 0.f}, kPi * 0.5);
+    } else if (mesh_ == PreviewMesh::Mesh) {
+        const anarchy::amesh::GpuMesh* file = mesh_path_.empty() ? nullptr : meshes_.get(mesh_path_);
+        if (file != nullptr && file->valid()) {
+            // Centered and scaled to the ball's radius.
+            const float* low = file->bounds_min();
+            const float* high = file->bounds_max();
+            const float extent = std::max({high[0] - low[0], high[1] - low[1], high[2] - low[2]}) * 0.5f;
+            const float scale = extent > 0.f ? 1.f / extent : 1.f;
+            base = engine_core::matrix4_identity();
+            base.m[0] = base.m[5] = base.m[10] = scale;
+            base.m[12] = -(low[0] + high[0]) * 0.5f * scale;
+            base.m[13] = -(low[1] + high[1]) * 0.5f * scale;
+            base.m[14] = -(low[2] + high[2]) * 0.5f * scale;
+            mesh = file;
+        }
+    }
+    const engine_core::Matrix4 turn =
+        engine_core::matrix4_multiply(engine_core::matrix4_axis_angle(engine_core::Vec3{0.f, 1.f, 0.f}, yaw_),
+                                      engine_core::matrix4_axis_angle(engine_core::Vec3{1.f, 0.f, 0.f}, pitch_));
+    runner::ViewPixels picture;
+    if (!render(look, *mesh, engine_core::matrix4_multiply(turn, base), picture)) {
+        return false;
+    }
+    out = runner::FitWithin(picture, size_);
+    return true;
+}
+
+bool MaterialBall::render(const MaterialLook& look, const anarchy::amesh::GpuMesh& mesh,
+                          const engine_core::Matrix4& model, runner::ViewPixels& render) {
     // A preview is drawn once, not every frame, so it waits for its textures
     // whole (never blurry) and asks to be drawn again until they are.
     textures_.pump();
     runner::MeshDraw ball;
-    ball.mesh = &sphere_;
+    ball.mesh = &mesh;
+    ball.model = model;
     ball.texture = textures_.get(look.diffuse_texture, Usage::Color, look.diffuse_flip_y, true);
     ball.normalTexture = textures_.get(look.normal_texture, Usage::Normal, look.normal_flip_y, true);
     ball.roughnessTexture = textures_.get(look.roughness_texture, Usage::Mask, look.roughness_flip_y, true);
@@ -152,7 +216,6 @@ bool MaterialBall::draw(const MaterialLook& look, runner::ViewPixels& out) {
     glDisable(runner::GL_SCISSOR_TEST);
     const double side = render_size_;
     const bool drawn = renderer_.draw(0, 0, side, side, side, side, &ball, 1, lights, 2);
-    runner::ViewPixels render;
     if (drawn) {
         renderer_.read(0, 0, side, side, side, side, render);
     }
@@ -161,18 +224,16 @@ bool MaterialBall::draw(const MaterialLook& look, runner::ViewPixels& out) {
     if (scissor) {
         glEnable(runner::GL_SCISSOR_TEST);
     }
-    if (!drawn) {
-        return false;
-    }
-    // Just inside the true circle: the sphere's facets stop short of it by a sliver.
-    out = cut_ball(render, kFill * std::cos(kPi / kSegments), size_);
-    return true;
+    return drawn;
 }
 
 void MaterialBall::release() {
     renderer_.shutdown();
     textures_.clear();
     sphere_.destroy();
+    cube_.destroy();
+    plane_.destroy();
+    meshes_.clear();
     if (framebuffer_ != 0) {
         glDeleteFramebuffers(1, &framebuffer_);
         framebuffer_ = 0;

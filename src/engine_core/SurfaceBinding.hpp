@@ -88,6 +88,11 @@ private:
 // from its samplers.
 void describe_surface(SurfaceBinding& binding);
 
+class Shader;
+// shader's binding with every uniform at its default and no textures, as the
+// Shader Editor previews it; null for a post Shader.
+std::shared_ptr<const SurfaceBinding> make_default_surface_binding(const Shader& shader);
+
 // The binding for material, or null when it has no live surface Shader.
 // Callers hold the world's lock.
 std::shared_ptr<const SurfaceBinding> make_surface_binding(const DataModel& world, const Material& material);

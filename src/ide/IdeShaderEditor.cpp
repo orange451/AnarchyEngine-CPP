@@ -6,6 +6,7 @@
 #include "AssetInstances.hpp"
 #include "DataModelLock.hpp"
 #include "Shader.hpp"
+#include "SurfaceBinding.hpp"
 
 #include "jadefx/jadefx.hpp"
 
@@ -105,8 +106,26 @@ constexpr const char* kEditorRules = R"CSS(
     background-color: var(--selection-color);
 }
 .se-preview {
-    background-color: #0c1a24;
+    background-color: #1f1f1f;
     border-radius: 12px;
+}
+.se-mesh {
+    background-color: transparent;
+    border-width: 1px;
+    border-style: solid;
+    border-color: var(--border-color);
+    border-radius: 6px;
+    color: var(--ide-text-color);
+    padding: 3px 10px;
+}
+.se-mesh-on {
+    background-color: var(--accent-color);
+    border-color: var(--accent-color);
+    color: var(--surface-color);
+}
+.se-preview-hint {
+    color: #9aa7b0;
+    font-size: 11px;
 }
 .se-empty-title {
     color: var(--ide-text-color);
@@ -153,6 +172,40 @@ std::shared_ptr<jadefx::VBox> card(const char* title) {
     box->getChildren().add(text_label(title, "se-card-title"));
     return box;
 }
+
+// How often the preview draws, and so how smoothly TIME moves in it.
+constexpr std::chrono::milliseconds kPreviewInterval{50};
+constexpr int kPreviewRender = 768;
+constexpr int kPreviewSize = 512;
+
+// The preview: a drag across it reports how far the pointer moved.
+class PreviewArea : public jadefx::StackPane {
+public:
+    std::function<void(double dx, double dy)> on_drag;
+
+protected:
+    void handleMousePressed(const jadefx::MouseEvent& event) override {
+        last_x_ = event.x;
+        last_y_ = event.y;
+        held_ = event.button == 0;
+    }
+    void handleMouseDragged(const jadefx::MouseEvent& event) override {
+        if (!held_) {
+            return;
+        }
+        if (on_drag) {
+            on_drag(event.x - last_x_, event.y - last_y_);
+        }
+        last_x_ = event.x;
+        last_y_ = event.y;
+    }
+    void handleMouseReleased(const jadefx::MouseEvent&) override { held_ = false; }
+
+private:
+    double last_x_ = 0;
+    double last_y_ = 0;
+    bool held_ = false;
+};
 
 int line_count(const std::string& text) {
     if (text.empty()) {
@@ -252,6 +305,23 @@ IdeShaderEditor::IdeShaderEditor(engine_core::DataModel& world, engine_core::Ins
     jadefx::Tooltip::install(kind_.get(), jadefx::make<jadefx::Tooltip>("What it draws: a Material's surface, or the finished frame"));
     header->getChildren().add(kind_);
     header->getChildren().add(spacer());
+    // What the preview draws on.
+    const std::pair<PreviewMesh, const char*> meshes[] = {
+        {PreviewMesh::Sphere, "Sphere"}, {PreviewMesh::Cube, "Cube"}, {PreviewMesh::Plane, "Plane"}, {PreviewMesh::Mesh, "Mesh..."}};
+    for (const auto& [mesh, text] : meshes) {
+        auto button = jadefx::make<jadefx::Button>(text);
+        button->getClassList().add("se-mesh");
+        const PreviewMesh which = mesh;
+        button->setOnAction([this, which](jadefx::ActionEvent&) {
+            if (which == PreviewMesh::Mesh) {
+                show_mesh_menu();
+            } else {
+                pick_mesh(which);
+            }
+        });
+        header->getChildren().add(button);
+        mesh_buttons_.emplace_back(mesh, button);
+    }
 
     // Left: the stages, then the render modes and the margin.
     auto left = jadefx::make<jadefx::VBox>();
@@ -296,11 +366,22 @@ IdeShaderEditor::IdeShaderEditor(engine_core::DataModel& world, engine_core::Ins
     modes_card_ = modes;
     left->getChildren().add(modes);
 
-    // Middle: the preview.
-    preview_ = jadefx::make<jadefx::StackPane>();
+    // Middle: the preview, turned by dragging.
+    auto area = jadefx::make<PreviewArea>();
+    area->on_drag = [this](double dx, double dy) { turn(dx, dy); };
+    preview_ = area;
     preview_->getClassList().add("se-preview");
     preview_->setStyle("width: 100%; height: 100%;");
     preview_->setMinSize(200, 200);
+    preview_->setAlignment(jadefx::Pos::Center);
+    preview_->setCursor(jadefx::Cursor::Move);
+    preview_image_ = jadefx::make<jadefx::ImageView>();
+    preview_image_->setMouseTransparent(true);
+    preview_->getChildren().add(preview_image_);
+    jadefx::Tooltip::install(preview_.get(),
+                             jadefx::make<jadefx::Tooltip>("Drag to turn it. The uniforms are at their defaults."));
+    ball_ = std::make_unique<MaterialBall>(kPreviewRender, kPreviewSize);
+    pick_mesh(PreviewMesh::Sphere);
 
     // Right: the uniforms and the Materials using the Shader.
     auto right = jadefx::make<jadefx::VBox>();
@@ -348,6 +429,100 @@ IdeShaderEditor::IdeShaderEditor(engine_core::DataModel& world, engine_core::Ins
 }
 
 IdeShaderEditor::~IdeShaderEditor() { world_.unwatch_changes(watch_); }
+
+jadefx::Node* IdeShaderEditor::meshButton(PreviewMesh mesh) const {
+    for (const auto& [which, button] : mesh_buttons_) {
+        if (which == mesh) {
+            return button.get();
+        }
+    }
+    return nullptr;
+}
+
+void IdeShaderEditor::pick_mesh(PreviewMesh mesh) {
+    preview_mesh_ = mesh;
+    // A plane reads best tipped back, as water or a floor would lie.
+    if (mesh == PreviewMesh::Plane) {
+        yaw_ = 0.f;
+        pitch_ = -1.0f;
+    }
+    for (const auto& [which, button] : mesh_buttons_) {
+        button->getClassList().removeIf([](const std::string& name) { return name == "se-mesh-on"; });
+        if (which == mesh) {
+            button->getClassList().add("se-mesh-on");
+        }
+    }
+    drawn_ = {};
+}
+
+void IdeShaderEditor::show_mesh_menu() {
+    jadefx::Scene* scene = getScene();
+    jadefx::Node* button = meshButton(PreviewMesh::Mesh);
+    if (scene == nullptr || button == nullptr) {
+        return;
+    }
+    if (mesh_menu_) {
+        mesh_menu_->hide();
+    }
+    mesh_menu_ = jadefx::make<jadefx::Menu>();
+    for (const auto& [name, path] : meshes_) {
+        auto item = jadefx::make<jadefx::MenuItem>(name);
+        const std::string file = path;
+        item->setOnAction([this, file](jadefx::ActionEvent&) {
+            preview_path_ = file;
+            pick_mesh(PreviewMesh::Mesh);
+        });
+        mesh_menu_->getItems().add(item);
+    }
+    if (meshes_.empty()) {
+        auto item = jadefx::make<jadefx::MenuItem>("No Mesh with a file in Assets");
+        item->setDisable(true);
+        mesh_menu_->getItems().add(item);
+    }
+    mesh_menu_->show(*scene, button->getAbsoluteX(), button->getAbsoluteY() + button->getHeight());
+}
+
+void IdeShaderEditor::turn(double dx, double dy) {
+    yaw_ += static_cast<float>(dx * 0.01);
+    pitch_ = std::clamp(pitch_ + static_cast<float>(dy * 0.01), -1.55f, 1.55f);
+    drawn_ = {};
+}
+
+void IdeShaderEditor::renderContent(jadefx::UiRenderer& renderer, float opacity) {
+    IdePane::renderContent(renderer, opacity);
+    if (!ball_ || !view_.alive || preview_->getWidth() <= 0) {
+        return;
+    }
+    const auto now = std::chrono::steady_clock::now();
+    if (now - drawn_ < kPreviewInterval) {
+        return;
+    }
+    drawn_ = now;
+    MaterialLook look;
+    look.surface = preview_binding_;
+    ball_->setRoot(world_.resources_root());
+    if (preview_mesh_ == PreviewMesh::Mesh) {
+        ball_->setMeshPath(preview_path_);
+    } else {
+        ball_->setMesh(preview_mesh_);
+    }
+    ball_->setRotation(yaw_, pitch_);
+    runner::ViewPixels pixels;
+    if (ball_->drawView(look, pixels) && !pixels.empty()) {
+        preview_image_->setImage(jadefx::Image::fromRgba(pixels.width, pixels.height, std::move(pixels.rgba)));
+    }
+}
+
+void IdeShaderEditor::sceneChanged(jadefx::Scene* previous) {
+    IdePane::sceneChanged(previous);
+    // As the Assets pane does: release the GL objects while the context that made them is current.
+    if (previous == nullptr || previous->isTearingDown() || getScene() == previous) {
+        return;
+    }
+    if (ball_) {
+        ball_->release();
+    }
+}
 
 IdeShaderEditor::StageRow IdeShaderEditor::make_stage_row(engine_core::ShaderStage stage) {
     const bool vertex = stage == engine_core::ShaderStage::Vertex;
@@ -449,6 +624,26 @@ void IdeShaderEditor::refresh() {
     seen_tree_ = tree;
     seen_authored_ = authored;
     View next = read();
+    if (const auto* shader = dynamic_cast<const engine_core::Shader*>(world_.instance(shader_))) {
+        preview_binding_ = engine_core::make_default_surface_binding(*shader);
+    } else {
+        preview_binding_.reset();
+    }
+    meshes_.clear();
+    std::vector<engine_core::InstanceId> pending{world_.service("Meshes")};
+    while (!pending.empty()) {
+        const engine_core::InstanceId at = pending.back();
+        pending.pop_back();
+        for (engine_core::InstanceId child = world_.first_child(at); child != 0; child = world_.next_sibling(child)) {
+            if (const auto* mesh = dynamic_cast<const engine_core::Mesh*>(world_.instance(child))) {
+                if (!mesh->path().empty()) {
+                    meshes_.emplace_back(world_.name(child), mesh->path());
+                }
+            }
+            pending.push_back(child);
+        }
+    }
+    std::sort(meshes_.begin(), meshes_.end());
     const bool same = next.alive == view_.alive && next.name == view_.name && next.kind == view_.kind &&
                       next.error == view_.error && next.vertex_error == view_.vertex_error &&
                       next.fragment_error == view_.fragment_error && next.has_vertex == view_.has_vertex &&

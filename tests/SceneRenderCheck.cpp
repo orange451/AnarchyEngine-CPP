@@ -6107,6 +6107,35 @@ int main(int argc, char** argv) {
         other.surface = SurfaceFor(9302, 1, tinted, {half});
         Expect(first == same && first != other && first != ide::MaterialLook{},
                "a look compares its Shader, its version, and its values");
+
+        // The Shader Editor's preview: the whole view, on a cube or a plane, turned.
+        ide::MaterialBall view(256, 128);
+        runner::ViewPixels shot;
+        view.setMesh(ide::PreviewMesh::Cube);
+        view.drawView(shaded, shot);
+        const auto pixel = [&shot](int x, int y) {
+            const unsigned char* p = shot.rgba.data() + (static_cast<std::size_t>(y) * shot.width + x) * 4;
+            return Pixel{p[0], p[1], p[2]};
+        };
+        const auto gray = [](Pixel p) { return std::abs(p.r - p.g) < 6 && std::abs(p.g - p.b) < 6; };
+        Expect(shot.width == 128 && shot.height == 128, "preview: the view comes back at the size asked");
+        if (shot.width == 128) {
+            const Pixel middle = pixel(64, 64);
+            Expect(middle.r > middle.g + 20 && gray(pixel(2, 2)),
+                   "preview: a red cube in the middle, the clear color in the corner (" + Text(middle) + ")");
+        }
+        view.setMesh(ide::PreviewMesh::Plane);
+        view.setRotation(0.f, 0.f);
+        view.drawView(shaded, shot);
+        Expect(shot.width == 128 && !gray(pixel(64, 64)), "preview: the plane faces the camera unturned");
+        view.setRotation(0.f, 1.5707963f);
+        view.drawView(shaded, shot);
+        bool row_clear = shot.width == 128;
+        for (int x = 0; row_clear && x < 128; x += 4) {
+            row_clear = gray(pixel(x, 40));
+        }
+        Expect(row_clear, "preview: turned 90 degrees the plane is edge on, the row above the middle clear");
+        view.release();
         runner::GLint viewportAfter[4] = {};
         glGetIntegerv(runner::GL_VIEWPORT, viewportAfter);
         runner::GLint framebuffer = -1;

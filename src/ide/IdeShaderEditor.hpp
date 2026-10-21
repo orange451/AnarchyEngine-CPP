@@ -2,10 +2,12 @@
 
 #include "ChangeFlag.hpp"
 #include "IdePane.hpp"
+#include "MaterialBall.hpp"
 
 #include "DataModel.hpp"
 #include "ShaderSource.hpp"
 
+#include <chrono>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -15,7 +17,9 @@
 namespace jadefx {
 class CheckBox;
 class ComboBox;
+class ImageView;
 class Label;
+class Menu;
 class TextField;
 class VBox;
 }  // namespace jadefx
@@ -69,11 +73,18 @@ public:
     std::vector<std::string> usedByNames() const;
     jadefx::Node* usedByRow(engine_core::InstanceId material) const;
     jadefx::Node* goneState() const { return gone_.get(); }
-    // Where the preview draws.
+    // Where the preview draws; dragging across it turns the mesh.
     jadefx::Node* previewNode() const { return preview_.get(); }
+    PreviewMesh previewMesh() const { return preview_mesh_; }
+    jadefx::Node* meshButton(PreviewMesh mesh) const;
+    // The preview's yaw and pitch, radians.
+    std::pair<float, float> rotation() const { return {yaw_, pitch_}; }
 
 protected:
     void layoutChildren() override;
+    // Draws the preview: GL is current while the pane paints.
+    void renderContent(jadefx::UiRenderer& renderer, float opacity) override;
+    void sceneChanged(jadefx::Scene* previous) override;
 
     // What the pane last read of the Shader.
     struct View {
@@ -113,6 +124,10 @@ private:
     void show_users();
     StageRow make_stage_row(engine_core::ShaderStage stage);
     void commit_margin();
+    void pick_mesh(PreviewMesh mesh);
+    void show_mesh_menu();
+    // Turns the preview by a drag of dx, dy points.
+    void turn(double dx, double dy);
 
     engine_core::DataModel& world_;
     engine_core::InstanceId shader_;
@@ -143,6 +158,20 @@ private:
 
 protected:
     std::shared_ptr<jadefx::StackPane> preview_;
+
+private:
+    std::shared_ptr<jadefx::ImageView> preview_image_;
+    std::unique_ptr<MaterialBall> ball_;
+    std::shared_ptr<const engine_core::SurfaceBinding> preview_binding_;
+    PreviewMesh preview_mesh_ = PreviewMesh::Sphere;
+    std::string preview_path_;
+    float yaw_ = 0.6f;
+    float pitch_ = -0.35f;
+    std::chrono::steady_clock::time_point drawn_{};
+    std::vector<std::pair<PreviewMesh, std::shared_ptr<jadefx::Node>>> mesh_buttons_;
+    // The place's Meshes with a file: name and Path, for Mesh...
+    std::vector<std::pair<std::string, std::string>> meshes_;
+    std::shared_ptr<jadefx::Menu> mesh_menu_;
 };
 
 }  // namespace ide

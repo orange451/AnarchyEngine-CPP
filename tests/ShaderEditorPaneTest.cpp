@@ -228,6 +228,31 @@ void uniforms_and_used_by() {
     Expect(rig.editor->usedByNames() == std::vector<std::string>{"Lake"}, "and one that stops using it drops off");
 }
 
+void preview_controls() {
+    Rig rig;
+    Expect(rig.editor->previewMesh() == ide::PreviewMesh::Sphere, "the preview starts on the sphere");
+    rig.click(rig.editor->meshButton(ide::PreviewMesh::Cube));
+    Expect(rig.editor->previewMesh() == ide::PreviewMesh::Cube, "the mesh bar's Cube picks the cube");
+    jadefx::Node* preview = rig.editor->previewNode();
+    Expect(preview != nullptr, "the preview is on screen");
+    if (preview == nullptr) {
+        return;
+    }
+    const auto before = rig.editor->rotation();
+    const double x = preview->getAbsoluteX() + preview->getWidth() * 0.5;
+    const double y = preview->getAbsoluteY() + preview->getHeight() * 0.5;
+    rig.scene->noteMove(x, y);
+    rig.scene->noteButton(0, true, x, y);
+    for (int step = 1; step <= 6; ++step) {
+        rig.scene->noteMove(x + 20 * step, y + 5 * step);
+        rig.frames();
+    }
+    rig.scene->noteButton(0, false, x + 120, y + 30);
+    rig.frames();
+    const auto after = rig.editor->rotation();
+    Expect(after.first != before.first && after.second != before.second, "a drag across the preview turns it");
+}
+
 void deleted() {
     Rig rig;
     rig.game.destroy(rig.wave);
@@ -242,6 +267,7 @@ int main() {
     stages();
     modes_and_margin();
     uniforms_and_used_by();
+    preview_controls();
     deleted();
     if (gFailures != 0) {
         std::fprintf(stderr, "%d failed\n", gFailures);

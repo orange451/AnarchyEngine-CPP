@@ -178,6 +178,38 @@ std::shared_ptr<const SurfaceBinding> make_surface_binding(const DataModel& worl
     return binding;
 }
 
+std::shared_ptr<const SurfaceBinding> make_default_surface_binding(const Shader& shader) {
+    if (shader.kind() != ShaderKind::Surface) {
+        return nullptr;
+    }
+    auto binding = std::make_shared<SurfaceBinding>();
+    binding->shader = shader.id();
+    binding->version = shader.source_version();
+    binding->parse = shader.parse();
+    std::vector<LuaSlot> slots;
+    for (const ShaderParam& param : binding->parse->params) {
+        if (param.type == ShaderParamType::Sampler) {
+            binding->samplers.emplace_back();
+            slots.emplace_back();
+            continue;
+        }
+        slots.push_back(param.fallback);
+    }
+    describe_surface(*binding);
+    binding->modes.transparent = shader.transparent();
+    binding->modes.two_sided = shader.two_sided();
+    binding->modes.no_shadow = !shader.casts_shadow();
+    binding->displacement_margin = static_cast<float>(shader.displacement_margin());
+    const std::shared_ptr<const ShaderParse> vertex = shader.stage_parse(ShaderStage::Vertex);
+    if (shader.has_vertex_stage() && vertex != nullptr && !vertex->error) {
+        binding->has_vertex = true;
+        binding->vertex_glsl = vertex->glsl;
+        binding->vertex_reads_time = vertex->reads_time;
+    }
+    binding->set_values(std::move(slots));
+    return binding;
+}
+
 void SurfaceBindingCache::begin() {
     previous_.swap(current_);
     current_.clear();

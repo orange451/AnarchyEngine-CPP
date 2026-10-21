@@ -14,6 +14,7 @@
 namespace engine_core {
 
 class Material;
+class ShaderEffect;
 
 // A surface shader's render_mode words, as the passes read them.
 struct SurfaceModes {
@@ -36,11 +37,12 @@ struct SurfaceValues {
     std::uint64_t hash = 0;
 };
 
-// What a Material's surface Shader needs to draw, resolved on the simulation
-// thread and shared by every mesh that draws the Material. All but its values
-// is immutable once built; while only the values change, SurfaceBindingCache
-// keeps the binding and swaps them (set_values), so no draw of the Material
-// changes and the renderer reads the new ones at bind time.
+// What a Shader's holder needs to draw it, resolved on the simulation thread:
+// a Material's surface Shader, shared by every mesh that draws the Material,
+// or a ShaderEffect's post Shader. All but its values is immutable once
+// built; while only the values change, SurfaceBindingCache keeps the binding
+// and swaps them (set_values), so no draw of the Material changes and the
+// renderer reads the new ones at bind time.
 struct SurfaceBinding {
     InstanceId shader = 0;
     // The Shader's source_version.
@@ -64,6 +66,8 @@ struct SurfaceBinding {
     // How far the vertex stage may move a vertex, in units (culling grows a
     // draw's box by it).
     float displacement_margin = 1.f;
+    // A post Shader's stage (Shader::hdr): before bloom and the tone map.
+    bool hdr = false;
     // The glsl names TIME, so its shadows redraw each frame.
     bool reads_time = false;
     // The glsl names discard or ALPHA, so it can cut holes, and its shadows
@@ -90,23 +94,34 @@ void describe_surface(SurfaceBinding& binding);
 
 class Shader;
 // shader's binding with every uniform at its default and no textures, as the
-// Shader Editor previews it; null for a post Shader.
+// Shader Editor previews it, surface or post.
 std::shared_ptr<const SurfaceBinding> make_default_surface_binding(const Shader& shader);
 
+// holder's binding of shader: holder's attributes as the uniforms' values,
+// held to type and range, and its sampler Textures. The caller chose shader:
+// a Material's surface Shader, a ShaderEffect's post Shader. Callers hold the
+// world's lock.
+std::shared_ptr<const SurfaceBinding> make_shader_binding(const DataModel& world, const DataModel& holder,
+                                                          const Shader& shader);
 // The binding for material, or null when it has no live surface Shader.
-// Callers hold the world's lock.
 std::shared_ptr<const SurfaceBinding> make_surface_binding(const DataModel& world, const Material& material);
+// The binding for effect, or null when it has no live post Shader.
+std::shared_ptr<const SurfaceBinding> make_effect_binding(const DataModel& world, const ShaderEffect& effect);
 
-// Each Material's binding, built once per frame and kept from the frame before
+// Each holder's binding, built once per frame and kept from the frame before
 // while nothing in it changed, so a draw's binding pointer stays put.
 class SurfaceBindingCache {
 public:
     // Starts a frame: what the last one built is kept only for reuse.
     void begin();
-    // The binding for material this frame, or null for none; material may be null.
+    // The binding for the holder this frame, or null for none; the holder may be null.
     std::shared_ptr<const SurfaceBinding> get(const DataModel& world, const Material* material);
+    std::shared_ptr<const SurfaceBinding> get(const DataModel& world, const ShaderEffect* effect);
 
 private:
+    template <class Make>
+    std::shared_ptr<const SurfaceBinding> get(InstanceId holder, Make make);
+
     std::unordered_map<InstanceId, std::shared_ptr<const SurfaceBinding>> current_;
     std::unordered_map<InstanceId, std::shared_ptr<const SurfaceBinding>> previous_;
 };

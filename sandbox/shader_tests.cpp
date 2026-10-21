@@ -10,6 +10,7 @@
 #include "Script.hpp"
 #include "LuaApi.hpp"
 #include "Shader.hpp"
+#include "ShaderEffect.hpp"
 #include "SnapshotPump.hpp"
 #include "SurfaceBinding.hpp"
 #include "GameObject.hpp"
@@ -1123,4 +1124,53 @@ TEST_CASE("SHA36b scripts read and write Hdr", "[shader][lua]") {
     const std::vector<std::string> out = printed(rig.runtime.drain_output());
     INFO(rig.runtime.last_error());
     REQUIRE(out == std::vector<std::string>{"false\n", "true\n"});
+}
+
+TEST_CASE("SHA37 a ShaderEffect's binding reads its attributes as its post Shader's uniforms", "[shader]") {
+    SimRole role;
+    engine_core::Game game;
+    Shader& fade = add_shader(game, "Fade");
+    REQUIRE_FALSE(fade.set_kind(ShaderKind::Post));
+    fade.set_source("uniform float Strength : range(0, 1) = 0.5;\nuniform sampler2D Lut : color;\n"
+                    "void post() {\n    COLOR.rgb *= 1.0 - Strength;\n}\n");
+    REQUIRE(fade.error().empty());
+    engine_core::ShaderEffect& effect = game.create<engine_core::ShaderEffect>();
+    game.set_name(effect.id(), "Vignette");
+    game.set_parent(effect.id(), game.scene_service("Lighting"));
+    REQUIRE(engine_core::make_effect_binding(game, effect) == nullptr);
+    REQUIRE_FALSE(effect.set_reference(engine_core::ShaderEffect::kShaderReference, instance_ref(fade.id())));
+    std::shared_ptr<const engine_core::SurfaceBinding> binding = engine_core::make_effect_binding(game, effect);
+    REQUIRE(binding != nullptr);
+    REQUIRE(binding->shader == fade.id());
+    REQUIRE(binding->parse->kind == ShaderKind::Post);
+    REQUIRE(binding->values()->slots[0].number == 0.5);
+    REQUIRE(binding->samplers.size() == 1);
+    REQUIRE(binding->samplers[0].path.empty());
+    REQUIRE_FALSE(effect.set_attribute("Strength", number_slot(0.8)));
+    REQUIRE(engine_core::make_effect_binding(game, effect)->values()->slots[0].number == 0.8);
+    REQUIRE_FALSE(effect.set_attribute("Strength", number_slot(1.7)));
+    REQUIRE(engine_core::make_effect_binding(game, effect)->values()->slots[0].number == 1.0);
+    engine_core::Texture& lut = game.create<engine_core::Texture>();
+    game.set_parent(lut.id(), game.service("Textures"));
+    REQUIRE_FALSE(lut.set_path("textures/lut.png"));
+    REQUIRE_FALSE(effect.set_attribute("Lut", instance_ref(lut.id())));
+    REQUIRE(engine_core::make_effect_binding(game, effect)->samplers[0].path == "textures/lut.png");
+    // Hdr rides on the binding, and a post Shader has a default binding for the preview.
+    REQUIRE(!binding->hdr);
+    REQUIRE_FALSE(fade.set_hdr(true));
+    REQUIRE(engine_core::make_effect_binding(game, effect)->hdr);
+    std::shared_ptr<const engine_core::SurfaceBinding> preview = engine_core::make_default_surface_binding(fade);
+    REQUIRE(preview != nullptr);
+    REQUIRE(preview->values()->slots[0].number == 0.5);
+    REQUIRE(preview->hdr);
+    // The cache keeps an unchanged effect's binding and makes a new one when its text changes.
+    engine_core::SurfaceBindingCache cache;
+    cache.begin();
+    const std::shared_ptr<const engine_core::SurfaceBinding> first = cache.get(game, &effect);
+    cache.begin();
+    REQUIRE(cache.get(game, &effect) == first);
+    fade.set_source("uniform float Strength : range(0, 1) = 0.5;\nvoid post() {\n    COLOR.rgb *= Strength;\n}\n");
+    cache.begin();
+    REQUIRE(cache.get(game, &effect) != first);
+    REQUIRE(cache.get(game, static_cast<const engine_core::Material*>(nullptr)) == nullptr);
 }

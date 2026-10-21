@@ -2,6 +2,7 @@
 
 #include "AssetInstances.hpp"
 #include "Shader.hpp"
+#include "ShaderEffect.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -65,7 +66,7 @@ bool same_values(const SurfaceValues& a, const SurfaceValues& b) {
 // The same Shader, version, and textures: all but the values.
 bool same_binding(const SurfaceBinding& a, const SurfaceBinding& b) {
     if (a.shader != b.shader || a.version != b.version || a.parse != b.parse ||
-        a.samplers.size() != b.samplers.size() || a.displacement_margin != b.displacement_margin) {
+        a.samplers.size() != b.samplers.size() || a.displacement_margin != b.displacement_margin || a.hdr != b.hdr) {
         return false;
     }
     for (std::size_t i = 0; i < a.samplers.size(); ++i) {
@@ -120,18 +121,50 @@ void SurfaceBinding::set_values(std::vector<LuaSlot> slots) const {
     std::atomic_store(&values_, std::shared_ptr<const SurfaceValues>(std::move(next)));
 }
 
+namespace {
+
+// What a surface Shader's binding carries beyond its uniforms: the modes, the
+// margin, and the vertex stage. A post Shader's carries its stage.
+void describe_shader(SurfaceBinding& binding, const Shader& shader) {
+    describe_surface(binding);
+    if (shader.kind() != ShaderKind::Surface) {
+        binding.hdr = shader.hdr();
+        return;
+    }
+    // The modes are the Shader's properties, not lines in its text.
+    binding.modes.transparent = shader.transparent();
+    binding.modes.two_sided = shader.two_sided();
+    binding.modes.no_shadow = !shader.casts_shadow();
+    binding.displacement_margin = static_cast<float>(shader.displacement_margin());
+    const std::shared_ptr<const ShaderParse> vertex = shader.stage_parse(ShaderStage::Vertex);
+    if (shader.has_vertex_stage() && vertex != nullptr && !vertex->error) {
+        binding.has_vertex = true;
+        binding.vertex_glsl = vertex->glsl;
+        binding.vertex_reads_time = vertex->reads_time;
+    }
+}
+
+}  // namespace
+
 std::shared_ptr<const SurfaceBinding> make_surface_binding(const DataModel& world, const Material& material) {
     const Shader* shader = material.shader(world);
-    if (shader == nullptr) {
-        return nullptr;
-    }
+    return shader != nullptr ? make_shader_binding(world, material, *shader) : nullptr;
+}
+
+std::shared_ptr<const SurfaceBinding> make_effect_binding(const DataModel& world, const ShaderEffect& effect) {
+    const Shader* shader = effect.shader(world);
+    return shader != nullptr ? make_shader_binding(world, effect, *shader) : nullptr;
+}
+
+std::shared_ptr<const SurfaceBinding> make_shader_binding(const DataModel& world, const DataModel& holder,
+                                                          const Shader& shader) {
     auto binding = std::make_shared<SurfaceBinding>();
-    binding->shader = shader->id();
-    binding->version = shader->source_version();
-    binding->parse = shader->parse();
+    binding->shader = shader.id();
+    binding->version = shader.source_version();
+    binding->parse = shader.parse();
     std::vector<LuaSlot> slots;
     for (const ShaderParam& param : binding->parse->params) {
-        const LuaSlot held = material.attribute(param.name);
+        const LuaSlot held = holder.attribute(param.name);
         if (param.type == ShaderParamType::Sampler) {
             SurfaceBinding::Sampler& sampler = binding->samplers.emplace_back();
             const auto* texture =
@@ -162,26 +195,12 @@ std::shared_ptr<const SurfaceBinding> make_surface_binding(const DataModel& worl
         }
         slots.push_back(std::move(kept));
     }
-    describe_surface(*binding);
-    // The modes are the Shader's properties, not lines in its text.
-    binding->modes.transparent = shader->transparent();
-    binding->modes.two_sided = shader->two_sided();
-    binding->modes.no_shadow = !shader->casts_shadow();
-    binding->displacement_margin = static_cast<float>(shader->displacement_margin());
-    const std::shared_ptr<const ShaderParse> vertex = shader->stage_parse(ShaderStage::Vertex);
-    if (shader->has_vertex_stage() && vertex != nullptr && !vertex->error) {
-        binding->has_vertex = true;
-        binding->vertex_glsl = vertex->glsl;
-        binding->vertex_reads_time = vertex->reads_time;
-    }
+    describe_shader(*binding, shader);
     binding->set_values(std::move(slots));
     return binding;
 }
 
 std::shared_ptr<const SurfaceBinding> make_default_surface_binding(const Shader& shader) {
-    if (shader.kind() != ShaderKind::Surface) {
-        return nullptr;
-    }
     auto binding = std::make_shared<SurfaceBinding>();
     binding->shader = shader.id();
     binding->version = shader.source_version();
@@ -195,17 +214,7 @@ std::shared_ptr<const SurfaceBinding> make_default_surface_binding(const Shader&
         }
         slots.push_back(param.fallback);
     }
-    describe_surface(*binding);
-    binding->modes.transparent = shader.transparent();
-    binding->modes.two_sided = shader.two_sided();
-    binding->modes.no_shadow = !shader.casts_shadow();
-    binding->displacement_margin = static_cast<float>(shader.displacement_margin());
-    const std::shared_ptr<const ShaderParse> vertex = shader.stage_parse(ShaderStage::Vertex);
-    if (shader.has_vertex_stage() && vertex != nullptr && !vertex->error) {
-        binding->has_vertex = true;
-        binding->vertex_glsl = vertex->glsl;
-        binding->vertex_reads_time = vertex->reads_time;
-    }
+    describe_shader(*binding, shader);
     binding->set_values(std::move(slots));
     return binding;
 }
@@ -219,11 +228,22 @@ std::shared_ptr<const SurfaceBinding> SurfaceBindingCache::get(const DataModel& 
     if (material == nullptr) {
         return nullptr;
     }
-    const InstanceId id = material->id();
+    return get(material->id(), [&] { return make_surface_binding(world, *material); });
+}
+
+std::shared_ptr<const SurfaceBinding> SurfaceBindingCache::get(const DataModel& world, const ShaderEffect* effect) {
+    if (effect == nullptr) {
+        return nullptr;
+    }
+    return get(effect->id(), [&] { return make_effect_binding(world, *effect); });
+}
+
+template <class Make>
+std::shared_ptr<const SurfaceBinding> SurfaceBindingCache::get(InstanceId id, Make make) {
     if (const auto found = current_.find(id); found != current_.end()) {
         return found->second;
     }
-    std::shared_ptr<const SurfaceBinding> made = make_surface_binding(world, *material);
+    std::shared_ptr<const SurfaceBinding> made = make();
     if (made != nullptr) {
         if (const auto last = previous_.find(id);
             last != previous_.end() && last->second != nullptr && same_binding(*last->second, *made)) {

@@ -703,14 +703,16 @@ IdeShaderEditor::View IdeShaderEditor::read() const {
     out.casts_shadow = shader->casts_shadow();
     out.margin = shader->displacement_margin();
     out.params = shader->parse()->params;
-    // Every Material using it, wherever it is under Materials.
+    // Every Material naming it, wherever it is under Materials: a post Shader's
+    // too, which draw plain (Material::shader is null for them).
     std::vector<engine_core::InstanceId> pending{world_.service("Materials")};
     while (!pending.empty()) {
         const engine_core::InstanceId at = pending.back();
         pending.pop_back();
         for (engine_core::InstanceId child = world_.first_child(at); child != 0; child = world_.next_sibling(child)) {
             if (const auto* material = dynamic_cast<const engine_core::Material*>(world_.instance(child))) {
-                if (material->shader(world_) == shader) {
+                const engine_core::LuaSlot named = material->reference(engine_core::Material::kShaderReference);
+                if (named.kind == engine_core::LuaSlot::Kind::Instance && named.id == shader_) {
                     out.users.emplace_back(child, world_.name(child));
                 }
             }
@@ -808,7 +810,14 @@ void IdeShaderEditor::show_users() {
         row->setStyle("width: 100%;");
         row->getChildren().add(text_label(name, "se-name"));
         row->getChildren().add(spacer());
-        row->getChildren().add(text_label("Material", "se-muted"));
+        if (view_.kind == engine_core::ShaderKind::Post) {
+            auto refused = text_label("Can't use post", "se-state-error");
+            jadefx::Tooltip::install(refused.get(), jadefx::make<jadefx::Tooltip>(
+                                                        "A Material can't use a post shader, so it draws plain"));
+            row->getChildren().add(refused);
+        } else {
+            row->getChildren().add(text_label("Material", "se-muted"));
+        }
         row->setCursor(jadefx::Cursor::Pointer);
         const engine_core::InstanceId material = id;
         row->setOnMouseClicked([this, material](const jadefx::MouseEvent& event) {

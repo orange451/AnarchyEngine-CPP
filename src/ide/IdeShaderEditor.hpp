@@ -52,7 +52,8 @@ struct ShaderEditorHost {
 // displacement margin. In the middle, a preview of the Shader drawn on a
 // mesh. On the right, the uniforms it declares with their defaults, by group,
 // and the Materials that use it: clicking one selects it, so Properties shows
-// its uniform rows. A deleted Shader leaves a note in the page.
+// its uniform rows; under a post Shader, which no Material can use, each is
+// marked as drawing plain. A deleted Shader leaves a note in the page.
 class IdeShaderEditor : public IdePane {
 public:
     IdeShaderEditor(engine_core::DataModel& world, engine_core::InstanceId shader, ShaderEditorHost host = {});

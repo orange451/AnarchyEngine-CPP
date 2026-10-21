@@ -9,6 +9,7 @@
 #include "Shader.hpp"
 #include "jadefx/jadefx.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <memory>
@@ -143,6 +144,22 @@ std::string text_of(jadefx::Node* node) {
     return std::string();
 }
 
+// Every label's text under node, in order.
+std::vector<std::string> texts_under(jadefx::Node* node) {
+    std::vector<std::string> out;
+    if (auto* label = dynamic_cast<jadefx::Labeled*>(node)) {
+        out.push_back(label->getText());
+    }
+    if (auto* pane = dynamic_cast<jadefx::Pane*>(node)) {
+        for (const auto& child : pane->getChildren().items()) {
+            for (std::string& text : texts_under(child.get())) {
+                out.push_back(std::move(text));
+            }
+        }
+    }
+    return out;
+}
+
 void header_and_state() {
     Rig rig;
     Expect(rig.editor->title() == "Wave", "the tab is the Shader's name");
@@ -230,6 +247,17 @@ void uniforms_and_used_by() {
         ->set_reference(engine_core::Material::kShaderReference, engine_core::LuaSlot{});
     rig.frames(2);
     Expect(rig.editor->usedByNames() == std::vector<std::string>{"Lake"}, "and one that stops using it drops off");
+    // A post Shader: the Material still names it but draws plain, so it stays, marked.
+    rig.shader().set_kind(ShaderKind::Post);
+    rig.frames(2);
+    Expect(rig.editor->usedByNames() == std::vector<std::string>{"Lake"}, "a post Shader still lists its Materials");
+    const std::vector<std::string> marked = texts_under(rig.editor->usedByRow(rig.lake));
+    Expect(std::find(marked.begin(), marked.end(), "Can't use post") != marked.end(),
+           "marked as unable to use a post shader");
+    rig.shader().set_kind(ShaderKind::Surface);
+    rig.frames(2);
+    const std::vector<std::string> plain = texts_under(rig.editor->usedByRow(rig.lake));
+    Expect(std::find(plain.begin(), plain.end(), "Material") != plain.end(), "and back to a surface, plain again");
 }
 
 // The preview draws when what it shows changes, and over and over only for a

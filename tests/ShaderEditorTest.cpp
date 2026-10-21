@@ -276,6 +276,19 @@ void TestShaderTab(ide::IdeLayout& layout, jadefx::Scene& scene) {
     editor->showLine(5);
     Expect(code->caretPosition() > 0, "showLine moves the caret");
 
+    // A place going away takes its Shader Editors with it: their ids are its.
+    layout.edit_for_tests(id);
+    frame();
+    frame();
+    Expect(PaneFor(scene, id) != nullptr, "the Shader Editor is open again");
+    layout.close_place_editors_for_tests();
+    frame();
+    frame();
+    Expect(PaneFor(scene, id) == nullptr && layout.open_shader_editor(id) == nullptr,
+           "closing the place's editors closes its Shader Editor too");
+    Expect(EditorFor(scene, id) == nullptr, "and its text tabs");
+    editor = nullptr;
+
     // Leave the studio as the later tests expect it: the editor closed, and the
     // tab that was in front of Assets in front again.
     for (ide::IdeDock* up = nullptr; up == nullptr;) {

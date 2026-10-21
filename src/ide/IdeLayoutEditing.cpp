@@ -1157,6 +1157,11 @@ void IdeLayout::close_script_editors() {
             pages.push_back(std::move(editor));
         }
     }
+    for (const auto& entry : open_shader_panes_) {
+        if (std::shared_ptr<IdeShaderEditor> editor = entry.second.lock()) {
+            pages.push_back(std::move(editor));
+        }
+    }
     for (const std::shared_ptr<IdePane>& editor : pages) {
         IdeDock* dock = dockContaining(editor.get());
         if (dock == nullptr || dock->tabs() == nullptr) {
@@ -1180,6 +1185,7 @@ void IdeLayout::close_script_editors() {
     open_terrains_.clear();
     open_css_.clear();
     open_shaders_.clear();
+    open_shader_panes_.clear();
     kept_sources_.clear();
     last_script_focus_ = 0;
 }

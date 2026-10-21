@@ -269,6 +269,10 @@ public:
     IdePane* page_named_for_tests(const std::string& name) { return page_named(name).get(); }
     bool page_open_for_tests(IdePane* page) const { return page != nullptr && dockContaining(page) != nullptr; }
     void close_page_for_tests(IdePane* page) { close_page(page); }
+    // What opening another place does to the editors of this one.
+    void close_place_editors_for_tests() { close_script_editors(); }
+    // Edit on id, as a double-click in Assets or the Explorer does.
+    void edit_for_tests(std::uint32_t id) { edit(id); }
     const void* dock_of_for_tests(IdePane* page) const { return dockContaining(page); }
     std::size_t dock_count_for_tests() const { return docks_.size(); }
     // Moves page as a tab into beside's dock (side 0), or into a new dock left, right,
@@ -402,7 +406,7 @@ private:
     void pause_test();
     void resume_test();
     void stop_test();
-    // Closes every script editor, Prefab editor, and Configure Terrain tab: their ids belong to a place
+    // Closes every script editor, Prefab editor, Configure Terrain tab, and Shader Editor: their ids belong to a place
     // that is going away.
     void close_script_editors();
     void show_error(const std::string& heading, const std::string& detail);

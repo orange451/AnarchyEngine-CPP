@@ -47,7 +47,7 @@ std::string without_spans(std::string text, const std::vector<std::pair<std::siz
 
 }  // namespace
 
-Shader::Shader(DataModel::ChildTag tag, DataModel::State& state, InstanceId id) : SourceText(tag, state, id) {
+Shader::Shader(DataModel::ChildTag tag, DataModel::State& state, InstanceId id) : SourceText(tag, state, id, 2) {
     source_ = kShaderStarterSource;
     reparse(ShaderStage::Fragment);
     reparse(ShaderStage::Vertex);
@@ -263,7 +263,9 @@ void Shader::read_place(const std::byte* data, std::size_t size) {
 
 void Shader::on_reuse() {
     source_ = kShaderStarterSource;
-    extras_.clear();
+    for (std::string& text : more_stages_) {
+        text.clear();
+    }
     kind_ = ShaderKind::Surface;
     transparent_ = false;
     two_sided_ = false;

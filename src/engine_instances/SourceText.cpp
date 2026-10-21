@@ -2,7 +2,6 @@
 
 #include "Contract.hpp"
 
-#include <algorithm>
 #include <cstdint>
 #include <cstring>
 
@@ -21,18 +20,18 @@ bool SourceText::load_property(const std::string& key, const JsonValue& value, s
     return DataModel::load_property(key, value, error);
 }
 
-std::string& SourceText::stage_text(int stage) const {
+const std::string& SourceText::source(int stage) const {
+    static const std::string kNone;
     if (stage <= 0) {
-        return const_cast<std::string&>(source_);
+        return source_;
     }
     const auto at = static_cast<std::size_t>(stage - 1);
-    if (extras_.size() <= at) {
-        extras_.resize(static_cast<std::size_t>(std::max(stage_count() - 1, stage)));
-    }
-    return extras_[at];
+    return at < more_stages_.size() ? more_stages_[at] : kNone;
 }
 
-const std::string& SourceText::source(int stage) const { return stage_text(stage); }
+std::string& SourceText::stage_text(int stage) {
+    return stage == 0 ? source_ : more_stages_[static_cast<std::size_t>(stage - 1)];
+}
 
 void SourceText::set_source(int stage, std::string source) {
     if (!on_gameplay_thread()) {

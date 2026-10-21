@@ -993,3 +993,14 @@ TEST_CASE("SHA32 a mode change clears the driver's error, which was for the old 
     REQUIRE_FALSE(shader.set_casts_shadow(false));
     REQUIRE(shader.error().empty());
 }
+
+TEST_CASE("SHA33 reading a stage leaves the others where they are", "[shader]") {
+    SimRole role;
+    engine_core::Game game;
+    Shader& shader = add_shader(game, "Look");
+    const Shader& held = shader;
+    const std::string* vertex = &held.source(Shader::kVertexStage);
+    REQUIRE(held.source(7).empty());
+    REQUIRE(vertex == &held.source(Shader::kVertexStage));
+    REQUIRE(held.stage_count() == 2);
+}

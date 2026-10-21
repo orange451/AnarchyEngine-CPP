@@ -17,15 +17,17 @@ namespace engine_core {
 // only while it has text.
 class SourceText : public DataModel {
 public:
-    SourceText(DataModel::ChildTag tag, DataModel::State& state, InstanceId id) : DataModel(tag, state, id) {}
+    // stages: how many texts the class keeps, 1 unless it says otherwise.
+    SourceText(DataModel::ChildTag tag, DataModel::State& state, InstanceId id, int stages = 1)
+        : DataModel(tag, state, id), more_stages_(static_cast<std::size_t>(stages > 1 ? stages - 1 : 0)) {}
 
-    // How many texts the class keeps; 1 unless it says otherwise.
-    virtual int stage_count() const { return 1; }
+    int stage_count() const { return 1 + static_cast<int>(more_stages_.size()); }
     // SimulationThread. Records undo and fires Changed for Source (stage 0)
     // or VertexSource (stage 1).
     void set_source(std::string source) { set_source(0, std::move(source)); }
     void set_source(int stage, std::string source);
     const std::string& source() const { return source_; }
+    // A stage past stage_count reads as empty.
     const std::string& source(int stage) const;
     // Moves each time any stage changes, by set_source or a Stop restoring
     // it. A reader that keeps a copy checks this to know the copy is current.
@@ -59,12 +61,13 @@ protected:
     void read_place(const std::byte* data, std::size_t size) override;
 
     std::string source_;
-    // Stages past the first, sized on first use.
-    mutable std::vector<std::string> extras_;
+    // Stages past the first, one per stage, sized at construction.
+    std::vector<std::string> more_stages_;
     std::uint64_t source_version_ = 1;
 
 private:
-    std::string& stage_text(int stage) const;
+    // Stage 0 through stage_count - 1.
+    std::string& stage_text(int stage);
 };
 
 }  // namespace engine_core

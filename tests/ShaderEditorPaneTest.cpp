@@ -178,7 +178,10 @@ void stages() {
     const std::string built = text_of(rig.editor->stageState(ShaderStage::Vertex));
     Expect(built.find("built") != std::string::npos && built.find("lines") != std::string::npos,
            "the Vertex row then reads built and its lines (" + built + ")");
-    Expect(text_of(rig.editor->stageButton(ShaderStage::Vertex)) == "Edit vertex.glsl", "its button edits it");
+    Expect(text_of(rig.editor->stageButton(ShaderStage::Vertex)) == "Edit", "its button edits it (" +
+                                                                                text_of(rig.editor->stageButton(ShaderStage::Vertex)) + ")");
+    Expect(text_of(rig.editor->stageButton(ShaderStage::Fragment)) == "Edit", "and so does the Fragment row's (" +
+                                                                                  text_of(rig.editor->stageButton(ShaderStage::Fragment)) + ")");
     rig.edited.clear();
     rig.click(rig.editor->stageButton(ShaderStage::Fragment));
     Expect(rig.edited.size() == 1 && rig.edited[0].first == rig.wave && rig.edited[0].second == ShaderStage::Fragment,

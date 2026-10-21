@@ -555,7 +555,7 @@ IdeShaderEditor::StageRow IdeShaderEditor::make_stage_row(engine_core::ShaderSta
     row.state = text_label("", "se-state");
     top->getChildren().add(row.state);
     box->getChildren().add(top);
-    auto button = jadefx::make<jadefx::Button>(vertex ? "Edit vertex.glsl" : "Edit fragment.glsl");
+    auto button = jadefx::make<jadefx::Button>("Edit");
     button->getClassList().add("se-primary");
     button->setOnAction([this, stage](jadefx::ActionEvent&) {
         if (stage == engine_core::ShaderStage::Vertex && !view_.has_vertex) {
@@ -762,7 +762,7 @@ void IdeShaderEditor::show_stage(StageRow& row, engine_core::ShaderStage stage) 
         button->setText("Add vertex stage");
         return;
     }
-    button->setText(vertex ? "Edit vertex.glsl" : "Edit fragment.glsl");
+    button->setText("Edit");
     const std::string& error = vertex ? view_.vertex_error : view_.fragment_error;
     const int lines = vertex ? view_.vertex_lines : view_.fragment_lines;
     row.state->setText(error.empty() ? "built \xC2\xB7 " + std::to_string(lines) + " lines" : error_line(error));

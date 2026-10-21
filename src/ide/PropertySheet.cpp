@@ -59,8 +59,9 @@ bool shown(const LuaField& field, PropertyKind& kind) {
     if (field.method || field.read == nullptr || field.name == nullptr || field.type_name == nullptr) {
         return false;
     }
-    // Multi-line source belongs to the script editor.
-    if (std::string_view(field.name) == "Source") {
+    // Multi-line source belongs to the script editor, and a Shader's stages to the shader text editor.
+    const std::string_view name(field.name);
+    if (name == "Source" || name == "FragmentSource" || name == "VertexSource") {
         return false;
     }
     // An EnumItem the registry gives no type for has no items to pick from.

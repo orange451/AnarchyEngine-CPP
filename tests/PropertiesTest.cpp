@@ -2708,6 +2708,23 @@ void TestShaderParamPanel() {
     Expect(rig.field("Speed") != nullptr, "a uniform added to the selected Material's Shader gets its row");
 }
 
+// A Shader's texts live in their files and the text editor, never in Properties.
+void TestShaderTextsHaveNoRows() {
+    engine_core::set_thread_role(engine_core::ThreadRole::Simulation);
+    Rig rig;
+    engine_core::Shader& shader = rig.game.create<engine_core::Shader>();
+    rig.game.set_parent(shader.id(), rig.game.service("Shaders"));
+    const ide::PropertySheet sheet = ide::read_sheet(rig.game, {shader.id()});
+    bool texts = false;
+    bool kind = false;
+    for (const ide::PropertyRow& row : sheet.rows) {
+        texts = texts || row.name == "Source" || row.name == "FragmentSource" || row.name == "VertexSource";
+        kind = kind || row.name == "Kind";
+    }
+    Expect(!texts, "a Shader's Source, FragmentSource, and VertexSource have no rows");
+    Expect(kind, "its Kind does");
+}
+
 int main() {
     TestGroupMarkersRegister();
     TestSheetGroupOrder();
@@ -2759,6 +2776,7 @@ int main() {
     TestAttributesPanel();
     TestShaderParamRows();
     TestShaderParamPanel();
+    TestShaderTextsHaveNoRows();
     if (gFailures == 0) {
         std::printf("properties tests passed\n");
         return 0;

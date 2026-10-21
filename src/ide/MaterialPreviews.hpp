@@ -46,6 +46,9 @@ struct MaterialLook {
     // The Material's surface Shader and its values, or null; looks compare its
     // Shader, version, and values_hash.
     std::shared_ptr<const engine_core::SurfaceBinding> surface;
+    // A post Shader drawn over the picture, as the Shader Editor previews one,
+    // or null; compared as surface is.
+    std::shared_ptr<const engine_core::SurfaceBinding> effect;
 
     bool operator==(const MaterialLook& other) const;
     bool operator!=(const MaterialLook& other) const { return !(*this == other); }

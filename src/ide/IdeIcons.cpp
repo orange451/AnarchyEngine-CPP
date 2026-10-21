@@ -51,6 +51,10 @@ const char* IconFileOverride(const std::string& class_name) {
     if (class_name == "DynamicSky") {
         return "icon-sky.png";
     }
+    // A post Shader's home: the Shader's own icon.
+    if (class_name == "ShaderEffect") {
+        return "Shader.png";
+    }
     if (class_name == "PointLight") {
         return "Light.png";
     }

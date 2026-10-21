@@ -52,7 +52,8 @@ bool MaterialLook::operator==(const MaterialLook& other) const {
            metalness_texture == other.metalness_texture && emissive_texture == other.emissive_texture &&
            diffuse_flip_y == other.diffuse_flip_y && normal_flip_y == other.normal_flip_y &&
            roughness_flip_y == other.roughness_flip_y && metalness_flip_y == other.metalness_flip_y &&
-           emissive_flip_y == other.emissive_flip_y && same_surface(surface, other.surface);
+           emissive_flip_y == other.emissive_flip_y && same_surface(surface, other.surface) &&
+           same_surface(effect, other.effect);
 }
 
 std::optional<MaterialLook> material_look(const engine_core::DataModel& world, engine_core::InstanceId id) {

@@ -2,6 +2,7 @@
 
 #include "Matrix4.hpp"
 #include "MeshShapes.hpp"
+#include "runner/SceneDraws.hpp"
 #include "runner/gl.hpp"
 
 // Only GLFW's proc lookup: the GL names come from runner/gl.hpp.
@@ -207,6 +208,17 @@ bool MaterialBall::render(const MaterialLook& look, const anarchy::amesh::GpuMes
     lights[1].color[1] = 0.8f;
     lights[1].color[2] = 1.f;
     lights[1].intensity = 0.35f;
+
+    // The look's post Shader, if any, over the picture: the one effect a preview runs.
+    runner::SceneLighting lighting;
+    if (look.effect != nullptr) {
+        runner::SceneEffect& effect = lighting.effects.emplace_back();
+        effect.effect = look.effect->shader;
+        effect.hdr = look.effect->hdr;
+        effect.binding = look.effect;
+        runner::ResolveShaderTextures(*look.effect, textures_, effect.textures, std::size(effect.textures));
+    }
+    renderer_.setLighting(lighting);
 
     runner::GLint framebuffer = 0;
     runner::GLint viewport[4] = {};

@@ -3,6 +3,7 @@
 #include "AssetInstances.hpp"
 #include "Attributes.hpp"
 #include "Shader.hpp"
+#include "ShaderEffect.hpp"
 #include "ChangeHistoryService.hpp"
 #include "CurveEditModel.hpp"
 #include "CurveJson.hpp"
@@ -430,6 +431,18 @@ bool property_kind_for(const std::string& type_name, PropertyKind& out) {
 
 namespace {
 
+// The live Shader object draws with, whose uniforms are its attributes: a
+// Material's surface Shader or a ShaderEffect's post Shader; null for neither.
+const engine_core::Shader* shader_of_holder(const DataModel& world, const DataModel* object) {
+    if (const auto* material = dynamic_cast<const engine_core::Material*>(object)) {
+        return material->shader(world);
+    }
+    if (const auto* effect = dynamic_cast<const engine_core::ShaderEffect*>(object)) {
+        return effect->shader(world);
+    }
+    return nullptr;
+}
+
 // The registry type a uniform's row edits: its attribute's.
 const char* param_type_name(engine_core::ShaderParamType type) {
     switch (type) {
@@ -635,14 +648,14 @@ PropertySheet read_sheet(DataModel& world, const std::vector<InstanceId>& select
         sheet.rows.push_back(std::move(row));
     }
 
-    // Then the uniforms of the Shader every selected Material draws with, one
-    // row each, set or not; the attributes they cover are not plain rows too.
+    // Then the uniforms of the Shader every selected Material or ShaderEffect
+    // draws with, one row each, set or not; the attributes they cover are not
+    // plain rows too.
     std::vector<std::string> covered;
     {
         const engine_core::Shader* shader = nullptr;
         for (InstanceId id : sheet.ids) {
-            const auto* material = dynamic_cast<const engine_core::Material*>(object_of(world, id));
-            const engine_core::Shader* own = material != nullptr ? material->shader(world) : nullptr;
+            const engine_core::Shader* own = shader_of_holder(world, object_of(world, id));
             if (own == nullptr || (shader != nullptr && own != shader)) {
                 shader = nullptr;
                 break;
@@ -873,9 +886,8 @@ EditResult write_edit(DataModel& world, const std::vector<InstanceId>& ids, cons
             continue;
         }
         if (edit.attribute && edit.shader_param) {
-            // A Material whose Shader declares the uniform, whether it holds it yet or not.
-            const auto* material = dynamic_cast<const engine_core::Material*>(object);
-            const engine_core::Shader* shader = material != nullptr ? material->shader(world) : nullptr;
+            // A Material or ShaderEffect whose Shader declares the uniform, whether it holds it yet or not.
+            const engine_core::Shader* shader = shader_of_holder(world, object);
             const engine_core::ShaderParam* param = nullptr;
             for (const engine_core::ShaderParam& candidate :
                  shader != nullptr ? shader->parse()->params : std::vector<engine_core::ShaderParam>{}) {

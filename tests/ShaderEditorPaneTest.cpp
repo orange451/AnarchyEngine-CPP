@@ -7,6 +7,7 @@
 #include "ScriptRuntime.hpp"
 #include "SelectionService.hpp"
 #include "Shader.hpp"
+#include "ShaderEffect.hpp"
 #include "jadefx/jadefx.hpp"
 
 #include <algorithm>
@@ -55,6 +56,7 @@ struct Rig {
     InstanceId rock = 0;
     std::vector<std::pair<InstanceId, ShaderStage>> edited;
     std::vector<InstanceId> selected;
+    std::vector<std::pair<std::string, bool>> modes;
     std::shared_ptr<ide::IdeShaderEditor> editor;
     std::shared_ptr<jadefx::Scene> scene;
     double time = 0;
@@ -71,7 +73,11 @@ struct Rig {
         ocean = material("Ocean", wave);
         lake = material("Lake", wave);
         rock = material("Rock", 0);
+        open(wave);
+    }
 
+    // The editor on id, in a fresh scene.
+    void open(InstanceId id) {
         ide::ShaderEditorHost host;
         host.set_kind = [this](InstanceId id, ShaderKind kind) {
             dynamic_cast<engine_core::Shader*>(game.instance(id))->set_kind(kind);
@@ -79,7 +85,10 @@ struct Rig {
         host.set_mode = [this](InstanceId id, const char* property, bool on) {
             auto* shader = dynamic_cast<engine_core::Shader*>(game.instance(id));
             const std::string name = property;
-            if (name == "Transparent") {
+            modes.emplace_back(name, on);
+            if (name == "Hdr") {
+                shader->set_hdr(on);
+            } else if (name == "Transparent") {
                 shader->set_transparent(on);
             } else if (name == "TwoSided") {
                 shader->set_two_sided(on);
@@ -96,7 +105,7 @@ struct Rig {
             edited.emplace_back(id, ShaderStage::Vertex);
         };
         host.select = [this](InstanceId id) { selected.push_back(id); };
-        editor = jadefx::make<ide::IdeShaderEditor>(game, wave, std::move(host));
+        editor = jadefx::make<ide::IdeShaderEditor>(game, id, std::move(host));
         editor->setPrefWidthRatio(1);
         editor->setPrefHeightRatio(1);
         scene = jadefx::make<jadefx::Scene>(editor, kWidth, kHeight);
@@ -311,6 +320,45 @@ void preview_controls() {
     Expect(after.first != before.first && after.second != before.second, "a drag across the preview turns it");
 }
 
+// A post Shader: an Hdr toggle in place of the surface modes, the ShaderEffects
+// that use it under Used by, and a preview that draws.
+void post_shader_editor() {
+    Rig rig;
+    engine_core::Shader& fade = rig.game.create<engine_core::Shader>();
+    rig.game.set_name(fade.id(), "Fade");
+    rig.game.set_parent(fade.id(), rig.game.service("Shaders"));
+    fade.set_kind(ShaderKind::Post);
+    fade.set_source("uniform float Strength : range(0, 1) = 0.5;\nvoid post() {\n    COLOR.rgb *= 1.0 - Strength;\n}\n");
+    engine_core::ShaderEffect& vignette = rig.game.create<engine_core::ShaderEffect>();
+    rig.game.set_name(vignette.id(), "Vignette");
+    rig.game.set_parent(vignette.id(), rig.game.scene_service("Lighting"));
+    engine_core::LuaSlot ref;
+    ref.kind = engine_core::LuaSlot::Kind::Instance;
+    ref.id = fade.id();
+    vignette.set_reference(engine_core::ShaderEffect::kShaderReference, ref);
+    Expect(rig.editor->modeToggle("Hdr") == nullptr || !rig.editor->modeToggle("Hdr")->isVisible(),
+           "a surface Shader shows no Hdr toggle");
+    rig.open(fade.id());
+    Expect(rig.editor->uniformNames() == std::vector<std::string>{"Strength"}, "a post Shader lists its uniforms");
+    Expect(rig.editor->usedByNames() == std::vector<std::string>{"Vignette"}, "Used by lists the ShaderEffects that use it");
+    const std::vector<std::string> tagged = texts_under(rig.editor->usedByRow(vignette.id()));
+    Expect(std::find(tagged.begin(), tagged.end(), "ShaderEffect") != tagged.end(), "tagged as a ShaderEffect");
+    rig.click(rig.editor->usedByRow(vignette.id()));
+    Expect(rig.selected == std::vector<InstanceId>{vignette.id()}, "clicking one selects it");
+    jadefx::CheckBox* hdr = rig.editor->modeToggle("Hdr");
+    Expect(hdr != nullptr && hdr->isVisible(), "a post Shader shows the Hdr toggle");
+    Expect(rig.editor->modeToggle("Transparent") == nullptr || !rig.editor->modeToggle("Transparent")->isVisible(),
+           "and none of the surface toggles");
+    if (hdr != nullptr) {
+        Expect(!hdr->isSelected(), "Hdr starts off");
+        rig.click(hdr);
+        rig.frames(2);
+        Expect(rig.modes == std::vector<std::pair<std::string, bool>>{{"Hdr", true}}, "clicking it sets Hdr");
+        Expect(hdr->isSelected(), "and the toggle follows the Shader");
+    }
+    Expect(rig.editor->previewDue(std::chrono::steady_clock::now()), "the preview draws a post Shader too");
+}
+
 void deleted() {
     Rig rig;
     rig.game.destroy(rig.wave);
@@ -325,6 +373,7 @@ int main() {
     stages();
     modes_and_margin();
     uniforms_and_used_by();
+    post_shader_editor();
     preview_controls();
     preview_redraws();
     deleted();

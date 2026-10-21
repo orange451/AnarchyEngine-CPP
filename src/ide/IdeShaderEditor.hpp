@@ -67,7 +67,7 @@ public:
     jadefx::Label* stateLabel() const { return state_.get(); }
     jadefx::Label* stageState(engine_core::ShaderStage stage) const;
     jadefx::Node* stageButton(engine_core::ShaderStage stage) const;
-    // property is "Transparent", "TwoSided", or "CastsShadow".
+    // property is "Transparent", "TwoSided", "CastsShadow", or "Hdr".
     jadefx::CheckBox* modeToggle(const std::string& property) const;
     jadefx::TextField* marginField() const { return margin_.get(); }
     std::vector<std::string> uniformNames() const;
@@ -105,10 +105,19 @@ protected:
         bool transparent = false;
         bool two_sided = false;
         bool casts_shadow = true;
+        bool hdr = false;
         double margin = 1.0;
         std::vector<engine_core::ShaderParam> params;
-        // The Materials using it: id and name, by name.
-        std::vector<std::pair<engine_core::InstanceId, std::string>> users;
+        // What uses it, by name: a Material naming it, or a ShaderEffect.
+        struct User {
+            engine_core::InstanceId id = 0;
+            std::string name;
+            bool effect = false;
+            bool operator==(const User& other) const {
+                return id == other.id && name == other.name && effect == other.effect;
+            }
+        };
+        std::vector<User> users;
     };
     const View& view() const { return view_; }
     engine_core::DataModel& world() const { return world_; }
@@ -153,6 +162,8 @@ private:
     std::shared_ptr<jadefx::CheckBox> transparent_;
     std::shared_ptr<jadefx::CheckBox> two_sided_;
     std::shared_ptr<jadefx::CheckBox> casts_shadow_;
+    std::shared_ptr<jadefx::CheckBox> hdr_;
+    std::shared_ptr<jadefx::Node> margin_row_;
     std::shared_ptr<jadefx::TextField> margin_;
     std::shared_ptr<jadefx::VBox> uniforms_;
     std::shared_ptr<jadefx::VBox> users_;

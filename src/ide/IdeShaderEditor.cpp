@@ -4,6 +4,7 @@
 #include "LockWaits.hpp"
 
 #include "AssetInstances.hpp"
+#include "ShaderEffect.hpp"
 #include "DataModelLock.hpp"
 #include "Shader.hpp"
 #include "SurfaceBinding.hpp"
@@ -348,6 +349,10 @@ IdeShaderEditor::IdeShaderEditor(engine_core::DataModel& world, engine_core::Ins
     toggle("Transparent", "Transparent", transparent_);
     toggle("Two-sided", "TwoSided", two_sided_);
     toggle("Casts shadow", "CastsShadow", casts_shadow_);
+    // A post Shader's one mode, in place of the three.
+    toggle("Before bloom (HDR)", "Hdr", hdr_);
+    jadefx::Tooltip::install(hdr_.get(), jadefx::make<jadefx::Tooltip>(
+                                             "Run on linear light before bloom and the tone map, instead of after"));
     auto margin_row = jadefx::make<jadefx::HBox>();
     margin_row->getClassList().add("se-row");
     margin_row->setAlignment(jadefx::Pos::CenterLeft);
@@ -364,6 +369,7 @@ IdeShaderEditor::IdeShaderEditor(engine_core::DataModel& world, engine_core::Ins
                              jadefx::make<jadefx::Tooltip>("How far the vertex stage may move a vertex, in units"));
     margin_row->getChildren().add(margin_);
     modes->getChildren().add(margin_row);
+    margin_row_ = margin_row;
     modes_card_ = modes;
     left->getChildren().add(modes);
 
@@ -513,7 +519,12 @@ void IdeShaderEditor::renderContent(jadefx::UiRenderer& renderer, float opacity)
     }
     previewDrawn(now);
     MaterialLook look;
-    look.surface = preview_binding_;
+    // A surface Shader on the mesh; a post Shader over the picture of the plain mesh.
+    if (preview_binding_ && preview_binding_->parse && preview_binding_->parse->kind == engine_core::ShaderKind::Post) {
+        look.effect = preview_binding_;
+    } else {
+        look.surface = preview_binding_;
+    }
     ball_->setRoot(world_.resources_root());
     if (preview_mesh_ == PreviewMesh::Mesh) {
         ball_->setMeshPath(preview_path_);
@@ -599,6 +610,9 @@ jadefx::CheckBox* IdeShaderEditor::modeToggle(const std::string& property) const
     if (property == "CastsShadow") {
         return casts_shadow_.get();
     }
+    if (property == "Hdr") {
+        return hdr_.get();
+    }
     return nullptr;
 }
 
@@ -606,8 +620,8 @@ std::vector<std::string> IdeShaderEditor::uniformNames() const { return uniform_
 
 std::vector<std::string> IdeShaderEditor::usedByNames() const {
     std::vector<std::string> out;
-    for (const auto& [id, name] : view_.users) {
-        out.push_back(name);
+    for (const View::User& user : view_.users) {
+        out.push_back(user.name);
     }
     return out;
 }
@@ -672,7 +686,7 @@ void IdeShaderEditor::refresh() {
                       next.fragment_error == view_.fragment_error && next.has_vertex == view_.has_vertex &&
                       next.vertex_lines == view_.vertex_lines && next.fragment_lines == view_.fragment_lines &&
                       next.transparent == view_.transparent && next.two_sided == view_.two_sided &&
-                      next.casts_shadow == view_.casts_shadow && next.margin == view_.margin &&
+                      next.casts_shadow == view_.casts_shadow && next.hdr == view_.hdr && next.margin == view_.margin &&
                       next.users == view_.users && next.params.size() == view_.params.size() &&
                       std::equal(next.params.begin(), next.params.end(), view_.params.begin(),
                                  [](const engine_core::ShaderParam& a, const engine_core::ShaderParam& b) {
@@ -704,26 +718,35 @@ IdeShaderEditor::View IdeShaderEditor::read() const {
     out.transparent = shader->transparent();
     out.two_sided = shader->two_sided();
     out.casts_shadow = shader->casts_shadow();
+    out.hdr = shader->hdr();
     out.margin = shader->displacement_margin();
     out.params = shader->parse()->params;
-    // Every Material naming it, wherever it is under Materials: a post Shader's
-    // too, which draw plain (Material::shader is null for them).
-    std::vector<engine_core::InstanceId> pending{world_.service("Materials")};
+    // Every Material naming it, wherever it is under Materials (a post Shader's
+    // too, which draw plain: Material::shader is null for them), and every
+    // ShaderEffect naming it under Lighting.
+    std::vector<engine_core::InstanceId> pending{world_.service("Materials"), world_.scene_service("Lighting")};
     while (!pending.empty()) {
         const engine_core::InstanceId at = pending.back();
         pending.pop_back();
         for (engine_core::InstanceId child = world_.first_child(at); child != 0; child = world_.next_sibling(child)) {
-            if (const auto* material = dynamic_cast<const engine_core::Material*>(world_.instance(child))) {
-                const engine_core::LuaSlot named = material->reference(engine_core::Material::kShaderReference);
-                if (named.kind == engine_core::LuaSlot::Kind::Instance && named.id == shader_) {
-                    out.users.emplace_back(child, world_.name(child));
-                }
+            const engine_core::DataModel* object = world_.instance(child);
+            const auto* material = dynamic_cast<const engine_core::Material*>(object);
+            const auto* effect = dynamic_cast<const engine_core::ShaderEffect*>(object);
+            engine_core::LuaSlot named;
+            if (material != nullptr) {
+                named = material->reference(engine_core::Material::kShaderReference);
+            } else if (effect != nullptr) {
+                named = effect->reference(engine_core::ShaderEffect::kShaderReference);
+            }
+            if (named.kind == engine_core::LuaSlot::Kind::Instance && named.id == shader_) {
+                out.users.push_back(View::User{child, world_.name(child), effect != nullptr});
             }
             pending.push_back(child);
         }
     }
-    std::sort(out.users.begin(), out.users.end(),
-              [](const auto& a, const auto& b) { return a.second < b.second || (a.second == b.second && a.first < b.first); });
+    std::sort(out.users.begin(), out.users.end(), [](const View::User& a, const View::User& b) {
+        return a.name < b.name || (a.name == b.name && a.id < b.id);
+    });
     return out;
 }
 
@@ -746,12 +769,18 @@ void IdeShaderEditor::show() {
     showing_kind_ = false;
     const bool surface = view_.kind == engine_core::ShaderKind::Surface;
     vertex_.root->setVisible(surface);
-    modes_card_->setVisible(surface);
+    // The surface modes and the margin for a surface Shader; Hdr for a post one.
+    transparent_->setVisible(surface);
+    two_sided_->setVisible(surface);
+    casts_shadow_->setVisible(surface);
+    margin_row_->setVisible(surface);
+    hdr_->setVisible(!surface);
     show_stage(vertex_, engine_core::ShaderStage::Vertex);
     show_stage(fragment_, engine_core::ShaderStage::Fragment);
     transparent_->setSelected(view_.transparent);
     two_sided_->setSelected(view_.two_sided);
     casts_shadow_->setSelected(view_.casts_shadow);
+    hdr_->setSelected(view_.hdr);
     if (!margin_->isFocused()) {
         margin_->setText(number_text(view_.margin));
     }
@@ -806,33 +835,37 @@ void IdeShaderEditor::show_uniforms() {
 void IdeShaderEditor::show_users() {
     users_->getChildren().clear();
     user_rows_.clear();
-    for (const auto& [id, name] : view_.users) {
+    for (const View::User& user : view_.users) {
         auto row = jadefx::make<jadefx::HBox>();
         row->getClassList().add("se-user");
         row->setAlignment(jadefx::Pos::CenterLeft);
         row->setStyle("width: 100%;");
-        row->getChildren().add(text_label(name, "se-name"));
+        row->getChildren().add(text_label(user.name, "se-name"));
         row->getChildren().add(spacer());
-        if (view_.kind == engine_core::ShaderKind::Post) {
-            auto refused = text_label("Can't use post", "se-state-error");
-            jadefx::Tooltip::install(refused.get(), jadefx::make<jadefx::Tooltip>(
-                                                        "A Material can't use a post shader, so it draws plain"));
+        // A holder of the wrong kind keeps the reference and draws nothing.
+        const bool post = view_.kind == engine_core::ShaderKind::Post;
+        if (post != user.effect) {
+            auto refused = text_label(post ? "Can't use post" : "Can't use surface", "se-state-error");
+            jadefx::Tooltip::install(refused.get(),
+                                     jadefx::make<jadefx::Tooltip>(
+                                         post ? "A Material can't use a post shader, so it draws plain"
+                                              : "A ShaderEffect can't use a surface shader, so it draws nothing"));
             row->getChildren().add(refused);
         } else {
-            row->getChildren().add(text_label("Material", "se-muted"));
+            row->getChildren().add(text_label(user.effect ? "ShaderEffect" : "Material", "se-muted"));
         }
         row->setCursor(jadefx::Cursor::Pointer);
-        const engine_core::InstanceId material = id;
+        const engine_core::InstanceId material = user.id;
         row->setOnMouseClicked([this, material](const jadefx::MouseEvent& event) {
             if (event.button == 0 && host_.select) {
                 host_.select(material);
             }
         });
         users_->getChildren().add(row);
-        user_rows_.emplace_back(id, row);
+        user_rows_.emplace_back(user.id, row);
     }
     if (view_.users.empty()) {
-        users_->getChildren().add(text_label("No Material uses it yet", "se-muted"));
+        users_->getChildren().add(text_label(view_.kind == engine_core::ShaderKind::Post ? "No ShaderEffect uses it yet" : "No Material uses it yet", "se-muted"));
     }
 }
 

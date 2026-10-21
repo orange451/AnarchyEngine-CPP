@@ -8,6 +8,7 @@
 
 #include "AssetInstances.hpp"
 #include "Shader.hpp"
+#include "ShaderEffect.hpp"
 #include "Camera.hpp"
 #include "CollisionGroups.hpp"
 #include "Constraint.hpp"
@@ -2647,6 +2648,63 @@ void TestShaderParamRows() {
     Expect(row_named(ide::read_sheet(rig.game, {material->id()}), "EdgeColor") == nullptr, "clearing the Shader clears them");
 }
 
+// A ShaderEffect's uniform rows are its post Shader's, written as its attributes,
+// as a Material's are; a Material and a ShaderEffect together show none.
+void TestShaderEffectParamRows() {
+    engine_core::set_thread_role(engine_core::ThreadRole::Simulation);
+    Rig rig;
+    engine_core::Shader& fade = rig.game.create<engine_core::Shader>();
+    rig.game.set_name(fade.id(), "Fade");
+    rig.game.set_parent(fade.id(), rig.game.service("Shaders"));
+    fade.set_kind(engine_core::ShaderKind::Post);
+    fade.set_source("uniform float Strength : range(0, 1) = 0.5;\nuniform vec3 Tint : color = vec3(1.0);\n"
+                    "void post() {\n    COLOR.rgb *= Tint * (1.0 - Strength);\n}\n");
+    engine_core::ShaderEffect& vignette = rig.game.create<engine_core::ShaderEffect>();
+    rig.game.set_name(vignette.id(), "Vignette");
+    rig.game.set_parent(vignette.id(), rig.game.scene_service("Lighting"));
+    engine_core::LuaSlot ref;
+    ref.kind = engine_core::LuaSlot::Kind::Instance;
+    ref.id = fade.id();
+    vignette.set_reference(engine_core::ShaderEffect::kShaderReference, ref);
+    rig.game.history().reset_waypoints();
+    const auto row_named = [](const ide::PropertySheet& sheet, const std::string& name) -> const ide::PropertyRow* {
+        for (const ide::PropertyRow& row : sheet.rows) {
+            if (row.shader_param && row.name == name) {
+                return &row;
+            }
+        }
+        return nullptr;
+    };
+    ide::PropertySheet sheet = ide::read_sheet(rig.game, {vignette.id()});
+    const ide::PropertyRow* strength = row_named(sheet, "Strength");
+    Expect(strength != nullptr && strength->group == "Fade" && strength->kind == ide::PropertyKind::Number &&
+               strength->slider_min == 0 && strength->slider_max == 1 && strength->defaulted &&
+               strength->value.number == 0.5,
+           "a ShaderEffect's Strength is a defaulted 0..1 slider under its Shader's name");
+    const ide::PropertyRow* tint = row_named(sheet, "Tint");
+    Expect(tint != nullptr && tint->kind == ide::PropertyKind::Color3 && tint->defaulted, "and Tint a color");
+    ide::PropertyEdit edit;
+    edit.property = "Strength";
+    edit.kind = ide::PropertyKind::Number;
+    edit.value.number = 0.8;
+    edit.attribute = true;
+    edit.shader_param = true;
+    const ide::EditResult wrote = ide::apply_edit(rig.game, {vignette.id()}, edit);
+    Expect(wrote.written == 1 && vignette.attribute("Strength").number == 0.8, "a write sets the effect's attribute");
+    sheet = ide::read_sheet(rig.game, {vignette.id()});
+    Expect(row_named(sheet, "Strength") != nullptr && !row_named(sheet, "Strength")->defaulted,
+           "a set uniform is no longer defaulted");
+    // A Material drawing with another Shader, selected with it: no shared Shader, no rows.
+    auto* material = dynamic_cast<engine_core::Material*>(
+        rig.game.instance(MakeAsset(rig.game, "Material", "Brick", rig.game.service("Materials"))));
+    Expect(row_named(ide::read_sheet(rig.game, {vignette.id(), material->id()}), "Strength") == nullptr,
+           "a Material and a ShaderEffect together show no uniform rows");
+    // Its Shader turned Surface: the effect draws nothing, and has no rows.
+    fade.set_kind(engine_core::ShaderKind::Surface);
+    Expect(row_named(ide::read_sheet(rig.game, {vignette.id()}), "Strength") == nullptr,
+           "a surface Shader on a ShaderEffect gives it no rows");
+}
+
 void TestShaderParamPanel() {
     engine_core::set_thread_role(engine_core::ThreadRole::Simulation);
     Rig rig;
@@ -2775,6 +2833,7 @@ int main() {
     TestAttributeAddRemove();
     TestAttributesPanel();
     TestShaderParamRows();
+    TestShaderEffectParamRows();
     TestShaderParamPanel();
     TestShaderTextsHaveNoRows();
     if (gFailures == 0) {

@@ -174,9 +174,12 @@ void Shader::set_compile_error(std::uint64_t version, ShaderStage stage, std::st
 }
 
 std::string Shader::prepare_source(int stage, std::string text) {
-    // Phase 1's `shader X;` and `render_mode` lines: read, applied, and taken out.
-    const ShaderStage which = stage == kVertexStage ? ShaderStage::Vertex : ShaderStage::Fragment;
-    const ShaderParse peek = parse_shader(text, which, kind_);
+    // Phase 1's `shader X;` and `render_mode` lines: read, applied, and taken
+    // out. Only the fragment stage's: in the vertex stage they are its error.
+    if (stage != kFragmentStage) {
+        return text;
+    }
+    const ShaderParse peek = parse_shader(text, ShaderStage::Fragment, kind_);
     if (peek.header_spans.empty()) {
         return text;
     }

@@ -957,3 +957,19 @@ TEST_CASE("SHA30 a post Shader builds without its vertex text, which it never us
     REQUIRE_FALSE(shader.set_kind(ShaderKind::Surface));
     REQUIRE(shader.vertex_error() == "1: a vertex stage needs void vertex()");
 }
+
+TEST_CASE("SHA31 header and render_mode lines count only in the fragment stage", "[shader]") {
+    SimRole role;
+    engine_core::Game game;
+    Shader& shader = add_shader(game, "Look");
+    const std::string headed = "shader post;\nvoid vertex() {}\n";
+    shader.set_vertex_source(headed);
+    REQUIRE(shader.kind() == ShaderKind::Surface);
+    REQUIRE(shader.vertex_source() == headed);
+    REQUIRE(shader.vertex_error() == "1: the shader line belongs in the fragment stage");
+    const std::string moded = "render_mode transparent;\nvoid vertex() {}\n";
+    shader.set_vertex_source(moded);
+    REQUIRE(!shader.transparent());
+    REQUIRE(shader.vertex_source() == moded);
+    REQUIRE(shader.vertex_error() == "1: render_mode belongs in the fragment stage");
+}

@@ -83,7 +83,7 @@ struct ShaderParse {
 // uniform inside `#if 0` still counts. With kind given, the header line is
 // optional (it sets header_kind when present); without, the text must start
 // with one, as phase 1 read it. A vertex stage needs void vertex() and takes
-// no render_mode.
+// no `shader` line or render_mode.
 ShaderParse parse_shader(std::string_view source, ShaderStage stage = ShaderStage::Fragment,
                          std::optional<ShaderKind> kind = std::nullopt);
 

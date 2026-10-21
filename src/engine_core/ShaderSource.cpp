@@ -239,6 +239,9 @@ public:
     ShaderParse run() {
         const std::vector<Statement> all = statements(masked_);
         const bool headed = !all.empty() && header(all.front());
+        if (headed && out_.stage == ShaderStage::Vertex) {
+            return fail(line_of(all.front().begin), "the shader line belongs in the fragment stage");
+        }
         if (header_required_ && !headed) {
             return fail(all.empty() ? 1 : line_of(all.front().begin), std::string(kHeaderMessage));
         }

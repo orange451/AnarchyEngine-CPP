@@ -40,6 +40,7 @@ inline int class_rank(std::string_view class_name) {
         {"Atmosphere", 7},
         {"BloomEffect", 7},
         {"ScreenSpaceReflections", 7},
+        {"ShaderEffect", 7},
         {"DirectionalLight", 8},
         {"PointLight", 8},
         {"SpotLight", 8},

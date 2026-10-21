@@ -1403,6 +1403,14 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
         "The brightness where bloom starts, from 0 to 10, fading in just below it. 0 blooms everything a little; "
         "above 1, only light brighter than white, such as a glowing Material or the sun in an .hdr sky.",
         "number", false, {});
+    add("ShaderEffect", "Enabled", "When false, this ShaderEffect draws nothing.", "boolean", false, {});
+    add("ShaderEffect", "Shader",
+        "The post Shader drawn over the finished frame, or nil. Its uniforms are the effect's attributes; a surface "
+        "shader is refused.",
+        "Shader?", false, {});
+    add("ShaderEffect", "Order",
+        "Where it runs among Lighting's ShaderEffects: lowest first, equal Orders in tree order. Any finite number.",
+        "number", false, {});
     add("Atmosphere", "Enabled", "When false, this Atmosphere draws no air.", "boolean", false, {});
     add("Atmosphere", "Density",
         "How thick the air is at BaseHeight, from 0 to 1. Distant surfaces fade into it; 0 draws no air.", "number",

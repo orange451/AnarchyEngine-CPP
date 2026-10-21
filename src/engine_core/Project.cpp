@@ -13,6 +13,7 @@
 #include "Bone.hpp"
 #include "Atmosphere.hpp"
 #include "BloomEffect.hpp"
+#include "ShaderEffect.hpp"
 #include "Camera.hpp"
 #include "ChangeHistoryService.hpp"
 #include "Containment.hpp"
@@ -280,6 +281,7 @@ std::vector<ClassEntry>& class_registry() {
         out.push_back({"Skybox", [](DataModel& world) -> DataModel& { return world.create<Skybox>(); }});
         out.push_back({"DynamicSky", [](DataModel& world) -> DataModel& { return world.create<DynamicSky>(); }});
         out.push_back({"BloomEffect", [](DataModel& world) -> DataModel& { return world.create<BloomEffect>(); }});
+        out.push_back({"ShaderEffect", [](DataModel& world) -> DataModel& { return world.create<ShaderEffect>(); }});
         out.push_back({"Atmosphere", [](DataModel& world) -> DataModel& { return world.create<Atmosphere>(); }});
         out.push_back({"ScreenSpaceReflections",
                        [](DataModel& world) -> DataModel& { return world.create<ScreenSpaceReflections>(); }});

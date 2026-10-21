@@ -674,6 +674,7 @@ add_library(engine_instances STATIC
     src/engine_instances/PhysicsObject.cpp
     src/engine_instances/PlayerController.cpp
     src/engine_instances/BloomEffect.cpp
+    src/engine_instances/ShaderEffect.cpp
     src/engine_instances/Atmosphere.cpp
     src/engine_instances/ScreenSpaceReflections.cpp
     src/engine_instances/AmbientOcclusionEffect.cpp
@@ -1224,6 +1225,7 @@ add_executable(sandbox
     sandbox/skybox_tests.cpp
     sandbox/dynamic_sky_tests.cpp
     sandbox/bloom_tests.cpp
+    sandbox/shader_effect_tests.cpp
     sandbox/atmosphere_tests.cpp
     sandbox/value_tests.cpp
     sandbox/curve_tests.cpp

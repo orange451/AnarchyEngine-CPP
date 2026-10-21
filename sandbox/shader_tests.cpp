@@ -1023,3 +1023,46 @@ TEST_CASE("SHA34 FragmentSource fires Changed beside Source, as VertexSource doe
     game.events().drain();
     REQUIRE(changed == std::vector<std::string>{"Source", "FragmentSource", "VertexSource"});
 }
+
+TEST_CASE("SHA35 a phase 1 Shader file, header lines and no Kind in its json, loads as it meant", "[shader][project]") {
+    SimRole role;
+    TempDir dir;
+    std::string glass_guid;
+    std::string fade_guid;
+    {
+        engine_core::Game game;
+        Project project = Project::create(dir.path, game);
+        Shader& glass = add_shader(game, "Glass");
+        Shader& fade = add_shader(game, "Fade");
+        glass_guid = game.guid(glass.id());
+        fade_guid = game.guid(fade.id());
+        project.save();
+        // As phase 1 wrote them: the header lines in the .glsl, and only class, id, and Name in the json.
+        const auto phase1 = [&](InstanceId id, const std::string& guid, const char* name, const char* text) {
+            std::ofstream(dir.path / leaf(game, id, ".meta.json"), std::ios::binary | std::ios::trunc)
+                << "{\n  \"class\": \"Shader\",\n  \"id\": \"" << guid << "\",\n  \"Name\": \"" << name << "\"\n}\n";
+            std::ofstream(dir.path / leaf(game, id, ".glsl"), std::ios::binary | std::ios::trunc) << text;
+        };
+        phase1(glass.id(), glass_guid, "Glass",
+               "shader surface;\nrender_mode transparent;\nvoid surface() {\n    ALPHA = 0.5;\n}\n");
+        phase1(fade.id(), fade_guid, "Fade", kVignette);
+        REQUIRE(read_text(dir.path / leaf(game, glass.id(), ".meta.json")).find("Kind") == std::string::npos);
+    }
+    engine_core::Game game;
+    Project read = Project::load(dir.path, game);
+    const auto* glass = dynamic_cast<const Shader*>(game.instance(*game.find_guid(glass_guid)));
+    const auto* fade = dynamic_cast<const Shader*>(game.instance(*game.find_guid(fade_guid)));
+    REQUIRE(glass != nullptr);
+    REQUIRE(fade != nullptr);
+    REQUIRE(glass->kind() == ShaderKind::Surface);
+    REQUIRE(glass->transparent());
+    REQUIRE(!glass->two_sided());
+    REQUIRE(glass->casts_shadow());
+    REQUIRE(glass->source() == std::string(15, ' ') + "\n" + std::string(24, ' ') + "\nvoid surface() {\n    ALPHA = 0.5;\n}\n");
+    REQUIRE(!glass->has_vertex_stage());
+    REQUIRE(glass->error().empty());
+    REQUIRE(fade->kind() == ShaderKind::Post);
+    REQUIRE(fade->source() == stored(kVignette));
+    REQUIRE(!fade->has_vertex_stage());
+    REQUIRE(fade->error().empty());
+}

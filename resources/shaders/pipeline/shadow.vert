@@ -7,6 +7,10 @@
 // Built with VERTEX_SHADER, a Material's Shader's vertex stage
 // (vertex_shader.glsl) moves each vertex as the G-buffer pass moves it.
 layout (location = 0) in vec3 aPosition;
+#ifdef VERTEX_SHADER
+// The vertex stage reads NORMAL, as in the G-buffer pass.
+layout (location = 1) in vec3 aNormal;
+#endif
 #if defined(CUTOUT) || defined(SURFACE_SHADER) || defined(VERTEX_SHADER)
 layout (location = 2) in vec2 aUv;
 #endif
@@ -58,10 +62,12 @@ void main() {
 #if defined(CUTOUT) || defined(SURFACE_SHADER)
     vUv = aUv;
 #endif
-    vec4 world = aModel * (skin() * vec4(aPosition, 1.0));
+    mat4 skinning = skin();
+    vec4 world = aModel * (skinning * vec4(aPosition, 1.0));
 #ifdef VERTEX_SHADER
     vec3 moved = world.xyz;
-    vec3 facing = vec3(0.0, 1.0, 0.0);
+    // The normal matrix geometry.vert is given, worked out here: casters carry none.
+    vec3 facing = transpose(inverse(mat3(aModel))) * (mat3(skinning) * aNormal);
     runVertexShader(moved, facing, aUv, aColor);
     world = vec4(moved, 1.0);
 #endif

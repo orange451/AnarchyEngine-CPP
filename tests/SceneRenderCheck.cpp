@@ -2759,6 +2759,14 @@ void CheckSurfaceShadows(const GpuMesh* cube, int size, int fbWidth, int fbHeigh
            "surface shadows: a cube lifted by its vertex stage shadows elsewhere (" + std::to_string(seen[0]) + ", " +
                std::to_string(seen[1]) + ")");
 
+    // NORMAL in the shadow pass is the vertex's own: the top raised and the bottom
+    // lowered along it, the cube's sides stay where they were, and so does their shadow.
+    spot.id = 49;
+    scene[0].surface = SurfaceFor(9209, 1, plainSurface, {}, "void vertex() {\n    VERTEX.y += 2.0 * NORMAL.y;\n}\n", 2.f);
+    seen = lit(spot);
+    Expect(seen[0] < middleBack,
+           "surface shadows: a cube stretched along NORMAL keeps its shadow (" + std::to_string(seen[0]) + ")");
+
     // A vertex stage that reads TIME draws its cached map every frame; one that does not, once.
     spot.id = 46;
     scene[0].surface = SurfaceFor(9207, 1, plainSurface, {}, "void vertex() {\n    VERTEX.y += 0.1 * sin(TIME);\n}\n");

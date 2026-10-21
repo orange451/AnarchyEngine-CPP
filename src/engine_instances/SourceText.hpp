@@ -23,7 +23,7 @@ public:
 
     int stage_count() const { return 1 + static_cast<int>(more_stages_.size()); }
     // SimulationThread. Records undo and fires Changed for Source (stage 0)
-    // or VertexSource (stage 1).
+    // or VertexSource (stage 1), then for the stage's source_alias.
     void set_source(std::string source) { set_source(0, std::move(source)); }
     void set_source(int stage, std::string source);
     const std::string& source() const { return source_; }
@@ -34,6 +34,12 @@ public:
     std::uint64_t source_version() const { return source_version_; }
     // The stage's file extension without its dot: "luau", "glsl", "vert.glsl".
     virtual const char* source_extension(int stage = 0) const = 0;
+    // Another property name a stage's text goes by, which fires Changed with
+    // it, or null: a Shader's FragmentSource is its Source.
+    virtual const char* source_alias(int stage) const {
+        (void)stage;
+        return nullptr;
+    }
 
     // Edit, then the actions every instance has. Edit is the double-click.
     void context_actions(std::vector<ContextAction>& out) const override;

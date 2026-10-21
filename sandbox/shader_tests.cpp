@@ -105,13 +105,13 @@ TEST_CASE("SHA2 Source sets Kind and Error, and each fires Changed once", "[shad
     game.events().drain();
     REQUIRE(shader.kind() == ShaderKind::Post);
     REQUIRE(shader.error().empty());
-    REQUIRE(changed == std::vector<std::string>{"Kind", "Source"});
+    REQUIRE(changed == std::vector<std::string>{"Kind", "Source", "FragmentSource"});
     changed.clear();
     shader.set_source(kBadHint);
     game.events().drain();
     REQUIRE(shader.kind() == ShaderKind::Surface);
     REQUIRE(shader.error() == "fragment 4: unknown hint glow");
-    REQUIRE(changed == std::vector<std::string>{"Kind", "Source", "Error", "FragmentError"});
+    REQUIRE(changed == std::vector<std::string>{"Kind", "Source", "FragmentSource", "Error", "FragmentError"});
 }
 
 TEST_CASE("SHA3 a Shader lives in Assets.Shaders and nowhere else", "[shader]") {
@@ -1003,4 +1003,23 @@ TEST_CASE("SHA33 reading a stage leaves the others where they are", "[shader]") 
     REQUIRE(held.source(7).empty());
     REQUIRE(vertex == &held.source(Shader::kVertexStage));
     REQUIRE(held.stage_count() == 2);
+}
+
+TEST_CASE("SHA34 FragmentSource fires Changed beside Source, as VertexSource does", "[shader]") {
+    SimRole role;
+    engine_core::Game game;
+    Shader& shader = add_shader(game, "Look");
+    std::vector<std::string> changed;
+    game.changed(shader.id()).connect([&](InstanceId, engine_core::Field field) {
+        if (field != engine_core::Field::Reflected) {
+            changed.push_back(field == engine_core::Field::Source ? "Source" : "VertexSource");
+            return;
+        }
+        const char* name = engine_core::lua_property_name(static_cast<std::uint32_t>(game.events().payload()));
+        changed.push_back(name != nullptr ? name : "");
+    });
+    shader.set_source("void surface() {}\n");
+    shader.set_vertex_source(kLift);
+    game.events().drain();
+    REQUIRE(changed == std::vector<std::string>{"Source", "FragmentSource", "VertexSource"});
 }

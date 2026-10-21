@@ -51,6 +51,9 @@ void SourceText::set_source(int stage, std::string source) {
     const Field field = stage == 0 ? Field::Source : Field::VertexSource;
     record_string(id(), field, previous, text);
     emit_own(field);
+    if (const char* alias = source_alias(stage)) {
+        emit_property(alias);
+    }
     on_source_changed(stage);
 }
 

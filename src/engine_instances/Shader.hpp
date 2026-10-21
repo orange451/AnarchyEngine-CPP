@@ -48,6 +48,7 @@ public:
     Shader(DataModel::ChildTag tag, DataModel::State& state, InstanceId id);
     const char* class_name() const override;
     const char* source_extension(int stage = 0) const override { return stage == kVertexStage ? "vert.glsl" : "glsl"; }
+    const char* source_alias(int stage) const override { return stage == kFragmentStage ? "FragmentSource" : nullptr; }
     const std::string& vertex_source() const { return source(kVertexStage); }
     void set_vertex_source(std::string text) { set_source(kVertexStage, std::move(text)); }
     // The vertex text is not empty.

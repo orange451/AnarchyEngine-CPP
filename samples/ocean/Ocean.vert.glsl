@@ -1,7 +1,7 @@
 // The Ocean's vertex stage: moves the sea mesh by the swells, every frame.
 // The waves are afl_ext's "Very fast procedural ocean" (afl_ext 2017-2024,
-// MIT License): a sum of sharp sine waves, each dragging the next. The
-// fragment stage sums more of them for the ripples.
+// MIT License, its notice at the end): a sum of sharp sine waves, each
+// dragging the next. The fragment stage sums more of them for the ripples.
 
 group Waves;
 uniform float WaveHeight : range(0, 5) = 2.0;
@@ -56,3 +56,27 @@ void vertex() {
     VERTEX.y += lift * (h - 0.5);
     NORMAL = normalize(vec3((h - hx) * lift, e, (h - hz) * lift));
 }
+
+// The wave functions above are afl_ext's, under this notice:
+//
+// MIT License
+//
+// Copyright (c) 2017-2024 afl_ext
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in all
+// copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.

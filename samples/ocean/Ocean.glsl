@@ -1,7 +1,8 @@
 // The Ocean's look. The same waves as the vertex stage (afl_ext's "Very fast
-// procedural ocean", afl_ext 2017-2024, MIT License), summed to
-// DetailOctaves for the ripples' normal, which smooths toward flat with
-// distance so the far sea does not shimmer. The sky it mirrors is the scene's.
+// procedural ocean", afl_ext 2017-2024, MIT License, its notice at the end),
+// summed to DetailOctaves for the ripples' normal, which smooths toward flat
+// with distance so the far sea does not shimmer. The sky it mirrors is the
+// scene's.
 
 group Waves;
 uniform float WaveHeight : range(0, 5) = 2.0;
@@ -71,3 +72,27 @@ void surface() {
     REFLECTIVITY = 1.0;
     EMISSIVE = ShallowColor * Scatter * 0.25 * (0.2 + h) * h;
 }
+
+// The wave functions above are afl_ext's, under this notice:
+//
+// MIT License
+//
+// Copyright (c) 2017-2024 afl_ext
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in all
+// copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.

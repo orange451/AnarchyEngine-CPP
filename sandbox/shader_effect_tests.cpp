@@ -20,6 +20,9 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <cmath>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <optional>
 #include <string>
 
@@ -232,4 +235,19 @@ TEST_CASE("SFX5 the snapshot carries every ShaderEffect with a post Shader, in O
     fade.set_source("void post() {}\n");
     frame();
     REQUIRE(pump.front().effects[0].binding != kept);
+}
+
+TEST_CASE("SFX6 the post samples parse as post Shaders with no error", "[shader-effect]") {
+    const std::filesystem::path folder = std::filesystem::path(__FILE__).parent_path().parent_path() / "samples" / "post";
+    for (const char* name : {"Vignette.glsl", "DepthFog.glsl"}) {
+        INFO(name);
+        std::ifstream in(folder / name, std::ios::binary);
+        REQUIRE(in);
+        const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        const engine_core::ShaderParse parse =
+            engine_core::parse_shader(text, engine_core::ShaderStage::Fragment, ShaderKind::Post);
+        REQUIRE(!parse.error);
+        REQUIRE(parse.kind == ShaderKind::Post);
+        REQUIRE(!parse.params.empty());
+    }
 }

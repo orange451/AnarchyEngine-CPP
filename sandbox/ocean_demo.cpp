@@ -1,5 +1,6 @@
 // Writes the Ocean sample project: a sea mesh drawn with samples/ocean's
-// Shader, whose vertex stage moves it every frame. Run by hand:
+// Shader, whose vertex stage moves it every frame, under samples/post's fog
+// and vignette as ShaderEffects. Run by hand:
 //     OCEAN_DEMO=<empty folder> sandbox "[.ocean-demo]"
 
 #include "support.hpp"
@@ -12,6 +13,7 @@
 #include "MeshShapes.hpp"
 #include "Project.hpp"
 #include "Shader.hpp"
+#include "ShaderEffect.hpp"
 #include "amesh.hpp"
 #include "brush/BrushGeometry.hpp"
 
@@ -31,8 +33,8 @@ namespace {
 
 using engine_core::InstanceId;
 
-std::string read_sample(const char* name) {
-    const std::filesystem::path file = std::filesystem::path(__FILE__).parent_path().parent_path() / "samples" / "ocean" / name;
+std::string read_sample(const char* name, const char* folder = "ocean") {
+    const std::filesystem::path file = std::filesystem::path(__FILE__).parent_path().parent_path() / "samples" / folder / name;
     std::ifstream in(file, std::ios::binary);
     REQUIRE(in);
     return std::string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
@@ -92,6 +94,43 @@ TEST_CASE("the Ocean sample project", "[.ocean-demo]") {
     REQUIRE_FALSE(shader.set_casts_shadow(false));
     REQUIRE_FALSE(shader.set_displacement_margin(3.0));
     REQUIRE(shader.error().empty());
+
+    // The post Shaders over the frame: fog on linear light before bloom, then a vignette after the tone map.
+    const auto post_shader = [&](const char* name, const char* file, bool hdr) -> engine_core::Shader& {
+        engine_core::Shader& made = game.create<engine_core::Shader>();
+        game.set_name(made.id(), name);
+        game.set_parent(made.id(), game.service("Shaders"));
+        REQUIRE_FALSE(made.set_kind(engine_core::ShaderKind::Post));
+        REQUIRE_FALSE(made.set_hdr(hdr));
+        made.set_source(read_sample(file, "post"));
+        REQUIRE(made.error().empty());
+        return made;
+    };
+    const auto effect = [&](const char* name, engine_core::Shader& look, double order) -> engine_core::ShaderEffect& {
+        engine_core::ShaderEffect& made = game.create<engine_core::ShaderEffect>();
+        game.set_name(made.id(), name);
+        game.set_parent(made.id(), game.scene_service("Lighting"));
+        REQUIRE_FALSE(made.set_reference(engine_core::ShaderEffect::kShaderReference, id_of(look.id())));
+        REQUIRE_FALSE(made.set_order(order));
+        return made;
+    };
+    engine_core::Shader& fog_shader = post_shader("DepthFog", "DepthFog.glsl", true);
+    engine_core::Shader& vignette_shader = post_shader("Vignette", "Vignette.glsl", false);
+    engine_core::ShaderEffect& fog = effect("Fog", fog_shader, 0.0);
+    engine_core::ShaderEffect& vignette = effect("Vignette", vignette_shader, 1.0);
+    // The sunset's own color, thin: the far sea fades into the glow.
+    engine_core::LuaSlot fog_color;
+    fog_color.kind = engine_core::LuaSlot::Kind::Color;
+    fog_color.color = {0.95f, 0.62f, 0.42f, 1.f};
+    REQUIRE_FALSE(fog.set_attribute("FogColor", fog_color));
+    engine_core::LuaSlot density;
+    density.kind = engine_core::LuaSlot::Kind::Number;
+    density.number = 0.004;
+    REQUIRE_FALSE(fog.set_attribute("Density", density));
+    engine_core::LuaSlot strength;
+    strength.kind = engine_core::LuaSlot::Kind::Number;
+    strength.number = 0.4;
+    REQUIRE_FALSE(vignette.set_attribute("Strength", strength));
 
     engine_core::Material& water = game.create<engine_core::Material>();
     game.set_name(water.id(), "Ocean");

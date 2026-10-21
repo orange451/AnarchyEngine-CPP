@@ -5,7 +5,7 @@
 #include "ide/IdeAssets.hpp"
 #include "ide/IdeLayout.hpp"
 #include "ide/IdeProblems.hpp"
-#include "ide/IdeShaderEditor.hpp"
+#include "ide/IdeShaderText.hpp"
 
 #include "DataModel.hpp"
 #include "Engine.hpp"
@@ -31,13 +31,41 @@ void Expect(bool condition, const char* message) {
 
 constexpr const char* kBadHint = "shader surface;\n\n// glow is not a hint\nuniform float Shine : glow;\n\nvoid surface() {}\n";
 
-ide::IdeShaderEditor* EditorFor(jadefx::Scene& scene, engine_core::InstanceId id) {
+ide::IdeShaderText* EditorFor(jadefx::Scene& scene, engine_core::InstanceId id,
+                              engine_core::ShaderStage stage = engine_core::ShaderStage::Fragment) {
     for (jadefx::Node* area : scene.getElementsByClassName("ide-script")) {
         for (jadefx::Node* node = area; node != nullptr; node = node->getParent()) {
-            auto* editor = dynamic_cast<ide::IdeShaderEditor*>(node);
-            if (editor != nullptr && editor->instanceId() == id) {
+            auto* editor = dynamic_cast<ide::IdeShaderText*>(node);
+            if (editor != nullptr && editor->instanceId() == id && editor->stage() == stage) {
                 return editor;
             }
+        }
+    }
+    return nullptr;
+}
+
+// Closes editor's tab, so the Scene View's tab is in front for the tests after.
+void CloseEditor(ide::IdeShaderText* editor) {
+    for (jadefx::Node* node = editor; node != nullptr; node = node->getParent()) {
+        if (auto* dock = dynamic_cast<ide::IdeDock*>(node)) {
+            std::shared_ptr<jadefx::Tab> found;
+            for (const std::shared_ptr<jadefx::Tab>& tab : dock->tabs()->getTabs().items()) {
+                if (tab && tab->getContent() == editor) {
+                    found = tab;
+                }
+            }
+            if (found) {
+                dock->tabs()->close(found);
+            }
+            break;
+        }
+    }
+}
+
+jadefx::CodeArea* CodeOf(jadefx::Scene& scene, ide::IdeShaderText* editor) {
+    for (jadefx::Node* node : scene.getElementsByClassName("ide-script")) {
+        if (node->getParent() == editor) {
+            return dynamic_cast<jadefx::CodeArea*>(node);
         }
     }
     return nullptr;
@@ -47,7 +75,7 @@ int CountEditors(jadefx::Scene& scene, engine_core::InstanceId id) {
     int count = 0;
     for (jadefx::Node* area : scene.getElementsByClassName("ide-script")) {
         for (jadefx::Node* node = area; node != nullptr; node = node->getParent()) {
-            auto* editor = dynamic_cast<ide::IdeShaderEditor*>(node);
+            auto* editor = dynamic_cast<ide::IdeShaderText*>(node);
             if (editor != nullptr && editor->instanceId() == id) {
                 ++count;
                 break;
@@ -129,7 +157,7 @@ void TestShaderTab(ide::IdeLayout& layout, jadefx::Scene& scene) {
         frame();
     };
     edit();
-    ide::IdeShaderEditor* editor = EditorFor(scene, id);
+    ide::IdeShaderText* editor = EditorFor(scene, id);
     Expect(editor != nullptr, "Edit opens a shader editor");
     if (editor == nullptr) {
         return;
@@ -253,7 +281,7 @@ void TestProblemOpensShader(ide::IdeLayout& layout, jadefx::Scene& scene) {
     }
     frame();
     frame();
-    ide::IdeShaderEditor* editor = EditorFor(scene, id);
+    ide::IdeShaderText* editor = EditorFor(scene, id);
     Expect(editor != nullptr, "opening the problem opens the shader editor");
     if (editor == nullptr) {
         return;
@@ -345,7 +373,7 @@ void TestFindReplace(ide::IdeLayout& layout, jadefx::Scene& scene) {
     }
     frame();
     frame();
-    ide::IdeShaderEditor* editor = EditorFor(scene, id);
+    ide::IdeShaderText* editor = EditorFor(scene, id);
     Expect(editor != nullptr, "the shader opens for find");
     if (editor == nullptr) {
         return;
@@ -478,7 +506,7 @@ void TestCompileErrorReachesShader(ide::IdeLayout& layout, jadefx::Scene& scene)
     }
     frame();
     frame();
-    ide::IdeShaderEditor* editor = EditorFor(scene, id);
+    ide::IdeShaderText* editor = EditorFor(scene, id);
     Expect(editor != nullptr && editor->errorLine() == 4, "the shader editor marks the compile error's line");
     // Close it, so the Scene View's tab is in front for the tests after this one.
     for (jadefx::Node* node = editor; node != nullptr; node = node->getParent()) {
@@ -499,6 +527,136 @@ void TestCompileErrorReachesShader(ide::IdeLayout& layout, jadefx::Scene& scene)
     frame();
 }
 
+// Each stage of a Shader opens in a tab of its own, named after its file.
+void TestStageTabs(ide::IdeLayout& layout, jadefx::Scene& scene) {
+    engine_core::Engine& engine = layout.simulation();
+    double time = 100.0;
+    auto frame = [&] {
+        scene.layout(1280, 800, time);
+        time += 0.05;
+    };
+    engine_core::InstanceId id = 0;
+    engine.on_simulation([&](engine_core::DataModel& game) {
+        engine_core::Shader& shader = game.create<engine_core::Shader>();
+        game.set_name(shader.id(), "Look");
+        game.set_parent(shader.id(), game.service("Shaders"));
+        shader.set_vertex_source(engine_core::kShaderVertexStarterSource);
+        id = shader.id();
+    });
+    layout.edit_shader_text(id, engine_core::ShaderStage::Vertex);
+    frame();
+    frame();
+    ide::IdeShaderText* vertex = EditorFor(scene, id, engine_core::ShaderStage::Vertex);
+    Expect(vertex != nullptr, "the vertex stage opens in a text editor");
+    if (vertex == nullptr) {
+        return;
+    }
+    Expect(vertex->title() == "Look.vert.glsl", "the vertex tab is titled <Name>.vert.glsl");
+    Expect(vertex->text() == engine_core::kShaderVertexStarterSource, "it shows the vertex text");
+    jadefx::CodeArea* code = CodeOf(scene, vertex);
+    Expect(code != nullptr, "the vertex editor holds a code area");
+    if (code != nullptr) {
+        code->setText("void vertex() {\n    VERTEX.y += 1.0;\n}\n");
+        vertex->flush();
+        frame();
+        frame();
+        std::string written;
+        std::string fragment;
+        engine.on_simulation([&](engine_core::DataModel& game) {
+            if (auto* shader = dynamic_cast<engine_core::Shader*>(game.instance(id))) {
+                written = shader->vertex_source();
+                fragment = shader->source();
+            }
+        });
+        Expect(written == "void vertex() {\n    VERTEX.y += 1.0;\n}\n", "typing in the vertex tab writes VertexSource");
+        Expect(fragment == engine_core::kShaderStarterSource, "and leaves the fragment stage alone");
+    }
+    layout.edit_shader_text(id, engine_core::ShaderStage::Fragment);
+    frame();
+    frame();
+    ide::IdeShaderText* fragment = EditorFor(scene, id, engine_core::ShaderStage::Fragment);
+    Expect(fragment != nullptr && fragment != vertex, "the fragment stage opens in a tab of its own");
+    Expect(fragment != nullptr && fragment->title() == "Look.glsl", "titled <Name>.glsl");
+    const auto open_vertex = layout.open_shader_text(id, engine_core::ShaderStage::Vertex);
+    const auto open_fragment = layout.open_shader_text(id, engine_core::ShaderStage::Fragment);
+    Expect(open_vertex.get() == vertex && open_fragment.get() == fragment, "the layout keeps one tab a stage");
+    // Opening a stage again brings its tab forward, with no new tab.
+    layout.edit_shader_text(id, engine_core::ShaderStage::Vertex);
+    frame();
+    frame();
+    Expect(layout.open_shader_text(id, engine_core::ShaderStage::Vertex).get() == vertex &&
+               EditorFor(scene, id, engine_core::ShaderStage::Vertex) == vertex,
+           "a stage open already is brought forward, not opened twice");
+    // Each closed in front, so no tab is left for the tests after.
+    CloseEditor(vertex);
+    frame();
+    layout.edit_shader_text(id, engine_core::ShaderStage::Fragment);
+    frame();
+    frame();
+    if (ide::IdeShaderText* front = EditorFor(scene, id, engine_core::ShaderStage::Fragment)) {
+        CloseEditor(front);
+    }
+    frame();
+    engine.on_simulation([&](engine_core::DataModel& game) { game.destroy(id); });
+    frame();
+}
+
+// A vertex stage's problem opens the vertex tab at its line.
+void TestProblemOpensVertexStage(ide::IdeLayout& layout, jadefx::Scene& scene) {
+    engine_core::Engine& engine = layout.simulation();
+    double time = 120.0;
+    auto frame = [&] {
+        scene.layout(1280, 800, time);
+        time += 0.1;
+    };
+    engine_core::InstanceId id = 0;
+    engine.on_simulation([&](engine_core::DataModel& game) {
+        engine_core::Shader& shader = game.create<engine_core::Shader>();
+        game.set_name(shader.id(), "Wave");
+        game.set_parent(shader.id(), game.service("Shaders"));
+        shader.set_vertex_source("uniform float A;\n\n// no vertex() here\n");
+        id = shader.id();
+    });
+    layout.show_problems();
+    for (int i = 0; i < 8; ++i) {
+        frame();
+    }
+    ide::IdeProblems* problems = nullptr;
+    for (jadefx::Node* node : scene.getElementsByClassName("problems-pane")) {
+        problems = problems != nullptr ? problems : dynamic_cast<ide::IdeProblems*>(node);
+    }
+    Expect(problems != nullptr, "Problems is open");
+    if (problems == nullptr) {
+        return;
+    }
+    std::size_t index = 0;
+    bool listed = false;
+    for (const ide::ScriptProblems& source : problems->list().scripts) {
+        if (source.id == id && !source.problems.empty() && source.problems[0].code == "Vertex") {
+            listed = true;
+            break;
+        }
+        ++index;
+    }
+    Expect(listed, "the vertex stage's error is listed with code Vertex");
+    const auto& rows = problems->tree().getRoot()->getChildren();
+    if (listed && index < rows.size() && !rows.items()[index]->getChildren().empty()) {
+        problems->openRow(rows.items()[index]->getChildren().items()[0].get());
+    }
+    frame();
+    frame();
+    ide::IdeShaderText* editor = EditorFor(scene, id, engine_core::ShaderStage::Vertex);
+    Expect(editor != nullptr, "opening the problem opens the vertex tab");
+    if (editor != nullptr) {
+        jadefx::CodeArea* code = CodeOf(scene, editor);
+        Expect(code != nullptr && code->currentParagraph() == 2, "with the caret on the error's line");
+        Expect(editor->errorLine() == 3, "and the line marked");
+        CloseEditor(editor);
+    }
+    engine.on_simulation([&](engine_core::DataModel& game) { game.destroy(id); });
+    frame();
+}
+
 }  // namespace
 
 int RunShaderEditorTests(ide::IdeLayout& layout, jadefx::Scene& scene) {
@@ -507,6 +665,8 @@ int RunShaderEditorTests(ide::IdeLayout& layout, jadefx::Scene& scene) {
     TestProblemOpensShader(layout, scene);
     TestFindReplace(layout, scene);
     TestCompileErrorReachesShader(layout, scene);
+    TestStageTabs(layout, scene);
+    TestProblemOpensVertexStage(layout, scene);
     if (gFailures == 0) {
         std::printf("shader editor tests passed\n");
     }

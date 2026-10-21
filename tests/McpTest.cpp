@@ -486,7 +486,7 @@ void TestShaderSource() {
     Expect(problems != nullptr && problems->items().size() == 1 &&
                Member(Item(*problems, 0), "line").as_number() == 3 &&
                Member(Item(*problems, 0), "message").as_string() == "unknown hint glow" &&
-               Member(Item(*problems, 0), "code").as_string() == "Shader",
+               Member(Item(*problems, 0), "code").as_string() == "Fragment",
            "write_script returns a Shader's error as its problem: " + ide::compact_json(bad));
     Expect(shader.error() == "fragment 3: unknown hint glow", "and the source is written");
     const JsonValue clean = Call(server, "write_script",

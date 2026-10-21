@@ -61,7 +61,7 @@ struct Harness {
 
     explicit Harness(engine_core::Engine& engine) {
         ide::ProblemsHost host;
-        host.open = [this](std::uint32_t id, int line, int column, int column_end) {
+        host.open = [this](std::uint32_t id, int line, int column, int column_end, int) {
             opened.emplace_back(id, line, column, column_end);
         };
         pane = jadefx::make<ide::IdeProblems>(engine, std::move(host));
@@ -467,7 +467,7 @@ int RunProblemsPaneTests(engine_core::Engine& engine) {
         expect(row != nullptr && row->name == "Dissolve" && row->class_name == "Shader" && row->path == "Assets.Shaders",
                "the row names the Shader and where it is");
         expect(row != nullptr && row->problems.size() == 1 && row->problems[0].line == 4 &&
-                   row->problems[0].message == "unknown hint glow" && row->problems[0].code == "Shader" &&
+                   row->problems[0].message == "unknown hint glow" && row->problems[0].code == "Fragment" &&
                    row->problems[0].severity == engine_core::Severity::Error,
                "one error at line 4");
         expect(row != nullptr && row->problems[0].column == 0 && row->problems[0].column_end == 27,

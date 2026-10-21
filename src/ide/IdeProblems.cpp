@@ -217,8 +217,8 @@ struct ShaderEntry {
     std::string path;
     std::string error;
     std::string source;
-    // The stage the error is in: "Shader" (the fragment) or "Vertex".
-    const char* code = "Shader";
+    // The stage the error is in: "Fragment" or "Vertex".
+    const char* code = "Fragment";
 };
 
 // Every Shader under Assets.Shaders, the only place one can be, in tree order.
@@ -255,7 +255,7 @@ std::vector<ShaderEntry> shaders_of(const engine_core::DataModel& game) {
 }
 
 // A Shader's Error, "<line>: <message>", as one problem across that line of source.
-Problem shader_problem(const std::string& error, const std::string& source, const char* code = "Shader") {
+Problem shader_problem(const std::string& error, const std::string& source, const char* code = "Fragment") {
     Problem problem;
     problem.severity = engine_core::Severity::Error;
     problem.code = code;
@@ -462,12 +462,17 @@ void IdeProblems::refresh() {
         if (shader.error.empty()) {
             continue;
         }
+        // A Shader's two stages are one row.
+        if (!gathered.empty() && gathered.back().id == shader.id && gathered.back().class_name == "Shader") {
+            gathered.back().problems.push_back(shader_problem(shader.error, shader.source, shader.code));
+            continue;
+        }
         ProblemSource source;
         source.id = shader.id;
         source.name = std::move(shader.name);
         source.class_name = "Shader";
         source.path = std::move(shader.path);
-        source.problems.push_back(shader_problem(shader.error, shader.source));
+        source.problems.push_back(shader_problem(shader.error, shader.source, shader.code));
         gathered.push_back(std::move(source));
     }
     sources_ = std::move(gathered);
@@ -568,13 +573,14 @@ void IdeProblems::rebuild() {
             show_problems(item, problems);
         });
         const Problem& first = script.problems.front();
-        targets_[row.get()] = Target{id, 0, first.column, first.column_end};
+        targets_[row.get()] = Target{id, 0, first.column, first.column_end, first.code == "Vertex" ? 1 : 0};
         if (selected && selected->id == id && selected->line == 0) {
             reselect = row.get();
         }
         for (const Problem& problem : script.problems) {
             auto child = jadefx::make<jadefx::TreeItem>("", nullptr);
-            targets_[child.get()] = Target{id, problem.line, problem.column, problem.column_end};
+            targets_[child.get()] =
+                Target{id, problem.line, problem.column, problem.column_end, problem.code == "Vertex" ? 1 : 0};
             if (selected && selected->id == id && selected->line == problem.line &&
                 selected->column == problem.column) {
                 reselect = child.get();
@@ -655,7 +661,7 @@ bool IdeProblems::openRow(const jadefx::TreeItem* item) {
     }
     if (host_.open && where.line > 0) {
         // Copied first: opening a script can refresh the list and drop this row.
-        host_.open(where.id, where.line, where.column, where.column_end);
+        host_.open(where.id, where.line, where.column, where.column_end, where.stage);
     }
     return true;
 }

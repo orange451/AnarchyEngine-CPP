@@ -1,4 +1,4 @@
-#include "IdeShaderEditor.hpp"
+#include "IdeShaderText.hpp"
 
 #include "EditorFont.hpp"
 #include "FindBar.hpp"
@@ -82,9 +82,9 @@ int ErrorLine(const std::string& error) {
 }  // namespace
 
 // Enter keeps the indent, and { brings its }, as in the CSS editor.
-class IdeShaderEditor::Area : public jadefx::CodeArea {
+class IdeShaderText::Area : public jadefx::CodeArea {
 public:
-    IdeShaderEditor* editor = nullptr;
+    IdeShaderText* editor = nullptr;
 
     // Runs work as one undo step, as the editor's Replace All needs.
     void asOneStep(const std::function<void()>& work) { transact(false, work); }
@@ -162,16 +162,23 @@ private:
     }
 };
 
-struct IdeShaderEditor::Commit {
+struct IdeShaderText::Commit {
     std::atomic<std::uint64_t> epoch{0};
     std::atomic<std::uint64_t> acked{0};
     std::uint32_t id = 0;
+    int stage = 0;
 };
 
-IdeShaderEditor::IdeShaderEditor(engine_core::Engine& engine, std::uint32_t id)
-    : IdePane("Shader.glsl", true), engine_(engine), id_(id), commit_(std::make_shared<Commit>()) {
+IdeShaderText::IdeShaderText(engine_core::Engine& engine, std::uint32_t id, engine_core::ShaderStage stage)
+    : IdePane(stage == engine_core::ShaderStage::Vertex ? "Shader.vert.glsl" : "Shader.glsl", true),
+      engine_(engine),
+      id_(id),
+      commit_(std::make_shared<Commit>()),
+      stage_(stage) {
     setIconFile("Shader.png");
     commit_->id = id;
+    commit_->stage = stage == engine_core::ShaderStage::Vertex ? engine_core::Shader::kVertexStage
+                                                                : engine_core::Shader::kFragmentStage;
     area_ = std::make_shared<Area>();
     area_->editor = this;
     area_->getClassList().add("ide-script");
@@ -202,17 +209,17 @@ IdeShaderEditor::IdeShaderEditor(engine_core::Engine& engine, std::uint32_t id)
     load();
 }
 
-IdeShaderEditor::~IdeShaderEditor() = default;
+IdeShaderText::~IdeShaderText() = default;
 
-std::string IdeShaderEditor::text() const { return area_ ? area_->getText() : std::string(); }
+std::string IdeShaderText::text() const { return area_ ? area_->getText() : std::string(); }
 
-void IdeShaderEditor::focus() {
+void IdeShaderText::focus() {
     if (area_) {
         area_->requestFocus();
     }
 }
 
-void IdeShaderEditor::showLine(int line) {
+void IdeShaderText::showLine(int line) {
     if (!area_ || line < 1) {
         return;
     }
@@ -221,16 +228,16 @@ void IdeShaderEditor::showLine(int line) {
     area_->showPosition(area_->caretPosition());
 }
 
-void IdeShaderEditor::setTitleText(const std::string& name) {
+void IdeShaderText::setTitleText(const std::string& name) {
     shownName_ = name;
-    setTitle(name + ".glsl");
+    setTitle(name + (stage_ == engine_core::ShaderStage::Vertex ? ".vert.glsl" : ".glsl"));
 }
 
-void IdeShaderEditor::onOpen() { focus(); }
+void IdeShaderText::onOpen() { focus(); }
 
-void IdeShaderEditor::onClose() { flush(); }
+void IdeShaderText::onClose() { flush(); }
 
-void IdeShaderEditor::layoutChildren() {
+void IdeShaderText::layoutChildren() {
     if (!loaded_) {
         load();
     } else if (dirty_ && std::chrono::steady_clock::now() - dirtyAt_ >= kSaveDelay) {
@@ -251,7 +258,7 @@ void IdeShaderEditor::layoutChildren() {
     markLayoutDirty(LayoutDirt::Arrange);
 }
 
-bool IdeShaderEditor::readSource(std::string& text, std::string& name, std::string& error, bool& alive,
+bool IdeShaderText::readSource(std::string& text, std::string& name, std::string& error, bool& alive,
                                  std::uint32_t* world) const {
     alive = false;
     engine_core::DataModel& game = engine_.datamodel();
@@ -264,8 +271,9 @@ bool IdeShaderEditor::readSource(std::string& text, std::string& name, std::stri
         return true;
     }
     alive = true;
-    text = shader->source();
-    error = shader->fragment_error();
+    const bool vertex = stage_ == engine_core::ShaderStage::Vertex;
+    text = shader->source(vertex ? engine_core::Shader::kVertexStage : engine_core::Shader::kFragmentStage);
+    error = vertex ? shader->vertex_error() : shader->fragment_error();
     name = game.name(id_);
     if (world != nullptr) {
         *world = game.world_generation();
@@ -273,7 +281,7 @@ bool IdeShaderEditor::readSource(std::string& text, std::string& name, std::stri
     return true;
 }
 
-void IdeShaderEditor::load() {
+void IdeShaderText::load() {
     std::string text;
     std::string name;
     std::string error;
@@ -304,7 +312,7 @@ void IdeShaderEditor::load() {
     markError(error);
 }
 
-void IdeShaderEditor::paint(const std::string& text) {
+void IdeShaderText::paint(const std::string& text) {
     refresh_find(text);
     const int current = current_find();
     painted_find_ = current;
@@ -349,7 +357,7 @@ void IdeShaderEditor::paint(const std::string& text) {
     refresh_scroll_marks();
 }
 
-void IdeShaderEditor::refresh_scroll_marks() {
+void IdeShaderText::refresh_scroll_marks() {
     std::vector<jadefx::ScrollMark> marks;
     marks.reserve(find_matches_.size() + 1);
     // Find matches down the left half of the bar, the error down the right.
@@ -363,9 +371,9 @@ void IdeShaderEditor::refresh_scroll_marks() {
     area_->setScrollMarks(std::move(marks));
 }
 
-bool IdeShaderEditor::findOpen() const { return find_bar_ && find_bar_->isVisible(); }
+bool IdeShaderText::findOpen() const { return find_bar_ && find_bar_->isVisible(); }
 
-void IdeShaderEditor::place_find_bar() {
+void IdeShaderText::place_find_bar() {
     if (!find_bar_) {
         return;
     }
@@ -379,7 +387,7 @@ void IdeShaderEditor::place_find_bar() {
     find_bar_->performLayout(right - width, contentTop(), width, height);
 }
 
-void IdeShaderEditor::openFind(bool replace) {
+void IdeShaderText::openFind(bool replace) {
     if (!area_ || !find_bar_) {
         return;
     }
@@ -421,7 +429,7 @@ void IdeShaderEditor::openFind(bool replace) {
     }
 }
 
-void IdeShaderEditor::closeFind() {
+void IdeShaderText::closeFind() {
     if (!findOpen()) {
         return;
     }
@@ -434,7 +442,7 @@ void IdeShaderEditor::closeFind() {
     focus();
 }
 
-void IdeShaderEditor::refresh_find(const std::string& text) {
+void IdeShaderText::refresh_find(const std::string& text) {
     find_matches_.clear();
     find_capped_ = false;
     find_error_.clear();
@@ -452,7 +460,7 @@ void IdeShaderEditor::refresh_find(const std::string& text) {
     }
 }
 
-int IdeShaderEditor::current_find() const {
+int IdeShaderText::current_find() const {
     if (!area_ || find_matches_.empty() || area_->selections().size() != 1) {
         return -1;
     }
@@ -465,13 +473,13 @@ int IdeShaderEditor::current_find() const {
     return -1;
 }
 
-void IdeShaderEditor::show_find_count() {
+void IdeShaderText::show_find_count() {
     if (findOpen()) {
         find_bar_->showCount(current_find(), static_cast<int>(find_matches_.size()), find_capped_, find_error_);
     }
 }
 
-void IdeShaderEditor::find_changed() {
+void IdeShaderText::find_changed() {
     // As the find text grows, the match stays where the last one started.
     const int from = area_->selection().start;
     paint(area_->getText());
@@ -488,7 +496,7 @@ void IdeShaderEditor::find_changed() {
     select_find(index);
 }
 
-void IdeShaderEditor::select_find(std::size_t index) {
+void IdeShaderText::select_find(std::size_t index) {
     if (index >= find_matches_.size()) {
         return;
     }
@@ -498,7 +506,7 @@ void IdeShaderEditor::select_find(std::size_t index) {
     paint(area_->getText());
 }
 
-void IdeShaderEditor::step_find(int direction) {
+void IdeShaderText::step_find(int direction) {
     if (find_matches_.empty()) {
         return;
     }
@@ -528,7 +536,7 @@ void IdeShaderEditor::step_find(int direction) {
     select_find(index);
 }
 
-void IdeShaderEditor::replace_find() {
+void IdeShaderText::replace_find() {
     if (!findOpen() || !area_->isEditable()) {
         return;
     }
@@ -557,7 +565,7 @@ void IdeShaderEditor::replace_find() {
     show_find_count();
 }
 
-void IdeShaderEditor::replace_find_all() {
+void IdeShaderText::replace_find_all() {
     if (!findOpen() || !area_->isEditable()) {
         return;
     }
@@ -568,7 +576,7 @@ void IdeShaderEditor::replace_find_all() {
     apply_replacements(search, search.find_all(area_->getText()), find_bar_->replacement());
 }
 
-int IdeShaderEditor::replaceAll(const std::string& query, const std::string& replacement) {
+int IdeShaderText::replaceAll(const std::string& query, const std::string& replacement) {
     if (!area_ || !loaded_ || missing_ || !area_->isEditable()) {
         return 0;
     }
@@ -581,7 +589,7 @@ int IdeShaderEditor::replaceAll(const std::string& query, const std::string& rep
     return apply_replacements(search, search.find_all(area_->getText()), replacement);
 }
 
-int IdeShaderEditor::apply_replacements(const TextSearch& search, const std::vector<TextMatch>& matches,
+int IdeShaderText::apply_replacements(const TextSearch& search, const std::vector<TextMatch>& matches,
                                         const std::string& replacement) {
     if (matches.empty()) {
         return 0;
@@ -596,7 +604,7 @@ int IdeShaderEditor::apply_replacements(const TextSearch& search, const std::vec
     return static_cast<int>(matches.size());
 }
 
-void IdeShaderEditor::markError(const std::string& error) {
+void IdeShaderText::markError(const std::string& error) {
     // The same Error over different text, as when lines above it grew, moves the mark.
     const std::string text = area_->getText();
     if (error == shownError_ && text == markedText_ && loaded_) {
@@ -634,7 +642,7 @@ void IdeShaderEditor::markError(const std::string& error) {
     refresh_scroll_marks();
 }
 
-void IdeShaderEditor::noteText() {
+void IdeShaderText::noteText() {
     if (loading_) {
         return;
     }
@@ -643,7 +651,7 @@ void IdeShaderEditor::noteText() {
     dirtyAt_ = std::chrono::steady_clock::now();
 }
 
-void IdeShaderEditor::flush() {
+void IdeShaderText::flush() {
     if (!area_ || missing_ || !loaded_) {
         return;
     }
@@ -651,17 +659,17 @@ void IdeShaderEditor::flush() {
     push(area_->getText());
 }
 
-void IdeShaderEditor::push(const std::string& text) {
+void IdeShaderText::push(const std::string& text) {
     const std::uint64_t gen = commit_->epoch.fetch_add(1, std::memory_order_relaxed) + 1;
     engine_.on_simulation([commit = commit_, text, gen](engine_core::DataModel& game) {
         if (auto* shader = dynamic_cast<engine_core::Shader*>(game.instance(commit->id))) {
-            if (shader->source() != text) {
+            if (shader->source(commit->stage) != text) {
                 // One place waypoint for the buffer, not one per keystroke.
                 std::optional<std::string> recording;
                 if (!game.simulation_running()) {
                     recording = game.history().try_begin_recording("Edit Shader");
                 }
-                shader->set_source(text);
+                shader->set_source(commit->stage, text);
                 if (recording) {
                     game.history().finish_recording(*recording, engine_core::FinishRecordingOperation::Commit);
                 }
@@ -671,7 +679,7 @@ void IdeShaderEditor::push(const std::string& text) {
     });
 }
 
-void IdeShaderEditor::reapply() {
+void IdeShaderText::reapply() {
     // Every Source, name, and tree change moves one of these, and so does Stop.
     const engine_core::DataModel& game = engine_.datamodel();
     const std::uint64_t authored = game.authored_revision();
@@ -720,7 +728,7 @@ void IdeShaderEditor::reapply() {
     markError(error);
 }
 
-void IdeShaderEditor::showSource(std::string text) {
+void IdeShaderText::showSource(std::string text) {
     const int caret = area_->caretPosition();
     loading_ = true;
     area_->suspendUndo();

@@ -4,7 +4,7 @@
 
 #include "IdeLayoutInternal.hpp"
 #include "IdeCssEditor.hpp"
-#include "IdeShaderEditor.hpp"
+#include "IdeShaderText.hpp"
 #include "IdeCollisionGroups.hpp"
 #include "IdeTerrainEditor.hpp"
 #include "QuickOpen.hpp"
@@ -180,11 +180,20 @@ std::shared_ptr<IdePane> IdeLayout::make_search() {
 std::shared_ptr<IdePane> IdeLayout::make_problems() {
     ProblemsHost host;
     // As Search opens a match.
-    host.open = [this](std::uint32_t id, int line, int column, int column_end) {
+    host.open = [this](std::uint32_t id, int line, int column, int column_end, int stage) {
+        if (stage > 0) {
+            // A Shader's vertex stage.
+            edit_shader_text(id, engine_core::ShaderStage::Vertex);
+            if (const std::shared_ptr<IdeShaderText> shader = open_shader_text(id, engine_core::ShaderStage::Vertex)) {
+                shader->showLine(line);
+            }
+            return;
+        }
         edit(id);
         if (const std::shared_ptr<IdeScriptEditor> editor = open_editor(id)) {
             editor->showRange(line, column, column_end);
-        } else if (const std::shared_ptr<IdeShaderEditor> shader = open_shader_editor(id)) {
+        } else if (const std::shared_ptr<IdeShaderText> shader =
+                       open_shader_text(id, engine_core::ShaderStage::Fragment)) {
             shader->showLine(line);
         }
     };
@@ -758,25 +767,44 @@ void IdeLayout::edit_prefab(std::uint32_t prefab, IdeDock& home) {
     open_prefabs_[prefab] = editor;
 }
 
+namespace {
+
+std::uint64_t shader_text_key(std::uint32_t id, engine_core::ShaderStage stage) {
+    return (static_cast<std::uint64_t>(id) << 1) | (stage == engine_core::ShaderStage::Vertex ? 1u : 0u);
+}
+
+}  // namespace
+
 void IdeLayout::edit_shader(std::uint32_t shader, IdeDock& home) {
-    if (const std::shared_ptr<IdeShaderEditor> existing = open_shader_editor(shader)) {
+    open_shader_text_at(shader, engine_core::ShaderStage::Fragment, home);
+}
+
+void IdeLayout::edit_shader_text(std::uint32_t shader, engine_core::ShaderStage stage) {
+    if (IdeDock* home = editorHome()) {
+        open_shader_text_at(shader, stage, *home);
+    }
+}
+
+void IdeLayout::open_shader_text_at(std::uint32_t shader, engine_core::ShaderStage stage, IdeDock& home) {
+    if (const std::shared_ptr<IdeShaderText> existing = open_shader_text(shader, stage)) {
         if (dockContaining(existing.get()) != nullptr) {
             reveal_window(existing.get());
             existing->focus();
             return;
         }
     }
-    auto editor = jadefx::make<IdeShaderEditor>(runner_.simulation(), shader);
+    auto editor = jadefx::make<IdeShaderText>(runner_.simulation(), shader, stage);
     add_select_to_tab_menu(*editor, shader);
     std::shared_ptr<jadefx::Tab> tab = home.dock(editor);
+    const std::uint64_t key = shader_text_key(shader, stage);
     if (tab) {
-        tab->setOnClosed([this, shader] { open_shaders_.erase(shader); });
+        tab->setOnClosed([this, key] { open_shaders_.erase(key); });
     }
-    open_shaders_[shader] = editor;
+    open_shaders_[key] = editor;
 }
 
-std::shared_ptr<IdeShaderEditor> IdeLayout::open_shader_editor(std::uint32_t id) const {
-    const auto found = open_shaders_.find(id);
+std::shared_ptr<IdeShaderText> IdeLayout::open_shader_text(std::uint32_t id, engine_core::ShaderStage stage) const {
+    const auto found = open_shaders_.find(shader_text_key(id, stage));
     return found != open_shaders_.end() ? found->second.lock() : nullptr;
 }
 
@@ -981,7 +1009,7 @@ void IdeLayout::flush_editors() {
         }
     }
     for (const auto& entry : open_shaders_) {
-        if (std::shared_ptr<IdeShaderEditor> editor = entry.second.lock()) {
+        if (std::shared_ptr<IdeShaderText> editor = entry.second.lock()) {
             editor->flush();
         }
     }
@@ -1051,7 +1079,7 @@ void IdeLayout::close_script_editors() {
         }
     }
     for (const auto& entry : open_shaders_) {
-        if (std::shared_ptr<IdeShaderEditor> editor = entry.second.lock()) {
+        if (std::shared_ptr<IdeShaderText> editor = entry.second.lock()) {
             pages.push_back(std::move(editor));
         }
     }
@@ -1098,7 +1126,7 @@ bool IdeLayout::editors_unflushed() const {
         }
     }
     for (const auto& entry : open_shaders_) {
-        if (std::shared_ptr<IdeShaderEditor> editor = entry.second.lock()) {
+        if (std::shared_ptr<IdeShaderText> editor = entry.second.lock()) {
             if (editor->hasUnflushedText()) {
                 return true;
             }

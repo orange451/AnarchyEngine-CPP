@@ -124,7 +124,7 @@ set(STUDIO_SOURCES
     src/ide/IdeConflicts.cpp
     src/ide/IdeConsole.cpp
     src/ide/IdeCssEditor.cpp
-    src/ide/IdeShaderEditor.cpp
+    src/ide/IdeShaderText.cpp
     src/ide/IdeTerminal.cpp
     src/ide/TerminalView.cpp
     src/ide/ConsoleLog.cpp

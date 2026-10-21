@@ -12,6 +12,7 @@
 
 namespace engine_core {
 class Engine;
+enum class ShaderStage : std::uint8_t;
 }
 
 namespace ide {
@@ -19,23 +20,25 @@ namespace ide {
 class FindBar;
 class ThemeListener;
 
-// One Shader's Source, docked beside the scene view as the CSS editor is.
-// Double-clicking a Shader in the Assets pane, or Edit, opens it. The text is
+// One stage of a Shader, its Source (the fragment stage, <Name>.glsl) or its
+// VertexSource (<Name>.vert.glsl), docked beside the scene view as the CSS
+// editor is. The Shader Editor's Edit buttons open it. The text is
 // highlighted as GLSL (GlslHighlight). Enter keeps the line's indent, and adds
 // a level after {; typing { adds its }. Typing writes Source back half a
 // second after the last keystroke, as one undo step named "Edit Shader";
 // while the simulation is stopped that becomes the authored place, so Stop
-// keeps it. The Shader's Error is marked across its line and on the scroll
+// keeps it. The stage's error is marked across its line and on the scroll
 // bar's right side, and moves as Error does. Ctrl+F (Cmd+F) opens the find
 // bar on the name under the caret and Ctrl+H (Cmd+Alt+F) with replace, as in
 // the script editor: every match is highlighted and marked down the scroll
 // bar's left side, F3 steps, and Escape closes it.
-class IdeShaderEditor : public IdePane {
+class IdeShaderText : public IdePane {
 public:
-    IdeShaderEditor(engine_core::Engine& engine, std::uint32_t id);
-    ~IdeShaderEditor() override;
+    IdeShaderText(engine_core::Engine& engine, std::uint32_t id, engine_core::ShaderStage stage);
+    ~IdeShaderText() override;
 
     std::uint32_t instanceId() const { return id_; }
+    engine_core::ShaderStage stage() const { return stage_; }
     bool isLoaded() const { return loaded_; }
     std::string text() const;
     // Typed text Source does not have yet. flush() writes it.
@@ -113,6 +116,7 @@ private:
     int errorStart_ = 0;
     int errorEnd_ = 0;
     std::shared_ptr<Commit> commit_;
+    engine_core::ShaderStage stage_;
     std::unique_ptr<ThemeListener> themeListener_;
     bool loaded_ = false;
     bool loading_ = false;

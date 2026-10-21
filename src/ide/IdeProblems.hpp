@@ -19,8 +19,9 @@ class Engine;
 namespace ide {
 
 struct ProblemsHost {
-    // Opens the script and selects code points [column, column_end) of the 1-based line.
-    std::function<void(std::uint32_t id, int line, int column, int column_end)> open;
+    // Opens the script and selects code points [column, column_end) of the
+    // 1-based line; stage is a Shader's (0 the fragment, 1 the vertex stage).
+    std::function<void(std::uint32_t id, int line, int column, int column_end, int stage)> open;
 };
 
 // Every error, warning, and info message the script checker has found, in a
@@ -88,6 +89,7 @@ private:
         int line = 0;
         int column = 0;
         int column_end = 0;
+        int stage = 0;
     };
 
     ProblemFilter filter() const;

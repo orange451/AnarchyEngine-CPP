@@ -786,7 +786,7 @@ JsonValue WriteSource(engine_core::Engine& engine, const McpStudio& studio, cons
                 entry.set("message", JsonValue::string(error.substr(colon + 2)));
                 problems.items().push_back(std::move(entry));
             };
-            add(shader->fragment_error(), "Shader");
+            add(shader->fragment_error(), "Fragment");
             add(shader->vertex_error(), "Vertex");
             brief.set("problems", std::move(problems));
         }

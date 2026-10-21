@@ -291,6 +291,18 @@ struct SceneBloom {
     float threshold = 0.f;
 };
 
+// One ShaderEffect this frame, as the renderer runs it (postPass): a post
+// Shader over the stage's image, its uniforms from binding's values.
+struct SceneEffect {
+    engine_core::InstanceId effect = 0;
+    bool enabled = true;
+    // Before bloom and the tone map, on linear light; else after the tone map.
+    bool hdr = false;
+    std::shared_ptr<const engine_core::SurfaceBinding> binding;
+    // Its sampler2D uniforms' GL textures, in order; 0 is unset.
+    unsigned textures[4] = {0, 0, 0, 0};
+};
+
 // The ScreenSpaceReflections, as the renderer reads it. The defaults trace nothing.
 struct SceneReflections {
     bool enabled = false;
@@ -369,6 +381,8 @@ struct SceneLighting {
     SceneSky sky;
     SceneDynamicSky dynamicSky;
     SceneBloom bloom;
+    // Every ShaderEffect with a post Shader, in Order.
+    std::vector<SceneEffect> effects;
     SceneAtmosphere atmosphere;
     SceneReflections reflections;
     SceneOcclusion occlusion;
@@ -601,6 +615,7 @@ private:
         unsigned gbufferFbo = 0, albedo = 0, normal = 0, material = 0, emissive = 0, depth = 0;
         unsigned accumulationFbo = 0, accumulation = 0, transparencyFbo = 0, transparency = 0;
         unsigned mergeFbo = 0, merge = 0, ldrFbo = 0, ldr = 0;
+        unsigned mergePingFbo = 0, mergePing = 0, ldrPingFbo = 0, ldrPing = 0;
         bool fxaaValid = false;
         // The ensureTargets call that last used it, for eviction.
         std::uint64_t used = 0;
@@ -641,15 +656,27 @@ private:
     void bindOcclusion(const Program& program);
     bool ensureReflectionBuffers(int width, int height);
     void destroyReflectionBuffers();
-    // Bloom's chain from the merge image, width by height pixels: the levels
-    // drawn, 0 when there is no bloom this frame (none asked for, no room for
-    // a level, the chain refused, or a program that cannot draw yet).
-    int bloomPass(int width, int height);
-    // The tone map, with this frame's uniforms and textures, into whatever
-    // framebuffer, viewport, and blend are set. False when it cannot draw yet.
-    bool toneMapPass(int bloomLevels);
-    // ldrTexture_ onto whatever is bound, opaque. False when it cannot draw yet.
-    bool fxaaPass();
+    // Bloom's chain from image (the merge image, or an Hdr effect's result),
+    // width by height pixels: the levels drawn, 0 when there is no bloom this
+    // frame (none asked for, no room for a level, the chain refused, or a
+    // program that cannot draw yet).
+    int bloomPass(unsigned image, int width, int height);
+    // The tone map of image, with this frame's uniforms and textures, into
+    // whatever framebuffer, viewport, and blend are set. False when it cannot draw yet.
+    bool toneMapPass(unsigned image, int bloomLevels);
+    // image (ldrTexture_, or an LDR effect's result) onto whatever is bound,
+    // opaque. False when it cannot draw yet.
+    bool fxaaPass(unsigned image);
+    // image onto whatever is bound, as it is. False when it cannot draw yet.
+    bool blitPass(unsigned image);
+    // Every enabled ShaderEffect of the stage (hdr: on the merge image, before
+    // bloom; else on the tone-mapped image) over image, each reading the one
+    // before, ping-ponging with the stage's second target: the texture holding
+    // the result, image itself when none ran. Never fails the frame.
+    unsigned postPass(bool hdr, unsigned image, int width, int height, const float* projection,
+                      const float* inverseProjection);
+    // Whether any enabled ShaderEffect of the stage has a binding this frame.
+    bool hasEffects(bool hdr) const;
     // Makes the chain for a width by height pane, if it is not made. False,
     // with nothing made, when the driver will not render into it.
     bool ensureBloomChain(int width, int height);
@@ -678,6 +705,11 @@ private:
     void useGeometryProgram(const Program& program, const float* projection);
     // draw's surface Shader's values and textures, at variant's locations and units 6 to 8.
     void bindSurface(const SurfacePrograms::Variant& variant, const MeshDraw& draw);
+    // binding's uniform values onto variant's locations, and its sampler
+    // uniforms' textures (textureCount of them) on firstUnit up, with the
+    // hints' samplers. True when it bound a sampler, so it is unbound after.
+    bool uploadParams(const SurfacePrograms::Variant& variant, const engine_core::SurfaceBinding& binding,
+                      const unsigned* textures, std::size_t textureCount, int firstUnit);
     // Takes the sampler objects bindSurface left off units 6 to 8, which later
     // passes read the G-buffer through.
     void unbindSurfaceSamplers();
@@ -730,6 +762,7 @@ private:
     Program bloomDown_;
     Program bloomUp_;
     Program fxaa_;
+    Program blit_;
     Program ssrScene_;
     Program ssrBlur_;
     Program ssr_;
@@ -878,6 +911,9 @@ private:
     // The linear image the tone map reads.
     unsigned mergeFbo_ = 0;
     unsigned mergeTexture_ = 0;
+    // The merge image's twin, which Hdr ShaderEffects ping-pong with.
+    unsigned mergePingFbo_ = 0;
+    unsigned mergePingTexture_ = 0;
     // Whether the driver refused a size, so the refusal is reported once.
     bool targetsRefused_ = false;
     // Bloom's chain: bloomTextures_[k] is the pane halved k + 1 times, linear
@@ -895,6 +931,9 @@ private:
     // filtering. Made and resized with the other buffers.
     unsigned ldrFbo_ = 0;
     unsigned ldrTexture_ = 0;
+    // Its twin, which LDR ShaderEffects ping-pong with.
+    unsigned ldrPingFbo_ = 0;
+    unsigned ldrPingTexture_ = 0;
     // Whether fxaa_ has passed validation since the programs or buffers were
     // last made. Validating is slow on macOS, and nothing it checks changes
     // between frames, so it is asked until it passes, as the grid's bands are.

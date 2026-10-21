@@ -13,6 +13,11 @@
 // the ViewportPanes, so a GameObject draws the same in either.
 namespace runner {
 
+// binding's sampler2D uniforms' textures, in order, loaded through textures as
+// the uniforms' hints say, into out[0..count); 0 for one unset or past count.
+void ResolveShaderTextures(const engine_core::SurfaceBinding& binding, TextureCache& textures, unsigned* out,
+                           std::size_t count);
+
 // prefab's Models as MeshDraw templates: each mesh and texture loaded through
 // the caches, Material values copied, slots numbered from nextSlot (which
 // moves on). A Model whose mesh does not load adds nothing.

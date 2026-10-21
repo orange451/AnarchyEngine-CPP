@@ -1,4 +1,5 @@
-// A Shader asset's post(), run once per pixel of the stage's image. Spliced
+// A Shader asset's post(), run once per pixel of the stage's image (uScene,
+// bound where every full-screen pass reads its source). Spliced
 // into post.frag by runner::AssemblePost after gbuffer.glsl and the position
 // helper, and before the user's glsl. No #version.
 
@@ -7,7 +8,7 @@
 vec4 COLOR;
 
 // What it reads.
-uniform sampler2D uScreen;
+uniform sampler2D uScene;
 uniform sampler2D uDepth;
 uniform sampler2D uNormal;
 uniform sampler2D uAlbedo;
@@ -18,7 +19,7 @@ uniform mat4 uView;
 uniform mat4 uProjection;
 uniform mat4 uInverseView;
 
-#define SCREEN uScreen
+#define SCREEN uScene
 #define DEPTH uDepth
 #define NORMALS uNormal
 #define ALBEDO uAlbedo
@@ -60,7 +61,7 @@ void post();
 vec4 runPostShader(vec2 uv) {
     SCREEN_UV = uv;
     CAMERA_POSITION = uInverseView[3].xyz;
-    COLOR = texture(uScreen, uv);
+    COLOR = texture(uScene, uv);
     post();
     // Nothing below black, and a coverage the blend can take: a NaN here would
     // spread through bloom and the tone map.

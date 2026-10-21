@@ -12,6 +12,24 @@ namespace runner {
 
 using engine_core::texture::Usage;
 
+void ResolveShaderTextures(const engine_core::SurfaceBinding& binding, TextureCache& textures, unsigned* out,
+                           std::size_t count) {
+    std::fill(out, out + count, 0u);
+    std::size_t sampler = 0;
+    for (const engine_core::ShaderParam& param : binding.parse->params) {
+        if (param.type != engine_core::ShaderParamType::Sampler) {
+            continue;
+        }
+        if (sampler >= count || sampler >= binding.samplers.size()) {
+            break;
+        }
+        const engine_core::SurfaceBinding::Sampler& bound = binding.samplers[sampler];
+        const Usage usage = param.srgb ? Usage::Color : param.normal ? Usage::Normal : Usage::Mask;
+        out[sampler] = textures.get(bound.path, usage, bound.flip_y, bound.always_loaded);
+        ++sampler;
+    }
+}
+
 namespace {
 
 // draw's surface Shader, as source's Material binds it, with its samplers'
@@ -22,22 +40,9 @@ void ApplySurface(const engine_core::VisualMesh& source, TextureCache& textures,
     if (draw.surface == nullptr) {
         return;
     }
-    std::size_t sampler = 0;
-    for (const engine_core::ShaderParam& param : draw.surface->parse->params) {
-        if (param.type != engine_core::ShaderParamType::Sampler) {
-            continue;
-        }
-        if (sampler >= std::size(draw.surfaceTextures) || sampler >= draw.surface->samplers.size()) {
-            break;
-        }
-        const engine_core::SurfaceBinding::Sampler& bound = draw.surface->samplers[sampler];
-        const Usage usage = param.srgb ? Usage::Color : param.normal ? Usage::Normal : Usage::Mask;
-        draw.surfaceTextures[sampler] = textures.get(bound.path, usage, bound.flip_y, bound.always_loaded);
-        ++sampler;
-    }
+    ResolveShaderTextures(*draw.surface, textures, draw.surfaceTextures, std::size(draw.surfaceTextures));
 }
 
-// draw drawn with source's Material: its textures, loaded through textures, and its numbers.
 void ApplyMaterial(const engine_core::VisualMesh& source, TextureCache& textures, MeshDraw& draw) {
     draw.texture = textures.get(source.diffuse_texture, Usage::Color, source.diffuse_flip_y, source.diffuse_always_loaded,
                                 &draw.cutout);

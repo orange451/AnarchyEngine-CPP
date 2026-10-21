@@ -2631,6 +2631,185 @@ void CheckSurfaceShaders(const GpuMesh* cube, int size, int fbWidth, int fbHeigh
     renderer.shutdown();
 }
 
+
+// ShaderEffects: post Shaders over the finished frame, Order low to high,
+// an Hdr one before bloom and the tone map and the rest after the tone map.
+void CheckPostEffects(const GpuMesh* cube, int size, int fbWidth, int fbHeight) {
+    runner::Renderer renderer;
+    Expect(renderer.initialize(), "post effects: the renderer builds");
+    const int midX = fbWidth / 2;
+    const int midY = fbHeight / 2;
+    const runner::MeshDraw draw{cube, engine_core::matrix4_identity()};
+    // Drawn twice and read the second: a target made this frame may not draw until the next on macOS.
+    const auto drawTwice = [&](const runner::MeshDraw& mesh) {
+        for (int pass = 0; pass < 2; ++pass) {
+            renderer.draw(0, 0, size, size, size, size, &mesh, 1);
+        }
+    };
+    const auto snap = [&] {
+        runner::ViewPixels pixels;
+        renderer.read(0, 0, size, size, size, size, pixels);
+        return pixels.rgba;
+    };
+    const auto near = [](Pixel a, Pixel b, int slack) {
+        return std::abs(a.r - b.r) <= slack && std::abs(a.g - b.g) <= slack && std::abs(a.b - b.b) <= slack;
+    };
+    const auto effect = [](std::shared_ptr<const engine_core::SurfaceBinding> binding, bool enabled = true) {
+        runner::SceneEffect out;
+        out.effect = binding->shader;
+        out.enabled = enabled;
+        out.hdr = binding->hdr;
+        out.binding = std::move(binding);
+        return out;
+    };
+
+    runner::SceneLighting hardEdges;
+    hardEdges.antialiasing = runner::SceneAntialiasing::None;
+    renderer.setLighting(hardEdges);
+    drawTwice(draw);
+    const Pixel plain = ReadPixel(midX, midY);
+    const std::vector<unsigned char> plainFrame = snap();
+    Expect(!IsClear(plain), "post effects: the cube draws plain first (" + Text(plain) + ")");
+    // The cube's right edge along the middle row, and a pixel just past it, from the frame without bloom.
+    int edge = midX;
+    while (edge < fbWidth - 1 && !IsClear(ReadPixel(edge + 1, midY))) {
+        ++edge;
+    }
+    const int outside = std::min(edge + 3, fbWidth - 1);
+
+    // One LDR effect inverts the pane, with FXAA off and on.
+    const auto invert = PostFor(9401, 1, "void post() {\n    COLOR.rgb = COLOR.a - COLOR.rgb;\n}\n");
+    runner::SceneLighting inverted = hardEdges;
+    inverted.effects.push_back(effect(invert));
+    renderer.setLighting(inverted);
+    drawTwice(draw);
+    const Pixel flipped = ReadPixel(midX, midY);
+    Expect(near(flipped, Pixel{static_cast<unsigned char>(255 - plain.r), static_cast<unsigned char>(255 - plain.g),
+                               static_cast<unsigned char>(255 - plain.b)},
+                4),
+           "post effects: an LDR effect inverts the pane (" + Text(flipped) + " from " + Text(plain) + ")");
+    runner::SceneLighting invertedFxaa = inverted;
+    invertedFxaa.antialiasing = runner::SceneAntialiasing::FXAA;
+    renderer.setLighting(invertedFxaa);
+    drawTwice(draw);
+    Expect(near(ReadPixel(midX, midY), flipped, 4), "post effects: the same under FXAA (" + Text(ReadPixel(midX, midY)) + ")");
+
+    // A disabled effect, a broken one, and a surface Shader given as an effect draw the plain frame exactly.
+    runner::SceneLighting off = hardEdges;
+    off.effects.push_back(effect(invert, false));
+    off.effects.push_back(effect(PostFor(9402, 1, "void post() {\n    COLOR.rgb = ;\n}\n")));
+    renderer.setLighting(off);
+    drawTwice(draw);
+    Expect(snap() == plainFrame, "post effects: a disabled effect and a broken one draw the plain frame");
+
+    // Two effects run in Order: halve then add, or add then halve.
+    const auto halve = PostFor(9403, 1, "void post() {\n    COLOR.rgb *= 0.5;\n}\n");
+    const auto lift = PostFor(9404, 1, "void post() {\n    COLOR.rgb += 0.25 * COLOR.a;\n}\n");
+    runner::SceneLighting halveThenLift = hardEdges;
+    halveThenLift.effects = {effect(halve), effect(lift)};
+    renderer.setLighting(halveThenLift);
+    drawTwice(draw);
+    const Pixel first = ReadPixel(midX, midY);
+    runner::SceneLighting liftThenHalve = hardEdges;
+    liftThenHalve.effects = {effect(lift), effect(halve)};
+    renderer.setLighting(liftThenHalve);
+    drawTwice(draw);
+    const Pixel second = ReadPixel(midX, midY);
+    const auto expectHalveLift = [](int c) { return static_cast<unsigned char>(std::min(255, c / 2 + 64)); };
+    const auto expectLiftHalve = [](int c) { return static_cast<unsigned char>(std::min(255, c + 64) / 2); };
+    Expect(near(first, Pixel{expectHalveLift(plain.r), expectHalveLift(plain.g), expectHalveLift(plain.b)}, 6) &&
+               near(second, Pixel{expectLiftHalve(plain.r), expectLiftHalve(plain.g), expectLiftHalve(plain.b)}, 6),
+           "post effects: two effects run in their order (" + Text(first) + " then " + Text(second) + " from " +
+               Text(plain) + ")");
+
+    // A value: Strength 0 leaves the frame, Strength 1 blacks it, through the binding's values.
+    engine_core::LuaSlot one;
+    one.kind = engine_core::LuaSlot::Kind::Number;
+    one.number = 1.0;
+    const auto fade = PostFor(9405, 1, "uniform float Strength : range(0, 1) = 0.0;\nvoid post() {\n    COLOR.rgb *= 1.0 - Strength;\n}\n");
+    runner::SceneLighting faded = hardEdges;
+    faded.effects = {effect(fade)};
+    renderer.setLighting(faded);
+    drawTwice(draw);
+    Expect(near(ReadPixel(midX, midY), plain, 3), "post effects: a uniform at its default leaves the frame");
+    fade->set_values({one});
+    drawTwice(draw);
+    Expect(Sum(ReadPixel(midX, midY)) < 12, "post effects: the uniform's new value is read at the next draw (" +
+                                                Text(ReadPixel(midX, midY)) + ")");
+
+    // depthAt: the cube is near, the sky far.
+    const auto depth = PostFor(9406, 1, "void post() {\n    COLOR.rgb = vec3(depthAt(SCREEN_UV) < 1.0e8 ? 1.0 : 0.0);\n}\n");
+    runner::SceneLighting depths = hardEdges;
+    depths.effects = {effect(depth)};
+    renderer.setLighting(depths);
+    drawTwice(draw);
+    Expect(Sum(ReadPixel(midX, midY)) > 700 && Sum(ReadPixel(2, 2)) < 12,
+           "post effects: depthAt is near on the cube and far at the sky (" + Text(ReadPixel(midX, midY)) + ", " +
+               Text(ReadPixel(2, 2)) + ")");
+
+    // An Hdr effect runs before bloom: blacking the merge image leaves a bright cube no halo.
+    runner::MeshDraw bright = draw;
+    bright.emissive[0] = bright.emissive[1] = bright.emissive[2] = 1.0f;
+    runner::SceneLighting haze = hardEdges;
+    haze.bloom.enabled = true;
+    haze.bloom.intensity = 0.5f;
+    haze.bloom.size = 56.f;
+    renderer.setLighting(haze);
+    drawTwice(bright);
+    const Pixel halo = ReadPixel(outside, midY);
+    Expect(!IsClear(halo), "post effects: the bright cube blooms past its edge first (" + Text(halo) + ")");
+    const auto black = PostFor(9407, 1, "void post() {\n    COLOR.rgb = vec3(0.0);\n}\n", {}, true);
+    runner::SceneLighting blackHdr = haze;
+    blackHdr.effects = {effect(black)};
+    renderer.setLighting(blackHdr);
+    drawTwice(bright);
+    Expect(IsClear(ReadPixel(outside, midY)) && Sum(ReadPixel(midX, midY)) < 12,
+           "post effects: an Hdr effect runs before bloom, so a blacked merge blooms nothing (" +
+               Text(ReadPixel(outside, midY)) + ", " + Text(ReadPixel(midX, midY)) + ")");
+    // The same Shader as an LDR effect leaves the halo: bloom came first.
+    const auto blackLdr = PostFor(9408, 1, "void post() {\n    COLOR.rgb = vec3(0.0);\n}\n");
+    runner::SceneLighting blackAfter = haze;
+    blackAfter.effects = {effect(blackLdr)};
+    renderer.setLighting(blackAfter);
+    drawTwice(bright);
+    Expect(IsClear(ReadPixel(outside, midY)) || Sum(ReadPixel(outside, midY)) < 12,
+           "post effects: an LDR effect runs after the tone map, over bloom too");
+
+    // Another pane size makes the ping-pong targets again, with no GL error.
+    renderer.setLighting(inverted);
+    for (int pass = 0; pass < 2; ++pass) {
+        renderer.draw(0, 0, size / 2.0, size / 2.0, size, size, &draw, 1);
+    }
+    drawTwice(draw);
+    Expect(near(ReadPixel(midX, midY), flipped, 4), "post effects: after the pane changes size the effect still draws");
+    Expect(runner::rt_glGetError() == runner::GL_NO_ERROR, "post effects: the chain leaves no GL error");
+
+    // A transparent pane keeps alpha 0 where nothing was drawn, through an LDR effect.
+    renderer.setTransparentOutput(true);
+    OffscreenTarget target(64, 64);
+    runner::LightDraw sun;
+    sun.kind = runner::LightDraw::Kind::Directional;
+    sun.direction[0] = -0.4f;
+    sun.direction[1] = -0.6f;
+    sun.direction[2] = -0.7f;
+    sun.intensity = 2.f;
+    renderer.setCamera(engine_core::matrix4_translation(0.f, 0.f, 6.f), 40.f);
+    runner::ViewPixels pixels;
+    Expect(target.complete() && target.shoot(renderer, {draw}, sun, pixels), "post effects: a transparent shot draws");
+    if (pixels.rgba.size() == 64 * 64 * 4) {
+        const auto alpha = [&pixels](int x, int y) {
+            return static_cast<int>(pixels.rgba[(static_cast<std::size_t>(y) * 64 + x) * 4 + 3]);
+        };
+        Expect(alpha(0, 0) == 0 && alpha(32, 32) == 255,
+               "post effects: a transparent pane keeps its coverage through an effect (" + std::to_string(alpha(0, 0)) +
+                   ", " + std::to_string(alpha(32, 32)) + ")");
+    }
+    renderer.setTransparentOutput(false);
+    renderer.setCamera(engine_core::matrix4_identity(), runner::Renderer::kCameraFovYDegrees);
+    renderer.setLighting(runner::SceneLighting{});
+    renderer.shutdown();
+}
+
 // render_mode transparent and two_sided, and a see-through Material's shader.
 void CheckSurfaceRenderModes(const GpuMesh* cube, int size, int fbWidth, int fbHeight) {
     runner::Renderer renderer;
@@ -2949,6 +3128,7 @@ int main(int argc, char** argv) {
         CheckSurfaceShaders(cube, kSize, fbWidth, fbHeight);
         CheckSurfaceRenderModes(cube, kSize, fbWidth, fbHeight);
         CheckSurfaceShadows(cube, kSize, fbWidth, fbHeight);
+        CheckPostEffects(cube, kSize, fbWidth, fbHeight);
 
         // The cube at the origin, under the camera a Renderer starts with, fills the middle of the pane.
         runner::MeshDraw draw{cube, engine_core::matrix4_identity()};

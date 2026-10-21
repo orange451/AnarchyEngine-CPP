@@ -538,6 +538,16 @@ void GameView::collectMeshes() {
     lighting.bloom.intensity = bloom.intensity;
     lighting.bloom.size = bloom.size;
     lighting.bloom.threshold = bloom.threshold;
+    // Every ShaderEffect, in Order, its textures loaded as a Material's are.
+    lighting.effects.clear();
+    for (const engine_core::VisualShaderEffect& row : snapshot.effects) {
+        SceneEffect& effect = lighting.effects.emplace_back();
+        effect.effect = row.effect;
+        effect.enabled = row.enabled;
+        effect.hdr = row.binding->hdr;
+        effect.binding = row.binding;
+        ResolveShaderTextures(*row.binding, textures_, effect.textures, std::size(effect.textures));
+    }
     // The Atmosphere, if any; with none, one turned off, or Density 0, there is no air.
     lighting.atmosphere = ToSceneAtmosphere(snapshot.atmosphere);
     // The ScreenSpaceReflections, if any; with none, or one turned off, nothing is traced.

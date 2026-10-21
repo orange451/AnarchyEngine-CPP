@@ -488,6 +488,7 @@ bool Renderer::initialize() {
                      {"pipeline/bloom.glsl"}) &&
         buildProgram(bloomUp_, "Bloom up", "pipeline/fullscreen.vert", "pipeline/bloom_up.frag", {}) &&
         buildProgram(fxaa_, "FXAA", "pipeline/fullscreen.vert", "pipeline/fxaa.frag", {}) &&
+        buildProgram(blit_, "Blit", "pipeline/fullscreen.vert", "pipeline/blit.frag", {}) &&
         buildProgram(ssrScene_, "Reflections scene", "pipeline/fullscreen.vert", "pipeline/ssr_scene.frag", {}) &&
         buildProgram(ssrBlur_, "Reflections blur", "pipeline/fullscreen.vert", "pipeline/ssr_blur.frag",
                      {"pipeline/ssr.glsl"}) &&
@@ -803,6 +804,9 @@ bool Renderer::ensureTargets(int width, int height) {
     mergeTexture_ = MakeTarget(RT_GL_RGBA16F, GL_RGBA, RT_GL_HALF_FLOAT, width, height, GL_LINEAR);
     // FXAA reads between texels.
     ldrTexture_ = MakeTarget(GL_RGBA8, GL_RGBA, GL_UNSIGNED_BYTE, width, height, GL_LINEAR);
+    // The twins ShaderEffects ping-pong with, read as their originals are.
+    mergePingTexture_ = MakeTarget(RT_GL_RGBA16F, GL_RGBA, RT_GL_HALF_FLOAT, width, height, GL_LINEAR);
+    ldrPingTexture_ = MakeTarget(GL_RGBA8, GL_RGBA, GL_UNSIGNED_BYTE, width, height, GL_LINEAR);
     glBindTexture(GL_TEXTURE_2D, 0);
 
     bool complete = true;
@@ -821,6 +825,12 @@ bool Renderer::ensureTargets(int width, int height) {
     glGenFramebuffers(1, &ldrFbo_);
     glBindFramebuffer(RT_GL_FRAMEBUFFER, ldrFbo_);
     complete = Attach({ldrTexture_}, 0) && complete;
+    glGenFramebuffers(1, &mergePingFbo_);
+    glBindFramebuffer(RT_GL_FRAMEBUFFER, mergePingFbo_);
+    complete = Attach({mergePingTexture_}, 0) && complete;
+    glGenFramebuffers(1, &ldrPingFbo_);
+    glBindFramebuffer(RT_GL_FRAMEBUFFER, ldrPingFbo_);
+    complete = Attach({ldrPingTexture_}, 0) && complete;
     if (!complete) {
         if (!targetsRefused_) {
             std::fprintf(stderr, "The Scene View's %d by %d render buffers are not supported.\n", width, height);
@@ -854,6 +864,10 @@ Renderer::TargetSet Renderer::parkTargets() {
     set.merge = std::exchange(mergeTexture_, 0u);
     set.ldrFbo = std::exchange(ldrFbo_, 0u);
     set.ldr = std::exchange(ldrTexture_, 0u);
+    set.mergePingFbo = std::exchange(mergePingFbo_, 0u);
+    set.mergePing = std::exchange(mergePingTexture_, 0u);
+    set.ldrPingFbo = std::exchange(ldrPingFbo_, 0u);
+    set.ldrPing = std::exchange(ldrPingTexture_, 0u);
     set.fxaaValid = std::exchange(fxaaValid_, false);
     set.used = targetUses_;
     targetWidth_ = 0;
@@ -878,18 +892,24 @@ void Renderer::unparkTargets(const TargetSet& set) {
     mergeTexture_ = set.merge;
     ldrFbo_ = set.ldrFbo;
     ldrTexture_ = set.ldr;
+    mergePingFbo_ = set.mergePingFbo;
+    mergePingTexture_ = set.mergePing;
+    ldrPingFbo_ = set.ldrPingFbo;
+    ldrPingTexture_ = set.ldrPing;
     fxaaValid_ = set.fxaaValid;
 }
 
 void Renderer::destroyTargets() {
-    for (unsigned* fbo : {&gbufferFbo_, &accumulationFbo_, &transparencyFbo_, &mergeFbo_, &ldrFbo_}) {
+    for (unsigned* fbo :
+         {&gbufferFbo_, &accumulationFbo_, &transparencyFbo_, &mergeFbo_, &ldrFbo_, &mergePingFbo_, &ldrPingFbo_}) {
         if (*fbo != 0) {
             glDeleteFramebuffers(1, fbo);
             *fbo = 0;
         }
     }
     for (unsigned* texture : {&albedoTexture_, &normalTexture_, &materialTexture_, &emissiveTexture_, &depthTexture_,
-                              &accumulationTexture_, &transparencyTexture_, &mergeTexture_, &ldrTexture_}) {
+                              &accumulationTexture_, &transparencyTexture_, &mergeTexture_, &ldrTexture_,
+                              &mergePingTexture_, &ldrPingTexture_}) {
         DeleteTexture(*texture);
     }
     destroyBloomChain();
@@ -1393,6 +1413,8 @@ bool Renderer::draw(double x, double y, double width, double height, double scen
     const bool sceneDrawn = hasMeshes || hasSky || hasParticles;
     bool drawn = !sceneDrawn;
     int bloomLevels = 0;
+    // The merge image, or the last Hdr ShaderEffect's result over it.
+    unsigned merged = mergeTexture_;
     if (!drawn && ensureTargets(pane.width, pane.height)) {
         // The lights in view space, as every pass takes them.
         viewLights_.clear();
@@ -1510,8 +1532,11 @@ bool Renderer::draw(double x, double y, double width, double height, double scen
         glViewport(0, 0, targetWidth_, targetHeight_);
         drawn = drawn && transparencyPass(meshes, projection, inverseProjection.m) &&
                 mergePass(reflected, inverseProjection.m);
+        // ShaderEffects on linear light, before bloom and the tone map see it.
+        merged = drawn ? postPass(true, mergeTexture_, targetWidth_, targetHeight_, projection, inverseProjection.m)
+                       : mergeTexture_;
         // Bloom never fails the frame: without it, the tone map draws the scene as it is.
-        bloomLevels = drawn ? bloomPass(targetWidth_, targetHeight_) : 0;
+        bloomLevels = drawn ? bloomPass(merged, targetWidth_, targetHeight_) : 0;
     }
     if (drawn && sceneDrawn) {
         glDisable(GL_DEPTH_TEST);
@@ -1534,9 +1559,11 @@ bool Renderer::draw(double x, double y, double width, double height, double scen
             }
         };
         bool onPane = false;
-        if (lighting_.antialiasing == SceneAntialiasing::FXAA) {
+        const bool antialiased = lighting_.antialiasing == SceneAntialiasing::FXAA;
+        if (antialiased || hasEffects(false)) {
             // The tone map into ldrTexture_, over the pane's clear color, so it
-            // holds what the pane would have shown; then FXAA onto the pane.
+            // holds what the pane would have shown; then the LDR ShaderEffects
+            // over it, and FXAA, or a plain copy, onto the pane.
             glBindFramebuffer(RT_GL_FRAMEBUFFER, ldrFbo_);
             glDisable(GL_SCISSOR_TEST);
             glViewport(0, 0, targetWidth_, targetHeight_);
@@ -1548,17 +1575,19 @@ bool Renderer::draw(double x, double y, double width, double height, double scen
             }
             glClear(GL_COLOR_BUFFER_BIT);
             blendOverClear();
-            if (toneMapPass(bloomLevels)) {
+            if (toneMapPass(merged, bloomLevels)) {
+                const unsigned shown =
+                    postPass(false, ldrTexture_, targetWidth_, targetHeight_, projection, inverseProjection.m);
                 bindPane();
                 glDisable(GL_BLEND);
-                onPane = fxaaPass();
+                onPane = antialiased ? fxaaPass(shown) : blitPass(shown);
             }
         }
-        // Without FXAA, or when it cannot draw yet: the tone map straight onto the pane.
+        // Without FXAA or effects, or when they cannot draw yet: the tone map straight onto the pane.
         if (!onPane) {
             bindPane();
             blendOverClear();
-            onPane = toneMapPass(bloomLevels);
+            onPane = toneMapPass(merged, bloomLevels);
         }
         drawn = onPane;
         if (drawn) {
@@ -2215,22 +2244,30 @@ void Renderer::useGeometryProgram(const Program& program, const float* projectio
 }
 
 void Renderer::bindSurface(const SurfacePrograms::Variant& variant, const MeshDraw& draw) {
-    const engine_core::SurfaceBinding& binding = *draw.surface;
+    if (uploadParams(variant, *draw.surface, draw.surfaceTextures, std::size(draw.surfaceTextures),
+                     kSurfaceTextureUnit)) {
+        surfaceSamplersBound_ = true;
+    }
+}
+
+bool Renderer::uploadParams(const SurfacePrograms::Variant& variant, const engine_core::SurfaceBinding& binding,
+                            const unsigned* textures, std::size_t textureCount, int firstUnit) {
     const std::vector<engine_core::ShaderParam>& params = binding.parse->params;
     // The values now: the simulation thread may have swapped them since the snapshot.
     const std::shared_ptr<const engine_core::SurfaceValues> held = binding.values();
     const std::vector<engine_core::LuaSlot>& values = held->slots;
-    int sampler = 0;
+    bool bound = false;
+    std::size_t sampler = 0;
     for (std::size_t i = 0; i < params.size() && i < variant.locations.size() && i < values.size(); ++i) {
         const engine_core::ShaderParam& param = params[i];
         const int location = variant.locations[i];
         const engine_core::LuaSlot& value = values[i];
         if (param.type == engine_core::ShaderParamType::Sampler) {
-            const int unit = kSurfaceTextureUnit + sampler;
-            const unsigned texture = sampler < 3 ? draw.surfaceTextures[sampler] : 0u;
+            const int unit = firstUnit + static_cast<int>(sampler);
+            const unsigned texture = sampler < textureCount ? textures[sampler] : 0u;
             BindTexture(unit, texture != 0 ? texture : param.black ? blackTexture_ : whiteTexture_);
             glBindSampler(static_cast<GLuint>(unit), surfaceSamplers_[(param.clamp ? 1 : 0) | (param.nearest ? 2 : 0)]);
-            surfaceSamplersBound_ = true;
+            bound = true;
             ++sampler;
             continue;
         }
@@ -2262,6 +2299,7 @@ void Renderer::bindSurface(const SurfacePrograms::Variant& variant, const MeshDr
             break;
         }
     }
+    return bound;
 }
 
 void Renderer::unbindSurfaceSamplers() {
@@ -3352,7 +3390,7 @@ bool Renderer::mergePass(bool reflected, const float* inverseProjection) {
     return true;
 }
 
-int Renderer::bloomPass(int width, int height) {
+int Renderer::bloomPass(unsigned image, int width, int height) {
     const SceneBloom& bloom = lighting_.bloom;
     if (!bloom.enabled || !(bloom.intensity > 0.f)) {
         return 0;
@@ -3374,7 +3412,7 @@ int Renderer::bloomPass(int width, int height) {
     for (int k = 0; k < plan.levels; ++k) {
         glBindFramebuffer(RT_GL_FRAMEBUFFER, bloomFbos_[k]);
         glViewport(0, 0, width >> (k + 1), height >> (k + 1));
-        BindTexture(kUnitScene, k == 0 ? mergeTexture_ : bloomTextures_[k - 1]);
+        BindTexture(kUnitScene, k == 0 ? image : bloomTextures_[k - 1]);
         glUniform2f(bloomDown_.texel, 1.f / static_cast<float>(width >> k), 1.f / static_cast<float>(height >> k));
         glUniform1f(bloomDown_.prefilter, k == 0 ? 1.f : 0.f);
         if (k == 0 && !CanDraw(bloomDown_.id)) {
@@ -3404,10 +3442,10 @@ int Renderer::bloomPass(int width, int height) {
     return plan.levels;
 }
 
-bool Renderer::toneMapPass(int bloomLevels) {
+bool Renderer::toneMapPass(unsigned image, int bloomLevels) {
     RENDER_PASS("Tone map");
     glUseProgram(tonemap_.id);
-    BindTexture(kUnitScene, mergeTexture_);
+    BindTexture(kUnitScene, image);
     glUniform1f(tonemap_.exposure, std::max(lighting_.exposure, 0.f));
     glUniform1f(tonemap_.inverseGamma, 1.f / std::max(lighting_.gamma, 0.01f));
     glUniform1i(tonemap_.cinematic, lighting_.cinematicToneMapping ? 1 : 0);
@@ -3425,10 +3463,10 @@ bool Renderer::toneMapPass(int bloomLevels) {
     return true;
 }
 
-bool Renderer::fxaaPass() {
+bool Renderer::fxaaPass(unsigned image) {
     RENDER_PASS("FXAA");
     glUseProgram(fxaa_.id);
-    BindTexture(kUnitScene, ldrTexture_);
+    BindTexture(kUnitScene, image);
     glUniform2f(fxaa_.texel, 1.f / static_cast<float>(targetWidth_), 1.f / static_cast<float>(targetHeight_));
     glUniform1f(fxaa_.keepAlpha, transparentOutput_ ? 1.f : 0.f);
     glBindVertexArray(emptyVao_);
@@ -3440,6 +3478,81 @@ bool Renderer::fxaaPass() {
     }
     DrawFullscreen(emptyVao_);
     return true;
+}
+
+bool Renderer::blitPass(unsigned image) {
+    RENDER_PASS("Blit");
+    glUseProgram(blit_.id);
+    BindTexture(kUnitScene, image);
+    glBindVertexArray(emptyVao_);
+    if (!CanDraw(blit_.id)) {
+        return false;
+    }
+    DrawFullscreen(emptyVao_);
+    return true;
+}
+
+bool Renderer::hasEffects(bool hdr) const {
+    for (const SceneEffect& effect : lighting_.effects) {
+        if (effect.enabled && effect.hdr == hdr && effect.binding != nullptr) {
+            return true;
+        }
+    }
+    return false;
+}
+
+unsigned Renderer::postPass(bool hdr, unsigned image, int width, int height, const float* projection,
+                            const float* inverseProjection) {
+    const unsigned pingTexture = hdr ? mergePingTexture_ : ldrPingTexture_;
+    const unsigned fbos[2] = {hdr ? mergeFbo_ : ldrFbo_, hdr ? mergePingFbo_ : ldrPingFbo_};
+    if (pingTexture == 0 || !hasEffects(hdr)) {
+        return image;
+    }
+    RENDER_PASS("Post effects");
+    const engine_core::Matrix4 inverseView = engine_core::matrix4_inverse(view_);
+    unsigned current = image;
+    bool boundSamplers = false;
+    for (const SceneEffect& effect : lighting_.effects) {
+        if (!effect.enabled || effect.hdr != hdr || effect.binding == nullptr) {
+            continue;
+        }
+        const SurfacePrograms::Variant& variant = surfacePrograms_.get(*effect.binding, shaderTime()).post;
+        if (variant.program.id == 0) {
+            continue;
+        }
+        // Into whichever of the two holds the image not being read.
+        const unsigned target = current == image ? fbos[1] : fbos[0];
+        glBindFramebuffer(RT_GL_FRAMEBUFFER, target);
+        glViewport(0, 0, width, height);
+        glDisable(GL_SCISSOR_TEST);
+        glDisable(GL_DEPTH_TEST);
+        glDisable(GL_BLEND);
+        glUseProgram(variant.program.id);
+        BindTexture(kUnitScene, current);
+        bindGBuffer(variant.program);
+        glUniformMatrix4fv(variant.program.view, 1, GL_FALSE, view_.m);
+        glUniformMatrix4fv(variant.program.projection, 1, GL_FALSE, projection);
+        glUniformMatrix4fv(variant.program.inverseView, 1, GL_FALSE, inverseView.m);
+        glUniformMatrix4fv(variant.program.inverseProjection, 1, GL_FALSE, inverseProjection);
+        glUniform2f(variant.program.screenSize, static_cast<float>(width), static_cast<float>(height));
+        glUniform1f(variant.program.time, shaderTime());
+        boundSamplers = uploadParams(variant, *effect.binding, effect.textures, std::size(effect.textures),
+                                     kPostTextureUnit) ||
+                        boundSamplers;
+        glBindVertexArray(emptyVao_);
+        if (!CanDraw(variant.program.id)) {
+            continue;
+        }
+        DrawFullscreen(emptyVao_);
+        current = target == fbos[1] ? pingTexture : image;
+    }
+    if (boundSamplers) {
+        for (int unit = kPostTextureUnit; unit < kPostTextureUnit + static_cast<int>(std::size(SceneEffect{}.textures));
+             ++unit) {
+            glBindSampler(static_cast<GLuint>(unit), 0);
+        }
+    }
+    return current;
 }
 
 bool Renderer::readGBuffer(GBufferPixels& out) const {
@@ -3554,7 +3667,8 @@ void Renderer::shutdown() {
     ready_ = false;
     for (Program* program :
          {&geometry_, &terrain_, &forward_, &ibl_, &light_, &sun_, &merge_, &tonemap_, &bloomDown_, &bloomUp_, &fxaa_, &ssrScene_, &ssrBlur_, &ssr_, &gtao_, &aoBlur_, &sky_, &grid_,
-          &gridBands_, &outline_, &handle_, &dynamicSky_, &dynamicSkyLayers_, &dynamicSkyCube_, &depthProbe_}) {
+          &gridBands_, &outline_, &handle_, &dynamicSky_, &dynamicSkyLayers_, &dynamicSkyCube_, &depthProbe_,
+          &blit_}) {
         if (program->id != 0) {
             glDeleteProgram(program->id);
         }

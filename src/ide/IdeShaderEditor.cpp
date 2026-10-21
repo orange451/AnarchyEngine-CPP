@@ -173,7 +173,8 @@ std::shared_ptr<jadefx::VBox> card(const char* title) {
     return box;
 }
 
-// How often the preview draws, and so how smoothly TIME moves in it.
+// How often the preview of a Shader that reads TIME draws, and so how
+// smoothly TIME moves in it. Any other draws only when what it shows changes.
 constexpr std::chrono::milliseconds kPreviewInterval{50};
 constexpr int kPreviewRender = 768;
 constexpr int kPreviewSize = 512;
@@ -452,7 +453,7 @@ void IdeShaderEditor::pick_mesh(PreviewMesh mesh) {
             button->getClassList().add("se-mesh-on");
         }
     }
-    drawn_ = {};
+    preview_stale_ = true;
 }
 
 void IdeShaderEditor::show_mesh_menu() {
@@ -485,7 +486,20 @@ void IdeShaderEditor::show_mesh_menu() {
 void IdeShaderEditor::turn(double dx, double dy) {
     yaw_ += static_cast<float>(dx * 0.01);
     pitch_ = std::clamp(pitch_ + static_cast<float>(dy * 0.01), -1.55f, 1.55f);
-    drawn_ = {};
+    preview_stale_ = true;
+}
+
+bool IdeShaderEditor::previewDue(std::chrono::steady_clock::time_point now) const {
+    if (preview_stale_) {
+        return true;
+    }
+    const bool moving = preview_binding_ && (preview_binding_->reads_time || preview_binding_->vertex_reads_time);
+    return moving && now - drawn_ >= kPreviewInterval;
+}
+
+void IdeShaderEditor::previewDrawn(std::chrono::steady_clock::time_point now) {
+    drawn_ = now;
+    preview_stale_ = false;
 }
 
 void IdeShaderEditor::renderContent(jadefx::UiRenderer& renderer, float opacity) {
@@ -494,10 +508,10 @@ void IdeShaderEditor::renderContent(jadefx::UiRenderer& renderer, float opacity)
         return;
     }
     const auto now = std::chrono::steady_clock::now();
-    if (now - drawn_ < kPreviewInterval) {
+    if (!previewDue(now)) {
         return;
     }
-    drawn_ = now;
+    previewDrawn(now);
     MaterialLook look;
     look.surface = preview_binding_;
     ball_->setRoot(world_.resources_root());
@@ -510,6 +524,8 @@ void IdeShaderEditor::renderContent(jadefx::UiRenderer& renderer, float opacity)
     runner::ViewPixels pixels;
     if (ball_->drawView(look, pixels) && !pixels.empty()) {
         preview_image_->setImage(jadefx::Image::fromRgba(pixels.width, pixels.height, std::move(pixels.rgba)));
+    } else {
+        preview_stale_ = true;
     }
 }
 
@@ -521,6 +537,7 @@ void IdeShaderEditor::sceneChanged(jadefx::Scene* previous) {
     }
     if (ball_) {
         ball_->release();
+        preview_stale_ = true;
     }
 }
 
@@ -625,7 +642,10 @@ void IdeShaderEditor::refresh() {
     seen_authored_ = authored;
     View next = read();
     if (const auto* shader = dynamic_cast<const engine_core::Shader*>(world_.instance(shader_))) {
-        preview_binding_ = engine_core::make_default_surface_binding(*shader);
+        if (!preview_binding_ || preview_binding_->version != shader->source_version()) {
+            preview_binding_ = engine_core::make_default_surface_binding(*shader);
+            preview_stale_ = true;
+        }
     } else {
         preview_binding_.reset();
     }

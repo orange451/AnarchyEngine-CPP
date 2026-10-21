@@ -79,6 +79,10 @@ public:
     jadefx::Node* meshButton(PreviewMesh mesh) const;
     // The preview's yaw and pitch, radians.
     std::pair<float, float> rotation() const { return {yaw_, pitch_}; }
+    // Whether the preview draws at now: renderContent asks, draws, then says
+    // so with previewDrawn. Public for tests, which have no GL to draw with.
+    bool previewDue(std::chrono::steady_clock::time_point now) const;
+    void previewDrawn(std::chrono::steady_clock::time_point now);
 
 protected:
     void layoutChildren() override;
@@ -168,6 +172,8 @@ private:
     float yaw_ = 0.6f;
     float pitch_ = -0.35f;
     std::chrono::steady_clock::time_point drawn_{};
+    // Something the preview shows changed since it last drew.
+    bool preview_stale_ = true;
     std::vector<std::pair<PreviewMesh, std::shared_ptr<jadefx::Node>>> mesh_buttons_;
     // The place's Meshes with a file: name and Path, for Mesh...
     std::vector<std::pair<std::string, std::string>> meshes_;

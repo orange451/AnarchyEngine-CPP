@@ -9,6 +9,7 @@
 #include "Shader.hpp"
 #include "jadefx/jadefx.hpp"
 
+#include <chrono>
 #include <cstdio>
 #include <memory>
 #include <string>
@@ -228,6 +229,32 @@ void uniforms_and_used_by() {
     Expect(rig.editor->usedByNames() == std::vector<std::string>{"Lake"}, "and one that stops using it drops off");
 }
 
+// The preview draws when what it shows changes, and over and over only for a
+// Shader that reads TIME: a still one costs nothing while the pane is open.
+void preview_redraws() {
+    Rig rig;
+    using Clock = std::chrono::steady_clock;
+    const Clock::time_point start = Clock::now();
+    Expect(rig.editor->previewDue(start), "the preview draws when the pane opens");
+    rig.editor->previewDrawn(start);
+    Expect(!rig.editor->previewDue(start + std::chrono::seconds(1)), "a still Shader is not drawn again");
+    // A change elsewhere in the place changes nothing it shows.
+    rig.game.set_name(rig.rock, "Stone");
+    rig.frames(2);
+    Expect(!rig.editor->previewDue(start + std::chrono::seconds(1)), "a rename elsewhere draws nothing");
+    rig.click(rig.editor->meshButton(ide::PreviewMesh::Cube));
+    Expect(rig.editor->previewDue(start + std::chrono::seconds(1)), "picking a mesh draws it");
+    rig.editor->previewDrawn(start + std::chrono::seconds(1));
+    rig.shader().set_source("void surface() {\n    EMISSIVE = vec3(sin(TIME));\n}\n");
+    rig.frames(2);
+    const Clock::time_point edited = start + std::chrono::seconds(2);
+    Expect(rig.editor->previewDue(edited), "a new source draws it");
+    rig.editor->previewDrawn(edited);
+    Expect(!rig.editor->previewDue(edited + std::chrono::milliseconds(10)) &&
+               rig.editor->previewDue(edited + std::chrono::milliseconds(60)),
+           "a Shader that reads TIME draws again every 50 ms");
+}
+
 void preview_controls() {
     Rig rig;
     Expect(rig.editor->previewMesh() == ide::PreviewMesh::Sphere, "the preview starts on the sphere");
@@ -268,6 +295,7 @@ int main() {
     modes_and_margin();
     uniforms_and_used_by();
     preview_controls();
+    preview_redraws();
     deleted();
     if (gFailures != 0) {
         std::fprintf(stderr, "%d failed\n", gFailures);

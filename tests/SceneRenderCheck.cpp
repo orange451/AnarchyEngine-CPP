@@ -2749,6 +2749,38 @@ void CheckSurfaceShadows(const GpuMesh* cube, int size, int fbWidth, int fbHeigh
     seen = lit(spot);
     Expect(seen[0] < middleBack && programs.shadowBuilds() == shadowsBefore,
            "surface shadows: a shader with no holes casts whole, with no shadow program of its own");
+
+    // A vertex stage lifts the cube 2 units: its shadow leaves the floor behind its rest position.
+    const char* plainSurface = "shader surface;\nvoid surface() {}\n";
+    spot.id = 45;
+    scene[0].surface = SurfaceFor(9206, 1, plainSurface, {}, "void vertex() {\n    VERTEX.y += 2.0;\n}\n", 2.f);
+    seen = lit(spot);
+    Expect(seen[0] > middleBack && seen[1] > middleFront,
+           "surface shadows: a cube lifted by its vertex stage shadows elsewhere (" + std::to_string(seen[0]) + ", " +
+               std::to_string(seen[1]) + ")");
+
+    // A vertex stage that reads TIME draws its cached map every frame; one that does not, once.
+    spot.id = 46;
+    scene[0].surface = SurfaceFor(9207, 1, plainSurface, {}, "void vertex() {\n    VERTEX.y += 0.1 * sin(TIME);\n}\n");
+    lit(spot);
+    lit(spot);
+    const int timedCalls = renderer.stats().instancedCalls;
+    spot.id = 47;
+    scene[0].surface = SurfaceFor(9208, 1, plainSurface, {}, "void vertex() {\n    VERTEX.y += 0.1;\n}\n");
+    lit(spot);
+    lit(spot);
+    const int stillCalls = renderer.stats().instancedCalls;
+    Expect(timedCalls > 2 && stillCalls == 2,
+           "surface shadows: a TIME vertex stage redraws its map each frame, a still one does not (" +
+               std::to_string(timedCalls) + " / " + std::to_string(stillCalls) + ")");
+
+    // The vertex text cleared: the plain depth program again, the shadow back at rest.
+    spot.id = 48;
+    const std::uint64_t vertexShadows = programs.shadowBuilds();
+    scene[0].surface = SurfaceFor(9208, 2, plainSurface);
+    seen = lit(spot);
+    Expect(seen[0] < middleBack && programs.shadowBuilds() == vertexShadows,
+           "surface shadows: without its vertex text the cube casts plain again, with no shadow program built");
     renderer.shutdown();
 }
 

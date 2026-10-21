@@ -4,14 +4,21 @@
 // world matrix and bone base come from runner::InstanceBuffer, slots 7 to 10
 // and 15; a skinned caster is posed as geometry.vert poses it. Built with
 // CUTOUT, it passes on the UVs shadow.frag tests alpha at.
+// Built with VERTEX_SHADER, a Material's Shader's vertex stage
+// (vertex_shader.glsl) moves each vertex as the G-buffer pass moves it.
 layout (location = 0) in vec3 aPosition;
-#if defined(CUTOUT) || defined(SURFACE_SHADER)
+#if defined(CUTOUT) || defined(SURFACE_SHADER) || defined(VERTEX_SHADER)
 layout (location = 2) in vec2 aUv;
+#endif
+#if defined(CUTOUT) || defined(SURFACE_SHADER)
 out vec2 vUv;
+#endif
+#if defined(SURFACE_SHADER) || defined(VERTEX_SHADER)
+// A Material's Shader reads the vertex color.
+layout (location = 4) in vec4 aColor;
 #endif
 #ifdef SURFACE_SHADER
 // A Material's Shader in shadow.frag reads the vertex color and where it is.
-layout (location = 4) in vec4 aColor;
 out vec4 vColor;
 out vec3 vWorldPosition;
 #endif
@@ -52,6 +59,12 @@ void main() {
     vUv = aUv;
 #endif
     vec4 world = aModel * (skin() * vec4(aPosition, 1.0));
+#ifdef VERTEX_SHADER
+    vec3 moved = world.xyz;
+    vec3 facing = vec3(0.0, 1.0, 0.0);
+    runVertexShader(moved, facing, aUv, aColor);
+    world = vec4(moved, 1.0);
+#endif
 #ifdef SURFACE_SHADER
     vColor = aColor;
     vWorldPosition = world.xyz;

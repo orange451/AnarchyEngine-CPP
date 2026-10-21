@@ -210,10 +210,14 @@ int ShadowRenderer::addCasterRuns(const std::vector<int>& casters, const MeshDra
     const auto cutoutOf = [&](int caster) { return cutouts && meshes[caster].cutout ? meshes[caster].texture : 0u; };
     // A caster whose surface Shader cuts holes casts through its shadow program
     // where cut-outs are tested; the binding names it, and so its values.
+    // One with a vertex stage casts through it in every cascade: its shape is
+    // in the program.
     const auto surfaceOf = [&](int caster) -> const engine_core::SurfaceBinding* {
         const MeshDraw& draw = meshes[caster];
-        return cutouts && draw.surface != nullptr && draw.surface->cuts && surfaces_.variant ? draw.surface.get()
-                                                                                             : nullptr;
+        if (draw.surface == nullptr || !surfaces_.variant) {
+            return nullptr;
+        }
+        return draw.surface->has_vertex || (cutouts && draw.surface->cuts) ? draw.surface.get() : nullptr;
     };
     std::stable_sort(casterOrder_.begin(), casterOrder_.end(), [&](int a, int b) {
         const engine_core::SurfaceBinding* surfaceA = surfaceOf(a);
@@ -410,11 +414,12 @@ bool ShadowRenderer::draw(const std::vector<ShadowRequest>& requests, const Mesh
                 caster.pose = mesh.bones != nullptr ? mesh.poseRevision : 0;
                 caster.cutout = mesh.cutout ? mesh.texture : 0;
                 caster.owner = mesh.owner;
-                // Only a shader that cuts holes changes the shadow.
+                // A shader that cuts holes or moves vertices changes the shadow.
                 const bool cuts = surface != nullptr && surface->cuts;
-                const bool timed = cuts && surface->reads_time;
-                casterWatched_[index] = cuts ? (timed ? 2 : 1) : 0;
-                if (cuts) {
+                const bool moves = surface != nullptr && surface->has_vertex;
+                const bool timed = (cuts && surface->reads_time) || (moves && surface->vertex_reads_time);
+                casterWatched_[index] = cuts || moves ? (timed ? 2 : 1) : 0;
+                if (cuts || moves) {
                     caster.surface = SurfaceFingerprint(*surface, timed ? casterFrame_ : 0);
                 }
                 casterSurface_[index] = caster.surface;

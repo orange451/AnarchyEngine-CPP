@@ -29,6 +29,19 @@ void FindParams(const engine_core::ShaderParse& parse, SurfacePrograms::Variant&
     glUseProgram(0);
 }
 
+// A define after source's #version line; the user's lines move down one.
+void AddDefine(AssembledSource& source, const char* name) {
+    const std::size_t line_end = source.text.find('\n');
+    if (source.text.empty()) {
+        return;
+    }
+    source.text.insert(line_end == std::string::npos ? source.text.size() : line_end + 1,
+                       std::string("#define ") + name + "\n");
+    if (source.user_first_line > 0) {
+        ++source.user_first_line;
+    }
+}
+
 }  // namespace
 
 const SurfacePrograms::Built& SurfacePrograms::get(const engine_core::SurfaceBinding& binding, double now) {
@@ -111,11 +124,26 @@ void SurfacePrograms::build(const engine_core::SurfaceBinding& binding, Built& b
         }
     }
     link(binding, geometry.text, vertex_map, forward, built.forward, built);
-    if (binding.cuts) {
+    // The shadow program: a shader that cuts holes runs them here; one with a
+    // vertex stage moves its casters here, testing its texture's alpha as the
+    // engine's cut-out program does.
+    if (binding.cuts || binding.has_vertex) {
         ++shadowBuilds_;
-        const AssembledSource vertex = AssembleSurface("pipeline/shadow.vert", {}, std::string(), false);
-        const AssembledSource shadow = AssembleSurface("pipeline/shadow.frag", {"pipeline/surface.glsl"}, glsl, true);
-        link(binding, vertex.text, nullptr, shadow, built.shadow, built);
+        AssembledSource vertex;
+        if (binding.has_vertex) {
+            vertex = AssembleVertex("pipeline/shadow.vert", binding.vertex_glsl);
+            AddDefine(vertex, binding.cuts ? "SURFACE_SHADER" : "CUTOUT");
+        } else {
+            vertex = AssembleSurface("pipeline/shadow.vert", {}, std::string(), false);
+        }
+        AssembledSource shadow;
+        if (binding.cuts) {
+            shadow = AssembleSurface("pipeline/shadow.frag", {"pipeline/surface.glsl"}, glsl, true);
+        } else {
+            shadow.text = LoadShader("pipeline/shadow.frag");
+            AddDefine(shadow, "CUTOUT");
+        }
+        link(binding, vertex.text, binding.has_vertex ? &vertex : nullptr, shadow, built.shadow, built);
     }
 }
 

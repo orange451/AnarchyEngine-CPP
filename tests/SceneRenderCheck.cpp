@@ -2550,6 +2550,16 @@ void CheckSurfaceShaders(const GpuMesh* cube, int size, int fbWidth, int fbHeigh
                Text(liftedTop) + ")");
     Expect(programs.take_errors().empty(), "vertex stage: a vertex stage that builds reports nothing");
 
+    // NORMAL is unit length whatever the instance's scale: a half-size cube moved by length(NORMAL) - 1 stays put.
+    runner::MeshDraw small = plainDraw;
+    for (int axis = 0; axis < 3; ++axis) {
+        small.model.m[axis * 5] = 0.5f;
+    }
+    small.surface = SurfaceFor(9011, 1, tint, {}, "void vertex() {\n    VERTEX.y += 4.0 * (length(NORMAL) - 1.0);\n}\n", 4.f);
+    const Pixel smallMiddle = drawOne(small);
+    Expect(!IsClear(smallMiddle) && smallMiddle.r > smallMiddle.g + 40,
+           "vertex stage: NORMAL is unit length on a scaled instance (" + Text(smallMiddle) + ")");
+
     // A vertex stage that does not build: plain, and its error names the stage and the user's line.
     runner::MeshDraw brokenVertex = plainDraw;
     brokenVertex.surface = SurfaceFor(9008, 1, tint, {}, "void vertex() {\n    VERTEX.y += ;\n}\n");
@@ -2766,6 +2776,19 @@ void CheckSurfaceShadows(const GpuMesh* cube, int size, int fbWidth, int fbHeigh
     seen = lit(spot);
     Expect(seen[0] < middleBack,
            "surface shadows: a cube stretched along NORMAL keeps its shadow (" + std::to_string(seen[0]) + ")");
+
+    // NORMAL is unit length in the shadow pass too: a scaled cube moved by 1 - length(NORMAL) keeps its shadow.
+    spot.id = 50;
+    const engine_core::Matrix4 restModel = scene[0].model;
+    for (int axis = 0; axis < 3; ++axis) {
+        scene[0].model.m[axis * 5] = 1.25f;
+    }
+    scene[0].surface =
+        SurfaceFor(9210, 1, plainSurface, {}, "void vertex() {\n    VERTEX.y += 20.0 * (1.0 - length(NORMAL));\n}\n", 4.f);
+    seen = lit(spot);
+    Expect(seen[0] < middleBack,
+           "surface shadows: NORMAL is unit length on a scaled caster (" + std::to_string(seen[0]) + ")");
+    scene[0].model = restModel;
 
     // A vertex stage that reads TIME draws its cached map every frame; one that does not, once.
     spot.id = 46;

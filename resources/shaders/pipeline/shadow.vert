@@ -66,8 +66,9 @@ void main() {
     vec4 world = aModel * (skinning * vec4(aPosition, 1.0));
 #ifdef VERTEX_SHADER
     vec3 moved = world.xyz;
-    // The normal matrix geometry.vert is given, worked out here: casters carry none.
-    vec3 facing = transpose(inverse(mat3(aModel))) * (mat3(skinning) * aNormal);
+    // The normal matrix geometry.vert is given, worked out here: casters carry
+    // none. NORMAL is unit length whatever the caster's scale.
+    vec3 facing = normalize(transpose(inverse(mat3(aModel))) * (mat3(skinning) * aNormal));
     runVertexShader(moved, facing, aUv, aColor);
     world = vec4(moved, 1.0);
 #endif

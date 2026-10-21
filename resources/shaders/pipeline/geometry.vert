@@ -137,6 +137,8 @@ void main() {
     vec4 color = aColor * vec4(aTint.rgb, 1.0);
 #ifdef VERTEX_SHADER
     // The Material's Shader's vertex stage (vertex_shader.glsl) moves it in world space.
+    // NORMAL is unit length whatever the instance's scale.
+    worldNormal = normalize(worldNormal);
     runVertexShader(world, worldNormal, aUv, color);
 #endif
     vec4 viewPosition = uView * vec4(world, 1.0);

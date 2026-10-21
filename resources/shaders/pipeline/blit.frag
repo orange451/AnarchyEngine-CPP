@@ -5,7 +5,10 @@ in vec2 vUv;
 out vec4 fragColor;
 
 uniform sampler2D uScene;
+// 1 for a transparent pane, whose alpha is its coverage; 0 draws opaque.
+uniform float uKeepAlpha;
 
 void main() {
-    fragColor = texture(uScene, vUv);
+    vec4 color = texture(uScene, vUv);
+    fragColor = vec4(color.rgb, uKeepAlpha > 0.5 ? color.a : 1.0);
 }

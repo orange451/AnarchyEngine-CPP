@@ -1092,7 +1092,8 @@ TEST_CASE("SHA36 Hdr is a post Shader's saved mode, set by a render_mode line as
     REQUIRE_FALSE(shader.set_hdr(true));
     end_step(game);
     game.events().drain();
-    REQUIRE(shader.source_version() > version);
+    // The text is the same, so the programs are: no new version to build.
+    REQUIRE(shader.source_version() == version);
     REQUIRE(changed == std::vector<std::string>{"Hdr"});
     game.history().undo();
     REQUIRE(!shader.hdr());

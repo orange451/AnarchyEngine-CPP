@@ -2671,6 +2671,13 @@ void CheckPostEffects(const GpuMesh* cube, int size, int fbWidth, int fbHeight) 
     const std::vector<unsigned char> plainFrame = snap();
     Expect(!IsClear(plain), "post effects: the cube draws plain first (" + Text(plain) + ")");
     Expect(!renderer.effectTargetsMade(), "post effects: a place with no effects makes no effect targets");
+    // An effect whose program fails costs nothing either: no targets, no extra passes.
+    runner::SceneLighting brokenOnly = hardEdges;
+    brokenOnly.effects.push_back(effect(PostFor(9400, 1, "void post() {\n    COLOR.rgb = ;\n}\n")));
+    renderer.setLighting(brokenOnly);
+    drawTwice(draw);
+    Expect(!renderer.effectTargetsMade(), "post effects: an effect whose program fails makes no targets");
+    Expect(snap() == plainFrame, "post effects: and draws the plain frame");
     // The cube's right edge along the middle row, and a pixel just past it, from the frame without bloom.
     int edge = midX;
     while (edge < fbWidth - 1 && !IsClear(ReadPixel(edge + 1, midY))) {
@@ -2690,6 +2697,17 @@ void CheckPostEffects(const GpuMesh* cube, int size, int fbWidth, int fbHeight) 
                 4),
            "post effects: an LDR effect inverts the pane (" + Text(flipped) + " from " + Text(plain) + ")");
     Expect(renderer.effectTargetsMade(), "post effects: the first effect makes its targets");
+    // An opaque pane stays opaque whatever an effect writes to COLOR.a, with FXAA off as with it on.
+    const auto thin = PostFor(9411, 1, "void post() {\n    COLOR.a *= 0.5;\n}\n");
+    runner::SceneLighting thinned = hardEdges;
+    thinned.effects = {effect(thin)};
+    renderer.setLighting(thinned);
+    drawTwice(draw);
+    const std::vector<unsigned char> thinFrame = snap();
+    const std::size_t middle = (static_cast<std::size_t>(midY) * static_cast<std::size_t>(size) + midX) * 4;
+    Expect(thinFrame.size() > middle + 3 && thinFrame[middle + 3] == 255,
+           "post effects: an opaque pane keeps alpha 1 through an effect with FXAA off (" +
+               std::to_string(thinFrame.size() > middle + 3 ? thinFrame[middle + 3] : 0) + ")");
     runner::SceneLighting invertedFxaa = inverted;
     invertedFxaa.antialiasing = runner::SceneAntialiasing::FXAA;
     renderer.setLighting(invertedFxaa);
@@ -2723,6 +2741,30 @@ void CheckPostEffects(const GpuMesh* cube, int size, int fbWidth, int fbHeight) 
                near(second, Pixel{expectLiftHalve(plain.r), expectLiftHalve(plain.g), expectLiftHalve(plain.b)}, 6),
            "post effects: two effects run in their order (" + Text(first) + " then " + Text(second) + " from " +
                Text(plain) + ")");
+
+    // An Hdr effect and an LDR one in one list, whatever their order in it: the
+    // Hdr halving runs before the tone map and the LDR lift after it.
+    const auto halveHdr = PostFor(9412, 1, "void post() {\n    COLOR.rgb *= 0.5;\n}\n", {}, true);
+    runner::SceneLighting hdrOnly = hardEdges;
+    hdrOnly.effects = {effect(halveHdr)};
+    renderer.setLighting(hdrOnly);
+    drawTwice(draw);
+    const Pixel halvedLight = ReadPixel(midX, midY);
+    runner::SceneLighting liftOnly = hardEdges;
+    liftOnly.effects = {effect(lift)};
+    renderer.setLighting(liftOnly);
+    drawTwice(draw);
+    const Pixel lifted = ReadPixel(midX, midY);
+    runner::SceneLighting bothStages = hardEdges;
+    bothStages.effects = {effect(lift), effect(halveHdr)};
+    renderer.setLighting(bothStages);
+    drawTwice(draw);
+    const Pixel both = ReadPixel(midX, midY);
+    const auto expectBoth = [&](int halved) { return static_cast<unsigned char>(std::min(255, halved + 64)); };
+    Expect(near(both, Pixel{expectBoth(halvedLight.r), expectBoth(halvedLight.g), expectBoth(halvedLight.b)}, 6) &&
+               Sum(both) < Sum(lifted),
+           "post effects: an Hdr and an LDR effect each run in their stage (" + Text(both) + " from " +
+               Text(halvedLight) + " and " + Text(lifted) + ")");
 
     // A value: Strength 0 leaves the frame, Strength 1 blacks it, through the binding's values.
     engine_core::LuaSlot one;

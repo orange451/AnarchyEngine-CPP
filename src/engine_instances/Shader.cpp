@@ -154,7 +154,8 @@ std::optional<std::string> Shader::set_kind(ShaderKind kind) {
 
 std::optional<std::string> Shader::set_transparent(bool on) { return set_mode("Transparent", transparent_, on, true); }
 
-std::optional<std::string> Shader::set_hdr(bool on) { return set_mode("Hdr", hdr_, on, true); }
+// The stage, not the text: the programs stay as built.
+std::optional<std::string> Shader::set_hdr(bool on) { return set_mode("Hdr", hdr_, on, false); }
 
 std::optional<std::string> Shader::set_two_sided(bool on) { return set_mode("TwoSided", two_sided_, on, true); }
 

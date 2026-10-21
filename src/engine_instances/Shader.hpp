@@ -55,7 +55,8 @@ public:
     bool has_vertex_stage() const { return !vertex_source().empty(); }
 
     // The saved properties. Each setter records undo and fires Changed; a
-    // Kind or mode change is a new source_version, so programs build again.
+    // Kind or render mode change is a new source_version, so programs build
+    // again (Hdr is not: it picks the stage a built program runs in).
     ShaderKind kind() const { return kind_; }
     std::optional<std::string> set_kind(ShaderKind kind);
     bool transparent() const { return transparent_; }

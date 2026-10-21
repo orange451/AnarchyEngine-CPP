@@ -3475,6 +3475,7 @@ bool Renderer::blitPass(unsigned image) {
     RENDER_PASS("Blit");
     glUseProgram(blit_.id);
     BindTexture(kUnitScene, image);
+    glUniform1f(blit_.keepAlpha, transparentOutput_ ? 1.f : 0.f);
     glBindVertexArray(emptyVao_);
     if (!CanDraw(blit_.id)) {
         return false;
@@ -3483,9 +3484,13 @@ bool Renderer::blitPass(unsigned image) {
     return true;
 }
 
-bool Renderer::hasEffects(bool hdr) const {
+bool Renderer::hasEffects(bool hdr) {
     for (const SceneEffect& effect : lighting_.effects) {
-        if (effect.enabled && effect.hdr == hdr && effect.binding != nullptr) {
+        if (!effect.enabled || effect.hdr != hdr || effect.binding == nullptr) {
+            continue;
+        }
+        // Built here if it is not yet; a failed one is skipped at no cost.
+        if (surfacePrograms_.get(*effect.binding, shaderTime()).post.program.id != 0) {
             return true;
         }
     }

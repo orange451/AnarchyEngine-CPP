@@ -659,7 +659,8 @@ void IdeShaderEditor::refresh() {
     seen_authored_ = authored;
     View next = read();
     if (const auto* shader = dynamic_cast<const engine_core::Shader*>(world_.instance(shader_))) {
-        if (!preview_binding_ || preview_binding_->version != shader->source_version()) {
+        if (!preview_binding_ || preview_binding_->version != shader->source_version() ||
+            preview_binding_->hdr != shader->hdr()) {
             preview_binding_ = engine_core::make_default_surface_binding(*shader);
             preview_stale_ = true;
         }
@@ -724,12 +725,21 @@ IdeShaderEditor::View IdeShaderEditor::read() const {
     // Every Material naming it, wherever it is under Materials (a post Shader's
     // too, which draw plain: Material::shader is null for them), and every
     // ShaderEffect naming it under Lighting.
-    std::vector<engine_core::InstanceId> pending{world_.service("Materials"), world_.scene_service("Lighting")};
+    std::vector<engine_core::InstanceId> pending;
+    for (const engine_core::InstanceId root : {world_.service("Materials"), world_.scene_service("Lighting")}) {
+        if (root != 0) {
+            pending.push_back(root);
+        }
+    }
     while (!pending.empty()) {
         const engine_core::InstanceId at = pending.back();
         pending.pop_back();
         for (engine_core::InstanceId child = world_.first_child(at); child != 0; child = world_.next_sibling(child)) {
             const engine_core::DataModel* object = world_.instance(child);
+            // A ViewportPane's contents are its own world, which runs no effects.
+            if (object == nullptr || object->viewport_pane()) {
+                continue;
+            }
             const auto* material = dynamic_cast<const engine_core::Material*>(object);
             const auto* effect = dynamic_cast<const engine_core::ShaderEffect*>(object);
             engine_core::LuaSlot named;

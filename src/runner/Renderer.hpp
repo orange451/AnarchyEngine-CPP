@@ -677,8 +677,9 @@ private:
     // the result, image itself when none ran. Never fails the frame.
     unsigned postPass(bool hdr, unsigned image, int width, int height, const float* projection,
                       const float* inverseProjection);
-    // Whether any enabled ShaderEffect of the stage has a binding this frame.
-    bool hasEffects(bool hdr) const;
+    // Whether any enabled ShaderEffect of the stage has a program this frame
+    // (built here when it is not yet).
+    bool hasEffects(bool hdr);
     // Makes the stage's twin target, the pane's size, if it is not made. False,
     // with nothing made, when the driver will not render into it.
     bool ensureEffectTarget(bool hdr);

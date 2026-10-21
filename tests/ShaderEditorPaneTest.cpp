@@ -351,10 +351,13 @@ void post_shader_editor() {
            "and none of the surface toggles");
     if (hdr != nullptr) {
         Expect(!hdr->isSelected(), "Hdr starts off");
+        const auto drawn = std::chrono::steady_clock::now();
+        rig.editor->previewDrawn(drawn);
         rig.click(hdr);
         rig.frames(2);
         Expect(rig.modes == std::vector<std::pair<std::string, bool>>{{"Hdr", true}}, "clicking it sets Hdr");
         Expect(hdr->isSelected(), "and the toggle follows the Shader");
+        Expect(rig.editor->previewDue(drawn), "and the preview draws again, in the other stage");
     }
     Expect(rig.editor->previewDue(std::chrono::steady_clock::now()), "the preview draws a post Shader too");
 }

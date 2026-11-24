@@ -43,6 +43,8 @@
 #include "TerrainMaterial.hpp"
 #include "ValueBase.hpp"
 #include "RemoteEvent.hpp"
+#include "SaveStore.hpp"
+#include "UserData.hpp"
 #include "terrain/TerrainStash.hpp"
 
 #include <algorithm>
@@ -444,6 +446,13 @@ bool well_formed_game_id(const std::string& text) {
         if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) return false;
     }
     return true;
+}
+
+// Points game's SaveService stores at <user data>/saves/<gameId>; with no user
+// folder they stay in memory.
+void point_saves(DataModel& game, const std::string& game_id) {
+    const fs::path user = user_data_directory();
+    game.saves().set_directory(user.empty() ? fs::path() : user / "saves" / game_id);
 }
 
 JsonValue project_document(const std::string& name, const Layout& layout, const std::string& game_id,
@@ -1884,6 +1893,7 @@ Project::Files Project::from_disk(const detail::PlanNode& node, std::string pare
 void Project::write_skeleton(const fs::path& root) {
     const Layout layout;
     if (game_id_.empty()) game_id_ = make_guid() + make_guid();
+    point_saves(*game_, game_id_);
     write_file(root / "project.json", write_json(project_document(name_, layout, game_id_, version_)));
     for (const char* kind : kResourceKinds) {
         write_file(disk_path(root, join(join(layout.resources, kind), ".gitkeep")), std::string());
@@ -2048,6 +2058,10 @@ void Project::read_into_game(const fs::path& root, bool replace) {
         if (disk_reader.joinable()) {
             disk_reader.join();
         }
+        // The cleared world is no project's now, so its saves are no one's either.
+        if (replace) {
+            game_->saves().set_directory({});
+        }
         throw;
     }
     if (disk_reader.joinable()) {
@@ -2105,6 +2119,7 @@ void Project::read_into_game(const fs::path& root, bool replace) {
     if (reader.disk_reads() >= kPackRewrite) {
         write_pack();
     }
+    point_saves(*game_, game_id_);
 }
 
 std::optional<Project::DiskStamp> Project::stamp_from(
@@ -2331,6 +2346,8 @@ void Project::reset_place(DataModel& game) {
     game.set_name(0, game.class_name());
     game.set_guid(0, make_guid());
     game.set_resources_root({});
+    // No project's saves: an untitled place keeps its stores in memory.
+    game.saves().set_directory({});
     add_default_camera(game);
     add_default_light(game);
     rebuild.finish();

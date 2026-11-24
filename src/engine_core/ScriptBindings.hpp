@@ -100,7 +100,8 @@ struct ServiceUd {
 };
 
 inline constexpr const char* kServiceClasses[] = {"RunService", "Selection", "UserInputService",
-                                                 "ChangeHistoryService", "PhysicsService"};
+                                                 "ChangeHistoryService", "PhysicsService", "TweenService",
+                                                 "CollectionService", "SaveService"};
 constexpr int kUserInputServiceKind = 2;
 
 // SignalUd kinds. An instance's Changed, a RunService phase, an UserInputService
@@ -118,6 +119,12 @@ constexpr int kSignalPlugin = 5;
 // An AnimationTrack's KeyframeReached or Stopped: the Animator in id, the track in
 // track, event_name which. Its handlers get the values the event carries.
 constexpr int kSignalTrack = 6;
+// A Tween's Completed, or a Value tween's Stepped: the tween in track, event_name
+// which. Its handlers get the values the event carries.
+constexpr int kSignalTween = 7;
+// A CollectionService tag signal: the tag in event_name, kept for the process;
+// phase 1 for added, 0 for removed. Its handlers get the instance.
+constexpr int kSignalTag = 8;
 constexpr int kServiceKinds = static_cast<int>(sizeof(kServiceClasses) / sizeof(kServiceClasses[0]));
 
 inline int service_kind(const char* name) {
@@ -316,6 +323,11 @@ struct ScriptBindings {
     static int instance_get_attribute(lua_State* state);
     static int instance_get_attributes(lua_State* state);
     static int instance_get_attribute_changed_signal(lua_State* state);
+    // Instance:AddTag(tag), RemoveTag(tag), HasTag(tag), and GetTags() (Tags.hpp).
+    static int instance_add_tag(lua_State* state);
+    static int instance_remove_tag(lua_State* state);
+    static int instance_has_tag(lua_State* state);
+    static int instance_get_tags(lua_State* state);
     // The value at index as an attribute takes it: nil, a boolean, number,
     // string, Vector3, Vector2, Color3, Matrix4, or a live Instance. False for
     // anything else; raises for an Instance that is gone.
@@ -421,6 +433,34 @@ struct ScriptBindings {
     static int track_adjust_weight(lua_State* state);
     static int track_adjust_speed(lua_State* state);
     static int track_destroy(lua_State* state);
+    // TweenService's methods and the Tween datatype, in TweenBindings.cpp.
+    static void link_tween_methods();
+    // The runtime, for TweenService's methods (self at 1). Raises unless the place plays.
+    static ScriptRuntime& tween_service_runtime(lua_State* state);
+    static int tween_service_tween(lua_State* state);
+    static int tween_service_value(lua_State* state);
+    // The runtime whose world knows the Tween at 1, with its id, or raises "Tween is gone".
+    static ScriptRuntime& tween_of(lua_State* state, std::uint32_t& id);
+    static int tween_index(lua_State* state);
+    static int tween_pause(lua_State* state);
+    static int tween_resume(lua_State* state);
+    static int tween_cancel(lua_State* state);
+    static int tween_wait(lua_State* state);
+    // A Tween userdata's destructor: lets its tween go.
+    static void tween_release(lua_State* state, void* data);
+    // CollectionService's methods, in CollectionServiceBindings.cpp.
+    static void link_collection_service_methods();
+    static int collection_get_tagged(lua_State* state);
+    static int collection_added_signal(lua_State* state);
+    static int collection_removed_signal(lua_State* state);
+    static int collection_observe(lua_State* state);
+    // Observe's handlers, each a closure on its state table: an instance gains
+    // the tag, loses it (so gaining it again is new), and Disconnect.
+    static int collection_observe_added(lua_State* state);
+    static int collection_observe_removed(lua_State* state);
+    static int collection_observe_disconnect(lua_State* state);
+    // SaveService and the SaveStore datatype, in SaveServiceBindings.cpp.
+    static void link_save_service_methods();
     // Camera's methods, in CameraBindings.cpp.
     static void link_camera_methods();
     static void link_physics_service_methods();
@@ -466,6 +506,11 @@ struct ScriptBindings {
     static int input_get_mouse_buttons_pressed(lua_State* state);
     static int input_get_mouse_location(lua_State* state);
     static int input_get_mouse_delta(lua_State* state);
+    // The pad an Enum.UserInputType.Gamepad1 to 4 argument names, 0 to 3. Raises for any other type.
+    static int gamepad_arg(lua_State* state, int index);
+    static int input_get_connected_gamepads(lua_State* state);
+    static int input_is_gamepad_button_down(lua_State* state);
+    static int input_get_gamepad_axis(lua_State* state);
     static int run_is_running(lua_State* state);
     static int run_is_server(lua_State* state);
     static int run_is_client(lua_State* state);
@@ -499,6 +544,10 @@ void open_raycast(lua_State* state);
 void open_brush_face(lua_State* state);
 // The AnimationTrack metatable, AE.AnimationTrack.
 void open_animation_track(lua_State* state);
+// The Tween metatable, AE.Tween, in TweenBindings.cpp.
+void open_tween(lua_State* state);
+// The SaveStore metatable, AE.SaveStore, in SaveServiceBindings.cpp.
+void open_save_store(lua_State* state);
 // The MeshEditor metatable, AE.MeshEditor, in MeshEditorBindings.cpp.
 void open_mesh_editor(lua_State* state);
 // Pushes a handle on editor, whose metatable open_mesh_editor made.

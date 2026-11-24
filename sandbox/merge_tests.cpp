@@ -155,14 +155,14 @@ TEST_CASE("M5 default_properties is what save_properties leaves out", "[M5][merg
         object->save_properties(saved);
         REQUIRE(saved.empty());
     }
-    // Persistent and Attributes are on every instance, the root included; a save
+    // Persistent, Attributes, and Tags are on every instance, the root included; a save
     // writes Persistent only when true and Attributes only when there are any.
-    REQUIRE(default_keys(game) == std::vector<std::string>{"Attributes", "Persistent"});
-    REQUIRE(default_keys(*objects[0]) == std::vector<std::string>{"Attributes", "Persistent", "Simulated", "VisualOnly"});
+    REQUIRE(default_keys(game) == std::vector<std::string>{"Attributes", "Persistent", "Tags"});
+    REQUIRE(default_keys(*objects[0]) == std::vector<std::string>{"Attributes", "Persistent", "Simulated", "Tags", "VisualOnly"});
     REQUIRE(default_keys(*objects[1]) ==
-            std::vector<std::string>{"Attributes", "Color", "Persistent", "Prefab", "Scale", "Simulated", "Transform", "Transparency",
+            std::vector<std::string>{"Attributes", "Color", "Persistent", "Prefab", "Scale", "Simulated", "Tags", "Transform", "Transparency",
                                      "VisualOnly"});
-    REQUIRE(default_keys(*objects[2]) == std::vector<std::string>{"Attributes", "Enabled", "Persistent", "RunContext", "Simulated", "VisualOnly"});
+    REQUIRE(default_keys(*objects[2]) == std::vector<std::string>{"Attributes", "Enabled", "Persistent", "RunContext", "Simulated", "Tags", "VisualOnly"});
     REQUIRE(default_keys(*objects[5]) ==
-            std::vector<std::string>{"Attributes", "FieldOfView", "Persistent", "Simulated", "Transform", "VisualOnly"});
+            std::vector<std::string>{"Attributes", "FieldOfView", "Persistent", "Simulated", "Tags", "Transform", "VisualOnly"});
 }

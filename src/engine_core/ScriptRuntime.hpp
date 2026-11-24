@@ -7,6 +7,7 @@
 #include "ScriptHost.hpp"
 #include "TableSnapshot.hpp"
 #include "TaskScheduler.hpp"
+#include "TweenWorld.hpp"
 #include "profiler/Profiler.hpp"
 
 #include <atomic>
@@ -530,6 +531,8 @@ private:
     // the step before.
     Signal selection_changed_;
     PluginUi plugin_ui_;
+    // TweenService's tweens. heartbeat steps them; Stop drops them.
+    TweenWorld tweens_;
     std::uint64_t selection_revision_ = 0;
     bool was_running_ = false;
     // ChangeHistoryService's OnUndo, OnRedo, OnRecordingStarted, and

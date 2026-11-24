@@ -365,6 +365,25 @@ void GameView::frameSelection() {
     });
 }
 
+void GameView::pollGamepads() {
+    // Only the focused view posts, so two views never post the pads twice.
+    if (game_ == nullptr || !isFocused()) {
+        return;
+    }
+    for (int jid = GLFW_JOYSTICK_1; jid <= GLFW_JOYSTICK_4; ++jid) {
+        engine_core::GamepadState pad;
+        GLFWgamepadstate state;
+        if (glfwJoystickIsGamepad(jid) == GLFW_TRUE && glfwGetGamepadState(jid, &state) == GLFW_TRUE) {
+            pad.connected = true;
+            for (int button = 0; button <= GLFW_GAMEPAD_BUTTON_LAST; ++button) {
+                pad.buttons[button] = state.buttons[button] == GLFW_PRESS;
+            }
+            std::copy(std::begin(state.axes), std::end(state.axes), pad.axes);
+        }
+        game_->input().post_gamepad(jid - GLFW_JOYSTICK_1, pad);
+    }
+}
+
 void GameView::syncPointerLock() {
     jadefx::Scene* scene = getScene();
     if (game_ == nullptr || scene == nullptr) {
@@ -1074,6 +1093,7 @@ void GameView::renderContent(jadefx::UiRenderer& renderer, float opacity) {
     PROFILE_SCOPE("Scene View", profiler::Group::Render);
     notePaint();
     syncPointerLock();
+    pollGamepads();
     // The engine loop waits on this when it is uncapped, so its frame follows
     // the paint instead of looping again as soon as the step itself returns.
     // Said once the snapshot is held, before the scene draws: the step then

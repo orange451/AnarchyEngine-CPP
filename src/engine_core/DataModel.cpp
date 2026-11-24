@@ -5,6 +5,7 @@
 #include "DataModelState.hpp"
 #include "LuaApi.hpp"
 #include "PropertyReflection.hpp"
+#include "Tags.hpp"
 
 #include <algorithm>
 #include <cstdio>
@@ -589,6 +590,7 @@ DataModel* DataModel::pooled_object(InstancePool& pool, std::uint32_t storage, I
         object->archivable_ = true;
         object->persistent_ = false;
         object->attributes_.reset();
+        object->tags_.reset();
         object->on_reuse();
     }
     return object;
@@ -803,6 +805,17 @@ void DataModel::destroy(InstanceId id) {
         reparented = get_children(id);
     }
     detach_links(id, *part);
+    // Each tag's removed signal fires while the id still names the instance,
+    // if it was in the place; its tags go with it, so Stop or undo bringing it
+    // back adds them again.
+    if (part->instance != nullptr && part->instance->tags_ != nullptr) {
+        const std::unique_ptr<TagSet> tags = std::move(part->instance->tags_);
+        if (in_game(id)) {
+            for (const std::string& tag : *tags) {
+                part->instance->emit_tag(tag, false);
+            }
+        }
+    }
     for (const InstanceId child : reparented) {
         TreeChange change;
         change.kind = TreeChange::Kind::Parented;
@@ -1045,6 +1058,13 @@ void DataModel::apply_scope(InstanceId id, bool in_game_now, bool in_workspace_n
         }
         if (had_game != game) {
             set_tag(world, part->entity, ids.in_game, game);
+            // A tag counts while its instance is in the place: coming or going fires it.
+            if (part->instance != nullptr && part->instance->tags_ != nullptr &&
+                !state_->tag_signals[game ? 1 : 0].empty()) {
+                for (const std::string& tag : *part->instance->tags_) {
+                    part->instance->emit_tag(tag, game);
+                }
+            }
         }
         if (had_lighting != lighting) {
             set_tag(world, part->entity, ids.in_lighting, lighting);
@@ -1229,6 +1249,8 @@ void DataModel::wireframes(std::vector<InstanceId>& out) const {
 Assemblies& DataModel::assemblies() const { return state_->assemblies; }
 
 CollisionGroups& DataModel::collision_groups() const { return state_->collision_groups; }
+
+SaveStores& DataModel::saves() const { return state_->saves; }
 
 MeshEditors& DataModel::mesh_editors() const { return state_->mesh_editors; }
 
@@ -2174,6 +2196,121 @@ void DataModel::attributes_moved(const std::string* moved, std::size_t count, bo
     }
 }
 
+const TagSet& DataModel::tags() const {
+    static const TagSet kNone;
+    return tags_ != nullptr ? *tags_ : kNone;
+}
+
+bool DataModel::holds_tag(std::string_view tag) const { return tags_ != nullptr && tags_->find(tag) != tags_->end(); }
+
+std::optional<std::string> DataModel::add_tag(std::string_view tag) {
+    if (!on_gameplay_thread()) {
+        contract_fail("AddTag runs on SimulationThread");
+    }
+    if (id_ == 0) {
+        return std::string("game cannot hold tags");
+    }
+    if (auto error = tag_error(tag)) {
+        return error;
+    }
+    if (!holds_tag(tag)) {
+        TagSet next = tags();
+        next.emplace(tag);
+        set_tags(std::move(next));
+    }
+    return std::nullopt;
+}
+
+bool DataModel::remove_tag(std::string_view tag) {
+    if (!on_gameplay_thread()) {
+        contract_fail("RemoveTag runs on SimulationThread");
+    }
+    if (!holds_tag(tag)) {
+        return false;
+    }
+    TagSet next = tags();
+    next.erase(next.find(tag));
+    set_tags(std::move(next));
+    return true;
+}
+
+void DataModel::set_tags(TagSet next) {
+    const TagSet& now = tags();
+    if (next == now) {
+        return;
+    }
+    std::vector<std::string> added;
+    std::vector<std::string> removed;
+    std::set_difference(next.begin(), next.end(), now.begin(), now.end(), std::back_inserter(added));
+    std::set_difference(now.begin(), now.end(), next.begin(), next.end(), std::back_inserter(removed));
+    const bool recording = history_capturing();
+    LuaSlot before;
+    if (recording) {
+        before.kind = LuaSlot::Kind::String;
+        before.text = tags_to_json(now);
+    }
+    if (next.empty()) {
+        tags_.reset();
+    } else {
+        tags_ = std::make_unique<TagSet>(std::move(next));
+    }
+    // As attributes_moved: one undo step holds the whole set, and Changed fires with "Tags".
+    if (recording) {
+        LuaSlot after;
+        after.kind = LuaSlot::Kind::String;
+        after.text = tags_to_json(tags());
+        note_property_change("Tags", before, after);
+    } else {
+        mark_authored_dirty(id_);
+        emit_property("Tags");
+    }
+    // Out of the place, it is in no tag's set: parenting it in fires added (apply_scope).
+    if (!in_game(id_)) {
+        return;
+    }
+    for (const std::string& tag : removed) {
+        emit_tag(tag, false);
+    }
+    for (const std::string& tag : added) {
+        emit_tag(tag, true);
+    }
+}
+
+std::vector<InstanceId> DataModel::tagged(std::string_view tag) const {
+    std::vector<InstanceId> out;
+    for (std::uint32_t index = 0; index < state_->slots.size(); ++index) {
+        const Slot& part = state_->slots[index];
+        if (part.alive && part.instance != nullptr && part.instance->holds_tag(tag) &&
+            in_game(make_instance_id(part.generation, index))) {
+            out.push_back(make_instance_id(part.generation, index));
+        }
+    }
+    return out;
+}
+
+Signal& DataModel::tag_signal(std::string_view tag, bool added) {
+    auto& signals = state_->tag_signals[added ? 1 : 0];
+    auto found = signals.find(tag);
+    if (found == signals.end()) {
+        found = signals.emplace(std::string(tag), std::make_unique<Signal>()).first;
+        state_->events.host_signal(found->second.get());
+    }
+    return *found->second;
+}
+
+void DataModel::emit_tag(std::string_view tag, bool added) {
+    const auto& signals = state_->tag_signals[added ? 1 : 0];
+    const auto found = signals.find(tag);
+    if (found == signals.end()) {
+        return;
+    }
+    LuaSlot arg;
+    arg.kind = LuaSlot::Kind::Instance;
+    arg.id = id_;
+    // Queued for no instance, so the destroy that fires removed does not drop it.
+    state_->events.emit_args(found->second->id(), 0, EventArgs{arg});
+}
+
 InstanceId DataModel::core() const {
     // Game makes Core once; until then, and in a DataModel that is not a Game, there is none.
     if (state_->core_id == 0 || !alive(state_->core_id)) {
@@ -3036,6 +3173,35 @@ bool write_lua_attributes(DataModel& world, DataModel& object, LuaSlot& in) {
     return true;
 }
 
+// The hidden Tags property: every tag as one JSON array, carried as Attributes is.
+bool read_lua_tags(DataModel&, DataModel& object, LuaSlot& out) {
+    out.kind = LuaSlot::Kind::String;
+    out.text = tags_to_json(object.tags());
+    return true;
+}
+
+bool write_lua_tags(DataModel& world, DataModel& object, LuaSlot& in) {
+    if (in.kind != LuaSlot::Kind::String) {
+        in.error = "Tags must be JSON text";
+        return false;
+    }
+    TagSet next;
+    std::string error;
+    if (!tags_from_json(in.text, next, error)) {
+        in.error = std::move(error);
+        return false;
+    }
+    if (!error.empty()) {
+        std::fprintf(stderr, "%s: %s\n", world.name(object.id()).c_str(), error.c_str());
+    }
+    if (object.id() == 0 && !next.empty()) {
+        in.error = "game cannot hold tags";
+        return false;
+    }
+    object.set_tags(std::move(next));
+    return true;
+}
+
 ANARCHY_LUA_REGISTER(register_datamodel_lua) {
     // Changed passes the name of the property that changed.
     static const LuaParam kChangedArgs[] = {{"property", "string"}};
@@ -3055,6 +3221,7 @@ ANARCHY_LUA_REGISTER(register_datamodel_lua) {
                          persistent_editable),
         lua_hidden(lua_json_text(
             lua_saved_property("Attributes", "string", read_lua_attributes, write_lua_attributes, "null"))),
+        lua_hidden(lua_json_text(lua_saved_property("Tags", "string", read_lua_tags, write_lua_tags, "null"))),
         lua_event("AttributeChanged", kAttributeArgs, 1),
     };
     register_lua_class("DataModel", nullptr, fields, static_cast<int>(std::size(fields)));

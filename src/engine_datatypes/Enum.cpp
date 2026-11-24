@@ -147,11 +147,30 @@ const EnumEntry kKeyCodes[] = {
     {"RightSuper", 312},
     {"Print", 316},
     {"Menu", 319},
+    {"ButtonX", 1000},
+    {"ButtonY", 1001},
+    {"ButtonA", 1002},
+    {"ButtonB", 1003},
+    {"ButtonR1", 1004},
+    {"ButtonL1", 1005},
+    {"ButtonR2", 1006},
+    {"ButtonL2", 1007},
+    {"ButtonR3", 1008},
+    {"ButtonL3", 1009},
+    {"ButtonStart", 1010},
+    {"ButtonSelect", 1011},
+    {"DPadLeft", 1012},
+    {"DPadRight", 1013},
+    {"DPadUp", 1014},
+    {"DPadDown", 1015},
+    {"Thumbstick1", 1016},
+    {"Thumbstick2", 1017},
 };
 
 const EnumEntry kUserInputTypes[] = {
     {"MouseButton1", 0}, {"MouseButton2", 1}, {"MouseButton3", 2}, {"MouseWheel", 3}, {"MouseMovement", 4},
-    {"Touch", 7},        {"Keyboard", 8},     {"Focus", 9},        {"None", 22},
+    {"Touch", 7},        {"Keyboard", 8},     {"Focus", 9},        {"Gamepad1", 12},    {"Gamepad2", 13},
+    {"Gamepad3", 14},    {"Gamepad4", 15},    {"None", 22},
 };
 
 const EnumEntry kUserInputStates[] = {

@@ -1029,6 +1029,13 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
         {P("name", "string")});
     add("DataModel", "AttributeChanged", "Fires with the name of the attribute that was set or removed.", "Signal",
         false, {});
+    add("DataModel", "AddTag",
+        "Gives the instance the tag, which CollectionService finds it by. A tag is 1 to 100 characters, with no "
+        "control characters.",
+        nullptr, false, {P("tag", "string")});
+    add("DataModel", "RemoveTag", "Takes the tag away, if the instance has it.", nullptr, false, {P("tag", "string")});
+    add("DataModel", "HasTag", "Whether the instance has the tag.", "boolean", false, {P("tag", "string")});
+    add("DataModel", "GetTags", "The instance's tags, sorted.", "{string}", false, {});
     add("DataModel", "Clone",
         "A copy of this instance and everything under it, with no parent. References inside the copy point at "
         "the copies: a cloned car's constraints join the cloned parts.",
@@ -1980,6 +1987,21 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
         "How far the mouse moved in the latest step, in points, times MouseDeltaSensitivity. It keeps reporting while "
         "the pointer is locked.",
         "Vector2", false, {});
+    add("UserInputService", "GamepadConnected", "Fires when a gamepad is plugged in. The argument is its Enum.UserInputType.",
+        "Signal", false, {});
+    add("UserInputService", "GamepadDisconnected",
+        "Fires when a gamepad is unplugged, after InputEnded for each button it held. The argument is its "
+        "Enum.UserInputType.",
+        "Signal", false, {});
+    add("UserInputService", "GetConnectedGamepads", "Enum.UserInputType.Gamepad1 to Gamepad4 for each pad plugged in.",
+        "{EnumItem}", false, {});
+    add("UserInputService", "IsGamepadButtonDown",
+        "True while this button of this pad is held. ButtonL2 and ButtonR2 are held past half way.", "boolean", false,
+        {P("gamepad", "Enum.UserInputType"), P("keyCode", "Enum.KeyCode")});
+    add("UserInputService", "GetGamepadAxis",
+        "A stick of this pad, Thumbstick1 or Thumbstick2, with up as +Y and a 0.15 dead zone; or a trigger, ButtonL2 or "
+        "ButtonR2, as (value, 0) from 0 to 1. Zero for a pad not plugged in.",
+        "Vector2", false, {P("gamepad", "Enum.UserInputType"), P("keyCode", "Enum.KeyCode")});
     add("InputObject", "KeyCode", "The key, or Enum.KeyCode.Unknown for mouse input.", "EnumItem", false, {});
     add("InputObject", "UserInputType", "What made the input: Keyboard, MouseButton1, MouseMovement, and so on.",
         "EnumItem", false, {});
@@ -2061,6 +2083,69 @@ std::unordered_map<std::string, LuaDoc> build_docs() {
         "table", false, {});
     add("PhysicsService", "GetMaxCollisionGroups", "How many groups may be registered at once: 62.", "number", false,
         {});
+
+    add("CollectionService", "GetTagged",
+        "Every instance in the place (under game) with the tag. An instance with no Parent is not counted.",
+        "{Instance}", false, {P("tag", "string")});
+    add("CollectionService", "GetInstanceAddedSignal",
+        "Fires with the instance each time an instance in the place gains the tag, or one with the tag comes into "
+        "the place.",
+        "Signal", false, {P("tag", "string")});
+    add("CollectionService", "GetInstanceRemovedSignal",
+        "Fires with the instance each time an instance in the place loses the tag, or one with the tag leaves the "
+        "place: it or an ancestor is unparented or destroyed.",
+        "Signal", false, {P("tag", "string")});
+    add("CollectionService", "Observe",
+        "Calls callback with every instance in the place that has the tag now and every one that gets it or comes "
+        "into the place with it later, each on its own thread. An instance that loses the tag and gains it again "
+        "is passed again. Disconnect on what it returns stops it. callback may yield.",
+        "ScriptConnection", false, {P("tag", "string"), P("callback", "function")});
+
+    add("SaveService", "Open",
+        "The store of that name, which keeps values from one play to the next on this machine. A name is 1 to 50 "
+        "letters, digits, _ and -, and case does not matter: Player and player are one store. Windows device names "
+        "such as con, nul, and com1 are refused. An untitled place keeps its stores only until the studio closes.",
+        "SaveStore", false, {P("name", "string")});
+    add("", "SaveStore",
+        "A store SaveService opened: keys of 1 to 100 bytes and the values saved under them. Written to disk within "
+        "a second of a change, and at Stop. Not an instance.",
+        nullptr, false, {});
+    add("SaveStore", "Get", "A copy of the value saved under key, or default (nil) when there is none.", "any", false,
+        {P("key", "string"), P("default", "any")});
+    add("SaveStore", "Set",
+        "Saves value under key: a boolean, number, string, Vector2, Vector3, Color3, Matrix4, or a table of these "
+        "(an array, or string keys only), nested up to 32 deep. nil removes the key. Anything else raises.",
+        "nil", false, {P("key", "string"), P("value", "any")});
+    add("SaveStore", "Remove", "Removes the key and its value.", "nil", false, {P("key", "string")});
+    add("SaveStore", "Keys", "Every key in the store, sorted.", "{string}", false, {});
+    add("SaveStore", "Clear", "Removes every key.", "nil", false, {});
+
+    add("TweenService", "Tween",
+        "Starts moving instance's properties to the goals, a table of property name to end value, and returns the "
+        "Tween. A number, Vector2, Vector3, Color3, or Matrix4 property tweens. options is a table of Time (seconds, "
+        "1), Style (Enum.EasingStyle, Quad), Direction (Enum.EasingDirection, Out), Delay (seconds, 0), Repeat (extra "
+        "plays, 0; -1 is forever), and Reverses (false). A new tween on a property takes it from the one running "
+        "there. Only while the place plays; Stop drops every tween.",
+        "Tween", false, {P("instance", "DataModel"), P("goals", "table"), P("options", "table?")});
+    add("TweenService", "Value",
+        "Tweens from to to as Tween does, calling callback with the value each frame. from and to are the same kind: "
+        "a number, Vector2, Vector3, Color3, or Matrix4.",
+        "Tween", false, {P("from", "any"), P("to", "any"), P("options", "table?"), P("callback", "function")});
+    add("", "Tween",
+        "A tween TweenService started: what Tween and Value return. Not an instance, and never saved; Stop drops it.",
+        nullptr, false, {});
+    add("Tween", "Playing", "Read-only. True until it ends, except while paused.", "boolean", false, {});
+    add("Tween", "Pause", "Holds it where it is until Resume.", "nil", false, {});
+    add("Tween", "Resume", "Carries on after a Pause.", "nil", false, {});
+    add("Tween", "Cancel", "Ends it where it is. Completed fires false.", "nil", false, {});
+    add("Tween", "Wait",
+        "Yields until it ends, then returns true when it ran to its end and false when it was cancelled or replaced. "
+        "Returns at once when it has ended.",
+        "boolean", false, {});
+    add("Tween", "Completed",
+        "Fires once when it ends: true when it ran to its end, false when it was cancelled, replaced, or its instance "
+        "was destroyed.",
+        "Signal", false, {});
     add("RaycastParams", "FilterType",
         "Whether FilterDescendantsInstances is what the ray sees (Include) or what it does not (Exclude, the "
         "default).",

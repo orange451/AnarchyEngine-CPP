@@ -86,6 +86,8 @@ void DataModel::stop_simulation() {
     if (state_->on_stop) {
         state_->on_stop();
     }
+    // What the session saved is on disk at Stop; Engine forwards any failure.
+    state_->saves.flush();
     state_->events.drop_pending();
     state_->events.disconnect_all();
     if (TaskScheduler* scheduler = state_->events.scheduler()) {

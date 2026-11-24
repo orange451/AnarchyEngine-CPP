@@ -173,6 +173,9 @@ private:
     // share one Scene, so only the focused view locks it or reads it as let
     // go; an unfocused view only ever releases a lock of its own.
     void syncPointerLock();
+    // Posts each GLFW gamepad's state to UserInputService, once a paint, while
+    // this view has the keyboard.
+    void pollGamepads();
     // Walks Workspace for the Cameras, and resolves the link. Skipped when the
     // DataModel is busy; the previous list and link stay. A link that resolves
     // to a new Camera makes it the CurrentCamera when the Workspace has none.

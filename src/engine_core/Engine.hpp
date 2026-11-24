@@ -139,6 +139,8 @@ private:
     // TerrainMesher's worker threads never log directly (see its header).
     // Called right after each terrain_.update(game_), on SimulationThread.
     void report_terrain_failures();
+    // SaveService's file failures (SaveStores::take_messages), to the console.
+    void report_save_messages();
 
     Game game_;
     SnapshotPump pump_;

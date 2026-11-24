@@ -17,6 +17,7 @@
 #include <memory>
 #include <new>
 #include <optional>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -99,6 +100,7 @@ class ChangeHistoryService;
 class Assemblies;
 class PoseBlend;
 class CollisionGroups;
+class SaveStores;
 class MeshEditors;
 class Engine;
 class GameObject;
@@ -115,6 +117,8 @@ struct Mutation;
 struct LuaSlot;
 // Attributes.hpp names it too; the two must stay the same type.
 using AttributeMap = std::map<std::string, LuaSlot, std::less<>>;
+// Tags.hpp names it too; the two must stay the same type.
+using TagSet = std::set<std::string, std::less<>>;
 struct PropertyValue;
 
 // Live source of truth. SimulationThread is the only thread that may run
@@ -605,6 +609,9 @@ public:
     // Workspace's hidden CollisionGroups. Edits go through
     // edit_collision_groups (CollisionGroupEdits.hpp), which notes them there.
     CollisionGroups& collision_groups() const;
+    // SaveService's stores (SaveStore.hpp): the world's, not the place's, so a
+    // Stop leaves them. Project points them at the project's folder.
+    SaveStores& saves() const;
     // Every live MeshEditor, one per Mesh (MeshEditors.hpp). Not saved.
     MeshEditors& mesh_editors() const;
     // Bodies drawn through the frame's last physics substep (PoseBlend.hpp).
@@ -669,6 +676,25 @@ public:
     // Replaces every attribute at once, as the hidden Attributes property's
     // write does for a load, Stop, or undo.
     void set_attributes(AttributeMap next);
+
+    // Tags: names this instance carries (Tags.hpp), which CollectionService
+    // finds. add_tag returns why it refused, changing nothing; a held tag
+    // changes nothing. remove_tag says whether the tag was held.
+    const TagSet& tags() const;
+    std::optional<std::string> add_tag(std::string_view tag);
+    bool remove_tag(std::string_view tag);
+    bool holds_tag(std::string_view tag) const;
+    // Replaces every tag at once, as the hidden Tags property's write does for
+    // a load, Stop, undo, or Clone.
+    void set_tags(TagSet next);
+    // Every instance in the place (under game) with tag, in slot order. A
+    // scan: nothing indexes tags.
+    std::vector<InstanceId> tagged(std::string_view tag) const;
+    // The world's signal that fires with the instance when it comes into
+    // tagged's set for tag (added: tagged in the place, or parented into it
+    // with the tag) or leaves it (removed: the tag goes, or the instance or an
+    // ancestor is unparented or destroyed). Made on first ask and kept with the world.
+    Signal& tag_signal(std::string_view tag, bool added);
 
     // Pool construction. Outsiders cannot build a ChildTag or a State.
     class ChildTag {
@@ -742,6 +768,8 @@ protected:
     // built only while recording) when recording, Changed with "Attributes",
     // and AttributeChanged plus its per-name event for each name in moved.
     void attributes_moved(const std::string* moved, std::size_t count, bool recording, const LuaSlot& before);
+    // Fires tag's added or removed signal with this instance, if anyone asked for it.
+    void emit_tag(std::string_view tag, bool added);
 
     // The GUID in text; the live target, if any, in id, with kind Instance, else
     // Nil. A target whose class does not inherit klass, as a hand-edited file
@@ -861,6 +889,8 @@ private:
     bool persistent_ = false;
     // Null until the first attribute is set: most instances never have one.
     std::unique_ptr<AttributeMap> attributes_;
+    // Null until the first tag is added, as attributes_ is.
+    std::unique_ptr<TagSet> tags_;
     PropertyBag extras_;
 
     bool lock_write_blocking();

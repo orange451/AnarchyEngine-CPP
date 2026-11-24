@@ -4584,7 +4584,7 @@ TEST_CASE("W1 children keep their order through removals at either end", "[W1]")
     REQUIRE(game.next_sibling(away.id()) == last.id());
 }
 
-TEST_CASE("K1 every KeyCode but Unknown comes from exactly one GLFW key", "[K1][input]") {
+TEST_CASE("K1 every KeyCode but Unknown and the gamepad's comes from exactly one GLFW key", "[K1][input]") {
     const engine_core::EnumType& codes = engine_core::key_code_enum();
     std::vector<int> from(512, 0);
     for (int glfw = -1; glfw <= 400; ++glfw) {
@@ -4599,7 +4599,8 @@ TEST_CASE("K1 every KeyCode but Unknown comes from exactly one GLFW key", "[K1][
     }
     for (int index = 0; index < codes.count; ++index) {
         const engine_core::EnumEntry& item = codes.items[index];
-        if (item.value == 0) {
+        // Gamepad buttons and sticks come from post_gamepad, not a key.
+        if (item.value == 0 || item.value >= engine_core::UserInputService::kButtonX) {
             continue;
         }
         INFO(item.name);

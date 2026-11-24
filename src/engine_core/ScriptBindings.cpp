@@ -972,6 +972,75 @@ int ScriptBindings::instance_get_attribute_changed_signal(lua_State* state) {
     });
 }
 
+namespace {
+
+// The live instance self names, or raises.
+DataModel& tag_self(lua_State* state, ScriptRuntime*& runtime) {
+    luaL_checkudata(state, 1, kInstanceMeta);
+    runtime = runtime_from(state);
+    DataModel* object = ScriptBindings::instance_arg(state, 1);
+    if (object == nullptr) {
+        luaL_error(state, "instance is gone");
+    }
+    return *object;
+}
+
+std::string_view tag_arg(lua_State* state) {
+    std::size_t length = 0;
+    const char* text = luaL_checklstring(state, 2, &length);
+    return {text, length};
+}
+
+}  // namespace
+
+int ScriptBindings::instance_add_tag(lua_State* state) {
+    return lua_guard(state, [&] {
+        ScriptRuntime* runtime = nullptr;
+        DataModel& object = tag_self(state, runtime);
+        const std::string_view tag = tag_arg(state);
+        const bool deferred_before = runtime->in_render_window_ && runtime->game_->has_deferred_violation();
+        if (const auto error = object.add_tag(tag)) {
+            luaL_error(state, "%s", error->c_str());
+        }
+        raise_window_refusal(state, *runtime, "AddTag", deferred_before);
+        return 0;
+    });
+}
+
+int ScriptBindings::instance_remove_tag(lua_State* state) {
+    return lua_guard(state, [&] {
+        ScriptRuntime* runtime = nullptr;
+        DataModel& object = tag_self(state, runtime);
+        const std::string_view tag = tag_arg(state);
+        const bool deferred_before = runtime->in_render_window_ && runtime->game_->has_deferred_violation();
+        object.remove_tag(tag);
+        raise_window_refusal(state, *runtime, "RemoveTag", deferred_before);
+        return 0;
+    });
+}
+
+int ScriptBindings::instance_has_tag(lua_State* state) {
+    return lua_guard(state, [&] {
+        ScriptRuntime* runtime = nullptr;
+        lua_pushboolean(state, tag_self(state, runtime).holds_tag(tag_arg(state)) ? 1 : 0);
+        return 1;
+    });
+}
+
+int ScriptBindings::instance_get_tags(lua_State* state) {
+    return lua_guard(state, [&] {
+        ScriptRuntime* runtime = nullptr;
+        const TagSet& tags = tag_self(state, runtime).tags();
+        lua_createtable(state, static_cast<int>(tags.size()), 0);
+        int index = 1;
+        for (const std::string& tag : tags) {
+            lua_pushlstring(state, tag.data(), tag.size());
+            lua_rawseti(state, -2, index++);
+        }
+        return 1;
+    });
+}
+
 bool ScriptBindings::hidden_from_play(lua_State* state, ScriptRuntime& runtime, InstanceId id) {
     const ScriptRuntime::Vm* vm = runtime.vm_from(state);
     return vm != nullptr && vm->kind == ScriptRuntime::VmKind::Play && runtime.game_->core_holds(id);
@@ -1021,6 +1090,8 @@ Signal& ScriptBindings::signal_of(lua_State* state, ScriptRuntime& runtime, cons
             luaL_error(state, "instance is gone");
         }
         signal = &runtime.game_->event_signal(ud.id, ud.event_name != nullptr ? ud.event_name : "");
+    } else if (ud.kind == kSignalTag) {
+        signal = &runtime.game_->tag_signal(ud.event_name != nullptr ? ud.event_name : "", ud.phase == 1);
     } else if (ud.kind == kSignalInput) {
         signal = runtime.game_->input().signal(static_cast<UserInputService::Kind>(ud.phase));
     } else if (ud.kind == kSignalHost) {
@@ -1034,6 +1105,13 @@ Signal& ScriptBindings::signal_of(lua_State* state, ScriptRuntime& runtime, cons
         }
         const bool stopped = ud.event_name != nullptr && std::strcmp(ud.event_name, "Stopped") == 0;
         signal = &animator->track_signal(ud.track, stopped ? TrackEvent::Kind::Stopped : TrackEvent::Kind::KeyframeReached);
+    } else if (ud.kind == kSignalTween) {
+        const bool stepped = ud.event_name != nullptr && std::strcmp(ud.event_name, "Stepped") == 0;
+        signal = stepped ? runtime.tweens_.stepped_signal(*runtime.game_, ud.track)
+                         : runtime.tweens_.completed_signal(*runtime.game_, ud.track);
+        if (signal == nullptr) {
+            luaL_error(state, "Tween is gone");
+        }
     } else {
         signal = runtime.run_service_.signal(static_cast<Phase>(ud.phase));
     }
@@ -1044,7 +1122,8 @@ Signal& ScriptBindings::signal_of(lua_State* state, ScriptRuntime& runtime, cons
 }
 
 const char* ScriptBindings::signal_cause(const SignalUd& ud) {
-    static const char* const kInput[] = {"InputBegan", "InputChanged", "InputEnded"};
+    static const char* const kInput[] = {"InputBegan", "InputChanged", "InputEnded", "GamepadConnected",
+                                         "GamepadDisconnected"};
     static const char* const kHost[] = {"SelectionChanged", "Started", "Stopped", "OnUndo",
                                         "OnRedo", "OnRecordingStarted", "OnRecordingFinished",
                                         "Joined", "Left"};
@@ -1057,13 +1136,16 @@ const char* ScriptBindings::signal_cause(const SignalUd& ud) {
         return ud.event_name != nullptr ? ud.event_name : "event";
     }
     if (ud.kind == kSignalInput) {
-        return ud.phase >= 0 && ud.phase < 3 ? kInput[ud.phase] : "input";
+        return ud.phase >= 0 && ud.phase < static_cast<int>(std::size(kInput)) ? kInput[ud.phase] : "input";
     }
     if (ud.kind == kSignalHost) {
         return ud.phase >= 0 && ud.phase < static_cast<int>(std::size(kHost)) ? kHost[ud.phase] : "event";
     }
-    if (ud.kind == kSignalPlugin || ud.kind == kSignalTrack) {
+    if (ud.kind == kSignalPlugin || ud.kind == kSignalTrack || ud.kind == kSignalTween) {
         return ud.event_name != nullptr ? ud.event_name : "event";
+    }
+    if (ud.kind == kSignalTag) {
+        return ud.phase == 1 ? "InstanceAdded" : "InstanceRemoved";
     }
     return ud.phase >= 0 && ud.phase < kPhaseCount ? kPhases[ud.phase] : "event";
 }
@@ -1108,9 +1190,14 @@ int ScriptBindings::signal_connect(lua_State* state) {
                 runtime->invoke_listener(owner, held->ref, script, generation, cause,
                                          changed_name(field, runtime->game_->events().payload()), false, 0);
             } else if (kind == kSignalInput || kind == kSignalEvent || kind == kSignalHost || kind == kSignalPlugin ||
-                       kind == kSignalTrack) {
-                runtime->invoke_listener_args(owner, held->ref, script, generation, cause,
-                                              runtime->game_->events().current_args());
+                       kind == kSignalTrack || kind == kSignalTween || kind == kSignalTag) {
+                const EventArgs* args = runtime->game_->events().current_args();
+                // As GetTagged does, a play script never hears of an instance Core holds.
+                if (kind == kSignalTag && owner.kind == ScriptRuntime::VmKind::Play && args != nullptr &&
+                    !args->empty() && runtime->game_->core_holds(args->front().id)) {
+                    return;
+                }
+                runtime->invoke_listener_args(owner, held->ref, script, generation, cause, args);
             } else {
                 runtime->invoke_listener(owner, held->ref, script, generation, cause, nullptr, true,
                                          runtime->run_service_.dt(phase));
@@ -1175,7 +1262,7 @@ int ScriptBindings::signal_wait(lua_State* state) {
                 if (kind == kSignalChanged) {
                     runtime->make_ready(*waiting, changed_name(field, runtime->game_->events().payload()));
                 } else if (kind == kSignalInput || kind == kSignalEvent || kind == kSignalHost || kind == kSignalPlugin ||
-                       kind == kSignalTrack) {
+                       kind == kSignalTrack || kind == kSignalTween || kind == kSignalTag) {
                     runtime->make_ready_args(*waiting, runtime->game_->events().current_args());
                 } else if (runtime->in_render_window_) {
                     runtime->resume_waiting_now(*waiting, runtime->run_service_.dt(phase));
@@ -1729,6 +1816,59 @@ int ScriptBindings::input_get_mouse_delta(lua_State* state) {
     });
 }
 
+int ScriptBindings::gamepad_arg(lua_State* state, int index) {
+    const int pad = check_enum_arg(state, index, user_input_type_enum()) - UserInputService::kGamepad1;
+    if (pad < 0 || pad >= UserInputService::kGamepads) {
+        luaL_error(state, "expected a gamepad, such as Enum.UserInputType.Gamepad1");
+    }
+    return pad;
+}
+
+int ScriptBindings::input_get_connected_gamepads(lua_State* state) {
+    return lua_guard(state, [&] {
+        UserInputService* input = input_service(state);
+        lua_newtable(state);
+        if (input == nullptr) {
+            return 1;
+        }
+        int index = 1;
+        for (int pad : input->connected_gamepads()) {
+            push_enum_item(state, user_input_type_enum(), UserInputService::kGamepad1 + pad);
+            lua_rawseti(state, -2, index);
+            ++index;
+        }
+        return 1;
+    });
+}
+
+int ScriptBindings::input_is_gamepad_button_down(lua_State* state) {
+    return lua_guard(state, [&] {
+        UserInputService* input = input_service(state);
+        const int pad = gamepad_arg(state, 2);
+        const int key = check_enum_arg(state, 3, key_code_enum());
+        if (key < UserInputService::kButtonX || key > UserInputService::kDPadDown) {
+            luaL_error(state, "expected a gamepad button, such as Enum.KeyCode.ButtonA");
+        }
+        lua_pushboolean(state, input != nullptr && input->gamepad_button_down(pad, key) ? 1 : 0);
+        return 1;
+    });
+}
+
+int ScriptBindings::input_get_gamepad_axis(lua_State* state) {
+    return lua_guard(state, [&] {
+        UserInputService* input = input_service(state);
+        const int pad = gamepad_arg(state, 2);
+        const int key = check_enum_arg(state, 3, key_code_enum());
+        if (key != UserInputService::kThumbstick1 && key != UserInputService::kThumbstick2 &&
+            key != UserInputService::kButtonL2 && key != UserInputService::kButtonR2) {
+            luaL_error(state, "expected Thumbstick1, Thumbstick2, ButtonL2, or ButtonR2");
+        }
+        const Vec3 axis = input != nullptr ? input->gamepad_axis(pad, key) : Vec3{};
+        push_vector2(state, Vec2{axis.x, axis.y});
+        return 1;
+    });
+}
+
 int ScriptBindings::run_is_running(lua_State* state) {
     return lua_guard(state, [&] {
         luaL_checkudata(state, 1, kServiceMeta);
@@ -1902,6 +2042,10 @@ ANARCHY_LUA_REGISTER(register_script_methods) {
         get_attribute,
         lua_method("GetAttributes", "", reinterpret_cast<void*>(&ScriptBindings::instance_get_attributes)),
         attribute_changed,
+        lua_method("AddTag", "nil", reinterpret_cast<void*>(&ScriptBindings::instance_add_tag)),
+        lua_method("RemoveTag", "nil", reinterpret_cast<void*>(&ScriptBindings::instance_remove_tag)),
+        lua_method("HasTag", "boolean", reinterpret_cast<void*>(&ScriptBindings::instance_has_tag)),
+        lua_method("GetTags", "string", reinterpret_cast<void*>(&ScriptBindings::instance_get_tags), false, false, true),
     };
     register_lua_class("DataModel", nullptr, methods, static_cast<int>(std::size(methods)));
     // Services hang off game alone. Game.cpp declares the class.
@@ -1962,6 +2106,9 @@ ANARCHY_LUA_REGISTER(register_script_methods) {
     ScriptBindings::link_animation_methods();
     ScriptBindings::link_wireframe_methods();
     ScriptBindings::link_physics_service_methods();
+    ScriptBindings::link_tween_methods();
+    ScriptBindings::link_collection_service_methods();
+    ScriptBindings::link_save_service_methods();
     ScriptBindings::link_remote_event_methods();
 
     // AssetInstances.cpp declares the class and its Path.
@@ -2000,6 +2147,11 @@ ANARCHY_LUA_REGISTER(register_script_methods) {
                    reinterpret_cast<void*>(&ScriptBindings::input_get_mouse_buttons_pressed), false, false, true),
         lua_method("GetMouseLocation", "Vector2", reinterpret_cast<void*>(&ScriptBindings::input_get_mouse_location)),
         lua_method("GetMouseDelta", "Vector2", reinterpret_cast<void*>(&ScriptBindings::input_get_mouse_delta)),
+        lua_method("GetConnectedGamepads", "EnumItem",
+                   reinterpret_cast<void*>(&ScriptBindings::input_get_connected_gamepads), false, false, true),
+        lua_method("IsGamepadButtonDown", "boolean",
+                   reinterpret_cast<void*>(&ScriptBindings::input_is_gamepad_button_down)),
+        lua_method("GetGamepadAxis", "Vector2", reinterpret_cast<void*>(&ScriptBindings::input_get_gamepad_axis)),
     };
     register_lua_class("UserInputService", nullptr, input, static_cast<int>(sizeof(input) / sizeof(input[0])));
 

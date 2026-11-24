@@ -7,6 +7,7 @@
 #include "DataModelLock.hpp"
 #include "MeshEditors.hpp"
 #include "PoseBlend.hpp"
+#include "SaveStore.hpp"
 #include "SceneService.hpp"
 #include "ScriptAnalysis.hpp"
 #include "ScriptRuntime.hpp"
@@ -227,6 +228,13 @@ void Engine::report_terrain_failures() {
     report_fault(text.c_str());
 }
 
+void Engine::report_save_messages() {
+    for (const std::string& text : game_.saves().take_messages()) {
+        std::fprintf(stderr, "%s\n", text.c_str());
+        scripts_->append_output(ScriptRuntime::OutputKind::Error, text);
+    }
+}
+
 void Engine::report_fault(const char* what) {
     const std::string text = std::string("Engine: ") + (what != nullptr ? what : "unknown error");
     const auto now = std::chrono::steady_clock::now();
@@ -283,6 +291,9 @@ void Engine::stop() {
         simulation_.join();
     }
     game_.set_threads_running(false);
+    // The engine thread has ended, so nothing else touches the stores.
+    game_.saves().flush();
+    report_save_messages();
 }
 
 void Engine::engine_loop() {
@@ -370,6 +381,14 @@ void Engine::run_frame(double wall) {
             }
             sim_frames_.fetch_add(1);
         }
+        // Each frame, playing, paused, or stopped: stores changed a second ago
+        // are written, and a Stop this frame already wrote the rest.
+        guarded_step(
+            [&] {
+                game_.saves().flush_due(std::chrono::steady_clock::now());
+                report_save_messages();
+            },
+            [&] { contract_count_.fetch_add(1); });
         {
             // Stopped, edit-mode particles keep wall time; paused play freezes them;
             // playing, they take the step's dt. After the scripts, so an Emit this

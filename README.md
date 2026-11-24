@@ -136,6 +136,58 @@ game:GetService("RunService").Heartbeat:Connect(function(dt)
 end)
 ```
 
+A gamepad comes through the same service. Its buttons fire `InputBegan` and `InputEnded` with `UserInputType` `Gamepad1` to `Gamepad4` and a `KeyCode` such as `ButtonA`, `ButtonL1`, `DPadUp`, or `ButtonStart`; a stick or trigger that moves fires `InputChanged` with `Thumbstick1`, `Thumbstick2`, `ButtonL2`, or `ButtonR2` and its value in `Position`. To read one directly, `GetGamepadAxis(gamepad, keyCode)` returns a stick as a `Vector2` with up as +Y and a 0.15 dead zone already applied, or a trigger as `(value, 0)` from 0 to 1, and `IsGamepadButtonDown(gamepad, keyCode)` says whether a button is held; a trigger counts as held past half way. `GetConnectedGamepads()` lists the pads plugged in, and `GamepadConnected` and `GamepadDisconnected` fire with the pad. A pad that is unplugged ends every button it held first. The scene view reads pads while it has the keyboard.
+
+```lua
+local UserInputService = game:GetService("UserInputService")
+local pad = Enum.UserInputType.Gamepad1
+
+game:GetService("RunService").Heartbeat:Connect(function(dt)
+    local move = UserInputService:GetGamepadAxis(pad, Enum.KeyCode.Thumbstick1)
+    if UserInputService:IsGamepadButtonDown(pad, Enum.KeyCode.ButtonA) then
+        print("jump", move.X, move.Y)
+    end
+end)
+```
+
+`game:GetService("TweenService")` moves properties over time. `TweenService:Tween(instance, goals, options)` starts at once and returns the tween: `goals` is a table of property name to end value, for any number, `Vector2`, `Vector3`, `Color3`, or `Matrix4` property, and `options` is a table of `Time` (seconds, 1 by default), `Style` (an `Enum.EasingStyle` or its name, `Quad`), `Direction` (`Enum.EasingDirection`, `Out`), `Delay` (0), `Repeat` (extra plays, 0; -1 is forever), and `Reverses` (false), each optional. The tween has `Pause()`, `Resume()`, `Cancel()`, `Playing`, `Completed`, which fires once with `true` when it ran to its end and `false` when it was cancelled, replaced, or its instance was destroyed, and `Wait()`, which yields until then and returns the same boolean. A new tween on a property takes that property from the one running there. `TweenService:Value(from, to, options, callback)` tweens a plain value, calling `callback(value)` each frame. Tweens run only while the place plays, write through the property as a script would, so `Changed` fires, and Stop drops them and puts the place back.
+
+```lua
+local TweenService = game:GetService("TweenService")
+local door = workspace.Door
+
+local tween = TweenService:Tween(door, { Transform = door.Transform + Vector3.new(0, 3, 0) }, { Time = 0.5, Style = "Quad" })
+tween:Wait()
+print("open")
+```
+
+Any instance can carry tags: `AddTag(tag)`, `RemoveTag(tag)`, `HasTag(tag)`, and `GetTags()`. A tag is 1 to 100 characters. Tags are saved with the place, copied by Clone and paste, undone, and put back at Stop, as attributes are. `game:GetService("CollectionService")` finds instances by tag, counting only instances in the place (under `game`): `GetTagged(tag)` returns every one with it, and `GetInstanceAddedSignal(tag)` and `GetInstanceRemovedSignal(tag)` fire with an instance as it gains or loses the tag; a tagged instance coming into the place counts as gaining it, and one leaving, because it or an ancestor is unparented or destroyed, as losing it. A tagged `Instance.new` or `Clone()` result with no `Parent` is not counted until it is parented in. `Observe(tag, callback)` saves the usual loop-then-connect: it calls `callback(instance)` for every instance that has the tag now and every one that gets it later. `Disconnect()` on what `Observe` returns stops it. Each call runs on its own thread, so `callback` may yield. For an instance losing the tag, connect `GetInstanceRemovedSignal`.
+
+```lua
+local CollectionService = game:GetService("CollectionService")
+
+local spins = {}
+
+CollectionService:Observe("Coin", function(coin)
+    spins[coin] = game:GetService("RunService").Heartbeat:Connect(function(dt)
+        coin.Transform = coin.Transform * Matrix4.fromEulerAngles(0, dt, 0)
+    end)
+end)
+
+CollectionService:GetInstanceRemovedSignal("Coin"):Connect(function(coin)
+    spins[coin]:Disconnect()
+    spins[coin] = nil
+end)
+```
+
+`game:GetService("SaveService")` keeps values from one run of a game to the next, on the machine it runs on. `SaveService:Open(name)` returns the store of that name (1 to 50 letters, digits, `_`, and `-`), and a store has `Get(key, default)`, `Set(key, value)`, `Remove(key)`, `Keys()`, and `Clear()`. None of them yields or needs `pcall`. A value is a boolean, number, string, `Vector2`, `Vector3`, `Color3`, `Matrix4`, or a table of these, either an array or with string keys only, nested up to 32 deep; anything else raises. `Get` returns a copy. Each store is one JSON file under the user's `AnarchyEngine` folder, in `saves/<the project's gameId>/`, written within about a second of a change and at Stop and quit; a file that cannot be read loads as empty, the console says why, and it is left alone until the store changes. A Test in the studio reads and writes the same file the built game does, and an untitled place keeps its stores only until the studio closes.
+
+```lua
+local save = game:GetService("SaveService"):Open("progress")
+local best = save:Get("BestScore", 0)
+save:Set("BestScore", best + 1)
+```
+
 ## Play
 
 The simulation starts paused, so the place holds still while you edit. Test captures that place, starts every eligible script, and steps the world once each time the Scene View paints, so a 120 Hz display steps it 120 times a second. A frame can take several physics steps, then Heartbeat, which wakes `task.wait` and steps the instances in the tree.

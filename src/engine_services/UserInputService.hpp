@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Events.hpp"
+#include "GamepadState.hpp"
 #include "InputRecord.hpp"
 #include "types.hpp"
 
@@ -13,7 +14,7 @@
 
 namespace engine_core {
 
-// game:GetService("UserInputService"). Keys and the mouse, as Roblox's
+// game:GetService("UserInputService"). Keys, the mouse, and gamepads, as Roblox's
 // UserInputService gives them: InputBegan, InputChanged, and InputEnded fire
 // with an InputObject and gameProcessedEvent, and IsKeyDown and the other
 // queries answer from the events delivered so far.
@@ -33,17 +34,27 @@ public:
     static constexpr int kMouseMovement = 4;
     static constexpr int kKeyboard = 8;
     static constexpr int kFocus = 9;
+    static constexpr int kGamepad1 = 12;
+    static constexpr int kGamepads = 4;
     // UserInputState values.
     static constexpr int kBegin = 0;
     static constexpr int kChange = 1;
     static constexpr int kEnd = 2;
     static constexpr int kCancel = 3;
+    // KeyCode values of the gamepad's buttons and sticks, ButtonX to Thumbstick2.
+    static constexpr int kButtonX = 1000;
+    static constexpr int kButtonA = 1002;
+    static constexpr int kButtonR2 = 1006;
+    static constexpr int kButtonL2 = 1007;
+    static constexpr int kDPadDown = 1015;
+    static constexpr int kThumbstick1 = 1016;
+    static constexpr int kThumbstick2 = 1017;
     // MouseBehavior values.
     static constexpr int kMouseBehaviorDefault = 0;
     static constexpr int kLockCenter = 1;
     static constexpr int kLockCurrentPosition = 2;
 
-    enum class Kind { Began, Changed, Ended };
+    enum class Kind { Began, Changed, Ended, GamepadConnected, GamepadDisconnected };
 
     UserInputService() = default;
     UserInputService(const UserInputService&) = delete;
@@ -73,6 +84,12 @@ public:
     // The scene view lost keyboard focus: every key and button still down ends.
     // MouseBehavior stays, so the lock comes back when the view is focused again.
     void post_focus_lost();
+    // Any thread, once a frame for each pad 0 to 3. Diffed against the pad's
+    // last post: a connect or disconnect, a Begin or End for each button that
+    // changed (ButtonL2 and ButtonR2 past half way), and a Change for each stick
+    // or trigger that moved, its value in Position. A pad that goes away ends
+    // what it held and rests its sticks first. While inactive, posts are dropped.
+    void post_gamepad(int pad, const GamepadState& state);
 
     // SimulationThread. Between bind and release the signals belong to one
     // world's EventQueue, and they must outlive that use.
@@ -96,6 +113,14 @@ public:
     // Keys in the order they went down.
     const std::vector<int>& keys_down() const { return keys_down_; }
     Vec3 mouse_location() const { return mouse_; }
+    // pad is 0 to 3. An unconnected pad, or a key_code it does not have, reads
+    // false or zero. gamepad_axis is the dead-zoned stick for Thumbstick1 and 2,
+    // and (value, 0) for ButtonL2 and R2.
+    bool gamepad_connected(int pad) const;
+    bool gamepad_button_down(int pad, int key_code) const;
+    Vec3 gamepad_axis(int pad, int key_code) const;
+    // The connected pads, 0 to 3, in order.
+    std::vector<int> connected_gamepads() const;
 
     // SimulationThread. The Delta of every MouseMovement in the latest dispatch,
     // added up and not scaled. GetMouseDelta scales it by the sensitivity. Zero
@@ -118,12 +143,24 @@ public:
 
     // SimulationThread. Forgets the dispatched state and records, and puts
     // MouseBehavior and MouseDeltaSensitivity back to their defaults. The play
-    // session calls this when it starts and stops.
+    // session calls this when it starts and stops, beside set_active, which
+    // forgets what the pads posted: a pad still plugged in is announced again,
+    // with what it holds, by its next post.
     void reset();
 
 private:
+    // One pad's buttons and sticks, by KeyCode - kButtonX.
+    struct Pad {
+        bool connected = false;
+        bool down[18] = {};
+        // Thumbstick1 and 2, ButtonL2 and R2. Zero for the rest.
+        Vec3 axis[18] = {};
+    };
+
     void push_locked(const InputRecord& record);
     void end_held_locked();
+    // Queues what turns pad's posted state into next, and keeps next.
+    void post_pad_locked(int pad, const Pad& next);
 
     // Guards everything the studio writes.
     mutable std::mutex mu_;
@@ -136,11 +173,13 @@ private:
     Vec3 posted_mouse_{};
     // False until the session's first move: nothing before it to measure from.
     bool posted_mouse_known_ = false;
+    Pad posted_pads_[kGamepads];
 
     // SimulationThread only.
     std::vector<int> keys_down_;
     DispatchFilter filter_;
     bool buttons_down_[3] = {};
+    Pad pads_[kGamepads];
     Vec3 mouse_{};
     Vec3 mouse_delta_{};
     // lock_starts_ as it was when mouse_delta_ was added up.
@@ -150,6 +189,8 @@ private:
     Signal began_;
     Signal changed_;
     Signal ended_;
+    Signal pad_connected_;
+    Signal pad_disconnected_;
     bool bound_ = false;
     std::atomic<int> mouse_behavior_{kMouseBehaviorDefault};
     // How many times MouseBehavior has gone from Default to a lock.

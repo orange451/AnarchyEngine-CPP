@@ -746,7 +746,7 @@ TEST_CASE("SHA22 a phase 1 project, leaf or folder form, loads with no vertex st
     REQUIRE(two->source() == stored(kVignette));
     REQUIRE(!two->has_vertex_stage());
     read.save();
-    REQUIRE(std::filesystem::last_write_time(glsl) == written);
+    REQUIRE((std::filesystem::last_write_time(glsl) == written));
     // A save never keeps the folder form (SHA9): Two becomes a leaf, with no vertex file.
     REQUIRE(!std::filesystem::exists(init_glsl.parent_path() / "init.vert.glsl"));
     REQUIRE(read_text(dir.path / leaf(game, two->id(), ".glsl")) == stored(kVignette));

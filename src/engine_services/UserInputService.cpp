@@ -22,6 +22,17 @@ constexpr std::size_t kMaxQueued = 256;
 
 bool valid_button(int button) { return button >= 0 && button < 3; }
 
+// Record states the queue carries for a pad, never shown to scripts: they
+// fire GamepadConnected and GamepadDisconnected instead of an InputObject.
+constexpr int kPadConnected = 100;
+constexpr int kPadDisconnected = 101;
+// A stick or trigger that moves less than this since its last Change is jitter.
+constexpr float kPadJitter = 0.001f;
+
+// The KeyCode of each GLFW gamepad button, A (0) to DPAD_LEFT (14). 0 for
+// GUIDE, which games do not get.
+constexpr int kPadButtons[15] = {1002, 1003, 1000, 1001, 1005, 1004, 1011, 1010, 0, 1009, 1008, 1014, 1013, 1015, 1012};
+
 // GLFW key numbers, by the KeyCode item each one is. `count` covers GLFW's
 // runs, such as A to Z, whose KeyCode items are consecutive too. The values
 // come from the KeyCode enum, so this table holds no Roblox numbers.
@@ -111,6 +122,7 @@ void UserInputService::set_active(bool active) {
     posted_keys_.clear();
     std::fill(std::begin(posted_buttons_), std::end(posted_buttons_), false);
     posted_mouse_known_ = false;
+    std::fill(std::begin(posted_pads_), std::end(posted_pads_), Pad{});
 }
 
 bool UserInputService::active() const {
@@ -290,6 +302,76 @@ void UserInputService::end_held_locked() {
         record.position = posted_mouse_;
         queue_.push_back(record);
     }
+    for (int pad = 0; pad < kGamepads; ++pad) {
+        Pad rest;
+        rest.connected = posted_pads_[pad].connected;
+        post_pad_locked(pad, rest);
+    }
+}
+
+void UserInputService::post_pad_locked(int pad, const Pad& next) {
+    Pad& last = posted_pads_[pad];
+    InputRecord record;
+    record.type = kGamepad1 + pad;
+    if (next.connected && !last.connected) {
+        record.state = kPadConnected;
+        queue_.push_back(record);
+    }
+    for (int index = 0; index < 18; ++index) {
+        record.key = kButtonX + index;
+        record.position = Vec3{};
+        if (next.down[index] != last.down[index]) {
+            record.state = next.down[index] ? kBegin : kEnd;
+            queue_.push_back(record);
+            last.down[index] = next.down[index];
+        }
+        const Vec3 to = next.axis[index];
+        const Vec3 from = last.axis[index];
+        const bool rest = to.x == 0.f && to.y == 0.f;
+        if ((to.x != from.x || to.y != from.y) && (rest || std::hypot(to.x - from.x, to.y - from.y) >= kPadJitter)) {
+            record.state = kChange;
+            record.position = to;
+            queue_.push_back(record);
+            last.axis[index] = to;
+        }
+    }
+    if (!next.connected && last.connected) {
+        record.state = kPadDisconnected;
+        record.key = 0;
+        record.position = Vec3{};
+        queue_.push_back(record);
+    }
+    last.connected = next.connected;
+}
+
+void UserInputService::post_gamepad(int pad, const GamepadState& state) {
+    if (pad < 0 || pad >= kGamepads) {
+        return;
+    }
+    Pad next;
+    if (state.connected) {
+        next.connected = true;
+        for (int button = 0; button < 15; ++button) {
+            if (kPadButtons[button] != 0) {
+                next.down[kPadButtons[button] - kButtonX] = state.buttons[button];
+            }
+        }
+        const float left = trigger_value(state.axes[4]);
+        const float right = trigger_value(state.axes[5]);
+        next.down[kButtonL2 - kButtonX] = left > 0.5f;
+        next.down[kButtonR2 - kButtonX] = right > 0.5f;
+        next.axis[kButtonL2 - kButtonX] = Vec3{left, 0.f, 0.f};
+        next.axis[kButtonR2 - kButtonX] = Vec3{right, 0.f, 0.f};
+        next.axis[kThumbstick1 - kButtonX] = stick_with_dead_zone(state.axes[0], state.axes[1]);
+        next.axis[kThumbstick2 - kButtonX] = stick_with_dead_zone(state.axes[2], state.axes[3]);
+    }
+    std::lock_guard<std::mutex> lock(mu_);
+    // A full queue drops the whole post. The host posts every frame, and the
+    // next post is diffed against what got through, so nothing stays held.
+    if (!active_ || queue_.size() >= kMaxQueued) {
+        return;
+    }
+    post_pad_locked(pad, next);
 }
 
 void UserInputService::post_focus_lost() {
@@ -307,6 +389,8 @@ void UserInputService::bind(EventQueue& events) {
     events.host_signal(&began_);
     events.host_signal(&changed_);
     events.host_signal(&ended_);
+    events.host_signal(&pad_connected_);
+    events.host_signal(&pad_disconnected_);
     bound_ = true;
 }
 
@@ -317,6 +401,8 @@ void UserInputService::release(EventQueue& events) {
     events.release_signal(began_);
     events.release_signal(changed_);
     events.release_signal(ended_);
+    events.release_signal(pad_connected_);
+    events.release_signal(pad_disconnected_);
     bound_ = false;
 }
 
@@ -328,6 +414,10 @@ Signal* UserInputService::signal(Kind kind) {
         return &changed_;
     case Kind::Ended:
         return &ended_;
+    case Kind::GamepadConnected:
+        return &pad_connected_;
+    case Kind::GamepadDisconnected:
+        return &pad_disconnected_;
     }
     return nullptr;
 }
@@ -345,7 +435,24 @@ void UserInputService::dispatch(EventQueue& events) {
     }
     mouse_delta_ = Vec3{};
     for (const InputRecord& record : records) {
-        mouse_ = record.position;
+        const int pad = record.type - kGamepad1;
+        const bool gamepad = pad >= 0 && pad < kGamepads;
+        if (gamepad && (record.state == kPadConnected || record.state == kPadDisconnected)) {
+            pads_[pad] = Pad{};
+            pads_[pad].connected = record.state == kPadConnected;
+            Signal& target = pads_[pad].connected ? pad_connected_ : pad_disconnected_;
+            if (target.id().valid()) {
+                LuaSlot which;
+                which.kind = LuaSlot::Kind::Enum;
+                which.enum_type = &user_input_type_enum();
+                which.number = record.type;
+                events.emit_args(target.id(), 0, EventArgs{which});
+            }
+            continue;
+        }
+        if (!gamepad) {
+            mouse_ = record.position;
+        }
         if (record.type == kMouseMovement) {
             mouse_delta_.x += record.delta.x;
             mouse_delta_.y += record.delta.y;
@@ -365,6 +472,12 @@ void UserInputService::dispatch(EventQueue& events) {
             }
         } else if (valid_button(record.type - kMouseButton1) && kind != Kind::Changed) {
             buttons_down_[record.type - kMouseButton1] = kind == Kind::Began;
+        } else if (gamepad && record.key >= kButtonX && record.key <= kThumbstick2) {
+            if (kind == Kind::Changed) {
+                pads_[pad].axis[record.key - kButtonX] = record.position;
+            } else {
+                pads_[pad].down[record.key - kButtonX] = kind == Kind::Began;
+            }
         }
         Signal* target = signal(kind);
         if (target != nullptr && target->id().valid()) {
@@ -385,9 +498,34 @@ bool UserInputService::key_down(int key_code) const {
 
 bool UserInputService::button_down(int button) const { return valid_button(button) && buttons_down_[button]; }
 
+bool UserInputService::gamepad_connected(int pad) const { return pad >= 0 && pad < kGamepads && pads_[pad].connected; }
+
+bool UserInputService::gamepad_button_down(int pad, int key_code) const {
+    return gamepad_connected(pad) && key_code >= kButtonX && key_code <= kThumbstick2 &&
+           pads_[pad].down[key_code - kButtonX];
+}
+
+Vec3 UserInputService::gamepad_axis(int pad, int key_code) const {
+    if (!gamepad_connected(pad) || key_code < kButtonX || key_code > kThumbstick2) {
+        return Vec3{};
+    }
+    return pads_[pad].axis[key_code - kButtonX];
+}
+
+std::vector<int> UserInputService::connected_gamepads() const {
+    std::vector<int> out;
+    for (int pad = 0; pad < kGamepads; ++pad) {
+        if (pads_[pad].connected) {
+            out.push_back(pad);
+        }
+    }
+    return out;
+}
+
 void UserInputService::reset() {
     keys_down_.clear();
     std::fill(std::begin(buttons_down_), std::end(buttons_down_), false);
+    std::fill(std::begin(pads_), std::end(pads_), Pad{});
     mouse_ = Vec3{};
     mouse_delta_ = Vec3{};
     // What a session set of the pointer is its own, so the next one starts fresh.
@@ -426,6 +564,9 @@ bool write_sensitivity(DataModel& world, DataModel&, LuaSlot& in) {
 // Every UserInputService signal passes the InputObject and whether the studio took it.
 const LuaParam kInputSignalArgs[] = {{"input", "InputObject"}, {"gameProcessedEvent", "boolean"}};
 
+// GamepadConnected and GamepadDisconnected pass the pad, an Enum.UserInputType.
+const LuaParam kGamepadSignalArgs[] = {{"gamepad", "EnumItem"}};
+
 LuaField input_signal(const char* name, UserInputService::Kind kind) {
     LuaField field;
     field.name = name;
@@ -436,6 +577,13 @@ LuaField input_signal(const char* name, UserInputService::Kind kind) {
     return field;
 }
 
+LuaField gamepad_signal(const char* name, UserInputService::Kind kind) {
+    LuaField field = input_signal(name, kind);
+    field.params = kGamepadSignalArgs;
+    field.param_count = 1;
+    return field;
+}
+
 // ScriptRuntime adds the methods, since those calls need the script VM, and
 // reads the InputObject fields off its own userdata.
 ANARCHY_LUA_REGISTER(register_input_service_lua) {
@@ -443,6 +591,8 @@ ANARCHY_LUA_REGISTER(register_input_service_lua) {
         input_signal("InputBegan", UserInputService::Kind::Began),
         input_signal("InputChanged", UserInputService::Kind::Changed),
         input_signal("InputEnded", UserInputService::Kind::Ended),
+        gamepad_signal("GamepadConnected", UserInputService::Kind::GamepadConnected),
+        gamepad_signal("GamepadDisconnected", UserInputService::Kind::GamepadDisconnected),
         lua_property("KeyboardEnabled", "boolean", false, read_true, nullptr),
         lua_property("MouseEnabled", "boolean", false, read_true, nullptr),
         lua_property("TouchEnabled", "boolean", false, read_false, nullptr),

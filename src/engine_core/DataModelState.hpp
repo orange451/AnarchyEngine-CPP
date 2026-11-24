@@ -6,6 +6,7 @@
 #include "DataModel.hpp"
 #include "Assemblies.hpp"
 #include "CollisionGroups.hpp"
+#include "SaveStore.hpp"
 #include "MeshEditors.hpp"
 #include "PoseBlend.hpp"
 #include "ChangeHistoryService.hpp"
@@ -153,6 +154,8 @@ struct DataModel::State {
     Assemblies assemblies;
     // The place's collision groups; DataModel::collision_groups. Saved as Workspace's CollisionGroups.
     CollisionGroups collision_groups;
+    // SaveService's stores; DataModel::saves. Not part of the place.
+    SaveStores saves;
     // Every live MeshEditor; DataModel::mesh_editors. Not saved.
     MeshEditors mesh_editors;
     PoseBlend pose_blend;
@@ -222,6 +225,9 @@ struct DataModel::State {
     InvalidationQueue invalidation;
 
     EventQueue events;
+    // DataModel::tag_signal's host signals, removed [0] and added [1], by tag.
+    // ~DataModel's events.shutdown() lets them go before they are destroyed.
+    std::map<std::string, std::unique_ptr<Signal>, std::less<>> tag_signals[2];
     std::vector<std::unique_ptr<InstanceSignals>> bags;
     // Id 0 is the root and has no slot. bags[0] belongs to the first created
     // instance, whose id is make_instance_id(1, 0): generation starts at 1.

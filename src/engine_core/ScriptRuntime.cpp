@@ -248,6 +248,10 @@ void ScriptRuntime::attach(DataModel& game, TaskScheduler& scheduler) {
 }
 
 void ScriptRuntime::detach() {
+    // Before any state closes, so a Tween's destructor finds nothing to let go.
+    if (game_ != nullptr) {
+        tweens_.clear(*game_);
+    }
     close_state(console_);
     close_state(plugin_);
     plugins_.clear();
@@ -302,6 +306,10 @@ void ScriptRuntime::heartbeat(double dt) {
         dt = 0;
     }
     play_.clock += dt;
+    // Tweens move before Heartbeat's handlers resume.
+    for (std::string& refusal : tweens_.step(*game_, dt)) {
+        append_output(OutputKind::Error, std::move(refusal));
+    }
     guarded(play_, [&] {
         wake_sleeps(play_);
         deliver_child_waits(play_);
@@ -890,6 +898,8 @@ void open_host_libraries(lua_State* state) {
     open_raycast(state);
     open_brush_face(state);
     open_animation_track(state);
+    open_tween(state);
+    open_save_store(state);
     open_mesh_editor(state);
     open_plugin_api(state);
 }
@@ -1119,6 +1129,10 @@ void ScriptRuntime::set_root_globals(lua_State* state) {
 }
 
 void ScriptRuntime::close_vm() {
+    // Stop drops every tween, before the play state closes and its Tweens let theirs go.
+    if (game_ != nullptr) {
+        tweens_.clear(*game_);
+    }
     if (play_.state == nullptr) {
         open_ = false;
         play_.clock = 0;

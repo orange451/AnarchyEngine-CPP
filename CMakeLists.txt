@@ -748,6 +748,13 @@ add_library(engine_core STATIC
     src/engine_core/MeshEditors.cpp
     src/engine_core/MeshEditorBindings.cpp
     src/engine_core/AnimationBindings.cpp
+    src/engine_core/TweenWorld.cpp
+    src/engine_core/TweenBindings.cpp
+    src/engine_core/Tags.cpp
+    src/engine_core/CollectionServiceBindings.cpp
+    src/engine_core/UserData.cpp
+    src/engine_core/SaveStore.cpp
+    src/engine_core/SaveServiceBindings.cpp
     src/engine_core/ScriptRuntime.cpp
     src/engine_core/TableSnapshot.cpp
     src/engine_core/ScriptAnalysis.cpp
@@ -1274,6 +1281,10 @@ add_executable(sandbox
     sandbox/core_tests.cpp
     sandbox/archivable_tests.cpp
     sandbox/attribute_tests.cpp
+    sandbox/tween_tests.cpp
+    sandbox/tag_tests.cpp
+    sandbox/gamepad_tests.cpp
+    sandbox/save_tests.cpp
     sandbox/shader_source_tests.cpp
     sandbox/shader_tests.cpp
     sandbox/shader_assembly_tests.cpp

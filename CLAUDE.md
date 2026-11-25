@@ -62,6 +62,16 @@ For multi-step tasks, state a brief plan:
 
 Strong success criteria let you loop independently. Weak criteria ("make it work") require constant clarification.
 
+## 5. Large Tasks on Fable: Orchestrate, Don't Type
+
+When the session model is Fable and the task spans several files or plan steps:
+
+- **Fable's job:** understand the problem, write or refine the plan, split it into self-contained tasks, review results, decide what's next.
+- **Coding goes to Opus:** dispatch each implementation task to the `implementer` agent (or the Agent tool with `model: "opus"`). Don't use a `fork` for coding — forks always run on Fable.
+- **Brief like a peer:** every brief names the goal, the exact files, the constraints, what "done" means, and how to verify it. The implementer sees only the brief.
+- **Review, don't trust:** read each returned diff yourself and run the build/tests before marking the task done. Send fixes back to the same implementer (SendMessage) instead of patching them yourself, unless it's a one-line fix.
+- **Stay inline for small work:** a handful of edits, a quick fix or a one-file change is faster to do yourself than to delegate.
+
 ---
 
 **These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.
